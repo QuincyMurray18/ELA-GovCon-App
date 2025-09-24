@@ -1,0 +1,8 @@
+streamlit
+openai
+PyPDF2
+python-docx
+xlsxwriter
+pandas
+requests
+scikit-learn
