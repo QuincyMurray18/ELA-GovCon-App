@@ -875,6 +875,171 @@ with st.sidebar:
     st.metric("Revenue target", f"${float(row['revenue_target']):,.0f}")
     st.metric("Revenue won", f"${float(row['revenue_won']):,.0f}")
 
+def render_rfp_analyzer():
+    try:
+        st.subheader("RFP Analyzer")
+        st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
+
+        conn = get_db()
+
+        # Sessions like Chat Assistant
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
+        pick = st.selectbox("RFP session", options=session_titles, index=0)
+
+        if pick == "➤ New RFP thread":
+            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
+            new_title = st.text_input("Thread title", value=default_title)
+            if st.button("Start RFP thread"):
+                conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
+                conn.commit()
+                st.rerun()
+            return
+
+        session_id = int(pick.split(":")[0])
+        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
+        st.caption(f"RFP thread #{session_id}  {cur_title}")
+
+        # File uploader with persistence
+        uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
+        if uploads and st.button("Add files to RFP thread"):
+            added = 0
+            for up in uploads:
+                text = read_doc(up)[:800_000]
+                conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
+                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
+                added += 1
+            conn.commit()
+            st.success(f"Added {added} file(s) to this thread.")
+            st.rerun()
+
+        files_df = pd.read_sql_query(
+            "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
+            conn, params=(session_id,)
+        )
+        if files_df.empty:
+            st.caption("No files yet.")
+        else:
+            st.caption("Attached files")
+            st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
+            del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
+            if st.button("Delete selected RFP file"):
+                if del_id > 0:
+                    conn.execute("delete from rfp_files where id=?", (int(del_id),))
+                    conn.commit()
+                    st.success(f"Deleted file id {del_id}.")
+                    st.rerun()
+
+        # Previous messages
+        hist = pd.read_sql_query(
+            "select role, content, created_at from rfp_messages where session_id=? order by id asc",
+            conn, params=(session_id,)
+        )
+        if hist.empty:
+            st.info("No messages yet. Use the quick actions or ask a question below.")
+        else:
+            for _, row in hist.iterrows():
+                if row["role"] == "user":
+                    st.chat_message("user").markdown(row["content"])
+                elif row["role"] == "assistant":
+                    st.chat_message("assistant").markdown(row["content"])
+                else:
+                    st.caption(f"System updated at {row['created_at']}")
+
+        # Helper to build doc context
+        def _rfp_context_for(question_text: str):
+            rows = pd.read_sql_query(
+                "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+                conn, params=(session_id,)
+            )
+            if rows.empty:
+                return ""
+            chunks, labels = [], []
+            for _, r in rows.iterrows():
+                cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                chunks.extend(cs)
+                labels.extend([r["filename"]]*len(cs))
+            vec, X = embed_texts(chunks)
+            top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
+            parts, used = [], set()
+            for sn in top:
+                try:
+                    idx = chunks.index(sn)
+                    fname = labels[idx]
+                except Exception:
+                    idx, fname = -1, "attachment"
+                key = (fname, sn[:60])
+                if key in used:
+                    continue
+                used.add(key)
+                parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+            return "Attached document snippets most relevant first:\n" + "\n".join(parts[:16]) if parts else ""
+
+        # Quick action buttons
+        colA, colB, colC, colD = st.columns(4)
+        qa = None
+        with colA:
+            if st.button("Compliance matrix"):
+                qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
+        with colB:
+            if st.button("Evaluation factors"):
+                qa = "Summarize the evaluation factors and their relative importance and scoring approach."
+        with colC:
+            if st.button("Submission checklist"):
+                qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
+        with colD:
+            if st.button("Grade my draft"):
+                qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
+
+        # Free form follow up like chat
+        user_q = st.chat_input("Ask a question about the RFP or use a quick action above")
+        pending_prompt = qa or user_q
+
+        if pending_prompt:
+            # Save user turn
+            conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
+                         (session_id, "user", pending_prompt))
+            conn.commit()
+
+            # Build system and context using company snapshot and RFP snippets
+            context_snap = build_context(max_rows=6)
+            doc_snips = _rfp_context_for(pending_prompt)
+
+            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
+    Context snapshot:
+    {context_snap}
+    {doc_snips if doc_snips else ""}"""
+
+            # Compose rolling window like Chat Assistant
+            msgs_db = pd.read_sql_query(
+                "select role, content from rfp_messages where session_id=? order by id asc",
+                conn, params=(session_id,)
+            ).to_dict(orient="records")
+
+            # Keep up to 12 user turns
+            pruned, user_turns = [], 0
+            for m in msgs_db[::-1]:
+                if m["role"] == "assistant":
+                    pruned.append(m)
+                    continue
+                if m["role"] == "user":
+                    if user_turns < 12:
+                        pruned.append(m)
+                        user_turns += 1
+                    continue
+            msgs_window = list(reversed(pruned))
+            messages = [{"role": "system", "content": sys_text}] + msgs_window
+
+            assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
+            conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
+                         (session_id, "assistant", assistant_out))
+            conn.commit()
+
+            st.chat_message("user").markdown(pending_prompt)
+            st.chat_message("assistant").markdown(assistant_out)
+    except Exception as e:
+        st.error(f"RFP Analyzer error: {e}")
+
 def render_proposal_builder():
     try:
         st.subheader("Proposal Builder")
@@ -1420,166 +1585,7 @@ with tabs[4]:
 # Removed RFP mini-analyzer from SAM Watch
 
 with tabs[5]:
-    st.subheader("RFP Analyzer")
-    st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
-
-    conn = get_db()
-
-    # Sessions like Chat Assistant
-    sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
-    session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
-    pick = st.selectbox("RFP session", options=session_titles, index=0)
-
-    if pick == "➤ New RFP thread":
-        default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
-        new_title = st.text_input("Thread title", value=default_title)
-        if st.button("Start RFP thread"):
-            conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
-            conn.commit()
-            st.rerun()
-        st.stop()
-
-    session_id = int(pick.split(":")[0])
-    cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
-    st.caption(f"RFP thread #{session_id}  {cur_title}")
-
-    # File uploader with persistence
-    uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
-    if uploads and st.button("Add files to RFP thread"):
-        added = 0
-        for up in uploads:
-            text = read_doc(up)[:800_000]
-            conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
-                            values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
-            added += 1
-        conn.commit()
-        st.success(f"Added {added} file(s) to this thread.")
-        st.rerun()
-
-    files_df = pd.read_sql_query(
-        "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
-        conn, params=(session_id,)
-    )
-    if files_df.empty:
-        st.caption("No files yet.")
-    else:
-        st.caption("Attached files")
-        st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
-        del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
-        if st.button("Delete selected RFP file"):
-            if del_id > 0:
-                conn.execute("delete from rfp_files where id=?", (int(del_id),))
-                conn.commit()
-                st.success(f"Deleted file id {del_id}.")
-                st.rerun()
-
-    # Previous messages
-    hist = pd.read_sql_query(
-        "select role, content, created_at from rfp_messages where session_id=? order by id asc",
-        conn, params=(session_id,)
-    )
-    if hist.empty:
-        st.info("No messages yet. Use the quick actions or ask a question below.")
-    else:
-        for _, row in hist.iterrows():
-            if row["role"] == "user":
-                st.chat_message("user").markdown(row["content"])
-            elif row["role"] == "assistant":
-                st.chat_message("assistant").markdown(row["content"])
-            else:
-                st.caption(f"System updated at {row['created_at']}")
-
-    # Helper to build doc context
-    def _rfp_context_for(question_text: str):
-        rows = pd.read_sql_query(
-            "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
-            conn, params=(session_id,)
-        )
-        if rows.empty:
-            return ""
-        chunks, labels = [], []
-        for _, r in rows.iterrows():
-            cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-            chunks.extend(cs)
-            labels.extend([r["filename"]]*len(cs))
-        vec, X = embed_texts(chunks)
-        top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
-        parts, used = [], set()
-        for sn in top:
-            try:
-                idx = chunks.index(sn)
-                fname = labels[idx]
-            except Exception:
-                idx, fname = -1, "attachment"
-            key = (fname, sn[:60])
-            if key in used:
-                continue
-            used.add(key)
-            parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-        return "Attached document snippets most relevant first:\n" + "\n".join(parts[:16]) if parts else ""
-
-    # Quick action buttons
-    colA, colB, colC, colD = st.columns(4)
-    qa = None
-    with colA:
-        if st.button("Compliance matrix"):
-            qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
-    with colB:
-        if st.button("Evaluation factors"):
-            qa = "Summarize the evaluation factors and their relative importance and scoring approach."
-    with colC:
-        if st.button("Submission checklist"):
-            qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
-    with colD:
-        if st.button("Grade my draft"):
-            qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
-
-    # Free form follow up like chat
-    user_q = st.chat_input("Ask a question about the RFP or use a quick action above")
-    pending_prompt = qa or user_q
-
-    if pending_prompt:
-        # Save user turn
-        conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                     (session_id, "user", pending_prompt))
-        conn.commit()
-
-        # Build system and context using company snapshot and RFP snippets
-        context_snap = build_context(max_rows=6)
-        doc_snips = _rfp_context_for(pending_prompt)
-
-        sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
-Context snapshot:
-{context_snap}
-{doc_snips if doc_snips else ""}"""
-
-        # Compose rolling window like Chat Assistant
-        msgs_db = pd.read_sql_query(
-            "select role, content from rfp_messages where session_id=? order by id asc",
-            conn, params=(session_id,)
-        ).to_dict(orient="records")
-
-        # Keep up to 12 user turns
-        pruned, user_turns = [], 0
-        for m in msgs_db[::-1]:
-            if m["role"] == "assistant":
-                pruned.append(m)
-                continue
-            if m["role"] == "user":
-                if user_turns < 12:
-                    pruned.append(m)
-                    user_turns += 1
-                continue
-        msgs_window = list(reversed(pruned))
-        messages = [{"role": "system", "content": sys_text}] + msgs_window
-
-        assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
-        conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                     (session_id, "assistant", assistant_out))
-        conn.commit()
-
-        st.chat_message("user").markdown(pending_prompt)
-        st.chat_message("assistant").markdown(assistant_out)
+    render_rfp_analyzer()
 
 with tabs[6]:
     st.subheader("Capability statement builder")
