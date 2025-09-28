@@ -3,21 +3,6 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
-
-SCHEMA.update({
-    "proposal_drafts": """
-    create table if not exists proposal_drafts (
-        id integer primary key,
-        session_id integer,
-        section text,
-        content text,
-        updated_at text default current_timestamp,
-        foreign key(session_id) references rfp_sessions(id)
-    );
-    """
-})
-
-
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -154,6 +139,52 @@ SCHEMA = {
     );
     """,
 }
+
+SCHEMA.update({
+    "rfp_sessions": """
+    create table if not exists rfp_sessions (
+        id integer primary key,
+        title text,
+        created_at text default current_timestamp
+    );
+    """,
+    "rfp_messages": """
+    create table if not exists rfp_messages (
+        id integer primary key,
+        session_id integer,
+        role text,
+        content text,
+        created_at text default current_timestamp,
+        foreign key(session_id) references rfp_sessions(id)
+    );
+    """,
+    "rfp_files": """
+    create table if not exists rfp_files (
+        id integer primary key,
+        session_id integer,
+        filename text,
+        mimetype text,
+        content_text text,
+        uploaded_at text default current_timestamp,
+        foreign key(session_id) references rfp_sessions(id)
+    );
+    """
+})
+
+
+SCHEMA.update({
+    "proposal_drafts": """
+    create table if not exists proposal_drafts (
+        id integer primary key,
+        session_id integer,
+        section text,
+        content text,
+        updated_at text default current_timestamp,
+        foreign key(session_id) references rfp_sessions(id)
+    );
+    """
+})
+
 
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -1004,6 +1035,174 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
 
+def render_rfp_analyzer():
+    try:
+            st.subheader("RFP Analyzer")
+            st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
+
+            conn = get_db()
+
+            # Sessions like Chat Assistant
+            sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+            session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
+            pick = st.selectbox("RFP session", options=session_titles, index=0)
+
+            if pick == "➤ New RFP thread":
+                default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
+                new_title = st.text_input("Thread title", value=default_title)
+                if st.button("Start RFP thread"):
+                    conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
+                    conn.commit()
+                    st.rerun()
+                return
+
+            session_id = int(pick.split(":")[0])
+            cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
+            st.caption(f"RFP thread #{session_id}  {cur_title}")
+
+            # File uploader with persistence
+            uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
+            if uploads and st.button("Add files to RFP thread"):
+                added = 0
+                for up in uploads:
+                    text = read_doc(up)[:800_000]
+                    conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
+                                    values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
+                    added += 1
+                conn.commit()
+                st.success(f"Added {added} file(s) to this thread.")
+                st.rerun()
+
+            files_df = pd.read_sql_query(
+                "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
+                conn, params=(session_id,)
+            )
+            if files_df.empty:
+                st.caption("No files yet.")
+            else:
+                st.caption("Attached files")
+                st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
+                del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
+                if st.button("Delete selected RFP file"):
+                    if del_id > 0:
+                        conn.execute("delete from rfp_files where id=?", (int(del_id),))
+                        conn.commit()
+                        st.success(f"Deleted file id {del_id}.")
+                        st.rerun()
+
+            # Previous messages
+            hist = pd.read_sql_query(
+                "select role, content, created_at from rfp_messages where session_id=? order by id asc",
+                conn, params=(session_id,)
+            )
+            if hist.empty:
+                st.info("No messages yet. Use the quick actions or ask a question below.")
+            else:
+                for _, row in hist.iterrows():
+                    if row["role"] == "user":
+                        st.chat_message("user").markdown(row["content"])
+                    elif row["role"] == "assistant":
+                        st.chat_message("assistant").markdown(row["content"])
+                    else:
+                        st.caption(f"System updated at {row['created_at']}")
+
+            # Helper to build doc context
+            def _rfp_context_for(question_text: str):
+                rows = pd.read_sql_query(
+                    "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+                    conn, params=(session_id,)
+                )
+                if rows.empty:
+                    return ""
+                chunks, labels = [], []
+                for _, r in rows.iterrows():
+                    cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                    chunks.extend(cs)
+                    labels.extend([r["filename"]]*len(cs))
+                vec, X = embed_texts(chunks)
+                top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
+                parts, used = [], set()
+                for sn in top:
+                    try:
+                        idx = chunks.index(sn)
+                        fname = labels[idx]
+                    except Exception:
+                        idx, fname = -1, "attachment"
+                    key = (fname, sn[:60])
+                    if key in used:
+                        continue
+                    used.add(key)
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached document snippets most relevant first:\n" + "\n".join(parts[:16]) if parts else ""
+
+            # Quick action buttons
+            colA, colB, colC, colD = st.columns(4)
+            qa = None
+            with colA:
+                if st.button("Compliance matrix"):
+                    qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
+            with colB:
+                if st.button("Evaluation factors"):
+                    qa = "Summarize the evaluation factors and their relative importance and scoring approach."
+            with colC:
+                if st.button("Submission checklist"):
+                    qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
+            with colD:
+                if st.button("Grade my draft"):
+                    qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
+
+            # Free form follow up like chat
+            user_q = st.chat_input("Ask a question about the RFP or use a quick action above")
+            pending_prompt = qa or user_q
+
+            if pending_prompt:
+                # Save user turn
+                conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
+                             (session_id, "user", pending_prompt))
+                conn.commit()
+
+                # Build system and context using company snapshot and RFP snippets
+                context_snap = build_context(max_rows=6)
+                doc_snips = _rfp_context_for(pending_prompt)
+
+                sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
+        Context snapshot:
+        {context_snap}
+        {doc_snips if doc_snips else ""}"""
+
+                # Compose rolling window like Chat Assistant
+                msgs_db = pd.read_sql_query(
+                    "select role, content from rfp_messages where session_id=? order by id asc",
+                    conn, params=(session_id,)
+                ).to_dict(orient="records")
+
+                # Keep up to 12 user turns
+                pruned, user_turns = [], 0
+                for m in msgs_db[::-1]:
+                    if m["role"] == "assistant":
+                        pruned.append(m)
+                        continue
+                    if m["role"] == "user":
+                        if user_turns < 12:
+                            pruned.append(m)
+                            user_turns += 1
+                        continue
+                msgs_window = list(reversed(pruned))
+                messages = [{"role": "system", "content": sys_text}] + msgs_window
+
+                assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
+                conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
+                             (session_id, "assistant", assistant_out))
+                conn.commit()
+
+                st.chat_message("user").markdown(pending_prompt)
+                st.chat_message("assistant").markdown(assistant_out)
+
+    except Exception as e:
+        st.error(f"RFP Analyzer error: {e}")
+        st.exception(e)
+
+
 tabs = st.tabs([
     "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
     "RFP Analyzer","Capability Statement","White Paper Builder",
@@ -1097,6 +1296,7 @@ with tabs[1]:
     colA, colB, colC = st.columns(3)
 
     with colA:
+
         if st.button("Google Places import"):
             results, info = google_places_search(f"{trade} small business", loc, int(radius_miles*1609.34))
             st.session_state["vendor_results"] = results or []
@@ -1106,39 +1306,78 @@ with tabs[1]:
 
         results = st.session_state.get("vendor_results") or []
         info = st.session_state.get("vendor_info") or {}
+
         if results:
             df_new = pd.DataFrame(results)
-            if "distance_m" in df_new.columns:
-                df_new["distance_miles"] = (df_new["distance_m"] / 1609.34).round(1)
-            name_filter = st.text_input("Filter by name contains", "")
-            if name_filter and "name" in df_new.columns:
-                df_new = df_new[df_new["name"].str.contains(name_filter, case=False, na=False)]
-            if "website" in df_new.columns:
-                df_new["Link"] = df_new["website"]
-            st.dataframe(df_new, use_container_width=True)
 
-            if st.button("Save to vendors"):
+            # Build hyperlink column; fallback to Google search if website missing
+            def _make_link(row):
+                site = (row.get("website") or "").strip()
+                if site:
+                    return site
+                comp = (row.get("company") or "").strip()
+                city = (row.get("city") or "").strip()
+                state = (row.get("state") or "").strip()
+                q = quote_plus(" ".join(x for x in [comp, city, state, "site"] if x))
+                return f"https://www.google.com/search?q={q}"
+
+            if not df_new.empty:
+                df_new["Link"] = df_new.apply(_make_link, axis=1)
+
+            # Optional name filter
+            name_filter = st.text_input("Filter by company name contains", "")
+            if name_filter:
+                df_new = df_new[df_new["company"].fillna("").str.contains(name_filter, case=False, na=False)]
+
+            # Add Save checkbox per row
+            if "Save" not in df_new.columns:
+                df_new["Save"] = False
+
+            # Show as editable grid with clickable links
+            edited = st.data_editor(
+                df_new[["company","phone","email","city","state","notes","Link","Save"]].rename(columns={
+                    "company": "Company", "phone": "Phone", "email": "Email",
+                    "city": "City", "state": "State", "notes": "Notes"
+                }),
+                column_config={
+                    "Link": st.column_config.LinkColumn("Link", display_text="Open"),
+                    "Save": st.column_config.CheckboxColumn("Save")
+                },
+                use_container_width=True,
+                num_rows="fixed",
+                key="vendor_import_grid"
+            )
+
+            # Save only selected rows
+            save_sel = edited[edited.get("Save", False) == True] if isinstance(edited, pd.DataFrame) else pd.DataFrame()
+
+            col_save_a, col_save_b = st.columns([1,2])
+            with col_save_a:
+                st.caption(f"Selected to save: {len(save_sel)} of {len(edited) if isinstance(edited, pd.DataFrame) else 0}")
+                save_btn = st.button("Save selected to vendors")
+            with col_save_b:
+                st.caption("Tip: Click a link to review a site before saving.")
+
+            if save_btn and not save_sel.empty:
                 conn = get_db(); cur = conn.cursor()
-                df_new["naics"] = ",".join(naics_choice) if naics_choice else ""
                 saved = 0
-                for _, r in df_new.iterrows():
-                    company = r.get('company') or r.get('name') or r.get("name")
-                    phone = r.get("phone","")
-                    website = (r.get("website","") or "").strip()
-                    email = r.get("email","")
-                    extra_note = r.get("notes","")
-                    city = r.get("city","")
-                    state = r.get("state","")
-                    source = r.get("source","GooglePlaces")
-                    if find_emails and website:
-                        crawled = crawl_site_for_emails(website, max_pages=max_pages)
-                        found = sorted(crawled.get("emails", []))
-                        if found:
-                            if not email: email = found[0]
-                            others = [e for e in found if e != email]
-                            if others:
-                                extra_note = (extra_note + f" | other emails: {', '.join(others[:5])}")[:800]
-                    # Dedup
+                # Include NAICS tag choice from the UI if present
+                naics_tag = ",".join(naics_choice) if "naics_choice" in locals() and naics_choice else ""
+
+                for _, r in save_sel.rename(columns={
+                    "Company":"company","Phone":"phone","Email":"email",
+                    "City":"city","State":"state","Notes":"notes"
+                }).iterrows():
+                    company = (r.get("company") or "").strip()
+                    phone = (r.get("phone") or "").strip()
+                    website = (r.get("Link") or "").strip()
+                    email = (r.get("email") or "").strip()
+                    extra_note = (r.get("notes") or "").strip()
+                    city = (r.get("city") or "").strip()
+                    state = (r.get("state") or "").strip()
+                    source = "GooglePlaces"
+
+                    # Dedup by website then by company+phone
                     vid = None
                     if website:
                         cur.execute("select id from vendors where website=?", (website,))
@@ -1148,19 +1387,20 @@ with tabs[1]:
                         cur.execute("select id from vendors where company=? and ifnull(phone,'')=?", (company, phone))
                         row = cur.fetchone()
                         if row: vid = row[0]
+
                     if vid:
                         cur.execute(
                             "update vendors set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, notes=?, source=?, updated_at=current_timestamp where id=?",
-                            (company, r.get("naics",""), trade, phone, email, website, city, state, extra_note, source, int(vid))
+                            (company, naics_tag, trade, phone, email, website, city, state, extra_note, source, int(vid))
                         )
                     else:
                         cur.execute(
                             "insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes,source) values(?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (company, r.get("naics",""), trade, phone, email, website, city, state, "", "", extra_note, source)
+                            (company, naics_tag, trade, phone, email, website, city, state, "", "", extra_note, source)
                         )
                     saved += 1
                 conn.commit()
-                st.success(f"Saved {saved} vendors")
+                st.success(f"Saved {saved} vendor(s).")
         else:
             msg = "No results"
             if info and not info.get("ok", True):
@@ -1168,6 +1408,7 @@ with tabs[1]:
             if not GOOGLE_PLACES_KEY:
                 msg += " — Google Places key is missing."
             st.warning(msg)
+
 
     with colB:
         st.markdown("LinkedIn quick search")
@@ -1347,23 +1588,7 @@ with tabs[4]:
 # Removed RFP mini-analyzer from SAM Watch
 
 with tabs[5]:
-    st.subheader("RFP Analyzer")
-    st.caption("Upload RFP package and amendments. Ask for compliance matrix, evaluation factors, submission checklist, and graded draft improvements.")
-    rfp_files = st.file_uploader("Upload RFP package (PDF, DOCX, ZIP)", type=["pdf","docx","zip"], accept_multiple_files=True, key="rfp_upload")
-    draft = st.text_area("Paste your draft (optional)")
-    colA, colB, colC = st.columns(3)
-    with colA:
-        if st.button("Compliance matrix"):
-            st.session_state["rfp_action"] = "compliance"
-    with colB:
-        if st.button("Evaluation factors"):
-            st.session_state["rfp_action"] = "evals"
-    with colC:
-        if st.button("Submission checklist"):
-            st.session_state["rfp_action"] = "checklist"
-    if st.button("Grade my draft"):
-        st.session_state["rfp_action"] = "grade"
-    st.info("Results will show here after your request is processed.")
+    render_rfp_analyzer()
 
 with tabs[6]:
     st.subheader("Capability statement builder")
