@@ -185,6 +185,62 @@ SCHEMA.update({
     """
 })
 
+# === Added schema for new features ===
+SCHEMA.update({
+    "deadlines": """
+    create table if not exists deadlines (
+        id integer primary key,
+        opp_id integer,
+        title text,
+        due_date text,
+        source text,
+        status text default 'Open',
+        notes text,
+        created_at text default current_timestamp
+    );
+    """,
+    "compliance_items": """
+    create table if not exists compliance_items (
+        id integer primary key,
+        opp_id integer,
+        item text,
+        required integer default 1,
+        status text default 'Pending',
+        source_page text,
+        notes text,
+        created_at text default current_timestamp
+    );
+    """,
+    "rfq_outbox": """
+    create table if not exists rfq_outbox (
+        id integer primary key,
+        vendor_id integer,
+        company text,
+        to_email text,
+        subject text,
+        body text,
+        due_date text,
+        files_json text,
+        sent_at text,
+        status text default 'Draft',
+        created_at text default current_timestamp
+    );
+    """,
+    "pricing_scenarios": """
+    create table if not exists pricing_scenarios (
+        id integer primary key,
+        opp_id integer,
+        base_cost real,
+        overhead_pct real,
+        gna_pct real,
+        profit_pct real,
+        total_price real,
+        lpta_note text,
+        created_at text default current_timestamp
+    );
+    """
+})
+
 
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -198,10 +254,6 @@ def run_migrations():
     except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
     except Exception: pass
-    # rfp_sessions expansion
-    try: cur.execute("alter table rfp_sessions add column source text")
-    except Exception: pass
-
     # vendors table expansions
     try: cur.execute("alter table vendors add column distance_miles real")
     except Exception: pass
@@ -256,7 +308,6 @@ ELA Management LLC
     conn.commit()
 
 ensure_schema()
-run_migrations()
 
 # ---------- Utilities ----------
 def get_setting(key, default=""):
@@ -888,7 +939,7 @@ def render_rfp_analyzer():
         conn = get_db()
 
         # Sessions like Chat Assistant
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions where ifnull(source, 'analyzer') = 'analyzer' order by created_at desc", conn)
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
         session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("RFP session", options=session_titles, index=0)
 
@@ -896,21 +947,12 @@ def render_rfp_analyzer():
             default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
             new_title = st.text_input("Thread title", value=default_title)
             if st.button("Start RFP thread"):
-                conn.execute("insert into rfp_sessions(title, source) values(?, ?)", (new_title, "analyzer"))
+                conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
                 st.rerun()
             return
 
         session_id = int(pick.split(":")[0])
-
-        # Require at least one file uploaded to this RFP thread
-        have_files = pd.read_sql_query(
-            "select count(1) as n from rfp_files where session_id=?", conn, params=(session_id,)
-        )["n"].iloc[0]
-        if have_files == 0:
-            st.warning("Add at least one solicitation file to this RFP thread in the RFP Analyzer tab before using Proposal Builder.")
-            return
-
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
@@ -1060,42 +1102,14 @@ def render_proposal_builder():
         st.caption("Draft federal proposal sections step by step, using your RFP thread and files as context.")
 
         conn = get_db()
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions where ifnull(source, 'analyzer') = 'analyzer' order by created_at desc", conn)
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first. I need a thread to pull SOW/PWS and instructions from.")
-            return
-
-        _any = pd.read_sql_query("select count(1) as n from rfp_files where session_id in (select id from rfp_sessions where ifnull(source, 'analyzer')='analyzer')", conn)["n"].iloc[0]
-        if _any == 0:
-            st.info("No solicitation files found for any RFP Analyzer thread yet. Upload in RFP Analyzer to proceed.")
-            return
-
-        # Ensure there is at least one uploaded file across analyzer sessions
-        _any = pd.read_sql_query("select count(1) as n from rfp_files where session_id in (select id from rfp_sessions where ifnull(source, 'analyzer')='analyzer')", conn)["n"].iloc[0]
-        if _any == 0:
-            st.info("No solicitation files found for any RFP Analyzer thread yet. Upload in RFP Analyzer to proceed.")
             return
 
         opts = [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("Select RFP thread", options=opts, index=0, key="pb_session_pick")
         session_id = int(pick.split(":")[0])
-        # Require at least one file uploaded to this RFP thread
-        have_files = pd.read_sql_query(
-            "select count(1) as n from rfp_files where session_id=?", conn, params=(session_id,)
-        )["n"].iloc[0]
-        if have_files == 0:
-            st.warning("Add at least one solicitation file to this RFP thread in the RFP Analyzer tab before using Proposal Builder.")
-            return
-
-
-        # Require at least one file uploaded to this RFP thread
-        have_files = pd.read_sql_query(
-            "select count(1) as n from rfp_files where session_id=?", conn, params=(session_id,)
-        )["n"].iloc[0]
-        if have_files == 0:
-            st.warning("Add at least one solicitation file to this RFP thread in the RFP Analyzer tab before using Proposal Builder.")
-            return
-
 
         st.markdown("**Sections to draft**")
         col1, col2, col3 = st.columns(3)
@@ -1245,7 +1259,11 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
 tabs = st.tabs([
     "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
     "RFP Analyzer","Capability Statement","White Paper Builder",
-    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder"])
+    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
+    "Deadlines",
+    "L&M Checklist",
+    "RFQ Generator",
+    "Pricing Calculator"])
 
 
 with tabs[0]:
@@ -1818,3 +1836,167 @@ Keep responses concise and actionable. Use bullet points when helpful. Ask clari
 
 with tabs[12]:
     render_proposal_builder()
+
+
+# === New Feature Tabs Implementation ===
+
+def _parse_date_any(s):
+    s = (s or "").strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    return None
+
+def _lpta_note(total_price, budget_hint=None):
+    if budget_hint is None:
+        return "LPTA check requires competitor or IGCE context. Provide budget to evaluate."
+    return "PASS" if total_price <= float(budget_hint) else "FAIL"
+
+# Compute dynamic base index for new tabs
+__tabs_base = len(tabs) - 4  # after we appended 4 labels
+
+with tabs[__tabs_base + 0]:
+    st.subheader("Deadline tracker")
+    conn = get_db()
+    colA, colB = st.columns(2)
+    with colA:
+        st.caption("From opportunities table")
+        o = pd.read_sql_query("select id, title, agency, response_due, status from opportunities order by response_due asc nulls last", conn)
+        if not o.empty:
+            o["due_dt"] = o["response_due"].apply(_parse_date_any)
+            o["Due in days"] = o["due_dt"].apply(lambda d: (d - datetime.now()).days if d else None)
+            st.dataframe(o[["id","title","agency","response_due","status","Due in days"]])
+        else:
+            st.info("No opportunities yet")
+    with colB:
+        st.caption("Manual deadlines")
+        m = pd.read_sql_query("select * from deadlines order by due_date asc", conn)
+        st.dataframe(m)
+        with st.form("add_deadline"):
+            title = st.text_input("Title")
+            due = st.date_input("Due date", datetime.now().date())
+            source = st.text_input("Source or link", "")
+            notes = st.text_area("Notes", "")
+            if st.form_submit_button("Add"):
+                conn.execute("insert into deadlines(opp_id,title,due_date,source,notes) values(?,?,?,?,?)",
+                             (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
+                conn.commit()
+                st.success("Added")
+
+    st.markdown("### Due today")
+    due_today = pd.read_sql_query("select * from deadlines where date(due_date)=date('now') and status='Open'", conn)
+    if not due_today.empty:
+        st.dataframe(due_today[["title","due_date","source","notes"]])
+    else:
+        st.write("No items due today.")
+
+with tabs[__tabs_base + 1]:
+    st.subheader("Section L and M checklist")
+    conn = get_db()
+    up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
+    if up and st.button("Generate checklist"):
+        text_chunks = []
+        for f in up:
+            try:
+                text_chunks.append(read_doc(f))
+            except Exception as e:
+                st.warning(f"Could not read {f.name}: {e}")
+        big = "\n\n".join(text_chunks).lower()
+        # Simple deterministic anchors
+        required_items = []
+        anchors = {
+            "technical": r"(technical volume|technical proposal)",
+            "price": r"(price volume|pricing|schedule of items)",
+            "past performance": r"past performance",
+            "representations": r"(reps(?: and)? certs|52\.212-3)",
+            "page limit": r"(page limit|not exceed \d+ pages|\d+\s*page\s*limit)",
+            "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
+            "delivery": r"(delivery|period of performance|pop:)",
+            "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
+            "due date": r"(offers due|responses due|closing date)",
+        }
+        for name, pat in anchors.items():
+            found = re.search(pat, big, flags=re.S)
+            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": "", "notes": ("Found" if found else "Not detected")})
+        df = pd.DataFrame(required_items)
+        st.dataframe(df)
+        # Save
+        for r in required_items:
+            conn.execute(
+                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
+                (None, r["item"], 1, r["status"], r["source_page"], r["notes"])
+            )
+        conn.commit()
+        st.success("Checklist saved")
+    st.markdown("#### Existing items")
+    items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
+    st.dataframe(items)
+
+with tabs[__tabs_base + 2]:
+    st.subheader("RFQ generator to subcontractors")
+    conn = get_db()
+    vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
+    st.caption("Compose RFQ")
+    with st.form("rfq_form"):
+        sel = st.multiselect("Recipients", vendors["company"].tolist())
+        scope = st.text_area("Scope", st.session_state.get("default_scope", "Provide labor materials equipment and supervision per attached specifications"), height=120)
+        qty = st.text_input("Quantities or CLIN list", "")
+        due = st.date_input("Quote due by", datetime.now().date() + timedelta(days=3))
+        files = st.text_input("File names to reference", "")
+        subject = st.text_input("Email subject", "Quote request for upcoming federal project")
+        body = st.text_area("Email body preview", height=240,
+            value=(f"Hello, \n\nELA Management LLC requests a quote.\n\nScope\n{scope}\n\nQuantities\n{qty}\n\nDue by {due.strftime('%Y-%m-%d')}\n\nFiles\n{files}\n\nPlease reply with price lead time and any exclusions.\n\nThank you.")
+        )
+        submit = st.form_submit_button("Generate drafts")
+    if submit:
+        recs = vendors[vendors["company"].isin(sel)]
+        for _, r in recs.iterrows():
+            conn.execute("""insert into rfq_outbox(vendor_id, company, to_email, subject, body, due_date, files_json, status)
+                            values(?,?,?,?,?,?,?,?)""",
+                         (int(r["id"]), r["company"], r.get("email",""), subject, body, due.strftime("%Y-%m-%d"),
+                          json.dumps([f.strip() for f in files.split(",") if f.strip()]), "Draft"))
+        conn.commit()
+        st.success(f"Created {len(recs)} RFQ draft(s)")
+    st.markdown("#### Drafts")
+    drafts = pd.read_sql_query("select * from rfq_outbox order by created_at desc", conn)
+    st.dataframe(drafts)
+
+    # Export selected draft as DOCX
+    pick = st.number_input("Draft ID to export as DOCX", min_value=0, step=1, value=0)
+    if pick:
+        cur = conn.cursor()
+        cur.execute("select company, subject, body from rfq_outbox where id=?", (int(pick),))
+        row = cur.fetchone()
+        if row:
+            from docx import Document
+            doc = Document()
+            doc.add_heading(row[1], level=1)
+            doc.add_paragraph(f"To: {row[0]}")
+            for para in row[2].split("\\n\\n"):
+                doc.add_paragraph(para)
+            bio = io.BytesIO(); doc.save(bio); bio.seek(0)
+            st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+with tabs[__tabs_base + 3]:
+    st.subheader("Pricing calculator")
+    with st.form("price_calc"):
+        base_cost = st.number_input("Base or subcontractor price", min_value=0.0, step=100.0, value=0.0)
+        overhead = st.number_input("Overhead percent", min_value=0.0, max_value=100.0, step=0.5, value=10.0)
+        gna = st.number_input("G and A percent", min_value=0.0, max_value=100.0, step=0.5, value=5.0)
+        profit = st.number_input("Profit percent", min_value=0.0, max_value=100.0, step=0.5, value=8.0)
+        igce = st.number_input("Budget or IGCE if known", min_value=0.0, step=100.0, value=0.0)
+        run = st.form_submit_button("Calculate")
+    if run:
+        total = base_cost * (1 + overhead/100.0) * (1 + gna/100.0) * (1 + profit/100.0)
+        note = _lpta_note(total, budget_hint=igce if igce > 0 else None)
+        st.metric("Total price", f"${total:,.2f}")
+        st.info(f"LPTA note: {note}")
+        conn = get_db()
+        conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note)
+                        values(?,?,?,?,?,?,?)""",
+                     (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note))
+        conn.commit()
+# === End new features ===
