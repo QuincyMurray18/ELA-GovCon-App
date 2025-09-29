@@ -902,6 +902,15 @@ def render_rfp_analyzer():
             return
 
         session_id = int(pick.split(":")[0])
+
+        # Require at least one file uploaded to this RFP thread
+        have_files = pd.read_sql_query(
+            "select count(1) as n from rfp_files where session_id=?", conn, params=(session_id,)
+        )["n"].iloc[0]
+        if have_files == 0:
+            st.warning("Add at least one solicitation file to this RFP thread in the RFP Analyzer tab before using Proposal Builder.")
+            return
+
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
@@ -1056,9 +1065,37 @@ def render_proposal_builder():
             st.warning("Create an RFP thread in RFP Analyzer first. I need a thread to pull SOW/PWS and instructions from.")
             return
 
+        _any = pd.read_sql_query("select count(1) as n from rfp_files where session_id in (select id from rfp_sessions where ifnull(source, 'analyzer')='analyzer')", conn)["n"].iloc[0]
+        if _any == 0:
+            st.info("No solicitation files found for any RFP Analyzer thread yet. Upload in RFP Analyzer to proceed.")
+            return
+
+        # Ensure there is at least one uploaded file across analyzer sessions
+        _any = pd.read_sql_query("select count(1) as n from rfp_files where session_id in (select id from rfp_sessions where ifnull(source, 'analyzer')='analyzer')", conn)["n"].iloc[0]
+        if _any == 0:
+            st.info("No solicitation files found for any RFP Analyzer thread yet. Upload in RFP Analyzer to proceed.")
+            return
+
         opts = [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("Select RFP thread", options=opts, index=0, key="pb_session_pick")
         session_id = int(pick.split(":")[0])
+        # Require at least one file uploaded to this RFP thread
+        have_files = pd.read_sql_query(
+            "select count(1) as n from rfp_files where session_id=?", conn, params=(session_id,)
+        )["n"].iloc[0]
+        if have_files == 0:
+            st.warning("Add at least one solicitation file to this RFP thread in the RFP Analyzer tab before using Proposal Builder.")
+            return
+
+
+        # Require at least one file uploaded to this RFP thread
+        have_files = pd.read_sql_query(
+            "select count(1) as n from rfp_files where session_id=?", conn, params=(session_id,)
+        )["n"].iloc[0]
+        if have_files == 0:
+            st.warning("Add at least one solicitation file to this RFP thread in the RFP Analyzer tab before using Proposal Builder.")
+            return
+
 
         st.markdown("**Sections to draft**")
         col1, col2, col3 = st.columns(3)
