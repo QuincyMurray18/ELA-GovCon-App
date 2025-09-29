@@ -256,6 +256,7 @@ ELA Management LLC
     conn.commit()
 
 ensure_schema()
+run_migrations()
 
 # ---------- Utilities ----------
 def get_setting(key, default=""):
