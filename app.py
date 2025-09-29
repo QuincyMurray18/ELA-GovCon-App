@@ -198,6 +198,10 @@ def run_migrations():
     except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
     except Exception: pass
+    # rfp_sessions expansion
+    try: cur.execute("alter table rfp_sessions add column source text")
+    except Exception: pass
+
     # vendors table expansions
     try: cur.execute("alter table vendors add column distance_miles real")
     except Exception: pass
@@ -883,7 +887,7 @@ def render_rfp_analyzer():
         conn = get_db()
 
         # Sessions like Chat Assistant
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions where ifnull(source, 'analyzer') = 'analyzer' order by created_at desc", conn)
         session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("RFP session", options=session_titles, index=0)
 
@@ -891,7 +895,7 @@ def render_rfp_analyzer():
             default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
             new_title = st.text_input("Thread title", value=default_title)
             if st.button("Start RFP thread"):
-                conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
+                conn.execute("insert into rfp_sessions(title, source) values(?, ?)", (new_title, "analyzer"))
                 conn.commit()
                 st.rerun()
             return
@@ -1046,7 +1050,7 @@ def render_proposal_builder():
         st.caption("Draft federal proposal sections step by step, using your RFP thread and files as context.")
 
         conn = get_db()
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions where ifnull(source, 'analyzer') = 'analyzer' order by created_at desc", conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first. I need a thread to pull SOW/PWS and instructions from.")
             return
