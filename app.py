@@ -1015,8 +1015,7 @@ with st.sidebar:
 
 def render_rfp_analyzer():
     try:
-with tabs[tab_idx("RFP Analyzer")]:
-            st.subheader("RFP Analyzer")
+        st.subheader("RFP Analyzer")
         st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
 
         conn = get_db()
@@ -1181,8 +1180,7 @@ with tabs[tab_idx("RFP Analyzer")]:
 
 def render_proposal_builder():
     try:
-with tabs[tab_idx("Proposal Builder")]:
-            st.subheader("Proposal Builder")
+        st.subheader("Proposal Builder")
         st.caption("Draft federal proposal sections step by step, using your RFP thread and files as context.")
 
         conn = get_db()
@@ -1338,19 +1336,43 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
         used.add(key)
         parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
-# --- Deterministic tab routing ---
-TABS_TITLES = ['Pipeline', 'Subcontractor Finder', 'Contacts', 'Outreach', 'SAM Watch', 'RFP Analyzer', 'Capability Statement', 'White Paper Builder', 'Data Export', 'Auto extract', 'Ask the doc', 'Chat Assistant', 'Proposal Builder', 'Deadlines', 'L&M Checklist', 'RFQ Generator', 'Pricing Calculator', 'Past Performance', 'Quote Comparison', 'Tasks', 'Proposal Export']
-def tab_idx(title: str) -> int:
-    try:
-        return TABS_TITLES.index(title)
-    except ValueError:
-        return 0
+
+
+tabs = st.tabs([
+    "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
+    "RFP Analyzer","Capability Statement","White Paper Builder",
+    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
+    "Deadlines",
+    "L&M Checklist",
+    "RFQ Generator",
+    "Pricing Calculator",
+    "Past Performance",
+    "Quote Comparison",
+    "Tasks",
+    "Proposal Export"])
+
+
 
 with tabs[0]:
-with tabs[tab_idx("Pipeline")]:
-        st.subheader("Opportunities pipeline")
+    st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+if not df_opp.empty:
+    try:
+        pp = pd.read_sql_query("select naics, count(1) as n from past_performance group by naics", conn)
+        pp_map = {str(r["naics"]): int(r["n"]) for _, r in pp.iterrows()}
+    except Exception:
+        pp_map = {}
+    scores = []
+    for _, r in df_opp.iterrows():
+        sc = 50
+        if str(r.get("naics","")) in pp_map:
+            sc += min(20, 5*pp_map[str(r.get("naics",""))])
+        if (r.get("agency") or "").strip(): sc += 5
+        if (r.get("status") or "") == "New": sc += 5
+        scores.append(min(100, sc))
+    df_opp["win_score"] = scores
+
     # Ensure optional columns exist
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
@@ -1939,8 +1961,7 @@ def _lpta_note(total_price, budget_hint=None):
 __tabs_base = len(tabs) - 4  # after we appended 4 labels
 
 with tabs[__tabs_base + 0]:
-with tabs[tab_idx("Deadlines")]:
-        st.subheader("Deadline tracker")
+    st.subheader("Deadline tracker")
     conn = get_db()
     colA, colB = st.columns(2)
     with colA:
@@ -1975,8 +1996,7 @@ with tabs[tab_idx("Deadlines")]:
         st.write("No items due today.")
 
 with tabs[__tabs_base + 1]:
-with tabs[tab_idx("L&M Checklist")]:
-        st.subheader("Section L and M checklist")
+    st.subheader("Section L and M checklist")
     conn = get_db()
     up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
     if up and st.button("Generate checklist"):
@@ -1989,6 +2009,15 @@ with tabs[tab_idx("L&M Checklist")]:
         big = "\n\n".join(text_chunks).lower()
         # Simple deterministic anchors
         required_items = []
+        pages = []
+        try:
+            for f in up:
+                if f.name.lower().endswith("pdf"):
+                    r = PdfReader(f)
+                    for i, p in enumerate(r.pages):
+                        pages.append((f.name, i+1, (p.extract_text() or "")))
+        except Exception:
+            pass
         anchors = {
             "technical": r"(technical volume|technical proposal)",
             "price": r"(price volume|pricing|schedule of items)",
@@ -2002,14 +2031,21 @@ with tabs[tab_idx("L&M Checklist")]:
         }
         for name, pat in anchors.items():
             found = re.search(pat, big, flags=re.S)
-            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": "", "notes": ("Found" if found else "Not detected")})
+            src_pg, snippet, fname = "", "", ""
+            if found and pages:
+                for fn, pg, txt in pages:
+                    if re.search(pat, (txt or "").lower()):
+                        src_pg, fname = str(pg), fn
+                        snippet = (txt or "")[:500]
+                        break
+            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": src_pg, "notes": ("Found" if found else "Not detected"), "snippet_text": snippet, "file_name": fname})
         df = pd.DataFrame(required_items)
         st.dataframe(df)
         # Save
         for r in required_items:
             conn.execute(
-                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
-                (None, r["item"], 1, r["status"], r["source_page"], r["notes"])
+                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?,?,?,?)",
+                (None, r["item"], 1, r["status"], r.get("source_page",""), r["notes"], r.get("snippet_text",""), r.get("file_name",""), int(r.get("source_page") or 0))
             )
         conn.commit()
         st.success("Checklist saved")
@@ -2018,8 +2054,7 @@ with tabs[tab_idx("L&M Checklist")]:
     st.dataframe(items)
 
 with tabs[__tabs_base + 2]:
-with tabs[tab_idx("RFQ Generator")]:
-        st.subheader("RFQ generator to subcontractors")
+    st.subheader("RFQ generator to subcontractors")
     conn = get_db()
     vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
     st.caption("Compose RFQ")
@@ -2065,8 +2100,7 @@ with tabs[tab_idx("RFQ Generator")]:
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 with tabs[__tabs_base + 3]:
-with tabs[tab_idx("Pricing Calculator")]:
-        st.subheader("Pricing calculator")
+    st.subheader("Pricing calculator")
     with st.form("price_calc"):
         base_cost = st.number_input("Base or subcontractor price", min_value=0.0, step=100.0, value=0.0)
         overhead = st.number_input("Overhead percent", min_value=0.0, max_value=100.0, step=0.5, value=10.0)
@@ -2085,3 +2119,125 @@ with tabs[tab_idx("Pricing Calculator")]:
                      (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note))
         conn.commit()
 # === End new features ===
+
+
+with tabs[-4]:
+    st.subheader("Past Performance Library")
+    conn = get_db()
+    df = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
+    st.dataframe(df)
+    with st.form("pp_add"):
+        col1, col2 = st.columns(2)
+        with col1:
+            title = st.text_input("Project title")
+            agency = st.text_input("Agency")
+            period = st.text_input("Period (e.g., 2023–2024)")
+            value = st.number_input("Contract value", min_value=0.0, step=1000.0, value=0.0)
+        with col2:
+            naics = st.text_input("NAICS")
+            role = st.text_input("Role (Prime/Sub)")
+            poc = st.text_input("POC name and email")
+        desc = st.text_area("Description / scope")
+        outc = st.text_area("Outcomes / results")
+        add = st.form_submit_button("Add record")
+    if add:
+        conn.execute("""insert into past_performance(project_title, agency, naics, period, contract_value, role, description, outcomes, contact_name, contact_email)
+                        values(?,?,?,?,?,?,?,?,?,?)""",
+                     (title, agency, naics, period, float(value), role, desc, outc,
+                      (poc.split("@")[0].strip() if "@" in poc else poc), (poc if "@" in poc else "")))
+        conn.commit(); st.success("Added")
+    st.markdown("#### Copy selected blurbs")
+    pick_ids = st.multiselect("Select records", df["id"].tolist() if not df.empty else [])
+    if st.button("Copy to clipboard helper") and pick_ids:
+        sel = df[df["id"].isin(pick_ids)]
+        blob = "\\n\\n".join(f"**{r['project_title']} ({r['agency']})** — {r['description'] or ''} Results: {r['outcomes'] or ''}" for _, r in sel.iterrows())
+        st.code(blob, language="markdown")
+
+
+with tabs[-3]:
+    st.subheader("Subcontractor Quote Comparison")
+    conn = get_db()
+    olist = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
+    opp_map = {f"{r['id']}: {r['title'] or '(untitled)'}": int(r["id"]) for _, r in olist.iterrows()}
+    opp_pick = st.selectbox("Opportunity", options=list(opp_map.keys()) if opp_map else ["(none)"])
+    if opp_pick != "(none)":
+        opp_id = opp_map[opp_pick]
+        vendors = pd.read_sql_query("select id, company, email from vendors order by company", conn)
+        with st.form("add_quote"):
+            company = st.selectbox("Vendor", options=vendors["company"].tolist() if not vendors.empty else [])
+            total = st.number_input("Total price", min_value=0.0, step=100.0, value=0.0)
+            lead = st.text_input("Lead time / availability", "")
+            notes = st.text_area("Notes", "")
+            addq = st.form_submit_button("Add quote")
+        if addq and not vendors.empty:
+            vrow = vendors[vendors["company"]==company].iloc[0]
+            conn.execute("""insert into vendor_quotes(opp_id, vendor_id, company, total_price, lead_time, notes)
+                            values(?,?,?,?,?,?)""", (opp_id, int(vrow["id"]), vrow["company"], float(total), lead, notes))
+            conn.commit(); st.success("Quote added")
+        qdf = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by total_price asc", conn, params=(opp_id,))
+        st.dataframe(qdf)
+        if not qdf.empty:
+            pick = st.number_input("Winner quote id", min_value=0, step=1, value=int(qdf.iloc[0]["id"]))
+            if st.button("Pick winner"):
+                conn.execute("update vendor_quotes set is_winner=case when id=? then 1 else 0 end where opp_id=?", (int(pick), opp_id))
+                conn.commit(); st.success("Winner selected")
+
+
+with tabs[-2]:
+    st.subheader("Tasks & Reminders")
+    conn = get_db()
+    o = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
+    omap = {f"{r['id']}: {r['title'] or '(untitled)'}": int(r["id"]) for _, r in o.iterrows()}
+    with st.form("task_add"):
+        title = st.text_input("Task")
+        opp = st.selectbox("Link to Opportunity", options=list(omap.keys()) if omap else ["(none)"])
+        due = st.date_input("Due date")
+        who = st.text_input("Assignee", "")
+        addt = st.form_submit_button("Add task")
+    if addt and opp != "(none)":
+        conn.execute("insert into tasks(opp_id, title, assignee, due_date) values(?,?,?,?)",
+                     (omap[opp], title, who, due.strftime("%Y-%m-%d")))
+        conn.commit(); st.success("Task added")
+    st.markdown("#### Open tasks")
+    t = pd.read_sql_query("select * from tasks where status='Open' order by due_date asc", conn)
+    st.dataframe(t)
+
+
+with tabs[-1]:
+    st.subheader("Proposal Export (DOCX with guardrails)")
+    conn = get_db()
+    sessions = pd.read_sql_query("select id, title from rfp_sessions where ifnull(source, 'analyzer')='analyzer' order by created_at desc", conn)
+    if sessions.empty:
+        st.info("Create an Analyzer thread and draft sections first.")
+    else:
+        pick = st.selectbox("RFP thread", options=[f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()])
+        session_id = int(pick.split(":")[0])
+        cur = conn.cursor()
+        cur.execute("select section, content from proposal_drafts where session_id=? order by updated_at asc", (session_id,))
+        rows = cur.fetchall()
+        if not rows:
+            st.info("No saved sections yet. Draft in Proposal Builder first.")
+        else:
+            font_ok = st.checkbox("Use Times New Roman 12pt", True)
+            margin_ok = st.checkbox("Use 1-inch margins", True)
+            page_limit = st.number_input("Page limit (0 for none)", min_value=0, max_value=500, step=1, value=0)
+            run = st.button("Export DOCX")
+            if run:
+                from docx import Document
+                from docx.shared import Inches, Pt
+                doc = Document()
+                if margin_ok:
+                    for section in doc.sections:
+                        section.top_margin = Inches(1); section.bottom_margin = Inches(1)
+                        section.left_margin = Inches(1); section.right_margin = Inches(1)
+                for sec, text in rows:
+                    doc.add_heading(sec, level=1)
+                    for para in (text or "").split("\\n\\n"):
+                        pgh = doc.add_paragraph(para)
+                        if font_ok:
+                            for runx in pgh.runs:
+                                runx.font.name = "Times New Roman"; runx.font.size = Pt(12)
+                bio = io.BytesIO(); doc.save(bio)
+                st.download_button("Download proposal.docx", data=bio.getvalue(), file_name="proposal.docx",
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
