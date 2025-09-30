@@ -2121,7 +2121,7 @@ with tabs[__tabs_base + 3]:
 # === End new features ===
 
 
-with tabs[-4]:
+with tabs[17]:
     st.subheader("Past Performance Library")
     conn = get_db()
     df = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
@@ -2154,7 +2154,7 @@ with tabs[-4]:
         st.code(blob, language="markdown")
 
 
-with tabs[-3]:
+with tabs[18]:
     st.subheader("Subcontractor Quote Comparison")
     conn = get_db()
     olist = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
@@ -2183,7 +2183,7 @@ with tabs[-3]:
                 conn.commit(); st.success("Winner selected")
 
 
-with tabs[-2]:
+with tabs[19]:
     st.subheader("Tasks & Reminders")
     conn = get_db()
     o = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
@@ -2203,7 +2203,7 @@ with tabs[-2]:
     st.dataframe(t)
 
 
-with tabs[-1]:
+with tabs[20]:
     st.subheader("Proposal Export (DOCX with guardrails)")
     conn = get_db()
     sessions = pd.read_sql_query("select id, title from rfp_sessions where ifnull(source, 'analyzer')='analyzer' order by created_at desc", conn)
