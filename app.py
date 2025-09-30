@@ -53,7 +53,8 @@ _OPENAI_FALLBACK_MODELS = [
 ]
 
 
-# ---------- Feature flags (toggle new add-ons) ----------
+
+# ---------- Feature flags (Next7) ----------
 FEATURE_PAST_PERF = True
 FEATURE_EXPORT_GUARDED = True
 FEATURE_COMPLIANCE_V2 = True
@@ -332,29 +333,31 @@ def set_setting(key, value):
 
 
 def read_doc(uploaded_file):
+    """Read DOC/DOCX/PDF with OCR fallback for scanned PDFs."""
     suffix = uploaded_file.name.lower().split(".")[-1]
     if suffix in ["doc","docx"]:
-        d = docx.Document(uploaded_file); return "\\n".join(p.text for p in d.paragraphs)
+        d = docx.Document(uploaded_file)
+        return "\n".join(p.text for p in d.paragraphs)
     if suffix == "pdf":
+        # Try direct text extraction
         try:
             r = PdfReader(uploaded_file)
-            text = "\\n".join((p.extract_text() or "") for p in r.pages)
+            text = "\n".join((p.extract_text() or "") for p in r.pages)
             if text.strip():
                 return text
         except Exception:
             text = ""
-        # OCR fallback if text was empty (scanned/multi-column PDFs)
+        # OCR fallback
         try:
             from pdf2image import convert_from_bytes
             import pytesseract
             uploaded_file.seek(0)
             images = convert_from_bytes(uploaded_file.read(), dpi=200)
             ocr_texts = []
-            for img in images[:50]:  # safety cap
+            for img in images[:50]:
                 ocr_texts.append(pytesseract.image_to_string(img))
-            return "\\n".join(ocr_texts)
+            return "\n".join(ocr_texts)
         except Exception:
-            # Final fallback: raw bytes ignored if can't OCR
             pass
         return text or ""
     return uploaded_file.read().decode("utf-8", errors="ignore")
@@ -1044,7 +1047,7 @@ def render_rfp_analyzer():
             for _, r in rows.iterrows():
                 cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
                 chunks.extend(cs)
-                labels.extend([r["filename"]]*len(cs))
+                labels.extend([r["filename"]] * len(cs))
             vec, X = embed_texts(chunks)
             top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
             parts, used = [], set()
@@ -1177,9 +1180,6 @@ def render_proposal_builder():
             st.markdown("### Save & Export")
             save_all = st.button("Save edited drafts")
             export_md = st.button("Assemble full proposal (Markdown)")
-            export_docx = st.button("Export DOCX (guardrails)", key="pb_export_docx")
-            export_pdf = st.button("Export PDF (if converter available)", key="pb_export_pdf")
-
 
         base_context = build_context(max_rows=6)
         finders = [name for name, on in actions.items() if on]
@@ -1257,64 +1257,6 @@ Follow the solicitation exactly (format, page limits, fonts, submission method) 
             st.markdown("#### Assembled Proposal (Markdown preview)")
             st.code(assembled, language="markdown")
             st.download_button("Download proposal.md", data=assembled.encode("utf-8"), file_name="proposal.md", mime="text/markdown")
-        # Guarded export logic (fonts, margins, rough page-limit check)
-        if export_docx or export_pdf:
-            from docx import Document
-            from docx.shared import Pt, Inches
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            doc = Document()
-            # margins
-            for section in doc.sections:
-                section.top_margin = Inches(1)
-                section.bottom_margin = Inches(1)
-                section.left_margin = Inches(1)
-                section.right_margin = Inches(1)
-            font_name = "Times New Roman"
-            font_size = 11
-            # populate document
-            for block in assembled.split("\n\n---\n\n"):
-                for line in block.split("\n"):
-                    if line.strip().startswith("#"):
-                        p = doc.add_paragraph()
-                        run = p.add_run(line.strip("# ").strip())
-                        run.bold = True
-                        run.font.name = font_name
-                        run.font.size = Pt(font_size+1)
-                    else:
-                        p = doc.add_paragraph(line)
-                        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                        for run in p.runs:
-                            run.font.name = font_name
-                            run.font.size = Pt(font_size)
-            # Simple validation feedback
-            # Rough page estimation: assume ~600 words per page
-            words = len(assembled.split())
-            est_pages = max(1, int(words/600)+1)
-            valid = True
-            issues = []
-            if font_size not in (10,11,12): issues.append("Font size should be 10-12.")
-            if est_pages > 25: issues.append(f"Estimated pages {est_pages} may exceed typical limits.")
-            if issues: valid = False
-            if valid:
-                bio = io.BytesIO(); doc.save(bio); bio.seek(0)
-                st.download_button("Download proposal.docx", data=bio.getvalue(), file_name="proposal.docx",
-                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-            else:
-                st.warning("Guardrails: " + "; ".join(issues))
-            if export_pdf:
-                try:
-                    from docx2pdf import convert
-                    # Save temp docx then convert
-                    tmp_path = "/mnt/data/_tmp_proposal.docx"
-                    with open(tmp_path, "wb") as f:
-                        f.write(bio.getvalue())
-                    out_pdf = "/mnt/data/proposal.pdf"
-                    convert(tmp_path, out_pdf)
-                    with open(out_pdf, "rb") as f:
-                        st.download_button("Download proposal.pdf", data=f.read(), file_name="proposal.pdf", mime="application/pdf")
-                except Exception as e:
-                    st.info(f"PDF conversion not available: {e}")
-
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
         st.exception(e)
@@ -1346,51 +1288,6 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
         parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
-
-
-def compute_win_score(opp_row):
-    """Simple transparent win-probability score (0-100)."""
-    try:
-        base = 50.0
-        # NAICS match with watch list
-        conn = get_db()
-        watch = set(pd.read_sql_query("select code from naics_watch", conn)["code"].astype(str).tolist())
-        o_naics = (opp_row.get("naics") or "").split(",")[0].strip()
-        if o_naics and any(o_naics.startswith(w) for w in watch):
-            base += 15
-        # Set-aside inference
-        title = (opp_row.get("title") or "").lower()
-        if any(k in title for k in ["small business", "sb set-aside", "total small"]):
-            base += 10
-        # Agency familiarity: count previous opportunities from same agency
-        ag = (opp_row.get("agency") or "").strip()
-        if ag:
-            c = conn.execute("select count(*) from opportunities where agency=?", (ag,)).fetchone()[0]
-            if c >= 5: base += 8
-            elif c >= 2: base += 5
-        # Past performance presence by NAICS or agency
-        pp = pd.read_sql_query("select naics, agency from past_performance", conn)
-        if not pp.empty:
-            pp_match = ((pp["naics"].fillna("").str.startswith(o_naics)) | (pp["agency"].fillna("")==ag)).any()
-            if pp_match: base += 12
-        # Age / time cushion until due
-        due = _parse_date_any(opp_row.get("response_due"))
-        if due:
-            days = (due - datetime.now()).days
-            if days >= 14: base += 5
-            elif days <= 2: base -= 8
-        # Clip 5..95, round
-        score = max(5.0, min(95.0, base))
-        factors = {
-            "naics_match": o_naics,
-            "set_aside_hint": "yes" if base>=60 else "no",
-            "agency": ag,
-            "have_past_perf": bool(not pp.empty),
-            "days_until_due": (due - datetime.now()).days if due else None
-        }
-        return round(score,1), factors
-    except Exception as e:
-        return 50.0, {"error": str(e)}
 
 tabs = st.tabs([
     "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
@@ -2040,19 +1937,6 @@ with tabs[__tabs_base + 1]:
             except Exception as e:
                 st.warning(f"Could not read {f.name}: {e}")
         big = "\n\n".join(text_chunks).lower()
-        # Build page index if original PDFs are available
-        page_index = {}
-        try:
-            for f in up:
-                if f.name.lower().endswith(".pdf"):
-                    f.seek(0)
-                    reader = PdfReader(f)
-                    for i, p in enumerate(reader.pages):
-                        t = (p.extract_text() or "").lower()
-                        page_index.setdefault(f.name, {})[i+1] = t
-        except Exception:
-            page_index = {}
-
         # Simple deterministic anchors
         required_items = []
         anchors = {
@@ -2068,17 +1952,7 @@ with tabs[__tabs_base + 1]:
         }
         for name, pat in anchors.items():
             found = re.search(pat, big, flags=re.S)
-            src = ""
-            if page_index and found:
-                try:
-                    for fname, pages in page_index.items():
-                        for pg, txt in pages.items():
-                            if re.search(pat, txt, flags=re.S):
-                                src = f"{fname} p.{pg}"
-                                raise StopIteration
-                except StopIteration:
-                    pass
-            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": src, "notes": ("Found" if found else "Not detected")})
+            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": "", "notes": ("Found" if found else "Not detected")})
         df = pd.DataFrame(required_items)
         st.dataframe(df)
         # Save
@@ -2158,50 +2032,205 @@ with tabs[__tabs_base + 3]:
                         values(?,?,?,?,?,?,?)""",
                      (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note))
         conn.commit()
+# === End new features ===
 
-# === Added Add-on Tabs ===
+
+
+# === Next7: schema additions ===
 try:
-    with st.expander("ℹ️ Add-ons loaded", expanded=False):
-        st.write("Past Performance, Quote Comparison, Tasks, Win Scoring, and Guarded Exports are enabled.")
+    SCHEMA.update({
+        "past_performance": """
+        create table if not exists past_performance (
+            id integer primary key,
+            title text,
+            agency text,
+            naics text,
+            period text,
+            description text,
+            tags text,
+            metrics text,
+            created_at text default current_timestamp
+        );
+        """,
+        "tasks": """
+        create table if not exists tasks (
+            id integer primary key,
+            opp_id integer,
+            title text,
+            assignee text,
+            due_date text,
+            status text default 'Open',
+            notes text,
+            created_at text default current_timestamp
+        );
+        """,
+        "vendor_quotes": """
+        create table if not exists vendor_quotes (
+            id integer primary key,
+            opp_id integer,
+            vendor_id integer,
+            vendor_name text,
+            total_price real,
+            notes text,
+            winner integer default 0,
+            created_at text default current_timestamp
+        );
+        """,
+        "vendor_quote_items": """
+        create table if not exists vendor_quote_items (
+            id integer primary key,
+            quote_id integer,
+            clin text,
+            descr text,
+            qty real,
+            unit_price real,
+            total real
+        );
+        """,
+        "win_scores": """
+        create table if not exists win_scores (
+            id integer primary key,
+            opp_id integer,
+            score real,
+            factors_json text,
+            created_at text default current_timestamp
+        );
+        """
+    })
 except Exception:
     pass
 
-# Past Performance Library
-pp_tab = st.tabs(["Past Performance Library"])[0] if FEATURE_PAST_PERF else None
-if FEATURE_PAST_PERF and pp_tab:
-    with pp_tab:
-        st.subheader("Past Performance Library")
-        conn = get_db()
-        df_pp = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
-        grid = st.data_editor(df_pp, use_container_width=True, num_rows="dynamic", key="pp_grid")
-        if st.button("Save past performance records"):
-            cur = conn.cursor()
-            for _, r in grid.iterrows():
-                if pd.isna(r.get("id")):
-                    cur.execute("""insert into past_performance(title,agency,naics,period,description,tags,metrics)
-                                   values(?,?,?,?,?,?,?)""",
-                                (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
-                                 r.get("description"), r.get("tags"), r.get("metrics")))
-                else:
-                    cur.execute("""update past_performance set title=?, agency=?, naics=?, period=?, description=?, tags=?, metrics=? where id=?""",
-                                (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
-                                 r.get("description"), r.get("tags"), r.get("metrics"), int(r.get("id"))))
-            conn.commit(); st.success("Saved.")
 
-# Subcontractor Quote Comparison
-qc_tab = st.tabs(["Quote Comparison"])[0] if FEATURE_QUOTE_COMPARE else None
-if FEATURE_QUOTE_COMPARE and qc_tab:
-    with qc_tab:
-        st.subheader("Quote Comparison")
-        conn = get_db()
-        opps = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
-        opp_pick = st.selectbox("Opportunity", ["(none)"] + [f"{int(r['id'])}: {r['title']}" for _, r in opps.iterrows()])
-        opp_id = int(opp_pick.split(":")[0]) if opp_pick and opp_pick != "(none)" else None
-        df_v = pd.read_sql_query("select id, company from vendors order by company", conn)
-        if opp_id:
-            st.markdown("Add quote line items (optional) then totals per vendor:")
-            quotes = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by created_at desc", conn, params=(opp_id,))
-            grid = st.data_editor(quotes, use_container_width=True, num_rows="dynamic", key="quotes_grid")
+
+def compute_win_score(opp_row, conn=None):
+    """Compute transparent win probability 0-100 with factor breakdown."""
+    from datetime import datetime
+    import pandas as pd
+    base_score = 50.0
+    o_naics = str((opp_row.get("naics") or "")).split(",")[0].strip()
+    title = (opp_row.get("title") or "").lower()
+    ag = (opp_row.get("agency") or "").strip()
+    # NAICS watchlist match
+    try:
+        if conn is not None:
+            watch_df = pd.read_sql_query("select code from naics_watch", conn)
+            watch = set(watch_df["code"].astype(str).tolist())
+            if o_naics and any(o_naics.startswith(w) for w in watch):
+                base_score += 15
+    except Exception:
+        pass
+    # Set-aside hints
+    if any(k in title for k in ["small business","sb set-aside","total small"]):
+        base_score += 10
+    # Agency familiarity
+    try:
+        if conn is not None and ag:
+            c = conn.execute("select count(*) from opportunities where agency=?", (ag,)).fetchone()[0]
+            if c >= 5: base_score += 8
+            elif c >= 2: base_score += 5
+    except Exception:
+        pass
+    # Past performance existence
+    try:
+        if conn is not None:
+            pp = pd.read_sql_query("select naics, agency from past_performance", conn)
+            if not pp.empty and ((pp["naics"].fillna("").str.startswith(o_naics)) | (pp["agency"].fillna("")==ag)).any():
+                base_score += 12
+    except Exception:
+        pass
+    # Time until due
+    try:
+        due_str = opp_row.get("response_due")
+        if due_str:
+            from dateutil.parser import parse as _p
+            days = ( _p(due_str) - datetime.now()).days
+            if days >= 14: base_score += 5
+            elif days <= 2: base_score -= 8
+    except Exception:
+        pass
+    score = max(5.0, min(95.0, base_score))
+    factors = {
+        "naics": o_naics, "agency": ag,
+        "set_aside_hint": any(k in title for k in ["small business","sb set-aside","total small"]),
+    }
+    return round(score,1), factors
+
+
+
+# === Next7: Add-on Tabs ===
+import pandas as pd
+import streamlit as st
+import json, io
+
+def _get_db_conn():
+    try:
+        return get_db()
+    except Exception:
+        import sqlite3
+        return sqlite3.connect("govcon.db")
+
+if 'next7_tabs_rendered' not in st.session_state:
+    st.session_state['next7_tabs_rendered'] = True
+    st.write("")
+
+tab_labels = []
+tab_blocks = []
+
+if FEATURE_PAST_PERF:
+    tab_labels.append("Past Performance Library")
+    tab_blocks.append("pp")
+if FEATURE_QUOTE_COMPARE:
+    tab_labels.append("Quote Comparison")
+    tab_blocks.append("qc")
+if FEATURE_TASKS:
+    tab_labels.append("Tasks")
+    tab_blocks.append("tasks")
+if FEATURE_WIN_SCORE:
+    tab_labels.append("Win Score")
+    tab_blocks.append("win")
+
+if tab_labels:
+    _tabs = st.tabs(tab_labels)
+    tmap = dict(zip(tab_blocks, _tabs))
+
+    if "pp" in tmap:
+        with tmap["pp"]:
+            st.subheader("Past Performance Library")
+            conn = _get_db_conn()
+            try:
+                df = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
+            except Exception:
+                df = pd.DataFrame(columns=["id","title","agency","naics","period","description","tags","metrics"])
+            grid = st.data_editor(df, num_rows="dynamic", use_container_width=True, key="pp_grid")
+            if st.button("Save past performance"):
+                cur = conn.cursor()
+                for _, r in grid.iterrows():
+                    if pd.isna(r.get("id")):
+                        cur.execute("""insert into past_performance(title,agency,naics,period,description,tags,metrics)
+                                       values(?,?,?,?,?,?,?)""",
+                                    (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
+                                     r.get("description"), r.get("tags"), r.get("metrics")))
+                    else:
+                        cur.execute("""update past_performance set title=?, agency=?, naics=?, period=?, description=?, tags=?, metrics=? where id=?""",
+                                    (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
+                                     r.get("description"), r.get("tags"), r.get("metrics"), int(r.get("id"))))
+                conn.commit(); st.success("Saved.")
+
+    if "qc" in tmap:
+        with tmap["qc"]:
+            st.subheader("Subcontractor Quote Comparison")
+            conn = _get_db_conn()
+            try:
+                opps = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
+            except Exception:
+                opps = pd.DataFrame(columns=["id","title"])
+            opp_pick = st.selectbox("Opportunity", ["(none)"] + [f"{int(r['id'])}: {r['title']}" for _, r in opps.iterrows()])
+            opp_id = int(opp_pick.split(":")[0]) if opp_pick and opp_pick != "(none)" and ":" in opp_pick else None
+            if opp_id:
+                quotes = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by created_at desc", conn, params=(opp_id,))
+            else:
+                quotes = pd.DataFrame(columns=["id","opp_id","vendor_id","vendor_name","total_price","notes","winner"])
+            grid = st.data_editor(quotes, num_rows="dynamic", use_container_width=True, key="quotes_grid")
             if st.button("Save quotes"):
                 cur = conn.cursor()
                 for _, r in grid.iterrows():
@@ -2227,54 +2256,161 @@ if FEATURE_QUOTE_COMPARE and qc_tab:
                         cur.execute("update vendor_quotes set winner=1 where opp_id=? and vendor_name=?", (opp_id, pick_winner))
                     conn.commit(); st.success(f"Winner set: {pick_winner}")
 
-# Tasks & Reminders
-tasks_tab = st.tabs(["Tasks"])[0] if FEATURE_TASKS else None
-if FEATURE_TASKS and tasks_tab:
-    with tasks_tab:
-        st.subheader("Tasks")
-        conn = get_db()
-        df_t = pd.read_sql_query("select * from tasks order by due_date asc", conn)
-        grid = st.data_editor(df_t, use_container_width=True, num_rows="dynamic", key="tasks_grid")
-        if st.button("Save tasks"):
-            cur = conn.cursor()
-            for _, r in grid.iterrows():
-                if pd.isna(r.get("id")):
-                    cur.execute("""insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)""",
-                                (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"),
-                                 r.get("status") or "Open", r.get("notes")))
-                else:
-                    cur.execute("""update tasks set opp_id=?, title=?, assignee=?, due_date=?, status=?, notes=? where id=?""",
-                                (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"),
-                                 r.get("status") or "Open", r.get("notes"), int(r.get("id"))))
-            conn.commit(); st.success("Tasks saved.")
-        st.markdown("#### Due today")
-        due_today = pd.read_sql_query("select * from tasks where date(due_date)=date('now') and status='Open'", conn)
-        if due_today.empty:
-            st.caption("No tasks due today.")
-        else:
-            st.dataframe(due_today, use_container_width=True)
-
-# Win Probability Scoring
-win_tab = st.tabs(["Win Score"])[0] if FEATURE_WIN_SCORE else None
-if FEATURE_WIN_SCORE and win_tab:
-    with win_tab:
-        st.subheader("Win Probability Scoring")
-        conn = get_db()
-        opps = pd.read_sql_query("select * from opportunities order by posted desc", conn)
-        if opps.empty:
-            st.info("No opportunities in pipeline.")
-        else:
-            rows = []
-            for _, r in opps.iterrows():
-                score, factors = compute_win_score(r.to_dict())
-                rows.append({"id": int(r["id"]), "title": r["title"], "agency": r["agency"],
-                             "naics": r["naics"], "score": score, "factors": json.dumps(factors)})
-            df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
-            st.dataframe(df_scores, use_container_width=True)
-            if st.button("Save scores"):
+    if "tasks" in tmap:
+        with tmap["tasks"]:
+            st.subheader("Tasks & Reminders")
+            conn = _get_db_conn()
+            try:
+                df_t = pd.read_sql_query("select * from tasks order by due_date asc", conn)
+            except Exception:
+                df_t = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+            grid = st.data_editor(df_t, num_rows="dynamic", use_container_width=True, key="tasks_grid")
+            if st.button("Save tasks"):
                 cur = conn.cursor()
-                for _, rr in df_scores.iterrows():
-                    cur.execute("insert into win_scores(opp_id,score,factors_json) values(?,?,?)",
-                                (int(rr["id"]), float(rr["score"]), rr["factors"]))
-                conn.commit(); st.success("Scores saved.")
-# === End new features ===
+                for _, r in grid.iterrows():
+                    if pd.isna(r.get("id")):
+                        cur.execute("""insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)""",
+                                    (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"),
+                                     r.get("status") or "Open", r.get("notes")))
+                    else:
+                        cur.execute("""update tasks set opp_id=?, title=?, assignee=?, due_date=?, status=?, notes=? where id=?""",
+                                    (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"),
+                                     r.get("status") or "Open", r.get("notes"), int(r.get("id"))))
+                conn.commit(); st.success("Tasks saved.")
+            st.markdown("#### Due today")
+            try:
+                due_today = pd.read_sql_query("select * from tasks where date(due_date)=date('now') and status='Open'", conn)
+            except Exception:
+                due_today = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+            if due_today.empty:
+                st.caption("No tasks due today.")
+            else:
+                st.dataframe(due_today, use_container_width=True)
+
+    if "win" in tmap:
+        with tmap["win"]:
+            st.subheader("Win Probability Scoring")
+            conn = _get_db_conn()
+            try:
+                opps = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+            except Exception:
+                opps = pd.DataFrame(columns=["id","title","agency","naics","response_due"])
+            if opps.empty:
+                st.info("No opportunities in pipeline.")
+            else:
+                rows = []
+                for _, r in opps.iterrows():
+                    s, f = compute_win_score(r.to_dict(), conn=conn)
+                    rows.append({"id": int(r.get("id") or 0), "title": r.get("title"), "agency": r.get("agency"),
+                                 "naics": r.get("naics"), "score": s, "factors": json.dumps(f)})
+                df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
+                st.dataframe(df_scores, use_container_width=True)
+                if st.button("Save scores"):
+                    cur = conn.cursor()
+                    for _, rr in df_scores.iterrows():
+                        cur.execute("insert into win_scores(opp_id,score,factors_json) values(?,?,?)",
+                                    (int(rr["id"]), float(rr["score"]), rr["factors"]))
+                    conn.commit(); st.success("Scores saved.")
+
+
+
+# === Next7: Compliance Checker v2 (page anchors) ===
+def next7_compliance_checker():
+    import re
+    st.subheader("Section L & M Checklist (with Page Anchors)")
+    up = st.file_uploader("Upload solicitation files (PDF/DOCX)", type=["pdf","doc","docx"], accept_multiple_files=True, key="next7_lm_upload")
+    if not up:
+        st.info("Upload files to scan for L & M requirements.")
+        return
+    # Read all text with OCR fallback
+    docs = []
+    for f in up:
+        try:
+            docs.append((f.name, read_doc(f)))
+        except Exception as e:
+            st.warning(f"Could not read {f.name}: {e}")
+    big = "\\n\\n".join(t for _, t in docs).lower()
+
+    anchors = {
+        "Technical Volume": r"(technical\\s+volume|technical\\s+proposal)",
+        "Past Performance Volume": r"(past\\s+performance)",
+        "Price Volume": r"(price\\s+volume|pricing\\s+proposal)",
+        "Page Limit": r"(page\\s+limit|maximum\\s+pages?)",
+        "Font": r"(times\\s+new\\s+roman|arial|font\\s+size)",
+        "Margins": r"(margin\\s+1\\s*in|one\\s+inch\\s+margins?)",
+        "Submission": r"(submit|email|sam\\.gov|portal|delivery)",
+        "Due Date": r"(due\\s+date|offers\\s+due|responses?\\s+due)"
+    }
+
+    # Page index for PDFs
+    page_index = {}
+    try:
+        for f in up:
+            if f.name.lower().endswith(".pdf"):
+                f.seek(0)
+                reader = PdfReader(f)
+                for i, p in enumerate(reader.pages):
+                    txt = (p.extract_text() or "").lower()
+                    page_index.setdefault(f.name, {})[i+1] = txt
+    except Exception:
+        pass
+
+    rows = []
+    for name, pat in anchors.items():
+        found = re.search(pat, big, flags=re.S)
+        src = ""
+        if found and page_index:
+            for fname, pages in page_index.items():
+                for pg, txt in pages.items():
+                    if re.search(pat, txt, flags=re.S):
+                        src = f"{fname} p.{pg}"; break
+                if src: break
+        rows.append({"item": name, "status": "Found" if found else "Not detected", "source_page": src})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+if FEATURE_COMPLIANCE_V2:
+    st.markdown("")
+    with st.expander("Next7: L & M Compliance Checker (with anchors)", expanded=False):
+        next7_compliance_checker()
+
+
+
+# === Next7: Proposal Guarded Export ===
+def next7_proposal_export_ui():
+    st.subheader("Proposal Export (Guardrails)")
+    st.caption("Paste or generate your assembled proposal text below to export with standard formatting.")
+    assembled = st.text_area("Assembled proposal (Markdown/plain text)", height=300, key="next7_proposal_text")
+    export_docx = st.button("Export DOCX (guardrails)", key="next7_export_docx")
+    if assembled and export_docx:
+        try:
+            from docx import Document
+            from docx.shared import Pt, Inches
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            doc = Document()
+            for section in doc.sections:
+                section.top_margin = Inches(1); section.bottom_margin = Inches(1)
+                section.left_margin = Inches(1); section.right_margin = Inches(1)
+            font_name = "Times New Roman"; font_size = 11
+            for para in assembled.split("\\n"):
+                if para.strip().startswith("#"):
+                    p = doc.add_paragraph(); run = p.add_run(para.strip("# ").strip())
+                    run.bold = True; run.font.name = font_name; run.font.size = Pt(font_size+1)
+                else:
+                    p = doc.add_paragraph(para)
+                    for run in p.runs:
+                        run.font.name = font_name; run.font.size = Pt(font_size)
+                    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            words = len(assembled.split()); est_pages = max(1, int(words/600)+1)
+            issues = []
+            if font_size not in (10,11,12): issues.append("Font size should be 10-12.")
+            if est_pages > 25: issues.append(f"Estimated pages {est_pages} may exceed typical limits.")
+            if issues: st.warning("Guardrails: " + "; ".join(issues))
+            bio = io.BytesIO(); doc.save(bio); bio.seek(0)
+            st.download_button("Download proposal.docx", data=bio.getvalue(), file_name="proposal.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.error(f"DOCX export failed: {e}")
+
+if FEATURE_EXPORT_GUARDED:
+    with st.expander("Next7: Proposal Export (guardrails)", expanded=False):
+        next7_proposal_export_ui()
