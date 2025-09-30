@@ -211,7 +211,7 @@ create table if not exists tasks (
     notes text,
     created_at text default current_timestamp
 );
-    """
+"""
 })
 
 
@@ -224,6 +224,62 @@ SCHEMA.update({
         content text,
         updated_at text default current_timestamp,
         foreign key(session_id) references rfp_sessions(id)
+    );
+    """
+})
+
+# === Added schema for new features ===
+SCHEMA.update({
+    "deadlines": """
+    create table if not exists deadlines (
+        id integer primary key,
+        opp_id integer,
+        title text,
+        due_date text,
+        source text,
+        status text default 'Open',
+        notes text,
+        created_at text default current_timestamp
+    );
+    """,
+    "compliance_items": """
+    create table if not exists compliance_items (
+        id integer primary key,
+        opp_id integer,
+        item text,
+        required integer default 1,
+        status text default 'Pending',
+        source_page text,
+        notes text,
+        created_at text default current_timestamp
+    );
+    """,
+    "rfq_outbox": """
+    create table if not exists rfq_outbox (
+        id integer primary key,
+        vendor_id integer,
+        company text,
+        to_email text,
+        subject text,
+        body text,
+        due_date text,
+        files_json text,
+        sent_at text,
+        status text default 'Draft',
+        created_at text default current_timestamp
+    );
+    """,
+    "pricing_scenarios": """
+    create table if not exists pricing_scenarios (
+        id integer primary key,
+        opp_id integer,
+        base_cost real,
+        overhead_pct real,
+        gna_pct real,
+        profit_pct real,
+        total_price real,
+        lpta_note text,
+        created_at text default current_timestamp
     );
     """
 })
@@ -243,6 +299,16 @@ def run_migrations():
     except Exception: pass
     # vendors table expansions
     try: cur.execute("alter table vendors add column distance_miles real")
+    except Exception: pass
+    try: cur.execute("alter table rfp_sessions add column source text")
+    except Exception: pass
+    try: cur.execute("alter table compliance_items add column snippet_text text")
+    except Exception: pass
+    try: cur.execute("alter table compliance_items add column file_name text")
+    except Exception: pass
+    try: cur.execute("alter table compliance_items add column page_num integer")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column win_score real")
     except Exception: pass
     conn.commit()
 
@@ -295,6 +361,7 @@ ELA Management LLC
     conn.commit()
 
 ensure_schema()
+run_migrations()
 
 # ---------- Utilities ----------
 def get_setting(key, default=""):
@@ -313,8 +380,36 @@ def read_doc(uploaded_file):
     if suffix in ["doc","docx"]:
         d = docx.Document(uploaded_file); return "\n".join(p.text for p in d.paragraphs)
     if suffix == "pdf":
-        r = PdfReader(uploaded_file); return "\n".join((p.extract_text() or "") for p in r.pages)
+        r = PdfReader(uploaded_file)
+        txt = "\n".join((p.extract_text() or "") for p in r.pages)
+        if txt.strip():
+            return txt
+        if convert_from_bytes and pytesseract:
+            try:
+                uploaded_file.seek(0)
+                pdf_bytes = uploaded_file.read()
+                pages = convert_from_bytes(pdf_bytes)
+                ocr_texts = []
+                for img in pages:
+                    ocr_texts.append(pytesseract.image_to_string(img))
+                return "\n".join(ocr_texts)
+            except Exception:
+                pass
+        return txt
     return uploaded_file.read().decode("utf-8", errors="ignore")
+
+
+
+# --- OCR fallback helpers (optional) ---
+try:
+    import pytesseract
+    from PIL import Image
+    from pdf2image import convert_from_bytes
+except Exception:
+    pytesseract = None
+    Image = None
+    convert_from_bytes = None
+
 
 def llm(system, prompt, temp=0.2, max_tokens=1400):
     if not client: return "Set OPENAI_API_KEY to enable drafting."
@@ -1246,13 +1341,38 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
 tabs = st.tabs([
     "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
     "RFP Analyzer","Capability Statement","White Paper Builder",
-    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder"])
+    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
+    "Deadlines",
+    "L&M Checklist",
+    "RFQ Generator",
+    "Pricing Calculator",
+    "Past Performance",
+    "Quote Comparison",
+    "Tasks",
+    "Proposal Export"])
+
 
 
 with tabs[0]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+if not df_opp.empty:
+    try:
+        pp = pd.read_sql_query("select naics, count(1) as n from past_performance group by naics", conn)
+        pp_map = {str(r["naics"]): int(r["n"]) for _, r in pp.iterrows()}
+    except Exception:
+        pp_map = {}
+    scores = []
+    for _, r in df_opp.iterrows():
+        sc = 50
+        if str(r.get("naics","")) in pp_map:
+            sc += min(20, 5*pp_map[str(r.get("naics",""))])
+        if (r.get("agency") or "").strip(): sc += 5
+        if (r.get("status") or "") == "New": sc += 5
+        scores.append(min(100, sc))
+    df_opp["win_score"] = scores
+
     # Ensure optional columns exist
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
@@ -1819,3 +1939,305 @@ Keep responses concise and actionable. Use bullet points when helpful. Ask clari
 
 with tabs[12]:
     render_proposal_builder()
+
+
+# === New Feature Tabs Implementation ===
+
+def _parse_date_any(s):
+    s = (s or "").strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    return None
+
+def _lpta_note(total_price, budget_hint=None):
+    if budget_hint is None:
+        return "LPTA check requires competitor or IGCE context. Provide budget to evaluate."
+    return "PASS" if total_price <= float(budget_hint) else "FAIL"
+
+# Compute dynamic base index for new tabs
+__tabs_base = len(tabs) - 4  # after we appended 4 labels
+
+with tabs[__tabs_base + 0]:
+    st.subheader("Deadline tracker")
+    conn = get_db()
+    colA, colB = st.columns(2)
+    with colA:
+        st.caption("From opportunities table")
+        o = pd.read_sql_query("select id, title, agency, response_due, status from opportunities order by response_due asc nulls last", conn)
+        if not o.empty:
+            o["due_dt"] = o["response_due"].apply(_parse_date_any)
+            o["Due in days"] = o["due_dt"].apply(lambda d: (d - datetime.now()).days if d else None)
+            st.dataframe(o[["id","title","agency","response_due","status","Due in days"]])
+        else:
+            st.info("No opportunities yet")
+    with colB:
+        st.caption("Manual deadlines")
+        m = pd.read_sql_query("select * from deadlines order by due_date asc", conn)
+        st.dataframe(m)
+        with st.form("add_deadline"):
+            title = st.text_input("Title")
+            due = st.date_input("Due date", datetime.now().date())
+            source = st.text_input("Source or link", "")
+            notes = st.text_area("Notes", "")
+            if st.form_submit_button("Add"):
+                conn.execute("insert into deadlines(opp_id,title,due_date,source,notes) values(?,?,?,?,?)",
+                             (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
+                conn.commit()
+                st.success("Added")
+
+    st.markdown("### Due today")
+    due_today = pd.read_sql_query("select * from deadlines where date(due_date)=date('now') and status='Open'", conn)
+    if not due_today.empty:
+        st.dataframe(due_today[["title","due_date","source","notes"]])
+    else:
+        st.write("No items due today.")
+
+with tabs[__tabs_base + 1]:
+    st.subheader("Section L and M checklist")
+    conn = get_db()
+    up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
+    if up and st.button("Generate checklist"):
+        text_chunks = []
+        for f in up:
+            try:
+                text_chunks.append(read_doc(f))
+            except Exception as e:
+                st.warning(f"Could not read {f.name}: {e}")
+        big = "\n\n".join(text_chunks).lower()
+        # Simple deterministic anchors
+        required_items = []
+        pages = []
+        try:
+            for f in up:
+                if f.name.lower().endswith("pdf"):
+                    r = PdfReader(f)
+                    for i, p in enumerate(r.pages):
+                        pages.append((f.name, i+1, (p.extract_text() or "")))
+        except Exception:
+            pass
+        anchors = {
+            "technical": r"(technical volume|technical proposal)",
+            "price": r"(price volume|pricing|schedule of items)",
+            "past performance": r"past performance",
+            "representations": r"(reps(?: and)? certs|52\.212-3)",
+            "page limit": r"(page limit|not exceed \d+ pages|\d+\s*page\s*limit)",
+            "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
+            "delivery": r"(delivery|period of performance|pop:)",
+            "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
+            "due date": r"(offers due|responses due|closing date)",
+        }
+        for name, pat in anchors.items():
+            found = re.search(pat, big, flags=re.S)
+            src_pg, snippet, fname = "", "", ""
+            if found and pages:
+                for fn, pg, txt in pages:
+                    if re.search(pat, (txt or "").lower()):
+                        src_pg, fname = str(pg), fn
+                        snippet = (txt or "")[:500]
+                        break
+            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": src_pg, "notes": ("Found" if found else "Not detected"), "snippet_text": snippet, "file_name": fname})
+        df = pd.DataFrame(required_items)
+        st.dataframe(df)
+        # Save
+        for r in required_items:
+            conn.execute(
+                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?,?,?,?)",
+                (None, r["item"], 1, r["status"], r.get("source_page",""), r["notes"], r.get("snippet_text",""), r.get("file_name",""), int(r.get("source_page") or 0))
+            )
+        conn.commit()
+        st.success("Checklist saved")
+    st.markdown("#### Existing items")
+    items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
+    st.dataframe(items)
+
+with tabs[__tabs_base + 2]:
+    st.subheader("RFQ generator to subcontractors")
+    conn = get_db()
+    vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
+    st.caption("Compose RFQ")
+    with st.form("rfq_form"):
+        sel = st.multiselect("Recipients", vendors["company"].tolist())
+        scope = st.text_area("Scope", st.session_state.get("default_scope", "Provide labor materials equipment and supervision per attached specifications"), height=120)
+        qty = st.text_input("Quantities or CLIN list", "")
+        due = st.date_input("Quote due by", datetime.now().date() + timedelta(days=3))
+        files = st.text_input("File names to reference", "")
+        subject = st.text_input("Email subject", "Quote request for upcoming federal project")
+        body = st.text_area("Email body preview", height=240,
+            value=(f"Hello, \n\nELA Management LLC requests a quote.\n\nScope\n{scope}\n\nQuantities\n{qty}\n\nDue by {due.strftime('%Y-%m-%d')}\n\nFiles\n{files}\n\nPlease reply with price lead time and any exclusions.\n\nThank you.")
+        )
+        submit = st.form_submit_button("Generate drafts")
+    if submit:
+        recs = vendors[vendors["company"].isin(sel)]
+        for _, r in recs.iterrows():
+            conn.execute("""insert into rfq_outbox(vendor_id, company, to_email, subject, body, due_date, files_json, status)
+                            values(?,?,?,?,?,?,?,?)""",
+                         (int(r["id"]), r["company"], r.get("email",""), subject, body, due.strftime("%Y-%m-%d"),
+                          json.dumps([f.strip() for f in files.split(",") if f.strip()]), "Draft"))
+        conn.commit()
+        st.success(f"Created {len(recs)} RFQ draft(s)")
+    st.markdown("#### Drafts")
+    drafts = pd.read_sql_query("select * from rfq_outbox order by created_at desc", conn)
+    st.dataframe(drafts)
+
+    # Export selected draft as DOCX
+    pick = st.number_input("Draft ID to export as DOCX", min_value=0, step=1, value=0)
+    if pick:
+        cur = conn.cursor()
+        cur.execute("select company, subject, body from rfq_outbox where id=?", (int(pick),))
+        row = cur.fetchone()
+        if row:
+            from docx import Document
+            doc = Document()
+            doc.add_heading(row[1], level=1)
+            doc.add_paragraph(f"To: {row[0]}")
+            for para in row[2].split("\\n\\n"):
+                doc.add_paragraph(para)
+            bio = io.BytesIO(); doc.save(bio); bio.seek(0)
+            st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+with tabs[__tabs_base + 3]:
+    st.subheader("Pricing calculator")
+    with st.form("price_calc"):
+        base_cost = st.number_input("Base or subcontractor price", min_value=0.0, step=100.0, value=0.0)
+        overhead = st.number_input("Overhead percent", min_value=0.0, max_value=100.0, step=0.5, value=10.0)
+        gna = st.number_input("G and A percent", min_value=0.0, max_value=100.0, step=0.5, value=5.0)
+        profit = st.number_input("Profit percent", min_value=0.0, max_value=100.0, step=0.5, value=8.0)
+        igce = st.number_input("Budget or IGCE if known", min_value=0.0, step=100.0, value=0.0)
+        run = st.form_submit_button("Calculate")
+    if run:
+        total = base_cost * (1 + overhead/100.0) * (1 + gna/100.0) * (1 + profit/100.0)
+        note = _lpta_note(total, budget_hint=igce if igce > 0 else None)
+        st.metric("Total price", f"${total:,.2f}")
+        st.info(f"LPTA note: {note}")
+        conn = get_db()
+        conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note)
+                        values(?,?,?,?,?,?,?)""",
+                     (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note))
+        conn.commit()
+# === End new features ===
+
+
+with tabs[-4]:
+    st.subheader("Past Performance Library")
+    conn = get_db()
+    df = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
+    st.dataframe(df)
+    with st.form("pp_add"):
+        col1, col2 = st.columns(2)
+        with col1:
+            title = st.text_input("Project title")
+            agency = st.text_input("Agency")
+            period = st.text_input("Period (e.g., 2023–2024)")
+            value = st.number_input("Contract value", min_value=0.0, step=1000.0, value=0.0)
+        with col2:
+            naics = st.text_input("NAICS")
+            role = st.text_input("Role (Prime/Sub)")
+            poc = st.text_input("POC name and email")
+        desc = st.text_area("Description / scope")
+        outc = st.text_area("Outcomes / results")
+        add = st.form_submit_button("Add record")
+    if add:
+        conn.execute("""insert into past_performance(project_title, agency, naics, period, contract_value, role, description, outcomes, contact_name, contact_email)
+                        values(?,?,?,?,?,?,?,?,?,?)""",
+                     (title, agency, naics, period, float(value), role, desc, outc,
+                      (poc.split("@")[0].strip() if "@" in poc else poc), (poc if "@" in poc else "")))
+        conn.commit(); st.success("Added")
+    st.markdown("#### Copy selected blurbs")
+    pick_ids = st.multiselect("Select records", df["id"].tolist() if not df.empty else [])
+    if st.button("Copy to clipboard helper") and pick_ids:
+        sel = df[df["id"].isin(pick_ids)]
+        blob = "\\n\\n".join(f"**{r['project_title']} ({r['agency']})** — {r['description'] or ''} Results: {r['outcomes'] or ''}" for _, r in sel.iterrows())
+        st.code(blob, language="markdown")
+
+
+with tabs[-3]:
+    st.subheader("Subcontractor Quote Comparison")
+    conn = get_db()
+    olist = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
+    opp_map = {f"{r['id']}: {r['title'] or '(untitled)'}": int(r["id"]) for _, r in olist.iterrows()}
+    opp_pick = st.selectbox("Opportunity", options=list(opp_map.keys()) if opp_map else ["(none)"])
+    if opp_pick != "(none)":
+        opp_id = opp_map[opp_pick]
+        vendors = pd.read_sql_query("select id, company, email from vendors order by company", conn)
+        with st.form("add_quote"):
+            company = st.selectbox("Vendor", options=vendors["company"].tolist() if not vendors.empty else [])
+            total = st.number_input("Total price", min_value=0.0, step=100.0, value=0.0)
+            lead = st.text_input("Lead time / availability", "")
+            notes = st.text_area("Notes", "")
+            addq = st.form_submit_button("Add quote")
+        if addq and not vendors.empty:
+            vrow = vendors[vendors["company"]==company].iloc[0]
+            conn.execute("""insert into vendor_quotes(opp_id, vendor_id, company, total_price, lead_time, notes)
+                            values(?,?,?,?,?,?)""", (opp_id, int(vrow["id"]), vrow["company"], float(total), lead, notes))
+            conn.commit(); st.success("Quote added")
+        qdf = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by total_price asc", conn, params=(opp_id,))
+        st.dataframe(qdf)
+        if not qdf.empty:
+            pick = st.number_input("Winner quote id", min_value=0, step=1, value=int(qdf.iloc[0]["id"]))
+            if st.button("Pick winner"):
+                conn.execute("update vendor_quotes set is_winner=case when id=? then 1 else 0 end where opp_id=?", (int(pick), opp_id))
+                conn.commit(); st.success("Winner selected")
+
+
+with tabs[-2]:
+    st.subheader("Tasks & Reminders")
+    conn = get_db()
+    o = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
+    omap = {f"{r['id']}: {r['title'] or '(untitled)'}": int(r["id"]) for _, r in o.iterrows()}
+    with st.form("task_add"):
+        title = st.text_input("Task")
+        opp = st.selectbox("Link to Opportunity", options=list(omap.keys()) if omap else ["(none)"])
+        due = st.date_input("Due date")
+        who = st.text_input("Assignee", "")
+        addt = st.form_submit_button("Add task")
+    if addt and opp != "(none)":
+        conn.execute("insert into tasks(opp_id, title, assignee, due_date) values(?,?,?,?)",
+                     (omap[opp], title, who, due.strftime("%Y-%m-%d")))
+        conn.commit(); st.success("Task added")
+    st.markdown("#### Open tasks")
+    t = pd.read_sql_query("select * from tasks where status='Open' order by due_date asc", conn)
+    st.dataframe(t)
+
+
+with tabs[-1]:
+    st.subheader("Proposal Export (DOCX with guardrails)")
+    conn = get_db()
+    sessions = pd.read_sql_query("select id, title from rfp_sessions where ifnull(source, 'analyzer')='analyzer' order by created_at desc", conn)
+    if sessions.empty:
+        st.info("Create an Analyzer thread and draft sections first.")
+    else:
+        pick = st.selectbox("RFP thread", options=[f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()])
+        session_id = int(pick.split(":")[0])
+        cur = conn.cursor()
+        cur.execute("select section, content from proposal_drafts where session_id=? order by updated_at asc", (session_id,))
+        rows = cur.fetchall()
+        if not rows:
+            st.info("No saved sections yet. Draft in Proposal Builder first.")
+        else:
+            font_ok = st.checkbox("Use Times New Roman 12pt", True)
+            margin_ok = st.checkbox("Use 1-inch margins", True)
+            page_limit = st.number_input("Page limit (0 for none)", min_value=0, max_value=500, step=1, value=0)
+            run = st.button("Export DOCX")
+            if run:
+                from docx import Document
+                from docx.shared import Inches, Pt
+                doc = Document()
+                if margin_ok:
+                    for section in doc.sections:
+                        section.top_margin = Inches(1); section.bottom_margin = Inches(1)
+                        section.left_margin = Inches(1); section.right_margin = Inches(1)
+                for sec, text in rows:
+                    doc.add_heading(sec, level=1)
+                    for para in (text or "").split("\\n\\n"):
+                        pgh = doc.add_paragraph(para)
+                        if font_ok:
+                            for runx in pgh.runs:
+                                runx.font.name = "Times New Roman"; runx.font.size = Pt(12)
+                bio = io.BytesIO(); doc.save(bio)
+                st.download_button("Download proposal.docx", data=bio.getvalue(), file_name="proposal.docx",
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
