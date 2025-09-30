@@ -1555,7 +1555,7 @@ def render_proposal_builder():
             want_tech = st.checkbox("Technical Approach", True)
         with col2:
             want_mgmt = st.checkbox("Management & Staffing Plan", True)
-            want_past = st.checkbox("Past Performance", True)
+            want_past = st.checkbox(True)
         with col3:
             want_price = st.checkbox("Pricing Assumptions/Notes", True)
             want_comp = st.checkbox("Compliance Narrative", True)
@@ -1565,8 +1565,7 @@ def render_proposal_builder():
         actions = {
             "Executive Summary": want_exec,
             "Technical Approach": want_tech,
-            "Management & Staffing Plan": want_mgmt,
-            "Past Performance": want_past,
+            "Management & Staffing Plan": want_mgmt: want_past,
             "Pricing Assumptions/Notes": want_price,
             "Compliance Narrative": want_comp,
         }
@@ -1625,7 +1624,7 @@ Follow the solicitation exactly (format, page limits, fonts, submission method) 
             st.success("Drafted selected sections. Scroll down to review and edit.")
 
         st.markdown("### Drafts")
-        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
+        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Pricing Assumptions/Notes","Compliance Narrative"]
         existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         edited_blocks = {}
         for sec in order:
@@ -1700,11 +1699,15 @@ tabs = st.tabs([
     "Deadlines",
     "L&M Checklist",
     "RFQ Generator",
-    "Pricing Calculator",
-    "Past Performance","Quote Compare","Tasks","Compliance v2","Proposal Export"])
+    "Pricing Calculator"])
 
 
-with tabs[0]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+
+if False:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -1782,7 +1785,11 @@ with tabs[0]:
         conn.commit()
         st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
 
-with tabs[1]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Find subcontractors and rank by fit")
     trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial"))
     loc = st.text_input("Place of Performance", value=get_setting("home_loc", "Houston, TX"))
@@ -1917,7 +1924,11 @@ with tabs[1]:
         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
-with tabs[2]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
 
 
 
@@ -1937,7 +1948,11 @@ with tabs[2]:
                             (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
         conn.commit(); st.success("Saved")
 
-with tabs[3]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
@@ -1977,7 +1992,12 @@ with tabs[3]:
             st.success(f"Processed {sent} messages")
 
 
-with tabs[4]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+
+if False:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
     conn = get_db()
@@ -2086,10 +2106,18 @@ with tabs[4]:
 
 # Removed RFP mini-analyzer from SAM Watch
 
-with tabs[5]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     render_rfp_analyzer()
 
-with tabs[6]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", value="Responsive project management for federal facilities and services")
@@ -2110,7 +2138,11 @@ Certifications Small Business
 Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
         st.markdown(llm(system, prompt, max_tokens=900))
 
-with tabs[7]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("White paper builder")
     title = st.text_input("Title", value="Improving Facility Readiness with Outcome based Service Contracts")
     thesis = st.text_area("Thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
@@ -2120,7 +2152,11 @@ with tabs[7]:
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
         st.markdown(llm(system, prompt, max_tokens=1400))
 
-with tabs[8]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Export to Excel workbook")
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
@@ -2130,7 +2166,11 @@ with tabs[8]:
     st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-with tabs[9]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Auto extract key details")
     up = st.file_uploader("Upload solicitation or PWS", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="auto_up")
     if up and st.button("Extract"):
@@ -2145,7 +2185,11 @@ with tabs[9]:
         prompt = "Source slices\n" + "\n\n".join(snips) + "\n\nExtract fields now"
         st.markdown(llm(system, prompt, max_tokens=1200))
 
-with tabs[10]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Ask questions over the uploaded docs")
     up2 = st.file_uploader("Upload PDFs or DOCX", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="qna_up")
     q = st.text_input("Your question")
@@ -2157,7 +2201,11 @@ with tabs[10]:
         prompt = f"Context\n{support}\n\nQuestion\n{q}"
         st.markdown(llm(system, prompt, max_tokens=900))
 
-with tabs[11]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
@@ -2276,7 +2324,11 @@ Keep responses concise and actionable. Use bullet points when helpful. Ask clari
         st.chat_message("assistant").markdown(assistant_out)
 # ===== end app.py =====
 
-with tabs[12]:
+
+# (commented) with tabs[...] legacy binding removed
+
+
+if False:
     render_proposal_builder()
 
 
@@ -2447,7 +2499,7 @@ with tabs[__tabs_base + 3]:
 
 # === Next 7 Upgrades tabs wiring (separate tab group to avoid index collisions) ===
 try:
-    new_tabs = st.tabs(["Past Performance", "Quote Compare", "Tasks", "Compliance v2", "Proposal Export"])
+    new_tabs = st.tabs(["Proposal Export"])
     with new_tabs[0]:
         render_past_performance_tab(get_db)
     with new_tabs[1]:
@@ -2461,3 +2513,24 @@ try:
     st.caption(f"OCR status: {ocr_status().get('message')}")
 except Exception as e:
     st.error(f"Upgrade tabs error: {e}")
+
+
+
+# === Upgrades Suite (single-panel navigation to avoid tab collisions) ===
+try:
+    st.sidebar.markdown("### Upgrades Suite")
+    _opt = st.sidebar.selectbox("Open module", ["Past Performance", "Quote Compare", "Tasks", "Compliance v2", "Proposal Export"], index=0)
+    if _opt == "Past Performance":
+        render_past_performance_tab(get_db)
+    elif _opt == "Quote Compare":
+        render_quote_comparison_tab(get_db)  # includes RFQ generator
+    elif _opt == "Tasks":
+        render_tasks_tab(get_db)  # includes Deadline Tracker/Due Today
+    elif _opt == "Compliance v2":
+        render_compliance_v2_tab(get_db)  # Section L & M anchors
+    elif _opt == "Proposal Export":
+        render_proposal_export_tab(get_db)  # export only
+    st.caption(f"OCR status: {ocr_status().get('message')}")
+except Exception as e:
+    st.error(f"Upgrades panel error: {e}")
+
