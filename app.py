@@ -17,6 +17,15 @@ try:
 except Exception:
     BeautifulSoup = None
 
+
+# ---- Feature flags (safe defaults) ----
+ENABLE_PAST_PERF = True
+ENABLE_DOCX_EXPORT = True
+ENABLE_COMPLIANCE_V2 = True
+ENABLE_QUOTE_COMPARE = True
+ENABLE_TASKS = True
+ENABLE_WIN_SCORE = True
+ENABLE_OCR = True  # auto-falls back if deps missing
 # ---------- Safe key loader ----------
 def _get_key(name: str) -> str:
     v = os.getenv(name, "")
@@ -1896,40 +1905,58 @@ with tabs[__tabs_base + 1]:
     st.subheader("Section L and M checklist")
     conn = get_db()
     up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
-    if up and st.button("Generate checklist"):
-        text_chunks = []
-        for f in up:
-            try:
-                text_chunks.append(read_doc(f))
-            except Exception as e:
-                st.warning(f"Could not read {f.name}: {e}")
-        big = "\n\n".join(text_chunks).lower()
-        # Simple deterministic anchors
-        required_items = []
-        anchors = {
+
+if up and st.button("Generate checklist"):
+    records = []
+    for f in up:
+        try:
+            content = read_doc(f)
+        except Exception as e:
+            st.warning(f"Could not read {f.name}: {e}"); continue
+        pages = re.split(r"\[\[PAGE\s+(\d+)\]\]", content)
+        def _emit(item, file_name, page_no, snippet):
+            records.append({
+                "item": item, "required": 1, "status": "Pending",
+                "file_name": file_name, "page_no": page_no, "snippet": snippet[:500]
+            })
+        checks = {
             "technical": r"(technical volume|technical proposal)",
             "price": r"(price volume|pricing|schedule of items)",
             "past performance": r"past performance",
             "representations": r"(reps(?: and)? certs|52\.212-3)",
-            "page limit": r"(page limit|not exceed \d+ pages|\d+\s*page\s*limit)",
-            "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
-            "delivery": r"(delivery|period of performance|pop:)",
+            "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
+            "font": r"(font\s*(size)?\s*\d+|times new roman|arial|calibri)",
             "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
-            "due date": r"(offers due|responses due|closing date)",
+            "due date": r"(offers due|responses due|closing date|due\s+by\s+\w+)"
         }
-        for name, pat in anchors.items():
-            found = re.search(pat, big, flags=re.S)
-            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": "", "notes": ("Found" if found else "Not detected")})
-        df = pd.DataFrame(required_items)
-        st.dataframe(df)
-        # Save
-        for r in required_items:
-            conn.execute(
-                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
-                (None, r["item"], 1, r["status"], r["source_page"], r["notes"])
-            )
+        if len(pages) >= 3:
+            it = iter(pages)
+            _ = next(it, "")
+            for pno, ptxt in zip(it, it):
+                for name, pat in checks.items():
+                    m = re.search(pat, ptxt, flags=re.I|re.S)
+                    if m:
+                        sl = max(0, m.start()-180); sr = min(len(ptxt), m.end()+180)
+                        _emit(name, f.name, int(pno), ptxt[sl:sr])
+        else:
+            for name, pat in checks.items():
+                m = re.search(pat, content, flags=re.I|re.S)
+                if m:
+                    sl = max(0, m.start()-180); sr = min(len(content), m.end()+180)
+                    _emit(name, f.name, None, content[sl:sr])
+
+    if records:
+        df = pd.DataFrame(records)
+        st.dataframe(df[["item","status","file_name","page_no","snippet"]])
+        for r in records:
+            conn.execute("""insert into compliance_items(opp_id,item,required,status,source_page,notes,file_name,page_no,snippet)
+                            values(?,?,?,?,?,?,?,?,?)""",
+                         (None, r["item"], 1, r["status"], str(r.get("page_no") or ""), "", r["file_name"], r["page_no"], r["snippet"]))
         conn.commit()
-        st.success("Checklist saved")
+        st.success("Checklist saved with page anchors/snippets.")
+    else:
+        st.info("No L&M anchors detected.")
+
     st.markdown("#### Existing items")
     items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
     st.dataframe(items)
