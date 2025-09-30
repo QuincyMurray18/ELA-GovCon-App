@@ -1565,7 +1565,7 @@ def render_proposal_builder():
         actions = {
             "Executive Summary": want_exec,
             "Technical Approach": want_tech,
-            "Management & Staffing Plan": want_mgmt: want_past,
+            "Management & Staffing Plan": want_mgmt, "Past Performance": want_past,
             "Pricing Assumptions/Notes": want_price,
             "Compliance Narrative": want_comp,
         }
