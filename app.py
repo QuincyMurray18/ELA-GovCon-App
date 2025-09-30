@@ -1263,7 +1263,7 @@ tabs = st.tabs([
     "Deadlines",
     "L&M Checklist",
     "RFQ Generator",
-    "Pricing Calculator"])
+    "Pricing Calculator","Past Performance","Quote Comparison","Win Probability"])
 
 
 with tabs[0]:
@@ -1892,47 +1892,68 @@ with tabs[__tabs_base + 0]:
     else:
         st.write("No items due today.")
 
+
 with tabs[__tabs_base + 1]:
     st.subheader("Section L and M checklist")
     conn = get_db()
     up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
     if up and st.button("Generate checklist"):
-        text_chunks = []
+        items = []
         for f in up:
-            try:
-                text_chunks.append(read_doc(f))
-            except Exception as e:
-                st.warning(f"Could not read {f.name}: {e}")
-        big = "\n\n".join(text_chunks).lower()
-        # Simple deterministic anchors
-        required_items = []
-        anchors = {
-            "technical": r"(technical volume|technical proposal)",
-            "price": r"(price volume|pricing|schedule of items)",
-            "past performance": r"past performance",
-            "representations": r"(reps(?: and)? certs|52\.212-3)",
-            "page limit": r"(page limit|not exceed \d+ pages|\d+\s*page\s*limit)",
-            "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
-            "delivery": r"(delivery|period of performance|pop:)",
-            "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
-            "due date": r"(offers due|responses due|closing date)",
-        }
-        for name, pat in anchors.items():
-            found = re.search(pat, big, flags=re.S)
-            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": "", "notes": ("Found" if found else "Not detected")})
-        df = pd.DataFrame(required_items)
-        st.dataframe(df)
-        # Save
-        for r in required_items:
-            conn.execute(
-                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
-                (None, r["item"], 1, r["status"], r["source_page"], r["notes"])
-            )
+            name = f.name
+            suffix = name.lower().split(".")[-1]
+            if suffix == "pdf":
+                r = PdfReader(f)
+                pages = [(i+1, (p.extract_text() or "")) for i, p in enumerate(r.pages)]
+                def find_page(pat):
+                    rx = re.compile(pat, re.I|re.S)
+                    for num, text in pages:
+                        if rx.search(text or ""):
+                            return num
+                    return ""
+                anchors = {
+                    "technical": r"(technical volume|technical proposal)",
+                    "price": r"(price volume|pricing|schedule of items)",
+                    "past performance": r"\bpast performance\b",
+                    "representations": r"(reps(?: and)? certs|52\.212-3)",
+                    "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
+                    "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
+                    "delivery": r"(delivery|period of performance|pop:)",
+                    "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
+                    "due date": r"(offers due|responses due|closing date)",
+                }
+                for label, pat in anchors.items():
+                    page_hit = find_page(pat)
+                    notes = "Found" if page_hit else "Not detected"
+                    items.append({"item": label, "required": 1, "status": "Pending", "source_page": f"{name} p.{page_hit}" if page_hit else "", "notes": notes})
+            else:
+                text = read_doc(f).lower()
+                anchors = {
+                    "technical": r"(technical volume|technical proposal)",
+                    "price": r"(price volume|pricing|schedule of items)",
+                    "past performance": r"\bpast performance\b",
+                    "representations": r"(reps(?: and)? certs|52\.212-3)",
+                    "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
+                    "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
+                    "delivery": r"(delivery|period of performance|pop:)",
+                    "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
+                    "due date": r"(offers due|responses due|closing date)",
+                }
+                for label, pat in anchors.items():
+                    notes = "Found" if re.search(pat, text, flags=re.S) else "Not detected"
+                    items.append({"item": label, "required": 1, "status": "Pending", "source_page": name, "notes": notes})
+
+        df = pd.DataFrame(items)
+        st.dataframe(df, use_container_width=True)
+        for r in items:
+            conn.execute("insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
+                         (None, r["item"], 1, r["status"], r["source_page"], r["notes"]))
         conn.commit()
-        st.success("Checklist saved")
+        st.success("Checklist saved with page anchors when available")
+
     st.markdown("#### Existing items")
     items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
-    st.dataframe(items)
+    st.dataframe(items, use_container_width=True)
 
 with tabs[__tabs_base + 2]:
     st.subheader("RFQ generator to subcontractors")
@@ -2000,387 +2021,3 @@ with tabs[__tabs_base + 3]:
                      (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note))
         conn.commit()
 # === End new features ===
-
-
-# =========================
-# Upgrade Pack (non-intrusive)
-# =========================
-# Feature flags
-ENABLE_PAST_PERF = True
-ENABLE_DOCX_EXPORT = True
-ENABLE_COMPLIANCE_V2 = True
-ENABLE_QUOTE_COMPARE = True
-ENABLE_TASKS = True
-ENABLE_WIN_SCORE = True
-ENABLE_OCR = True
-
-# Optional OCR deps are imported inside helper to avoid import errors
-
-# Safe schema extras (no reliance on SCHEMA dict)
-def _apply_upgrade_schema_extras():
-    try:
-        conn = get_db(); cur = conn.cursor()
-    except Exception:
-        return
-    ddls = [
-        """create table if not exists past_performance (
-            id integer primary key,
-            title text, agency text, naics text, period text,
-            value_amount real, description text, outcomes text,
-            contact_name text, contact_email text,
-            created_at text default current_timestamp
-        );""",
-        """create table if not exists quotes (
-            id integer primary key,
-            opp_id integer, vendor_id integer, vendor_name text,
-            total_price real, lead_time text, notes text,
-            received_at text default current_timestamp
-        );""" ,
-        """create table if not exists tasks (
-            id integer primary key,
-            opp_id integer, title text, assignee text, due_date text,
-            status text default 'Open', notes text,
-            created_at text default current_timestamp
-        );""" ,
-        """alter table compliance_items add column file_name text""" ,
-        """alter table compliance_items add column page_no integer""" ,
-        """alter table compliance_items add column snippet text""" ,
-    ]
-    for ddl in ddls:
-        try: cur.execute(ddl)
-        except Exception: pass
-    try: conn.commit()
-    except Exception: pass
-
-_apply_upgrade_schema_extras()
-
-# OCR helper
-def ocr_pdf_bytes(pdf_bytes: bytes) -> str:
-    if not ENABLE_OCR:
-        return ""
-    try:
-        from pdf2image import convert_from_bytes as _convert_from_bytes
-        import pytesseract as _pytesseract
-    except Exception:
-        return ""
-    try:
-        pages = _convert_from_bytes(pdf_bytes, dpi=300)
-        out = []
-        for i, img in enumerate(pages, 1):
-            try:
-                txt = _pytesseract.image_to_string(img) or ""
-            except Exception:
-                txt = ""
-            out.append(f"\n\n[[PAGE {i}]]\n{txt}")
-        return "\n".join(out)
-    except Exception:
-        return ""
-
-# Read doc wrapper (non-destructive): use if available, else define
-try:
-    _orig_read_doc = read_doc  # keep original
-except Exception:
-    _orig_read_doc = None
-
-def read_doc_upgrade(uploaded_file):
-    try:
-        name = uploaded_file.name
-    except Exception:
-        name = ""
-    suffix = (name or "").lower().split(".")[-1]
-    if suffix in ["doc","docx"]:
-        try:
-            import docx
-            d = docx.Document(uploaded_file); return "\n".join(p.text for p in d.paragraphs)
-        except Exception:
-            pass
-    if suffix == "pdf":
-        import io
-        try:
-            from pypdf import PdfReader
-        except Exception:
-            try:
-                from PyPDF2 import PdfReader  # fallback
-            except Exception:
-                PdfReader = None
-        try:
-            raw = uploaded_file.read()
-            if PdfReader:
-                r = PdfReader(io.BytesIO(raw))
-                text = "\n".join((p.extract_text() or "") for p in r.pages)
-            else:
-                text = ""
-            if len((text or "").strip()) < 50:
-                ocr_txt = ocr_pdf_bytes(raw)
-                return ocr_txt if ocr_txt else text
-            return text
-        except Exception:
-            try:
-                uploaded_file.seek(0)
-                return ocr_pdf_bytes(uploaded_file.read())
-            except Exception:
-                return ""
-    # Fallback to original if exists
-    if _orig_read_doc:
-        try:
-            uploaded_file.seek(0)
-        except Exception:
-            pass
-        try:
-            return _orig_read_doc(uploaded_file)
-        except Exception:
-            pass
-    try:
-        return uploaded_file.read().decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-# Win score helper
-def compute_win_score(row) -> tuple:
-    from datetime import datetime
-    import pandas as pd
-    score = 0; factors = []
-    try:
-        naics_watch = set(pd.read_sql_query("select code from naics_watch", get_db())["code"].tolist())
-    except Exception:
-        naics_watch = set()
-    naics_first = str(row.get("naics","")).split(",")[0][:6]
-    if naics_first and naics_first in naics_watch:
-        score += 25; factors.append("NAICS match +25")
-    t = (row.get("title") or "").lower()
-    if any(k in t for k in ["small business","sdvosb","wosb","8(a)","hubzone"]):
-        score += 15; factors.append("Set-aside alignment +15")
-    try:
-        conn = get_db()
-        cnt = conn.execute("select count(*) from opportunities where agency=?",(row.get("agency"),)).fetchone()[0]
-        if cnt >= 3:
-            score += 20; factors.append("Agency familiarity +20")
-    except Exception:
-        pass
-    try:
-        pp_cnt = get_db().execute("select count(*) from past_performance").fetchone()[0]
-        if pp_cnt >= 3:
-            score += 20; factors.append("Past performance depth +20")
-    except Exception:
-        pass
-    try:
-        d = _parse_date_any(row.get("response_due",""))
-        if d and (d - datetime.now()).days >= 7:
-            score += 20; factors.append("Time runway +20")
-    except Exception:
-        pass
-    return min(score, 100), "; ".join(factors)
-
-# UI Add-ons: Past Performance, Quote Comparison, Tasks, Compliance v2 and DOCX export (best-effort mount points)
-try:
-    # Add extra tabs without disturbing existing order
-    tabs.append("Past Performance")
-    tabs.append("Quote Comparison")
-    tabs.append("Tasks")
-except Exception:
-    pass
-
-try:
-    with tabs[tabs.index("Past Performance")]:
-        st.subheader("Past Performance Library")
-        conn = get_db()
-        import pandas as pd
-        df_pp = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
-        grid = st.data_editor(
-            df_pp,
-            use_container_width=True, num_rows="dynamic",
-            column_config={"value_amount": st.column_config.NumberColumn("Value ($)", step=1000.0)}
-        )
-        if st.button("Save past performance"):
-            cur = conn.cursor()
-            for _, r in grid.iterrows():
-                if pd.isna(r.get("id")):
-                    cur.execute("""insert into past_performance(title,agency,naics,period,value_amount,description,outcomes,contact_name,contact_email)
-                                   values(?,?,?,?,?,?,?,?,?)""",
-                                (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
-                                 float(r.get("value_amount") or 0), r.get("description"), r.get("outcomes"),
-                                 r.get("contact_name"), r.get("contact_email")))
-                else:
-                    cur.execute("""update past_performance set title=?,agency=?,naics=?,period=?,value_amount=?,
-                                   description=?,outcomes=?,contact_name=?,contact_email=? where id=?""",
-                                (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
-                                 float(r.get("value_amount") or 0), r.get("description"), r.get("outcomes"),
-                                 r.get("contact_name"), r.get("contact_email"), int(r["id"])))
-            conn.commit(); st.success("Saved.")
-except Exception:
-    pass
-
-try:
-    with tabs[tabs.index("Quote Comparison")]:
-        st.subheader("Subcontractor Quote Comparison")
-        conn = get_db()
-        import pandas as pd
-        opps = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
-        opp_pick = st.selectbox("Opportunity", options=opps["title"].tolist()) if not opps.empty else None
-        opp_id = int(opps[opps["title"]==opp_pick]["id"].iloc[0]) if opp_pick else None
-
-        st.markdown("**Quotes**")
-        df_q = pd.read_sql_query("select * from quotes where opp_id=? order by received_at desc", conn, params=(opp_id,) ) if opp_id else pd.DataFrame()
-        grid = st.data_editor(df_q, use_container_width=True, num_rows="dynamic")
-        if st.button("Save quotes"):
-            cur = conn.cursor()
-            for _, r in grid.iterrows():
-                if pd.isna(r.get("id")):
-                    cur.execute("""insert into quotes(opp_id,vendor_id,vendor_name,total_price,lead_time,notes)
-                                   values(?,?,?,?,?,?)""",
-                                (opp_id, r.get("vendor_id"), r.get("vendor_name"), float(r.get("total_price") or 0),
-                                 r.get("lead_time"), r.get("notes")))
-                else:
-                    cur.execute("""update quotes set vendor_id=?, vendor_name=?, total_price=?, lead_time=?, notes=? where id=?""",
-                                (r.get("vendor_id"), r.get("vendor_name"), float(r.get("total_price") or 0),
-                                 r.get("lead_time"), r.get("notes"), int(r["id"])))
-            conn.commit(); st.success("Saved.")
-
-        if not df_q.empty:
-            st.markdown("**Comparison**")
-            st.dataframe(df_q.sort_values("total_price")[["vendor_name","total_price","lead_time","notes"]])
-            winner = df_q.sort_values("total_price").iloc[0]
-            st.success(f"Pick Winner: {winner['vendor_name']} at ${float(winner['total_price']):,.2f}")
-except Exception:
-    pass
-
-try:
-    with tabs[tabs.index("Tasks")]:
-        st.subheader("Tasks and reminders")
-        conn = get_db()
-        import pandas as pd
-        df_t = pd.read_sql_query("select * from tasks order by due_date asc", conn)
-        grid = st.data_editor(df_t, use_container_width=True, num_rows="dynamic",
-                              column_config={"status": st.column_config.SelectboxColumn("status", options=["Open","In Progress","Done"])})
-        if st.button("Save tasks"):
-            cur = conn.cursor()
-            for _, r in grid.iterrows():
-                if pd.isna(r.get("id")):
-                    cur.execute("""insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)""",
-                                (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"), r.get("status"), r.get("notes")))
-                else:
-                    cur.execute("""update tasks set opp_id=?, title=?, assignee=?, due_date=?, status=?, notes=? where id=?""",
-                                (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"), r.get("status"), r.get("notes"), int(r["id"])))
-            conn.commit(); st.success("Saved.")
-
-        # Due today snippet
-        from datetime import datetime
-        due_today = pd.read_sql_query("select * from tasks where date(due_date)=date('now') and status<>'Done'", conn)
-        if not due_today.empty:
-            st.markdown("### Due today")
-            st.dataframe(due_today[["title","assignee","due_date","notes"]])
-except Exception:
-    pass
-
-# Compliance Checker v2: add a separate generator in case the original exists
-try:
-    with st.expander("Compliance checklist v2 (page-anchored)"):
-        conn = get_db()
-        import re, pandas as pd
-        up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up_v2")
-        if up and st.button("Generate checklist v2"):
-            records = []
-            for f in up:
-                try:
-                    content = read_doc_upgrade(f)
-                except Exception as e:
-                    st.warning(f"Could not read {f.name}: {e}"); continue
-                pages = re.split(r"\[\[PAGE\s+(\d+)\]\]", content)
-                def _emit(item, file_name, page_no, snippet):
-                    records.append({
-                        "item": item, "required": 1, "status": "Pending",
-                        "file_name": file_name, "page_no": page_no, "snippet": snippet[:500]
-                    })
-                checks = {
-                    "technical": r"(technical volume|technical proposal)",
-                    "price": r"(price volume|pricing|schedule of items)",
-                    "past performance": r"past performance",
-                    "representations": r"(reps(?: and)? certs|52\.212-3)",
-                    "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
-                    "font": r"(font\s*(size)?\s*\d+|times new roman|arial|calibri)",
-                    "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
-                    "due date": r"(offers due|responses due|closing date|due\s+by\s+\w+)"
-                }
-                if len(pages) >= 3:
-                    it = iter(pages); _ = next(it, "")
-                    for pno, ptxt in zip(it, it):
-                        for name, pat in checks.items():
-                            m = re.search(pat, ptxt, flags=re.I|re.S)
-                            if m:
-                                sl = max(0, m.start()-180); sr = min(len(ptxt), m.end()+180)
-                                _emit(name, f.name, int(pno), ptxt[sl:sr])
-                else:
-                    for name, pat in checks.items():
-                        m = re.search(pat, content, flags=re.I|re.S)
-                        if m:
-                            sl = max(0, m.start()-180); sr = min(len(content), m.end()+180)
-                            _emit(name, f.name, None, content[sl:sr])
-            if records:
-                df = pd.DataFrame(records)
-                st.dataframe(df[["item","status","file_name","page_no","snippet"]])
-                for r in records:
-                    conn.execute("""insert into compliance_items(opp_id,item,required,status,source_page,notes,file_name,page_no,snippet)
-                                    values(?,?,?,?,?,?,?,?,?)""",
-                                 (None, r["item"], 1, r["status"], str(r.get("page_no") or ""), "", r["file_name"], r["page_no"], r["snippet"]))
-                conn.commit()
-                st.success("Checklist saved with page anchors/snippets.")
-            else:
-                st.info("No L&M anchors detected.")
-except Exception:
-    pass
-
-# Proposal DOCX export helper (attach to a button you already have)
-try:
-    def proposal_docx_export(session_id, conn, actions, order):
-        parts = []
-        for sec in order:
-            if actions.get(sec, False):
-                row = conn.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec)).fetchone()
-                if row and row[0]:
-                    parts.append(f"# {sec}\n\n{row[0].strip()}\n")
-        assembled_md = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
-        ok = True; msgs = []
-        import re as _re_guard
-        words = len(_re_guard.findall(r"\w+", assembled_md))
-        if words > 15000:
-            ok = False; msgs.append(f"Estimated length too long (~{words//500} pages).")
-        msgs.append("Use Times New Roman 12pt, 1-inch margins, single column (verify before submission).")
-        if not ok:
-            st.error("Guardrails failed:\n" + "\n".join("- " + m for m in msgs)); return
-        try:
-            from docx import Document
-            from docx.shared import Pt, Inches
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            doc = Document()
-            for s in doc.sections:
-                s.top_margin = s.bottom_margin = s.left_margin = s.right_margin = Inches(1.0)
-            style = doc.styles["Normal"]; style.font.name = "Times New Roman"; style.font.size = Pt(12)
-            for block in parts:
-                for line in block.splitlines():
-                    if line.startswith("# "):
-                        p = doc.add_heading(line[2:].strip(), level=1); p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    elif line.startswith("---"):
-                        continue
-                    else:
-                        doc.add_paragraph(line)
-                doc.add_page_break()
-            bio = io.BytesIO(); doc.save(bio); bio.seek(0)
-            st.download_button("Download proposal.docx", data=bio.getvalue(),
-                               file_name="proposal.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-            st.info("\n".join(msgs))
-        except Exception as e:
-            st.error(f"DOCX export error: {e}")
-except Exception:
-    pass
-
-# Add Win Score visualization to Pipeline if df_opp exists in scope
-try:
-    if 'df_opp' in globals() and ENABLE_WIN_SCORE:
-        import pandas as pd
-        if isinstance(df_opp, pd.DataFrame) and not df_opp.empty and "Win Score" not in df_opp.columns:
-            _scores = df_opp.apply(lambda r: compute_win_score(r.to_dict()), axis=1)
-            df_opp["Win Score"] = [s[0] for s in _scores]
-            df_opp["Why"] = [s[1] for s in _scores]
-except Exception:
-    pass
