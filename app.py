@@ -2444,19 +2444,20 @@ with tabs[__tabs_base + 3]:
 # === End new features ===
 
 
-# === Next 7 Upgrades tabs wiring ===
+
+# === Next 7 Upgrades tabs wiring (separate tab group to avoid index collisions) ===
 try:
-    __extra_base = len(tabs) - 5  # number of new tabs we appended
-    with tabs[__extra_base + 0]:
+    new_tabs = st.tabs(["Past Performance", "Quote Compare", "Tasks", "Compliance v2", "Proposal Export"])
+    with new_tabs[0]:
         render_past_performance_tab(get_db)
-    with tabs[__extra_base + 1]:
-        render_quote_comparison_tab(get_db)
-    with tabs[__extra_base + 2]:
-        render_tasks_tab(get_db)
-    with tabs[__extra_base + 3]:
-        render_compliance_v2_tab(get_db)
-    with tabs[__extra_base + 4]:
-        render_proposal_export_tab(get_db)
+    with new_tabs[1]:
+        render_quote_comparison_tab(get_db)  # includes RFQ generator
+    with new_tabs[2]:
+        render_tasks_tab(get_db)  # includes Deadline Tracker/Due Today
+    with new_tabs[3]:
+        render_compliance_v2_tab(get_db)  # includes Section L & M checklist anchors
+    with new_tabs[4]:
+        render_proposal_export_tab(get_db)  # keeps Pricing Calculator separate from export
     st.caption(f"OCR status: {ocr_status().get('message')}")
 except Exception as e:
     st.error(f"Upgrade tabs error: {e}")
