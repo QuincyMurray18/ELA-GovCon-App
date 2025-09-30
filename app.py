@@ -1351,9 +1351,20 @@ tabs = st.tabs([
     "Tasks",
     "Proposal Export"])
 
+# --- Tab registry & lookup (deterministic routing) ---
+TABS_TITLES = ['Pipeline', 'Subcontractor Finder', 'Contacts', 'Outreach', 'SAM Watch', 'RFP Analyzer', 'Capability Statement', 'White Paper Builder', 'Data Export', 'Auto extract', 'Ask the doc', 'Chat Assistant', 'Proposal Builder', 'Deadlines', 'L&M Checklist', 'RFQ Generator', 'Pricing Calculator', 'Past Performance', 'Quote Comparison', 'Tasks', 'Proposal Export']
+def tab_idx(title: str) -> int:
+    try:
+        return TABS_TITLES.index(title)
+    except ValueError:
+        # Fallback to first tab if not found
+        return 0
 
 
-with tabs[0]:
+
+
+
+with tabs[tab_idx("Pipeline")]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -2121,7 +2132,7 @@ with tabs[__tabs_base + 3]:
 # === End new features ===
 
 
-with tabs[17]:
+with tabs[tab_idx("Past Performance")]:
     st.subheader("Past Performance Library")
     conn = get_db()
     df = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
@@ -2154,7 +2165,7 @@ with tabs[17]:
         st.code(blob, language="markdown")
 
 
-with tabs[18]:
+with tabs[tab_idx("Quote Comparison")]:
     st.subheader("Subcontractor Quote Comparison")
     conn = get_db()
     olist = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
@@ -2183,7 +2194,7 @@ with tabs[18]:
                 conn.commit(); st.success("Winner selected")
 
 
-with tabs[19]:
+with tabs[tab_idx("Tasks")]:
     st.subheader("Tasks & Reminders")
     conn = get_db()
     o = pd.read_sql_query("select id, title from opportunities order by created_at desc", conn)
@@ -2203,7 +2214,7 @@ with tabs[19]:
     st.dataframe(t)
 
 
-with tabs[20]:
+with tabs[tab_idx("Proposal Export")]:
     st.subheader("Proposal Export (DOCX with guardrails)")
     conn = get_db()
     sessions = pd.read_sql_query("select id, title from rfp_sessions where ifnull(source, 'analyzer')='analyzer' order by created_at desc", conn)
