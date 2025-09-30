@@ -2315,10 +2315,10 @@ if tab_labels:
 
 
 # === Next7: Compliance Checker v2 (page anchors) ===
-def next7_compliance_checker():
+def next7_compliance_checker(key_suffix=""):
     import re
     st.subheader("Section L & M Checklist (with Page Anchors)")
-    up = st.file_uploader("Upload solicitation files (PDF/DOCX)", type=["pdf","doc","docx"], accept_multiple_files=True, key="next7_lm_upload")
+    up = st.file_uploader("Upload solicitation files (PDF/DOCX)", type=["pdf","doc","docx"], accept_multiple_files=True, key=f"next7_lm_upload{key_suffix}")
     if not up:
         st.info("Upload files to scan for L & M requirements.")
         return
@@ -2449,8 +2449,8 @@ if FEATURE_PAST_PERF and _pp_idx is not None:
         except Exception:
             import pandas as pd
             df_pp = pd.DataFrame(columns=["id","title","agency","naics","period","description","tags","metrics"])
-        grid = st.data_editor(df_pp, use_container_width=True, num_rows="dynamic", key="pp_grid_main")
-        if st.button("Save past performance records", key="pp_save_main"):
+        grid = st.data_editor(df_pp, use_container_width=True, num_rows="dynamic", key=f"pp_grid_main{_pp_idx}")
+        if st.button("Save past performance records", key=f"pp_save_main{_pp_idx}"):
             cur = conn.cursor()
             for _, r in grid.iterrows():
                 if pd.isna(r.get("id")):
@@ -2479,14 +2479,14 @@ if FEATURE_QUOTE_COMPARE and _qc_idx is not None:
             opps = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
         except Exception:
             opps = pd.DataFrame(columns=["id","title"])
-        opp_pick = st.selectbox("Opportunity", ["(none)"] + [f"{int(r['id'])}: {r['title']}" for _, r in opps.iterrows()], key="qc_opp_pick")
+        opp_pick = st.selectbox("Opportunity", ["(none)"] + [f"{int(r['id'])}: {r['title']}" for _, r in opps.iterrows()], key=f"qc_opp_pick{_qc_idx}")
         opp_id = int(opp_pick.split(":")[0]) if opp_pick and opp_pick != "(none)" and ":" in opp_pick else None
         if opp_id:
             quotes = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by created_at desc", conn, params=(opp_id,))
         else:
             quotes = pd.DataFrame(columns=["id","opp_id","vendor_id","vendor_name","total_price","notes","winner"])
-        grid = st.data_editor(quotes, num_rows="dynamic", use_container_width=True, key="quotes_grid_main")
-        if st.button("Save quotes", key="qc_save"):
+        grid = st.data_editor(quotes, num_rows="dynamic", use_container_width=True, key=f"quotes_grid_main{_qc_idx}")
+        if st.button("Save quotes", key=f"qc_save{_qc_idx}"):
             cur = conn.cursor()
             for _, r in grid.iterrows():
                 if pd.isna(r.get("id")):
@@ -2503,8 +2503,8 @@ if FEATURE_QUOTE_COMPARE and _qc_idx is not None:
             st.markdown("#### Comparison")
             show = quotes[["vendor_name","total_price","notes"]].sort_values("total_price")
             st.dataframe(show, use_container_width=True)
-            pick_winner = st.selectbox("Pick winner", ["(none)"] + quotes["vendor_name"].fillna("(unnamed)").tolist(), key="qc_pick")
-            if st.button("Set winner", key="qc_set_winner"):
+            pick_winner = st.selectbox("Pick winner", ["(none)"] + quotes["vendor_name"].fillna("(unnamed)").tolist(), key=f"qc_pick{_qc_idx}")
+            if st.button("Set winner", key=f"qc_set_winner{_qc_idx}"):
                 cur = conn.cursor()
                 cur.execute("update vendor_quotes set winner=0 where opp_id=?", (opp_id,))
                 if pick_winner and pick_winner != "(none)":
@@ -2526,8 +2526,8 @@ if FEATURE_TASKS and _tasks_idx is not None:
             df_t = pd.read_sql_query("select * from tasks order by due_date asc", conn)
         except Exception:
             df_t = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
-        grid = st.data_editor(df_t, num_rows="dynamic", use_container_width=True, key="tasks_grid_main")
-        if st.button("Save tasks", key="tasks_save"):
+        grid = st.data_editor(df_t, num_rows="dynamic", use_container_width=True, key=f"tasks_grid_main{_tasks_idx}")
+        if st.button("Save tasks", key=f"tasks_save{_tasks_idx}"):
             cur = conn.cursor()
             for _, r in grid.iterrows():
                 if pd.isna(r.get("id")):
@@ -2569,7 +2569,7 @@ if FEATURE_WIN_SCORE and _ws_idx is not None:
                              "naics": r.get("naics"), "score": s, "factors": json.dumps(f)})
             df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
             st.dataframe(df_scores, use_container_width=True)
-            if st.button("Save scores", key="win_save"):
+            if st.button("Save scores", key=f"win_save{_ws_idx}"):
                 cur = conn.cursor()
                 for _, rr in df_scores.iterrows():
                     cur.execute("insert into win_scores(opp_id,score,factors_json) values(?,?,?)",
@@ -2582,7 +2582,7 @@ if FEATURE_WIN_SCORE and _ws_idx is not None:
 _lm_idx = _tab_index_by_label(_main_tab_labels, "L&M Checker")
 if FEATURE_COMPLIANCE_V2 and _lm_idx is not None:
     with tabs[_lm_idx]:
-        next7_compliance_checker()
+        next7_compliance_checker(key_suffix=f"_{_lm_idx}")
 
 # Proposal Export
 _px_idx = _tab_index_by_label(_main_tab_labels, "Proposal Export")
