@@ -1287,16 +1287,16 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
         used.add(key)
         parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
-
-
 tabs = st.tabs([
+
     "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
     "RFP Analyzer","Capability Statement","White Paper Builder",
     "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
     "Deadlines",
     "L&M Checklist",
     "RFQ Generator",
-    "Pricing Calculator"])
+    "Pricing Calculator", "Past Performance", "Quote Comparison", "Tasks", "Win Score", "L&M Checker", "Proposal Export"
+])
 
 
 with tabs[0]:
@@ -2413,4 +2413,179 @@ def next7_proposal_export_ui():
 
 if FEATURE_EXPORT_GUARDED:
     with st.expander("Next7: Proposal Export (guardrails)", expanded=False):
+        next7_proposal_export_ui()
+
+
+
+# === Next7: Render add-ons inside main tab set ===
+def _tab_index_by_label(labels, target):
+    try:
+        return [l for l in labels].index(target)
+    except ValueError:
+        return None
+
+# Build an ordered list of main tab labels
+_main_tab_labels = [
+    "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
+    "RFP Analyzer","Capability Statement","White Paper Builder",
+    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
+    "Deadlines","L&M Checklist","RFQ Generator","Pricing Calculator","Quote Builder",
+    "Past Performance","Quote Comparison","Tasks","Win Score","L&M Checker","Proposal Export"
+]
+
+# Past Performance
+_pp_idx = _tab_index_by_label(_main_tab_labels, "Past Performance")
+if FEATURE_PAST_PERF and _pp_idx is not None:
+    with tabs[_pp_idx]:
+        st.subheader("Past Performance Library")
+        try:
+            conn = get_db()
+        except Exception:
+            import sqlite3
+            conn = sqlite3.connect("govcon.db")
+        import pandas as pd
+        try:
+            df_pp = pd.read_sql_query("select * from past_performance order by created_at desc", conn)
+        except Exception:
+            import pandas as pd
+            df_pp = pd.DataFrame(columns=["id","title","agency","naics","period","description","tags","metrics"])
+        grid = st.data_editor(df_pp, use_container_width=True, num_rows="dynamic", key="pp_grid_main")
+        if st.button("Save past performance records", key="pp_save_main"):
+            cur = conn.cursor()
+            for _, r in grid.iterrows():
+                if pd.isna(r.get("id")):
+                    cur.execute("""insert into past_performance(title,agency,naics,period,description,tags,metrics)
+                                   values(?,?,?,?,?,?,?)""",
+                                (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
+                                 r.get("description"), r.get("tags"), r.get("metrics")))
+                else:
+                    cur.execute("""update past_performance set title=?, agency=?, naics=?, period=?, description=?, tags=?, metrics=? where id=?""",
+                                (r.get("title"), r.get("agency"), r.get("naics"), r.get("period"),
+                                 r.get("description"), r.get("tags"), r.get("metrics"), int(r.get("id"))))
+            conn.commit(); st.success("Saved.")
+
+# Quote Comparison
+_qc_idx = _tab_index_by_label(_main_tab_labels, "Quote Comparison")
+if FEATURE_QUOTE_COMPARE and _qc_idx is not None:
+    with tabs[_qc_idx]:
+        st.subheader("Subcontractor Quote Comparison")
+        try:
+            conn = get_db()
+        except Exception:
+            import sqlite3
+            conn = sqlite3.connect("govcon.db")
+        import pandas as pd
+        try:
+            opps = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
+        except Exception:
+            opps = pd.DataFrame(columns=["id","title"])
+        opp_pick = st.selectbox("Opportunity", ["(none)"] + [f"{int(r['id'])}: {r['title']}" for _, r in opps.iterrows()], key="qc_opp_pick")
+        opp_id = int(opp_pick.split(":")[0]) if opp_pick and opp_pick != "(none)" and ":" in opp_pick else None
+        if opp_id:
+            quotes = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by created_at desc", conn, params=(opp_id,))
+        else:
+            quotes = pd.DataFrame(columns=["id","opp_id","vendor_id","vendor_name","total_price","notes","winner"])
+        grid = st.data_editor(quotes, num_rows="dynamic", use_container_width=True, key="quotes_grid_main")
+        if st.button("Save quotes", key="qc_save"):
+            cur = conn.cursor()
+            for _, r in grid.iterrows():
+                if pd.isna(r.get("id")):
+                    cur.execute("""insert into vendor_quotes(opp_id,vendor_id,vendor_name,total_price,notes)
+                                   values(?,?,?,?,?)""",
+                                (opp_id, r.get("vendor_id") or None, r.get("vendor_name") or "",
+                                 float(r.get("total_price") or 0.0), r.get("notes") or ""))
+                else:
+                    cur.execute("""update vendor_quotes set vendor_id=?, vendor_name=?, total_price=?, notes=? where id=?""",
+                                (r.get("vendor_id") or None, r.get("vendor_name") or "",
+                                 float(r.get("total_price") or 0.0), r.get("notes") or "", int(r.get("id"))))
+            conn.commit(); st.success("Quotes saved.")
+        if not quotes.empty:
+            st.markdown("#### Comparison")
+            show = quotes[["vendor_name","total_price","notes"]].sort_values("total_price")
+            st.dataframe(show, use_container_width=True)
+            pick_winner = st.selectbox("Pick winner", ["(none)"] + quotes["vendor_name"].fillna("(unnamed)").tolist(), key="qc_pick")
+            if st.button("Set winner", key="qc_set_winner"):
+                cur = conn.cursor()
+                cur.execute("update vendor_quotes set winner=0 where opp_id=?", (opp_id,))
+                if pick_winner and pick_winner != "(none)":
+                    cur.execute("update vendor_quotes set winner=1 where opp_id=? and vendor_name=?", (opp_id, pick_winner))
+                conn.commit(); st.success(f"Winner set: {pick_winner}")
+
+# Tasks
+_tasks_idx = _tab_index_by_label(_main_tab_labels, "Tasks")
+if FEATURE_TASKS and _tasks_idx is not None:
+    with tabs[_tasks_idx]:
+        st.subheader("Tasks & Reminders")
+        try:
+            conn = get_db()
+        except Exception:
+            import sqlite3
+            conn = sqlite3.connect("govcon.db")
+        import pandas as pd
+        try:
+            df_t = pd.read_sql_query("select * from tasks order by due_date asc", conn)
+        except Exception:
+            df_t = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+        grid = st.data_editor(df_t, num_rows="dynamic", use_container_width=True, key="tasks_grid_main")
+        if st.button("Save tasks", key="tasks_save"):
+            cur = conn.cursor()
+            for _, r in grid.iterrows():
+                if pd.isna(r.get("id")):
+                    cur.execute("""insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)""",
+                                (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"),
+                                 r.get("status") or "Open", r.get("notes")))
+                else:
+                    cur.execute("""update tasks set opp_id=?, title=?, assignee=?, due_date=?, status=?, notes=? where id=?""",
+                                (r.get("opp_id"), r.get("title"), r.get("assignee"), r.get("due_date"),
+                                 r.get("status") or "Open", r.get("notes"), int(r.get("id"))))
+            conn.commit(); st.success("Tasks saved.")
+        st.markdown("#### Due today")
+        try:
+            due_today = pd.read_sql_query("select * from tasks where date(due_date)=date('now') and status='Open'", conn)
+        except Exception:
+            due_today = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+        st.dataframe(due_today if not due_today.empty else pd.DataFrame(columns=due_today.columns), use_container_width=True)
+
+# Win Score
+_ws_idx = _tab_index_by_label(_main_tab_labels, "Win Score")
+if FEATURE_WIN_SCORE and _ws_idx is not None:
+    with tabs[_ws_idx]:
+        st.subheader("Win Probability Scoring")
+        try:
+            conn = get_db()
+        except Exception:
+            import sqlite3
+            conn = sqlite3.connect("govcon.db")
+        import pandas as pd, json
+        try:
+            opps = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+        except Exception:
+            opps = pd.DataFrame(columns=["id","title","agency","naics","response_due"])
+        if not opps.empty:
+            rows = []
+            for _, r in opps.iterrows():
+                s, f = compute_win_score(r.to_dict(), conn=conn)
+                rows.append({"id": int(r.get("id") or 0), "title": r.get("title"), "agency": r.get("agency"),
+                             "naics": r.get("naics"), "score": s, "factors": json.dumps(f)})
+            df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
+            st.dataframe(df_scores, use_container_width=True)
+            if st.button("Save scores", key="win_save"):
+                cur = conn.cursor()
+                for _, rr in df_scores.iterrows():
+                    cur.execute("insert into win_scores(opp_id,score,factors_json) values(?,?,?)",
+                                (int(rr["id"]), float(rr["score"]), rr["factors"]))
+                conn.commit(); st.success("Scores saved.")
+        else:
+            st.info("No opportunities in pipeline.")
+
+# L&M Checker v2
+_lm_idx = _tab_index_by_label(_main_tab_labels, "L&M Checker")
+if FEATURE_COMPLIANCE_V2 and _lm_idx is not None:
+    with tabs[_lm_idx]:
+        next7_compliance_checker()
+
+# Proposal Export
+_px_idx = _tab_index_by_label(_main_tab_labels, "Proposal Export")
+if FEATURE_EXPORT_GUARDED and _px_idx is not None:
+    with tabs[_px_idx]:
         next7_proposal_export_ui()
