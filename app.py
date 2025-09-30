@@ -1288,14 +1288,7 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
         parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 tabs = st.tabs([
-
-    "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
-    "RFP Analyzer","Capability Statement","White Paper Builder",
-    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
-    "Deadlines",
-    "L&M Checklist",
-    "RFQ Generator",
-    "Pricing Calculator", "Past Performance", "Quote Comparison", "Tasks", "Win Score", "L&M Checker", "Proposal Export"
+    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Tasks", "Win Score", "L&M Checker", "Proposal Export"
 ])
 
 
@@ -2436,7 +2429,12 @@ _main_tab_labels = [
 # Past Performance
 _pp_idx = _tab_index_by_label(_main_tab_labels, "Past Performance")
 if FEATURE_PAST_PERF and _pp_idx is not None:
-    with tabs[_pp_idx]:
+    if isinstance(_pp_idx, int) and 0 <= _pp_idx < len(tabs):
+        with tabs[_pp_idx]:
+            st.subheader('Past Performance Library'); pass
+    else:
+        with st.expander("Past Performance — fallback view", expanded=False):
+            st.subheader('Past Performance Library'); pass
         st.subheader("Past Performance Library")
         try:
             conn = get_db()
@@ -2467,7 +2465,12 @@ if FEATURE_PAST_PERF and _pp_idx is not None:
 # Quote Comparison
 _qc_idx = _tab_index_by_label(_main_tab_labels, "Quote Comparison")
 if FEATURE_QUOTE_COMPARE and _qc_idx is not None:
-    with tabs[_qc_idx]:
+    if isinstance(_qc_idx, int) and 0 <= _qc_idx < len(tabs):
+        with tabs[_qc_idx]:
+            st.subheader('Subcontractor Quote Comparison'); pass
+    else:
+        with st.expander("Quote Comparison — fallback view", expanded=False):
+            st.subheader('Subcontractor Quote Comparison'); pass
         st.subheader("Subcontractor Quote Comparison")
         try:
             conn = get_db()
@@ -2514,7 +2517,12 @@ if FEATURE_QUOTE_COMPARE and _qc_idx is not None:
 # Tasks
 _tasks_idx = _tab_index_by_label(_main_tab_labels, "Tasks")
 if FEATURE_TASKS and _tasks_idx is not None:
-    with tabs[_tasks_idx]:
+    if isinstance(_tasks_idx, int) and 0 <= _tasks_idx < len(tabs):
+        with tabs[_tasks_idx]:
+            st.subheader('Tasks & Reminders'); pass
+    else:
+        with st.expander("Tasks — fallback view", expanded=False):
+            st.subheader('Tasks & Reminders'); pass
         st.subheader("Tasks & Reminders")
         try:
             conn = get_db()
@@ -2549,7 +2557,12 @@ if FEATURE_TASKS and _tasks_idx is not None:
 # Win Score
 _ws_idx = _tab_index_by_label(_main_tab_labels, "Win Score")
 if FEATURE_WIN_SCORE and _ws_idx is not None:
-    with tabs[_ws_idx]:
+    if isinstance(_ws_idx, int) and 0 <= _ws_idx < len(tabs):
+        with tabs[_ws_idx]:
+            st.subheader('Win Probability Scoring'); pass
+    else:
+        with st.expander("Win Score — fallback view", expanded=False):
+            st.subheader('Win Probability Scoring'); pass
         st.subheader("Win Probability Scoring")
         try:
             conn = get_db()
@@ -2587,5 +2600,10 @@ if FEATURE_COMPLIANCE_V2 and _lm_idx is not None:
 # Proposal Export
 _px_idx = _tab_index_by_label(_main_tab_labels, "Proposal Export")
 if FEATURE_EXPORT_GUARDED and _px_idx is not None:
-    with tabs[_px_idx]:
+    if isinstance(_px_idx, int) and 0 <= _px_idx < len(tabs):
+        with tabs[_px_idx]:
+            next7_proposal_export_ui()
+    else:
+        with st.expander("Proposal Export — fallback view", expanded=False):
+            next7_proposal_export_ui()
         next7_proposal_export_ui()
