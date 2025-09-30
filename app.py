@@ -2369,10 +2369,10 @@ if FEATURE_COMPLIANCE_V2:
 
 
 # === Next7: Proposal Guarded Export ===
-def next7_proposal_export_ui():
+def next7_proposal_export_ui(key_suffix=""):
     st.subheader("Proposal Export (Guardrails)")
     st.caption("Paste or generate your assembled proposal text below to export with standard formatting.")
-    assembled = st.text_area("Assembled proposal (Markdown/plain text)", height=300, key="next7_proposal_text")
+    assembled = st.text_area("Assembled proposal (Markdown/plain text)", height=300, key=f"next7_proposal_text{key_suffix}")
     export_docx = st.button("Export DOCX (guardrails)", key="next7_export_docx")
     if assembled and export_docx:
         try:
@@ -2602,8 +2602,8 @@ _px_idx = _tab_index_by_label(_main_tab_labels, "Proposal Export")
 if FEATURE_EXPORT_GUARDED and _px_idx is not None:
     if isinstance(_px_idx, int) and 0 <= _px_idx < len(tabs):
         with tabs[_px_idx]:
-            next7_proposal_export_ui()
+            next7_proposal_export_ui(key_suffix=f"_{_px_idx}")
     else:
         with st.expander("Proposal Export — fallback view", expanded=False):
-            next7_proposal_export_ui()
+            next7_proposal_export_ui(key_suffix="_fallback_px")
         next7_proposal_export_ui()
