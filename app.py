@@ -1855,7 +1855,7 @@ def _lpta_note(total_price, budget_hint=None):
     return "PASS" if total_price <= float(budget_hint) else "FAIL"
 
 # Compute dynamic base index for new tabs
-__tabs_base = len(tabs) - 4  # after we appended 4 labels
+__tabs_base = tabs.index("Deadlines")  # anchor base to the Deadlines tab by name
 
 with tabs[__tabs_base + 0]:
     st.subheader("Deadline tracker")
