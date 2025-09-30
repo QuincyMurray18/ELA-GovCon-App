@@ -50,9 +50,9 @@ _OPENAI_FALLBACK_MODELS = [
     "gpt-5-mini","gpt-5-mini-2025-08-07",
     "gpt-5-nano","gpt-5-nano-2025-08-07",
     "gpt-4o-mini","gpt-4o",
-
-
 ]
+
+
 # ---------- Feature flags (toggle new add-ons) ----------
 FEATURE_PAST_PERF = True
 FEATURE_EXPORT_GUARDED = True
@@ -61,7 +61,6 @@ FEATURE_QUOTE_COMPARE = True
 FEATURE_TASKS = True
 FEATURE_WIN_SCORE = True
 FEATURE_OCR = True
-
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 DB_PATH = "govcon.db"
 
@@ -71,7 +70,6 @@ NAICS_SEEDS = [
     "562910","236220","332420","238320","541380","541519","561710","423730","238210","562211",
     "541214","541330","541512","541511","541370","611430","611699","611310","611710","562111","562119",
     "624230","488999","485510","485410","488510","541614","332994","334220","336992","561320","561311","541214"
-
 ]
 
 SCHEMA = {
@@ -333,32 +331,30 @@ def set_setting(key, value):
     conn.commit()
 
 
-
 def read_doc(uploaded_file):
     suffix = uploaded_file.name.lower().split(".")[-1]
     if suffix in ["doc","docx"]:
-        d = docx.Document(uploaded_file)
-        return "\n".join(p.text for p in d.paragraphs)
+        d = docx.Document(uploaded_file); return "\\n".join(p.text for p in d.paragraphs)
     if suffix == "pdf":
-        # Try text extraction
         try:
             r = PdfReader(uploaded_file)
-            text = "\n".join((p.extract_text() or "") for p in r.pages)
+            text = "\\n".join((p.extract_text() or "") for p in r.pages)
             if text.strip():
                 return text
         except Exception:
             text = ""
-        # OCR fallback if available
+        # OCR fallback if text was empty (scanned/multi-column PDFs)
         try:
             from pdf2image import convert_from_bytes
             import pytesseract
             uploaded_file.seek(0)
             images = convert_from_bytes(uploaded_file.read(), dpi=200)
             ocr_texts = []
-            for img in images[:50]:
+            for img in images[:50]:  # safety cap
                 ocr_texts.append(pytesseract.image_to_string(img))
-            return "\n".join(ocr_texts)
+            return "\\n".join(ocr_texts)
         except Exception:
+            # Final fallback: raw bytes ignored if can't OCR
             pass
         return text or ""
     return uploaded_file.read().decode("utf-8", errors="ignore")
@@ -454,7 +450,7 @@ def build_context(max_rows=6):
         conn, params=(max_rows,)
     )
     vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
-    return "\\n".join([
+    return "\n".join([
         f"Company: {get_setting('company_name','ELA Management LLC')}",
         f"Home location: {get_setting('home_loc','Houston, TX')}",
         f"Goals: {goals_line or 'not set'}",
@@ -1063,7 +1059,7 @@ def render_rfp_analyzer():
                     continue
                 used.add(key)
                 parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-            return "Attached document snippets most relevant first:\n" + "\\n".join(parts[:16]) if parts else ""
+            return "Attached document snippets most relevant first:\n" + "\n".join(parts[:16]) if parts else ""
 
         # Quick action buttons
         colA, colB, colC, colD = st.columns(4)
@@ -1348,7 +1344,7 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
         if key in used: continue
         used.add(key)
         parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-    return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
+    return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
 
 
@@ -1961,7 +1957,7 @@ Keep responses concise and actionable. Use bullet points when helpful. Ask clari
                 if key in used: continue
                 used.add(key)
                 parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-            if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\\n".join(parts[:16])
+            if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
 
         context_snap = build_context(max_rows=6)
         sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
