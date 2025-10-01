@@ -3081,7 +3081,7 @@ drafts_df = pd.read_sql_query(
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.markdown("### Drafts"))
+        st.markdown("### Drafts")
 
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
         )
