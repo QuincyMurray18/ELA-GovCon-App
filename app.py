@@ -140,17 +140,6 @@ except NameError:
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
-
-# === Global proposal section order ===
-ORDER_SECTIONS = [
-    "Executive Summary",
-    "Technical Approach",
-    "Management & Staffing Plan",
-    "Past Performance",
-    "Pricing Assumptions/Notes",
-    "Compliance Narrative",
-]
-
 def _coerce_dt(x):
     if isinstance(x, datetime):
         return x
@@ -2693,36 +2682,10 @@ def render_rfp_analyzer():
             st.info("Select a chat session to continue.")
             st.stop()
 
-# Sections order used by multiple actions
-order = [
-    "Executive Summary",
-    "Technical Approach",
-    "Management & Staffing Plan",
-    "Past Performance",
-    "Pricing Assumptions/Notes",
-    "Compliance Narrative",
-]
-
-if not OPENAI_API_KEY:
-    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
-
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
             st.stop()
-
-# Sections order used by multiple actions
-order = [
-    "Executive Summary",
-    "Technical Approach",
-    "Management & Staffing Plan",
-    "Past Performance",
-    "Pricing Assumptions/Notes",
-    "Compliance Narrative",
-]
-
-if not OPENAI_API_KEY:
-    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
@@ -2875,7 +2838,7 @@ def render_proposal_builder():
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
 
         conn = get_db()
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions ORDER_SECTIONS by created_at desc", conn)
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first.")
             return
@@ -2887,15 +2850,258 @@ def render_proposal_builder():
             st.info("Select a valid session to continue.")
             st.stop()
 
-        # ... (keep all your generation, drafts, and export logic here) ...
+        st.markdown("**Attach past performance to include**")
+        df_pp = get_past_performance_df()
+        selected_pp_ids = []
+        if not df_pp.empty:
+            df_pp["pick"] = False
+            edited_pp = st.data_editor(df_pp[["id","title","agency","naics","period","value","role","highlights","pick"]], use_container_width=True, num_rows="fixed", key="pp_pick_grid")
+            selected_pp_ids = [int(x) for x in edited_pp[edited_pp["pick"]==True]["id"].tolist()]
+        else:
+            st.caption("No past performance records yet. Add some in Past Performance tab.")
 
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            want_exec = st.checkbox("Executive Summary", True)
+            want_tech = st.checkbox("Technical Approach", True)
+        with col2:
+            want_mgmt = st.checkbox("Management & Staffing Plan", True)
+            want_past = st.checkbox("Past Performance", True)
+        with col3:
+            want_price = st.checkbox("Pricing Assumptions/Notes", True)
+            want_comp = st.checkbox("Compliance Narrative", True)
+
+        actions = {
+            "Executive Summary": want_exec,
+            "Technical Approach": want_tech,
+            "Management & Staffing Plan": want_mgmt,
+            "Past Performance": want_past,
+            "Pricing Assumptions/Notes": want_price,
+            "Compliance Narrative": want_comp,
+        }
+
+        drafts_df = pd.read_sql_query(
+            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+            conn, params=(session_id,)
+        )
+
+        colA, colB = st.columns([1,1])
+        with colA:
+            regenerate = st.button("Generate selected sections")
+        with colB:
+            save_all = st.button("Save edited drafts")
+            export_md = st.button("Assemble full proposal (Markdown)")
+            export_docx = st.button("Export Proposal DOCX (guardrails)")
+        # === Generate selected sections ===
+        if regenerate:
+            # Helper: pull top snippets from attached RFP files for this session
+            def _pb_doc_snips(question_text: str):
+                rows = pd.read_sql_query(
+                    "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+                    conn, params=(session_id,)
+                )
+                if rows.empty:
+                    return ""
+                chunks, labels = [], []
+                for _, r in rows.iterrows():
+                    cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
+                vec, X = embed_texts(chunks)
+                top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
+                parts, used = [], set()
+                for sn in top:
+                    try:
+                        idx = chunks.index(sn); fname = labels[idx]
+                    except Exception:
+                        fname = "attachment"
+                    key = (fname, sn[:60])
+                    if key in used: continue
+                    used.add(key)
+                    parts.append(f"\\n--- {fname} ---\\n{sn.strip()}\\n")
+                return "Attached RFP snippets (most relevant first):\\n" + "\\n".join(parts[:16]) if parts else ""
+
+            # Pull past performance selections text if any
+            pp_text = ""
+            if selected_pp_ids:
+                qmarks = ",".join(["?"]*len(selected_pp_ids))
+                df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
+                lines = []
+                for _, r in df_sel.iterrows():
+                    lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                pp_text = "\\n".join(lines)
+
+            # Build common system context
+            try:
+                context_snap = build_context(max_rows=6)
+            except Exception:
+                context_snap = ""
+
+            # Section-specific prompts
+            section_prompts = {
+                "Executive Summary": "Write an executive summary that aligns our capabilities to the requirement. Emphasize value, risk mitigation, and rapid mobilization.",
+                "Technical Approach": "Describe a compliant, phase-oriented technical approach keyed to the PWS/SOW, referencing SLAs and QC steps.",
+                "Management & Staffing Plan": "Provide management structure, roles, key personnel, surge plan, and communication/QA practices.",
+                "Past Performance": "Summarize the selected past performance items, mapping relevance to scope, scale, and outcomes.",
+                "Pricing Assumptions/Notes": "List pricing basis, inclusions/exclusions, assumptions, and any risk-based contingencies. No dollar totals.",
+                "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
+            }
+
+            for sec, on in actions.items():
+                if not on:
+                    continue
+                # Build doc context keyed to the section
+                doc_snips = _pb_doc_snips(sec)
+                system_text = "\\n\\n".join(filter(None, [
+                    "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
+                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
+                    doc_snips,
+                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                ]))
+                user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
+
+                out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
+
+                # Upsert into proposal_drafts
+                cur = conn.cursor()
+                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
+                else:
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
+                conn.commit()
+            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            st.rerun()
+
+
+        # Compliance validation settings
+        st.markdown("#### Compliance validation settings")
+        colv1, colv2, colv3 = st.columns(3)
+        with colv1:
+            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
+            pb_font = st.text_input("Required font", value="Times New Roman")
+        with colv2:
+            pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
+            pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
+        with colv3:
+            pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
+            pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
+
+        # Assemble full proposal in Markdown
+        if export_md:
+            parts = []
+            for sec in order:
+                if sec not in actions or not actions[sec]:
+                    continue
+                cur = conn.cursor()
+                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row and row[0]:
+                    parts.append(f"# {sec}\n\n{row[0].strip()}\n")
+            assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
+            st.markdown("#### Assembled Proposal (Markdown preview)")
+            st.code(assembled, language="markdown")
+            st.download_button("Download proposal.md", data=assembled.encode("utf-8"),
+                               file_name="proposal.md", mime="text/markdown")
+
+        # Export DOCX with guardrails
+        if export_docx:
+            from docx import Document
+            from docx.shared import Inches, Pt
+            from docx.oxml.ns import qn
+
+            parts = []
+            for sec in order:
+                cur = conn.cursor()
+                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row and row[0]:
+                    parts.append((sec, row[0].strip()))
+            full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
+
+            issues, _ = _validate_text_for_guardrails(
+                full_text,
+                page_limit=int(pb_page_limit) if pb_page_limit else None,
+                require_font=pb_font or None,
+                require_size_pt=int(pb_font_size) if pb_font_size else None,
+                margins_in=float(pb_margins) if pb_margins else None,
+                line_spacing=float(pb_line_spacing) if pb_line_spacing else None,
+                filename_pattern=pb_file_pat or None
+            )
+            if issues:
+                st.error("Export blocked until these issues are resolved:")
+                for x in issues:
+                    st.markdown(f"- {x}")
+                st.stop()
+
+            doc = Document()
+            for section in doc.sections:
+                section.top_margin = Inches(pb_margins or 1)
+                section.bottom_margin = Inches(pb_margins or 1)
+                section.left_margin = Inches(pb_margins or 1)
+                section.right_margin = Inches(pb_margins or 1)
+
+            style = doc.styles["Normal"]
+            req_font = pb_font or "Times New Roman"
+            style.font.name = req_font
+            style._element.rPr.rFonts.set(qn("w:eastAsia"), req_font)
+            style.font.size = Pt(pb_font_size or 12)
+
+            for sec, txt in parts:
+                doc.add_heading(sec, level=1)
+                for para in txt.split("\n\n"):
+                    doc.add_paragraph(para)
+
+            bio = io.BytesIO()
+            doc.save(bio)
+            bio.seek(0)
+
+            company = get_setting("company_name","ELA Management LLC")
+            today = datetime.now().strftime("%Y%m%d")
+            safe_title = (sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "RFP").replace(" ", "_")
+            fname = (pb_file_pat or "{company}_{solicitation}_{date}").format(
+                company=company.replace(" ", "_"),
+                solicitation=safe_title,
+                section="FullProposal",
+                date=today
+            )
+            if not fname.lower().endswith(".docx"):
+                fname += ".docx"
+
+            st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+        st.markdown("### Drafts")
+        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
+        # Refresh drafts after generation so new content appears immediately
+        drafts_df = pd.read_sql_query(
+            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+            conn, params=(session_id,)
+        )
+        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
+        edited_blocks = {}
+        for sec in order:
+            if not actions.get(sec, False):
+                continue
+            st.markdown(f"**{sec}**")
+            txt = existing.get(sec, {}).get("content", "")
+            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
+
+        if save_all and edited_blocks:
+            cur = conn.cursor()
+            for sec, content in edited_blocks.items():
+                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
+                else:
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
+            conn.commit()
+            st.success("Drafts saved.")
+
+        
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
-
-    # === Definitions outside try/except ===
-    if not OPENAI_API_KEY:
-        st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
-
 
 # === End new features ===
 
