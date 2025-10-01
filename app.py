@@ -94,6 +94,109 @@ _OPENAI_FALLBACK_MODELS = [
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
+# ---- Hoisted helper implementations (duplicate for early use) ----
+def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
+    """
+    Google Places Text Search + Details (phone + website).
+    Returns (list_of_vendors, info). Emails are NOT provided by Places.
+    """
+    if not GOOGLE_PLACES_KEY:
+        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
+    try:
+        # 1) Text Search
+        search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
+        rs = requests.get(search_url, params=search_params, timeout=25)
+        status_code = rs.status_code
+        data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
+        api_status = data.get("status","")
+        results = data.get("results", []) or []
+
+        if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
+            return ([] if strict else results), {
+                "ok": False, "reason": api_status or "http_error", "http": status_code,
+                "api_status": api_status, "count": len(results),
+                "raw_preview": (rs.text or "")[:800],
+                "note": "Enable billing + 'Places API' in Google Cloud."
+            }
+
+        # 2) Details per result
+        out = []
+        for item in results:
+            place_id = item.get("place_id")
+            phone, website = "", ""
+            if place_id:
+                det_url = "https://maps.googleapis.com/maps/api/place/details/json"
+                det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
+                rd = requests.get(det_url, params=det_params, timeout=20)
+                det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
+                det = det_json.get("result", {})
+                phone = det.get("formatted_phone_number", "") or ""
+                website = det.get("website", "") or ""
+
+            out.append({
+                "company": item.get("name"),
+                "naics": "",
+                "trades": "",
+                "phone": phone,
+                "email": "",  # Emails not provided by Google Places
+                "website": website,
+                "city": location.split(",")[0].strip() if "," in location else location,
+                "state": location.split(",")[-1].strip() if "," in location else "",
+                "certifications": "",
+                "set_asides": "",
+                "notes": item.get("formatted_address",""),
+                "source": "GooglePlaces",
+            })
+        info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
+                "raw_preview": (rs.text or "")[:800]}
+        return out, info
+    except Exception as e:
+        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
+
+def linkedin_company_search(keyword: str) -> str:
+    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
+
+def build_context(max_rows=6):
+    conn = get_db()
+    g = pd.read_sql_query("select * from goals limit 1", conn)
+    goals_line = ""
+    if not g.empty:
+        rr = g.iloc[0]
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
+                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    opp = pd.read_sql_query(
+        "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
+        conn, params=(max_rows,)
+    )
+    opp_lines = ["- " + " | ".join(filter(None, [
+        str(r["title"])[:80], str(r["agency"])[:40],
+        f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
+    ])) for _, r in opp.iterrows()]
+    vend = pd.read_sql_query(
+        """select trim(substr(naics,1,6)) as code, count(*) as cnt
+           from vendors where ifnull(naics,'')<>''
+           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
+        conn, params=(max_rows,)
+    )
+    vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
+    return "\n".join([
+        f"Company: {get_setting('company_name','ELA Management LLC')}",
+        f"Home location: {get_setting('home_loc','Houston, TX')}",
+        f"Goals: {goals_line or 'not set'}",
+        f"NAICS watch: {naics_line}",
+        "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
+        *opp_lines,
+        "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
+        *vend_lines,
+    ])
+
+# ---------- External integrations ----------
+
+
+
 # ---- Safety helpers (fallbacks to avoid NameError at first render) ----
 try:
     _ = linkedin_company_search
