@@ -1422,6 +1422,125 @@ with tabs[3]:
             st.success(f"Processed {sent} messages")
 
 
+
+# === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
+
+def _ensure_opportunity_columns():
+    conn = get_db(); cur = conn.cursor()
+    # Add columns if missing
+    try: cur.execute("alter table opportunities add column status text default 'New'")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
+    conn.commit()
+
+def _get_table_cols(name):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"pragma table_info({name})")
+    return [r[1] for r in cur.fetchall()]
+
+def _to_sqlite_value(v):
+    # Normalize pandas/NumPy/complex types to Python primitives or None
+    try:
+        import numpy as np
+        import pandas as pd
+        if v is None:
+            return None
+        # Pandas NA
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        # Numpy scalars
+        if isinstance(v, (np.generic,)):
+            return v.item()
+        # Lists/dicts -> JSON
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        # Bytes -> decode
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode("utf-8", "ignore")
+            except Exception:
+                return str(v)
+        # Other types: cast to str for safety
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
+    except Exception:
+        # Fallback minimal handling
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        return v
+
+def save_opportunities(df, default_assignee=None):
+    """Upsert into opportunities and handle legacy schemas gracefully."""
+    if df is None or getattr(df, "empty", True):
+        return 0, 0
+    try:
+        df = df.where(df.notnull(), None)
+    except Exception:
+        pass
+
+    _ensure_opportunity_columns()
+    cols = set(_get_table_cols("opportunities"))
+
+    inserted = 0
+    updated = 0
+    conn = get_db(); cur = conn.cursor()
+    for _, r in df.iterrows():
+        nid = r.get("sam_notice_id")
+        if not nid:
+            continue
+        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+
+        base_fields = {
+            "sam_notice_id": nid,
+            "title": r.get("title"),
+            "agency": r.get("agency"),
+            "naics": r.get("naics"),
+            "psc": r.get("psc"),
+            "place_of_performance": r.get("place_of_performance"),
+            "response_due": r.get("response_due"),
+            "posted": r.get("posted"),
+            "type": r.get("type"),
+            "url": r.get("url"),
+            "attachments_json": r.get("attachments_json"),
+        }
+        # Sanitize all base fields
+        for k, v in list(base_fields.items()):
+            base_fields[k] = _to_sqlite_value(v)
+
+        if row:
+            cur.execute(
+                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            )
+            updated += 1
+        else:
+            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
+            insert_vals = [base_fields[c] for c in insert_cols]
+            if "status" in cols:
+                insert_cols.append("status"); insert_vals.append("New")
+            if "assignee" in cols:
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+            if "quick_note" in cols:
+                insert_cols.append("quick_note"); insert_vals.append("")
+            placeholders = ",".join("?" for _ in insert_cols)
+            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+            inserted += 1
+
+    conn.commit()
+    return inserted, updated
+
+
 with tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
