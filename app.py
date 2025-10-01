@@ -3083,31 +3083,31 @@ def render_proposal_builder():
                 saved += 1
             conn.commit()
             st.success(f"Saved {saved} section(s).")
-        with st.expander("Compliance validation settings", expanded=False):
-    st.markdown("#### Compliance validation settings")
-            colv1, colv2, colv3 = st.columns(3)
-            with colv1:
-                pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
-                pb_font = st.text_input("Required font", value="Times New Roman")
-            with colv2:
-                pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
-                pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
-            with colv3:
-                pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
-                pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
-
-        # Assemble full proposal in Markdown
-        if export_md:
-            parts = []
-            for sec in order:
-                if sec not in actions or not actions[sec]:
-                    continue
-                cur = conn.cursor()
-                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row and row[0]:
-                    parts.append(f"# {sec}\n\n{row[0].strip()}\n")
-            assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
+with st.expander("Compliance validation settings", expanded=False):
+with st.expander("Compliance validation settings", expanded=False):
+                colv1, colv2, colv3 = st.columns(3)
+                with colv1:
+                    pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
+                    pb_font = st.text_input("Required font", value="Times New Roman")
+                with colv2:
+                    pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
+                    pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
+                with colv3:
+                    pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
+                    pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
+    
+            # Assemble full proposal in Markdown
+            if export_md:
+                parts = []
+                for sec in order:
+                    if sec not in actions or not actions[sec]:
+                        continue
+                    cur = conn.cursor()
+                    cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        parts.append(f"# {sec}\n\n{row[0].strip()}\n")
+                assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
             st.markdown("#### Assembled Proposal (Markdown preview)")
             st.code(assembled, language="markdown")
             st.download_button("Download proposal.md", data=assembled.encode("utf-8"),
@@ -3198,3 +3198,12 @@ try:
         render_proposal_builder()
 except Exception as e:
     st.caption(f"[Proposal Builder tab note: {e}]")
+
+# Compatibility rerun (supports older Streamlit)
+try:
+    st.rerun()
+except Exception:
+    try:
+        st.experimental_rerun()
+    except Exception:
+        pass
