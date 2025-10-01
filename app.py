@@ -2880,7 +2880,17 @@ def render_proposal_builder():
             "Compliance Narrative": want_comp,
         }
 
-        drafts_df = pd.read_sql_query(
+        
+        # Canonical section order available to all downstream blocks
+        order = [
+            "Executive Summary",
+            "Technical Approach",
+            "Management & Staffing Plan",
+            "Past Performance",
+            "Pricing Assumptions/Notes",
+            "Compliance Narrative"
+        ]
+drafts_df = pd.read_sql_query(
             "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
             conn, params=(session_id,)
         )
