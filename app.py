@@ -2935,7 +2935,7 @@ def render_rfp_analyzer():
 
             sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
     Context snapshot:
-    {context_snap}
+        {context_snap}
     {doc_snips if doc_snips else ""}"""
 
             # Compose rolling window like Chat Assistant
