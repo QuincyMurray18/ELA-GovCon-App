@@ -93,6 +93,9 @@ _OPENAI_FALLBACK_MODELS = [
 ]
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
+st.title("GovCon Copilot Pro")
+st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+
 DB_PATH = "govcon.db"
 
 NAICS_SEEDS = [
@@ -2086,12 +2089,6 @@ def save_opportunities(df, default_assignee=None):
     conn.commit()
     return inserted, updated
 # ---------- UI ----------
-st.title("GovCon Copilot Pro")
-st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
-
-
-
-
 with st.sidebar:
     st.subheader("Configuration")
     company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
