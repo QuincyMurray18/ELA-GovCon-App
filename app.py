@@ -7,6 +7,23 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import requests
+
+def _risk_flags(text_chunk: str):
+    flags = []
+    patterns = {
+        "No-substitution/brand-name only": r"brand name only|no substitution",
+        "Unusual warranty/liability": r"unlimited liability|indemnify|hold harmless",
+        "Aggressive delivery": r"delivery within\s+(?:\d{1,2})\s+days",
+        "Payment terms risk": r"net\s*(?:60|90)",
+        "On-site access / clearance": r"secret clearance|public trust|escort required",
+    }
+    import re as _re
+    low = (text_chunk or "").lower()
+    for label, pat in patterns.items():
+        if _re.search(pat, low):
+            flags.append(label)
+    return flags
+
 from PyPDF2 import PdfReader
 import docx
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -40,8 +57,7 @@ try:
     from openai import OpenAI  # openai>=1.40.0 recommended
     _openai_version = getattr(_openai_pkg, "__version__", "unknown")
 except Exception as e:
-    st.warning("OpenAI SDK missing or too old. Chat features disabled until installed.")
-    OpenAI = None
+    raise RuntimeError("OpenAI SDK missing or too old. Install: openai>=1.40.0") from e
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
@@ -243,13 +259,6 @@ SCHEMA.update({
 })
 
 
-
-def parse_pick_id(pick):
-    try:
-        return int(str(pick).split(":")[0])
-    except Exception:
-        return None
-
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -329,14 +338,51 @@ def set_setting(key, value):
                  (key, str(value)))
     conn.commit()
 
+
 def read_doc(uploaded_file):
     suffix = uploaded_file.name.lower().split(".")[-1]
     if suffix in ["doc","docx"]:
-        d = docx.Document(uploaded_file); return "\n".join(p.text for p in d.paragraphs)
-    if suffix == "pdf":
-        r = PdfReader(uploaded_file); return "\n".join((p.extract_text() or "") for p in r.pages)
-    return uploaded_file.read().decode("utf-8", errors="ignore")
+        d = docx.Document(uploaded_file); return "
+".join(p.text for p in d.paragraphs)
 
+    if suffix == "pdf":
+        # Try text first
+        try:
+            r = PdfReader(uploaded_file)
+            txt_pages = [(p.extract_text() or "").strip() for p in r.pages]
+            text_all = "
+".join(txt_pages).strip()
+            if text_all:
+                return text_all
+        except Exception:
+            pass
+        # OCR fallback for scanned PDFs
+        try:
+            from pdf2image import convert_from_bytes  # requires poppler
+            import pytesseract
+            pages = convert_from_bytes(uploaded_file.getvalue(), dpi=300)
+            ocr_text = []
+            for img in pages[:50]:
+                ocr_text.append(pytesseract.image_to_string(img))
+            return "
+".join(ocr_text)
+        except Exception as e:
+            return f"[OCR fallback failed: {e}]"
+
+    # Plain text and images with OCR
+    if suffix in ["png","jpg","jpeg","tif","tiff","bmp"]:
+        try:
+            from PIL import Image
+            import pytesseract
+            img = Image.open(uploaded_file)
+            return pytesseract.image_to_string(img)
+        except Exception as e:
+            return f"[Image OCR failed: {e}]"
+
+    try:
+        return uploaded_file.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
 def llm(system, prompt, temp=0.2, max_tokens=1400):
     if not client: return "Set OPENAI_API_KEY to enable drafting."
     messages = [{"role":"system","content":system},{"role":"user","content":prompt}]
@@ -960,16 +1006,7 @@ def render_rfp_analyzer():
                 st.rerun()
             return
 
-        if not pick:
-            st.info("Select a chat session to continue.")
-            st.stop()
-
-        session_id = parse_pick_id(pick)
-        if session_id is None:
-            st.info("Select a valid session to continue.")
-            st.stop()
-        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
-        st.caption(f"RFP thread #{session_id}  {cur_title}")
+        session_id = int(pick.split(":")[0])
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
@@ -1126,10 +1163,7 @@ def render_proposal_builder():
 
         opts = [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("Select RFP thread", options=opts, index=0, key="pb_session_pick")
-        session_id = parse_pick_id(pick)
-        if session_id is None:
-            st.info("Select a valid session to continue.")
-            st.stop()
+        session_id = int(pick.split(":")[0])
 
         st.markdown("**Sections to draft**")
         col1, col2, col3 = st.columns(3)
@@ -1218,6 +1252,42 @@ Follow the solicitation exactly (format, page limits, fonts, submission method) 
             txt = existing.get(sec, {}).get("content", "")
             edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=220, key=f"pb_{sec}")
 
+# Insert past performance snippets into 'Past Performance' section
+st.markdown("#### Insert past performance")
+try:
+    df_pp = pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", conn)
+except Exception:
+    df_pp = pd.DataFrame()
+if not df_pp.empty:
+    picks = st.multiselect(
+        "Choose records to insert",
+        options=[f"{int(r.id)}: {r.title} — {r.agency}" for _, r in df_pp.iterrows()],
+        key=f"pp_pick_{session_id}"
+    )
+    if st.button("Insert selected past performance", key=f"pp_ins_{session_id}") and picks:
+        for pick_row in picks:
+            rid = int(str(pick_row).split(":")[0])
+            row = df_pp[df_pp["id"]==rid].iloc[0]
+            snippet = f"{row['title']} — {row['agency']}  NAICS {row.get('naics','') or ''}
+{row.get('highlights','') or ''}
+Contact: {row.get('contact_name','') or ''} {row.get('contact_email','') or ''} {row.get('contact_phone','') or ''}
+"
+            cur = conn.cursor()
+            # ensure section exists
+            cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, "Past Performance"))
+            prev = (cur.fetchone() or [""])[0] or ""
+            if prev == "":
+                cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, "Past Performance", ""))
+                conn.commit()
+                prev = ""
+            cur.execute("update proposal_drafts set content=? , updated_at=current_timestamp where session_id=? and section=?", (prev + "
+
+" + snippet, session_id, "Past Performance"))
+            conn.commit()
+        st.success("Inserted selected past performance into the 'Past Performance' section.")
+else:
+    st.caption("No past performance records found.")
+
         if save_all and edited_blocks:
             cur = conn.cursor()
             for sec, content in edited_blocks.items():
@@ -1229,6 +1299,53 @@ Follow the solicitation exactly (format, page limits, fonts, submission method) 
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
             conn.commit()
             st.success("Drafts saved.")
+
+st.markdown("#### Validate and Export Proposal (DOCX)")
+max_pages = st.number_input("Max pages", min_value=1, value=25, step=1, key=f"pb_max_pages_{session_id}")
+font_whitelist = st.text_input("Allowed fonts", value="Times New Roman, Arial", key=f"pb_fonts_{session_id}")
+margin_in = st.number_input("Margins (inches)", min_value=0.5, max_value=2.0, value=1.0, step=0.25, key=f"pb_margin_{session_id}")
+
+if st.button("Build & Export DOCX", key=f"pb_export_docx_{session_id}"):
+    # assemble from DB
+    order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Compliance Narrative","Pricing Assumptions/Notes"]
+    cur = conn.cursor()
+    parts = []
+    for sec in order:
+        cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+        parts.append(f"# {sec}
+" + ((cur.fetchone() or [""])[0] or ""))
+    assembled = "
+
+".join(parts)
+    words = len(assembled.split()); est_pages = max(1, int(round(words / 450)))
+    if est_pages > max_pages:
+        st.error(f"Estimated pages {est_pages} exceed max {max_pages}. Please trim content.")
+    else:
+        try:
+            from docx import Document
+            from docx.shared import Inches, Pt
+            doc = Document()
+            sec = doc.sections[0]
+            sec.top_margin = Inches(margin_in); sec.bottom_margin = Inches(margin_in)
+            sec.left_margin = Inches(margin_in); sec.right_margin = Inches(margin_in)
+            default_font = (font_whitelist.split(",")[0] or "Times New Roman").strip()
+            for block in assembled.split("
+"):
+                if block.startswith("# "):
+                    doc.add_heading(block[2:].strip(), level=1)
+                elif block.startswith("## "):
+                    doc.add_heading(block[3:].strip(), level=2)
+                else:
+                    p = doc.add_paragraph(block)
+                    for run in p.runs:
+                        run.font.name = default_font
+                        run.font.size = Pt(11)
+            import io as _io
+            bio = _io.BytesIO(); doc.save(bio); bio.seek(0)
+            st.download_button("Download proposal.docx", data=bio.getvalue(), file_name="proposal.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", key=f"pb_dl_{session_id}")
+        except Exception as e:
+            st.error(f"DOCX export failed: {e}")
+
 
         if export_md:
             parts = []
@@ -1283,227 +1400,8 @@ tabs = st.tabs([
     "Deadlines",
     "L&M Checklist",
     "RFQ Generator",
-    "Pricing Calculator","Past Performance","Quote Comparison","Win Probability"])
+    "Pricing Calculator"])
 
-
-
-
-# === Begin injected: extra schema, helpers, and three tab bodies ===
-def _ensure_extra_schema():
-    try:
-        conn = get_db()
-    except Exception:
-        return
-    try:
-        conn.execute("""create table if not exists past_performance (
-            id integer primary key,
-            title text, agency text, naics text, psc text,
-            period text, value real, role text, location text,
-            highlights text,
-            contact_name text, contact_email text, contact_phone text,
-            created_at text default current_timestamp,
-            updated_at text default current_timestamp
-        );""")
-        conn.execute("""create table if not exists vendor_quotes (
-            id integer primary key,
-            opp_id integer, vendor_id integer, company text,
-            subtotal real, taxes real, shipping real, total real,
-            lead_time text, notes text, files_json text,
-            created_at text default current_timestamp
-        );""")
-        conn.execute("""create table if not exists win_scores (
-            id integer primary key,
-            opp_id integer unique, score real, factors_json text,
-            computed_at text default current_timestamp
-        );""")
-        conn.execute("""create table if not exists tasks (
-            id integer primary key,
-            opp_id integer, title text, assignee text, due_date text,
-            status text default 'Open', notes text,
-            created_at text default current_timestamp,
-            updated_at text default current_timestamp
-        );""")
-        conn.commit()
-    except Exception:
-        pass
-
-_ensure_extra_schema()
-
-def get_past_performance_df():
-    try:
-        return pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", get_db())
-    except Exception:
-        return pd.DataFrame()
-
-def upsert_win_score(opp_id: int, score: float, factors: dict):
-    try:
-        conn = get_db()
-        conn.execute("""            insert into win_scores(opp_id, score, factors_json, computed_at)
-            values(?,?,?, current_timestamp)
-            on conflict(opp_id) do update set
-                score=excluded.score,
-                factors_json=excluded.factors_json,
-                computed_at=current_timestamp
-        """, (int(opp_id), float(score), json.dumps(factors)))
-        conn.commit()
-    except Exception:
-        pass
-
-def compute_win_score_row(opp_row, past_perf_df):
-    from datetime import datetime as _dt
-    # Factors
-    score = 0
-    factors = {}
-    # NAICS match signal
-    opp_naics = (opp_row.get("naics") or "").split(",")[0].strip()
-    has_pp_same_naics = not past_perf_df[past_perf_df.get("naics", pd.Series(dtype=str)).fillna("").str.contains(opp_naics, na=False)].empty if opp_naics else False
-    factors["naics_match"] = 25 if has_pp_same_naics else 10
-    score += factors["naics_match"]
-    # Set-aside fit signal
-    t = (opp_row.get("type") or "").lower()
-    setaside_fit = 20 if ("small business" in t or "total small business" in t) else 10
-    factors["set_aside_fit"] = setaside_fit
-    score += setaside_fit
-    # Agency familiarity
-    opp_agency = (opp_row.get("agency") or "").strip().lower()
-    has_pp_same_agency = not past_perf_df[past_perf_df.get("agency", pd.Series(dtype=str)).fillna("").str.lower().str.contains(opp_agency)].empty if opp_agency else False
-    factors["agency_familiarity"] = 25 if has_pp_same_agency else 10
-    score += factors["agency_familiarity"]
-    # Time runway
-    try:
-        due = _parse_date_any(opp_row.get("response_due") or "")
-    except Exception:
-        due = None
-    runway = (due - _dt.now()).days if due else 21
-    runway_pts = 20 if runway >= 14 else (10 if runway >= 7 else 5)
-    factors["time_runway"] = runway_pts
-    score += runway_pts
-    # Attachment presence for clarity
-    has_docs = bool(opp_row.get("attachments_json"))
-    factors["docs_avail"] = 10 if has_docs else 5
-    score += factors["docs_avail"]
-    # Cap 100
-    score = min(100, score)
-    return score, factors
-
-# Past Performance tab body (assumes appended as last-3 tab)
-try:
-    with tabs[-3]:
-        st.subheader("Past Performance Library")
-        st.caption("Create reusable blurbs linked by NAICS and agency. Insert into Proposal Builder later.")
-        conn = get_db()
-        df_pp = get_past_performance_df()
-        st.dataframe(df_pp, use_container_width=True)
-
-        with st.form("pp_form", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            with col1:
-                title = st.text_input("Project title")
-                agency = st.text_input("Agency")
-                naics = st.text_input("NAICS", value="")
-                psc = st.text_input("PSC", value="")
-                period = st.text_input("Period", value="")
-            with col2:
-                value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0)
-                role = st.text_input("Role", value="Prime")
-                location = st.text_input("Location", value="")
-                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
-            contact_name = st.text_input("POC name", value="")
-            contact_email = st.text_input("POC email", value="")
-            contact_phone = st.text_input("POC phone", value="")
-            submit = st.form_submit_button("Save record")
-        if submit:
-            conn.execute("""insert into past_performance
-                (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
-                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
-            conn.commit()
-            st.success("Saved")
-            st.experimental_rerun()
-except Exception as _e_pp:
-    st.caption(f"[Past Performance tab init note: {_e_pp}]")
-
-# Quote Comparison tab body (last-2)
-try:
-    with tabs[-2]:
-        st.subheader("Subcontractor Quote Comparison")
-        conn = get_db()
-        df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
-        df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
-        opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
-        opp_pick = st.selectbox("Opportunity", options=opp_opts)
-        if opp_pick:
-            opp_id = int(opp_pick.split(":")[0])
-
-            with st.form("qc_add"):
-                cols = st.columns(2)
-                with cols[0]:
-                    v_opts = [""] + [f"{int(r.id)}: {r.company}" for _, r in df_vendors.iterrows()]
-                    v_pick = st.selectbox("Vendor", options=v_opts)
-                    subtotal = st.number_input("Subtotal", min_value=0.0, step=100.0, value=0.0)
-                    taxes = st.number_input("Taxes", min_value=0.0, step=50.0, value=0.0)
-                    shipping = st.number_input("Shipping", min_value=0.0, step=50.0, value=0.0)
-                with cols[1]:
-                    lead_time = st.text_input("Lead time", value="")
-                    notes = st.text_area("Notes", height=120, value="")
-                    files = st.text_input("Files list", value="")
-                add_btn = st.form_submit_button("Save quote line")
-            if add_btn and v_pick:
-                vendor_id = int(v_pick.split(":")[0])
-                company = df_vendors[df_vendors["id"]==vendor_id]["company"].iloc[0]
-                total = float(subtotal) + float(taxes) + float(shipping)
-                conn.execute("""insert into vendor_quotes(opp_id, vendor_id, company, subtotal, taxes, shipping, total, lead_time, notes, files_json)
-                                values(?,?,?,?,?,?,?,?,?,?)""",                             (opp_id, vendor_id, company, float(subtotal), float(taxes), float(shipping), total, lead_time, notes,
-                              json.dumps([s.strip() for s in files.split(",") if s.strip()])))
-                conn.commit()
-                st.success("Saved")
-
-            dfq = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by total asc", conn, params=(opp_id,))
-            if dfq.empty:
-                st.info("No quotes yet")
-            else:
-                st.dataframe(dfq[["company","subtotal","taxes","shipping","total","lead_time","notes"]], use_container_width=True)
-                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist())
-                if pick_winner and st.button("Pick Winner"):
-                    st.success(f"Winner selected {pick_winner}. Use Pricing Calculator to model markup.")
-except Exception as _e_qc:
-    st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
-
-# Win Probability tab body (last-1)
-try:
-    with tabs[-1]:
-        st.subheader("Win Probability")
-        conn = get_db()
-        df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
-        df_pp = get_past_performance_df()
-        if df_opp.empty:
-            st.info("No opportunities in pipeline")
-        else:
-            rows = []
-            for _, r in df_opp.iterrows():
-                s, f = compute_win_score_row(r, df_pp)
-                rows.append({
-                    "id": r.get("id"),
-                    "title": r.get("title"),
-                    "agency": r.get("agency"),
-                    "naics": r.get("naics"),
-                    "response_due": r.get("response_due"),
-                    "score": s,
-                    "factors": f
-                })
-                try:
-                    upsert_win_score(int(r.get("id")), s, f)
-                except Exception:
-                    pass
-            df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
-            st.dataframe(df_scores[["id","title","agency","naics","response_due","score"]], use_container_width=True)
-            pick = st.number_input("Opportunity ID for factor breakdown", min_value=0, step=1, value=0)
-            if pick:
-                row = next((x for x in rows if x["id"]==int(pick)), None)
-                if row:
-                    st.json(row["factors"])
-except Exception as _e_win:
-    st.caption(f"[Win Probability tab init note: {_e_win}]")
-# === End injected ===
 
 with tabs[0]:
     st.subheader("Opportunities pipeline")
@@ -1960,23 +1858,84 @@ with tabs[11]:
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
     session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
     pick = st.selectbox("Session", options=session_titles, index=0)
-    
     if pick == "➤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
         new_title = st.text_input("New chat title", value=default_title)
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
-            conn.commit()
-            st.rerun()
-        st.caption("Pick an existing chat from the dropdown above to continue.")
-    else:
-        session_id = parse_pick_id(pick)
-        if session_id is None:
-            st.info("Select a valid session to continue.")
-        else:
-            cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
-            st.caption(f"Session #{session_id} — {cur_title}")
+            conn.commit(); st.rerun()
+        st.stop()
 
+    session_id = int(pick.split(":")[0])
+    cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
+    st.caption(f"Session #{session_id} — {cur_title}")
+
+    g = pd.read_sql_query("select * from goals limit 1", conn)
+    goals_line = ""
+    if not g.empty:
+        rr = g.iloc[0]
+        goals_line = f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}."
+    default_system = f"""You are a senior federal contracting copilot.
+Company: {get_setting('company_name','ELA Management LLC')}.
+Home location: {get_setting('home_loc','Houston, TX')}.
+Default trade: {get_setting('default_trade','Janitorial')}.
+Goals: {goals_line}
+Keep responses concise and actionable. Use bullet points when helpful. Ask clarifying questions only when necessary."""
+    sys_prompt = st.text_area("System instructions (optional)", value=default_system, height=120)
+
+    st.markdown("**Attach files for this chat** (PDF, DOCX, TXT)")
+    uploads = st.file_uploader("Drop files here", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="chat_uploads")
+    if uploads and st.button("Add to chat"):
+        added = 0
+        for up in uploads:
+            text = read_doc(up)[:800_000]
+            conn.execute("""insert into chat_files(session_id, filename, mimetype, content_text)
+                            values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
+            added += 1
+        conn.commit(); st.success(f"Added {added} file(s) to this chat.")
+
+    files_df = pd.read_sql_query(
+        "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
+        conn, params=(session_id,)
+    )
+    if files_df.empty:
+        st.caption("No files attached yet.")
+    else:
+        st.caption("Attached files:")
+        st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
+        del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0)
+        if st.button("Delete selected file") and del_id > 0:
+            conn.execute("delete from chat_files where id=?", (int(del_id),)); conn.commit(); st.success(f"Deleted file id {del_id}."); st.rerun()
+
+    hist = pd.read_sql_query("select role, content, created_at from chat_messages where session_id=? order by id asc",
+                             conn, params=(session_id,))
+    if hist.empty:
+        st.info("No messages yet. Ask your first question below.")
+    else:
+        for _, row in hist.iterrows():
+            if row["role"] == "user": st.chat_message("user").markdown(row["content"])
+            elif row["role"] == "assistant": st.chat_message("assistant").markdown(row["content"])
+            else: st.caption(f"ðŸ§  System updated at {row['created_at']}")
+
+    user_msg = st.chat_input("Ask a question… e.g., 'Draft staffing plan for janitorial at VA clinic'")
+    if user_msg:
+        last_sys = pd.read_sql_query(
+            "select id, content from chat_messages where session_id=? and role='system' order by id desc limit 1",
+            conn, params=(session_id,))
+        if last_sys.empty or last_sys.iloc[0]["content"] != sys_prompt:
+            conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "system", sys_prompt)); conn.commit()
+        conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "user", user_msg)); conn.commit()
+
+        msgs = pd.read_sql_query("select role, content from chat_messages where session_id=? order by id asc",
+                                 conn, params=(session_id,)).to_dict(orient="records")
+        pruned, sys_seen, user_turns = [], False, 0
+        for m in msgs[::-1]:
+            if m["role"] == "assistant": pruned.append(m); continue
+            if m["role"] == "user":
+                if user_turns < 12: pruned.append(m); user_turns += 1
+                continue
+            if m["role"] == "system" and not sys_seen: pruned.append(m); sys_seen = True
+        msgs_window = list(reversed(pruned))
 
         # Build doc context
         rows = pd.read_sql_query(
@@ -2033,7 +1992,7 @@ def _lpta_note(total_price, budget_hint=None):
     return "PASS" if total_price <= float(budget_hint) else "FAIL"
 
 # Compute dynamic base index for new tabs
-__tabs_base = 13  # 'Deadlines' tab index
+__tabs_base = len(tabs) - 4  # after we appended 4 labels
 
 with tabs[__tabs_base + 0]:
     st.subheader("Deadline tracker")
@@ -2070,69 +2029,79 @@ with tabs[__tabs_base + 0]:
     else:
         st.write("No items due today.")
 
-
 with tabs[__tabs_base + 1]:
     st.subheader("Section L and M checklist")
     conn = get_db()
     up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
     if up and st.button("Generate checklist"):
-        items = []
+        text_chunks = []
         for f in up:
-            name = f.name
-            suffix = name.lower().split(".")[-1]
-            if suffix == "pdf":
-                r = PdfReader(f)
-                pages = [(i+1, (p.extract_text() or "")) for i, p in enumerate(r.pages)]
-                def find_page(pat):
-                    rx = re.compile(pat, re.I|re.S)
-                    for num, text in pages:
-                        if rx.search(text or ""):
-                            return num
-                    return ""
-                anchors = {
-                    "technical": r"(technical volume|technical proposal)",
-                    "price": r"(price volume|pricing|schedule of items)",
-                    "past performance": r"\bpast performance\b",
-                    "representations": r"(reps(?: and)? certs|52\.212-3)",
-                    "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
-                    "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
-                    "delivery": r"(delivery|period of performance|pop:)",
-                    "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
-                    "due date": r"(offers due|responses due|closing date)",
-                }
-                for label, pat in anchors.items():
-                    page_hit = find_page(pat)
-                    notes = "Found" if page_hit else "Not detected"
-                    items.append({"item": label, "required": 1, "status": "Pending", "source_page": f"{name} p.{page_hit}" if page_hit else "", "notes": notes})
-            else:
-                text = read_doc(f).lower()
-                anchors = {
-                    "technical": r"(technical volume|technical proposal)",
-                    "price": r"(price volume|pricing|schedule of items)",
-                    "past performance": r"\bpast performance\b",
-                    "representations": r"(reps(?: and)? certs|52\.212-3)",
-                    "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
-                    "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
-                    "delivery": r"(delivery|period of performance|pop:)",
-                    "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
-                    "due date": r"(offers due|responses due|closing date)",
-                }
-                for label, pat in anchors.items():
-                    notes = "Found" if re.search(pat, text, flags=re.S) else "Not detected"
-                    items.append({"item": label, "required": 1, "status": "Pending", "source_page": name, "notes": notes})
-
-        df = pd.DataFrame(items)
-        st.dataframe(df, use_container_width=True)
-        for r in items:
-            conn.execute("insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
-                         (None, r["item"], 1, r["status"], r["source_page"], r["notes"]))
+            try:
+                text_chunks.append(read_doc(f))
+            except Exception as e:
+                st.warning(f"Could not read {f.name}: {e}")
+        big = "\n\n".join(text_chunks).lower()
+        # Simple deterministic anchors
+        required_items = []
+        anchors = {
+            "technical": r"(technical volume|technical proposal)",
+            "price": r"(price volume|pricing|schedule of items)",
+            "past performance": r"past performance",
+            "representations": r"(reps(?: and)? certs|52\.212-3)",
+            "page limit": r"(page limit|not exceed \d+ pages|\d+\s*page\s*limit)",
+            "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
+            "delivery": r"(delivery|period of performance|pop:)",
+            "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
+            "due date": r"(offers due|responses due|closing date)",
+        }
+        for name, pat in anchors.items():
+            found = re.search(pat, big, flags=re.S)
+            required_items.append({"item": name, "required": 1, "status": "Pending", "source_page": "", "notes": ("Found" if found else "Not detected")})
+        df = pd.DataFrame(required_items)
+        st.dataframe(df)
+        # Save
+        for r in required_items:
+            conn.execute(
+                "insert into compliance_items(opp_id,item,required,status,source_page,notes) values(?,?,?,?,?,?)",
+                (None, r["item"], 1, r["status"], r["source_page"], r["notes"])
+            )
         conn.commit()
-        st.success("Checklist saved with page anchors when available")
-
+        st.success("Checklist saved")
     st.markdown("#### Existing items")
     items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
-    st.dataframe(items, use_container_width=True)
+    st.dataframe(items)
 
+
+
+st.markdown("#### Manage assignments / status")
+try:
+    items = pd.read_sql_query("select rowid as id, * from compliance_items order by created_at desc limit 500", conn)
+except Exception:
+    items = pd.DataFrame()
+if not items.empty:
+    sel = st.multiselect("Filter by item", options=sorted(items["item"].unique()))
+    view = items[items["item"].isin(sel)] if sel else items
+    st.dataframe(view, use_container_width=True)
+    with st.form("cmpl_update"):
+        rid = st.number_input("Row ID to update", min_value=1, step=1)
+        owner = st.text_input("Owner/Assignee")
+        status = st.selectbox("Status", ["Pending","In Progress","Complete","N/A"])
+        snippet = st.text_area("Snippet / Note", height=100)
+        if st.form_submit_button("Update"):
+            try:
+                cur = conn.cursor()
+                cur.execute("select notes from compliance_items where rowid=?", (int(rid),))
+                prev = (cur.fetchone() or ["{}"])[0] or "{}"
+                try:
+                    data = json.loads(prev)
+                except Exception:
+                    data = {"notes": prev}
+                data.update({"owner": owner, "status": status, "snippet": snippet})
+                cur.execute("update compliance_items set notes=? where rowid=?", (json.dumps(data), int(rid)))
+                conn.commit()
+                st.success("Updated.")
+            except Exception as e:
+                st.error(f"Update failed: {e}")
 with tabs[__tabs_base + 2]:
     st.subheader("RFQ generator to subcontractors")
     conn = get_db()
