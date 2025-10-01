@@ -1160,73 +1160,78 @@ with tabs[0]:
         st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
 
 
-# Analytics mini-dashboard
-try:
-    conn = get_db()
-    df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
-    if not df_all.empty:
-        st.markdown("### Pipeline analytics")
-        st.bar_chart(df_all.set_index("status"))
-    # Forecast (probability-adjusted revenue) using win_scores if any
+# Analytics mini-dashboard (scoped to Pipeline tab)
+with tabs[0]:
+
+    # Analytics mini-dashboard
     try:
-        dfw = pd.read_sql_query("""
-            select o.id, o.title, o.agency, coalesce(w.score, 50) as score
-            from opportunities o left join win_scores w on o.id = w.opp_id
-        """, conn)
-        if not dfw.empty:
-            dfw["prob"] = dfw["score"]/100.0
-            # No revenue field available, so treat prob as index only
-            st.dataframe(dfw[["id","title","agency","score","prob"]])
-    except Exception as _e_wa:
-        st.caption(f"[Win score analytics note: {_e_wa}]")
-except Exception as _e_dash:
-    st.caption(f"[Analytics dash note: {_e_dash}]")
+        conn = get_db()
+        df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
+        if not df_all.empty:
+            st.markdown("### Pipeline analytics")
+            st.bar_chart(df_all.set_index("status"))
+        # Forecast (probability-adjusted revenue) using win_scores if any
+        try:
+            dfw = pd.read_sql_query("""
+                select o.id, o.title, o.agency, coalesce(w.score, 50) as score
+                from opportunities o left join win_scores w on o.id = w.opp_id
+            """, conn)
+            if not dfw.empty:
+                dfw["prob"] = dfw["score"]/100.0
+                # No revenue field available, so treat prob as index only
+                st.dataframe(dfw[["id","title","agency","score","prob"]])
+        except Exception as _e_wa:
+            st.caption(f"[Win score analytics note: {_e_wa}]")
+    except Exception as _e_dash:
+        st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
-if globals().get("__ctx_pipeline", False):
+with tabs[0]:
+
+    if globals().get("__ctx_pipeline", False):
 
 
-    st.markdown("### Tasks for selected opportunity")
+        st.markdown("### Tasks for selected opportunity")
 
-    try:
+        try:
 
-        sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
+            sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
 
-        if sel_id:
+            if sel_id:
 
-            df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
+                df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
 
-            if df_tasks.empty:
+                if df_tasks.empty:
 
-                df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+                    df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
 
-            grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
+                grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
 
-            if st.button("Save tasks"):
+                if st.button("Save tasks"):
 
-                cur = conn.cursor()
+                    cur = conn.cursor()
 
-                for _, r in grid_tasks.iterrows():
+                    for _, r in grid_tasks.iterrows():
 
-                    if pd.isna(r.get("id")):
+                        if pd.isna(r.get("id")):
 
-                        cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
+                            cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
 
-                                    (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
+                                        (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
 
-                    else:
+                        else:
 
-                        cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
+                            cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
 
-                                    (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
+                                        (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
 
-                conn.commit()
+                    conn.commit()
 
-                st.success("Tasks saved.")
+                    st.success("Tasks saved.")
 
-    except Exception as _e_tasks:
+        except Exception as _e_tasks:
 
-        st.caption(f"[Tasks panel note: {_e_tasks}]")
+            st.caption(f"[Tasks panel note: {_e_tasks}]")
 with tabs[1]:
     st.subheader("Find subcontractors and rank by fit")
     trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial"))
