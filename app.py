@@ -500,57 +500,57 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
 
         if export_md:
-            parts = []
-            for sec in order:
-                if sec not in actions or not actions[sec]:
-                    continue
-                cur = conn.cursor()
-                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row and row[0]:
-                    parts.append(f"# {sec}\n\n{row[0].strip()}\n")
-            assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
-            st.markdown("#### Assembled Proposal (Markdown preview)")
-            st.code(assembled, language="markdown")
-            st.download_button("Download proposal.md", data=assembled.encode("utf-8"), file_name="proposal.md", mime="text/markdown")
+        parts = []
+        for sec in order:
+            if sec not in actions or not actions[sec]:
+                continue
+            cur = conn.cursor()
+            cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+            row = cur.fetchone()
+            if row and row[0]:
+                parts.append(f"# {sec}\n\n{row[0].strip()}\n")
+        assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
+        st.markdown("#### Assembled Proposal (Markdown preview)")
+        st.code(assembled, language="markdown")
+        st.download_button("Download proposal.md", data=assembled.encode("utf-8"), file_name="proposal.md", mime="text/markdown")
 
         if export_docx:
-            from docx import Document
-            from docx.shared import Inches, Pt
-            from docx.oxml.ns import qn
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.oxml.ns import qn
 
-            parts = []
-            for sec in order:
-                cur = conn.cursor()
-                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row and row[0]:
-                    parts.append((sec, row[0].strip()))
-            full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
+        parts = []
+        for sec in order:
+            cur = conn.cursor()
+            cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+            row = cur.fetchone()
+            if row and row[0]:
+                parts.append((sec, row[0].strip()))
+        full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
 
-            issues, _ = _validate_text_for_guardrails(full_text, page_limit=None)
-            for x in issues:
-                st.warning(x)
+        issues, _ = _validate_text_for_guardrails(full_text, page_limit=None)
+        for x in issues:
+            st.warning(x)
 
-            doc = Document()
-            for section in doc.sections:
-                section.top_margin = Inches(1)
-                section.bottom_margin = Inches(1)
-                section.left_margin = Inches(1)
-                section.right_margin = Inches(1)
-            style = doc.styles["Normal"]
-            style.font.name = "Times New Roman"
-            style._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
-            style.font.size = Pt(12)
+        doc = Document()
+        for section in doc.sections:
+            section.top_margin = Inches(1)
+            section.bottom_margin = Inches(1)
+            section.left_margin = Inches(1)
+            section.right_margin = Inches(1)
+        style = doc.styles["Normal"]
+        style.font.name = "Times New Roman"
+        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
+        style.font.size = Pt(12)
 
-            for sec, txt in parts:
-                doc.add_heading(sec, level=1)
-                for para in txt.split("\n\n"):
-                    doc.add_paragraph(para)
+        for sec, txt in parts:
+            doc.add_heading(sec, level=1)
+            for para in txt.split("\n\n"):
+                doc.add_paragraph(para)
 
-            bio = io.BytesIO(); doc.save(bio); bio.seek(0)
-            st.download_button("Download Proposal.docx", data=bio.getvalue(), file_name="Proposal.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        bio = io.BytesIO(); doc.save(bio); bio.seek(0)
+        st.download_button("Download Proposal.docx", data=bio.getvalue(), file_name="Proposal.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
         st.exception(e)
