@@ -373,30 +373,33 @@ def set_setting(key, value):
     conn.commit()
 
 def read_doc(uploaded_file):
-
-suffix = uploaded_file.name.lower().split(".")[-1]
-if suffix in ["doc","docx"]:
-    d = docx.Document(uploaded_file); return "\n".join(p.text for p in d.paragraphs)
-if suffix == "pdf":
-    try:
-        data = uploaded_file.read()
-        r = PdfReader(io.BytesIO(data))
-        txt = "\n".join((p.extract_text() or "") for p in r.pages)
-        if len((txt or "").strip()) < 500:
-            ocr_txt = _ocr_pdf_bytes(data)
-            if ocr_txt and len(ocr_txt.strip()) > len((txt or "").strip()):
-                return ocr_txt
-        return txt
-    except Exception:
+    suffix = uploaded_file.name.lower().split(".")[-1]
+    if suffix in ["doc","docx"]:
+        d = docx.Document(uploaded_file)
+        return "\n".join(p.text for p in d.paragraphs)
+    if suffix == "pdf":
         try:
             data = uploaded_file.read()
-            ocr_txt = _ocr_pdf_bytes(data)
-            if ocr_txt:
-                return ocr_txt
+            r = PdfReader(io.BytesIO(data))
+            txt = "\n".join((p.extract_text() or "") for p in r.pages)
+            # OCR fallback when native text is sparse
+            if len((txt or "").strip()) < 500:
+                ocr_txt = _ocr_pdf_bytes(data)
+                if ocr_txt and len(ocr_txt.strip()) > len((txt or "").strip()):
+                    return ocr_txt
+            return txt
         except Exception:
-            pass
-        return ""
-return uploaded_file.read().decode("utf-8", errors="ignore")
+            try:
+                data = uploaded_file.read()
+                ocr_txt = _ocr_pdf_bytes(data)
+                if ocr_txt:
+                    return ocr_txt
+            except Exception:
+                pass
+            return ""
+    return uploaded_file.read().decode("utf-8", errors="ignore")
+
+
 def llm(system, prompt, temp=0.2, max_tokens=1400):
     if not client: return "Set OPENAI_API_KEY to enable drafting."
     messages = [{"role":"system","content":system},{"role":"user","content":prompt}]
