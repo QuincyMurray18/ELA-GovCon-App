@@ -3099,9 +3099,9 @@ def render_proposal_builder():
                 cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
                 row = cur.fetchone()
                 if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
                 else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
             conn.commit()
             st.success("Drafts saved.")
 
