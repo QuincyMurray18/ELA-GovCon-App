@@ -94,6 +94,88 @@ _OPENAI_FALLBACK_MODELS = [
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
+# ---- Hoisted SAM helper (duplicate for early use) ----
+def sam_search(
+    naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
+    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
+):
+    if not SAM_API_KEY:
+        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+    base = "https://api.sam.gov/opportunities/v2/search"
+    today = datetime.utcnow().date()
+    min_due_date = today + timedelta(days=min_days)
+    posted_from = _us_date(today - timedelta(days=posted_from_days))
+    posted_to   = _us_date(today)
+
+    params = {
+        "api_key": SAM_API_KEY,
+        "limit": str(limit),
+        "response": "json",
+        "sort": "-publishedDate",
+        "active": active,
+        "postedFrom": posted_from,   # MM/dd/yyyy
+        "postedTo": posted_to,       # MM/dd/yyyy
+    }
+    # Enforce only Solicitation + Combined when notice_types is blank
+    if not notice_types:
+        notice_types = "Combined Synopsis/Solicitation,Solicitation"
+    params["noticeType"] = notice_types
+
+    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
+    if keyword:      params["keywords"] = keyword
+
+    try:
+        headers = {"X-Api-Key": SAM_API_KEY}
+        r = requests.get(base, params=params, headers=headers, timeout=40)
+        status = r.status_code
+        raw_preview = (r.text or "")[:1000]
+        try:
+            data = r.json()
+        except Exception:
+            return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
+        if status != 200:
+            err_msg = ""
+            if isinstance(data, dict):
+                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
+            return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
+        if isinstance(data, dict) and data.get("message"):
+            return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
+
+        items = data.get("opportunitiesData", []) or []
+        rows = []
+        for opp in items:
+            due_str = opp.get("responseDeadLine") or ""
+            d = _parse_sam_date(due_str)
+            due_ok = (d is None) or (d >= min_due_date)
+            if not due_ok: continue
+            docs = opp.get("documents", []) or []
+            rows.append({
+                "sam_notice_id": opp.get("noticeId"),
+                "title": opp.get("title"),
+                "agency": opp.get("organizationName"),
+                "naics": ",".join(opp.get("naicsCodes", [])),
+                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+                "response_due": due_str,
+                "posted": opp.get("publishedDate",""),
+                "type": opp.get("type",""),
+                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
+            })
+        df = pd.DataFrame(rows)
+        info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
+                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+                            "postedFrom": posted_from, "postedTo": posted_to,
+                            "min_due_days": min_days, "noticeType": notice_types,
+                            "active": active, "limit": limit}}
+        if df.empty:
+            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+        return df, info
+    except requests.RequestException as e:
+        return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
+
+
+
 # ---- Hoisted helper implementations (duplicate for early use) ----
 def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
     """
