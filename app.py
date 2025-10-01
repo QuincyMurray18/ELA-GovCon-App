@@ -2682,10 +2682,36 @@ def render_rfp_analyzer():
             st.info("Select a chat session to continue.")
             st.stop()
 
+# Sections order used by multiple actions
+order = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing Plan",
+    "Past Performance",
+    "Pricing Assumptions/Notes",
+    "Compliance Narrative",
+]
+
+if not OPENAI_API_KEY:
+    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
+
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
             st.stop()
+
+# Sections order used by multiple actions
+order = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing Plan",
+    "Past Performance",
+    "Pricing Assumptions/Notes",
+    "Compliance Narrative",
+]
+
+if not OPENAI_API_KEY:
+    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
@@ -2859,6 +2885,11 @@ order = [
     "Pricing Assumptions/Notes",
     "Compliance Narrative",
 ]
+
+if not OPENAI_API_KEY:
+    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
+
+# Sections order used by multiple actions
 
 if not OPENAI_API_KEY:
     st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
@@ -3046,6 +3077,19 @@ if not OPENAI_API_KEY:
                 for x in issues:
                     st.markdown(f"- {x}")
                 st.stop()
+
+# Sections order used by multiple actions
+order = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing Plan",
+    "Past Performance",
+    "Pricing Assumptions/Notes",
+    "Compliance Narrative",
+]
+
+if not OPENAI_API_KEY:
+    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
 
             doc = Document()
             for section in doc.sections:
