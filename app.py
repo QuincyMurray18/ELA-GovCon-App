@@ -243,6 +243,13 @@ SCHEMA.update({
 })
 
 
+
+def parse_pick_id(pick):
+    try:
+        return int(str(pick).split(":")[0])
+    except Exception:
+        return None
+
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -957,7 +964,10 @@ def render_rfp_analyzer():
             st.info("Select a chat session to continue.")
             st.stop()
 
-        session_id = int(pick.split(":")[0])
+        session_id = parse_pick_id(pick)
+        if session_id is None:
+            st.info("Select a valid session to continue.")
+            st.stop()
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
@@ -1116,7 +1126,10 @@ def render_proposal_builder():
 
         opts = [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("Select RFP thread", options=opts, index=0, key="pb_session_pick")
-        session_id = int(pick.split(":")[0])
+        session_id = parse_pick_id(pick)
+        if session_id is None:
+            st.info("Select a valid session to continue.")
+            st.stop()
 
         st.markdown("**Sections to draft**")
         col1, col2, col3 = st.columns(3)
@@ -1955,7 +1968,10 @@ with tabs[11]:
             conn.commit(); st.rerun()
         st.caption("Continuing without halting")
 
-    session_id = int(pick.split(":")[0])
+        session_id = parse_pick_id(pick)
+        if session_id is None:
+            st.info("Select a valid session to continue.")
+            st.stop()
     cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
     st.caption(f"Session #{session_id} — {cur_title}")
 
