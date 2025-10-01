@@ -989,6 +989,8 @@ try:
                                 values(?,?,?,?,?,?,?,?,?,?)""",                             (opp_id, vendor_id, company, float(subtotal), float(taxes), float(shipping), total, lead_time, notes,
                               json.dumps([s.strip() for s in files.split(",") if s.strip()])))
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
                 st.success("Saved")
 
             dfq = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by total asc", conn, params=(opp_id,))
@@ -1226,6 +1228,8 @@ with tabs[0]:
                                         (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
 
                     conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
 
                     st.success("Tasks saved.")
 
@@ -1349,6 +1353,8 @@ with tabs[1]:
                         )
                     saved += 1
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
                 st.success(f"Saved {saved} vendor(s).")
         else:
             msg = "No results"
@@ -1741,7 +1747,7 @@ with tabs[11]:
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
-            st.rerun()
+
         st.caption("Pick an existing chat from the dropdown above to continue.")
     else:
         # Parse session id
@@ -1768,8 +1774,10 @@ with tabs[11]:
                     )
                     added += 1
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
                 st.success(f"Added {added} file(s).")
-                st.rerun()
+    
 
             # Show existing attachments
             files_df = pd.read_sql_query(
@@ -1827,6 +1835,8 @@ with tabs[11]:
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
                              (session_id, "user", user_msg))
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
 
                 # Build system + context
                 try:
@@ -1855,6 +1865,8 @@ with tabs[11]:
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
                              (session_id, "assistant", assistant_out))
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
 
                 st.chat_message("user").markdown(user_msg)
                 st.chat_message("assistant").markdown(assistant_out)
@@ -1909,6 +1921,8 @@ with tabs[__tabs_base + 0]:
                 conn.execute("insert into deadlines(opp_id,title,due_date,source,notes) values(?,?,?,?,?)",
                              (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
                 st.success("Added")
 
     st.markdown("### Due today")
@@ -2675,7 +2689,9 @@ def render_rfp_analyzer():
             if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
-                st.rerun()
+                _gen_count += 1
+                _gen_names.append(sec)
+    
             return
 
         if not pick:
@@ -2700,7 +2716,7 @@ def render_rfp_analyzer():
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
-            st.rerun()
+
 
         files_df = pd.read_sql_query(
             "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
@@ -2716,8 +2732,10 @@ def render_rfp_analyzer():
                 if del_id > 0:
                     conn.execute("delete from rfp_files where id=?", (int(del_id),))
                     conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
                     st.success(f"Deleted file id {del_id}.")
-                    st.rerun()
+        
 
         # Previous messages
         hist = pd.read_sql_query(
@@ -2832,6 +2850,27 @@ def render_rfp_analyzer():
     except Exception as e:
         st.error(f"RFP Analyzer error: {e}")
 
+
+def _ensure_proposal_tables(conn):
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS proposal_drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                section TEXT,
+                content TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        try:
+            st.error(f"DB init error (proposal_drafts): {e}")
+        except Exception:
+            pass
+
+
 def render_proposal_builder():
     try:
         st.subheader("Proposal Builder")
@@ -2849,20 +2888,6 @@ def render_proposal_builder():
         if session_id is None:
             st.info("Select a valid session to continue.")
             st.stop()
-
-        # --- quick diagnostics/status bar ---
-        _files_count_df = pd.read_sql_query(
-            "select count(*) as n from rfp_files where session_id=?",
-            conn, params=(session_id,)
-        )
-        _files_count = int(_files_count_df.iloc[0]["n"]) if not _files_count_df.empty else 0
-        col_status1, col_status2 = st.columns(2)
-        with col_status1:
-            st.metric("RFP files attached", _files_count)
-        with col_status2:
-            st.metric("OpenAI key detected", "Yes" if OPENAI_API_KEY else "No")
-        if not OPENAI_API_KEY:
-            st.warning("OpenAI key not set — I’ll generate offline scaffolds. Set OPENAI_API_KEY to enable AI drafting.")
 
         st.markdown("**Attach past performance to include**")
         df_pp = get_past_performance_df()
@@ -2923,66 +2948,23 @@ def render_proposal_builder():
         # === Generate selected sections ===
         if regenerate:
 
-            def _gen_with_fallback(system_text, user_prompt, sec_name):
-                """
-                Always return usable content.
-                If the model fails or key is missing, return a solid scaffold for the given section.
-                """
+            def _gen_with_fallback(system_text, user_prompt):
                 try:
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
                     _out = f"LLM error: {type(_e).__name__}: {_e}"
                 bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
                 if bad:
-                    scaffolds = {
-                        "Executive Summary": "\n".join([
-                            "## Executive Summary",
-                            "• Customer mission and objectives we support",
-                            "• Our value proposition aligned to the PWS",
-                            "• Rapid mobilization plan and risk mitigation",
-                            "• Outcome metrics and continuous improvement",
-                            "• Compliance with Section L&M and key differentiators"
-                        ]),
-                        "Technical Approach": "\n".join([
-                            "## Technical Approach",
-                            "• Understanding of scope and constraints",
-                            "• Phased approach with tasks mapped to PWS",
-                            "• Quality control (inspection schedule, KPIs, CAPA)",
-                            "• Staffing, equipment, materials, and surge plan",
-                            "• Safety, security, and environmental compliance"
-                        ]),
-                        "Management & Staffing Plan": "\n".join([
-                            "## Management & Staffing Plan",
-                            "• Org chart and roles (PM, QA, Leads, SMEs)",
-                            "• Recruiting, onboarding, and training",
-                            "• Scheduling, coverage, and backup procedures",
-                            "• Communications and escalation paths",
-                            "• Risk management and performance reviews"
-                        ]),
-                        "Past Performance": "\n".join([
-                            "## Past Performance",
-                            "• Relevant projects summary (scope/scale/NAICS)",
-                            "• Quantified outcomes and CPARS quotes (if any)",
-                            "• Relevance mapping to this requirement",
-                            "• Lessons learned applied here"
-                        ]),
-                        "Pricing Assumptions/Notes": "\n".join([
-                            "## Pricing Assumptions/Notes",
-                            "• Basis of estimate and labor categories",
-                            "• Inclusions and exclusions",
-                            "• Assumptions and dependencies",
-                            "• Risk-based contingencies",
-                            "• Notes on travel/ODCs (if applicable)"
-                        ]),
-                        "Compliance Narrative": "\n".join([
-                            "## Compliance Narrative",
-                            "• Section L: volumes, page limits, formatting",
-                            "• Section M: factors and where addressed",
-                            "• Submission method, due date/time zone, file naming",
-                            "• Crosswalk mapping (requirement → response location)"
-                        ]),
-                    }
-                    return scaffolds.get(sec_name, f"## {sec_name}\n• Overview\n• Details\n• QA & Risks\n• Compliance")
+                    heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
+                    tmpl = [
+                        f"## {heading}",
+                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
+                        "• Roles and responsibilities: Identify key staff and escalation paths.",
+                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
+                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
+                        "• Compliance notes: Where Section L & M items are satisfied.",
+                    ]
+                    return "\n".join(tmpl)
                 return _out
 
             # Helper: pull top snippets from attached RFP files for this session
@@ -3008,8 +2990,8 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -3037,20 +3019,23 @@ def render_proposal_builder():
                 "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
             }
 
+            
+            _gen_count = 0
+            _gen_names = []
             for sec, on in actions.items():
                 if not on:
                     continue
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
-                system_text = "\n\n".join(filter(None, [
+                system_text = "\\n\\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    f"Company snapshot:\n{context_snap}" if context_snap else "",
+                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
                     doc_snips,
-                    f"Past Performance selections:\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
-                out = _gen_with_fallback(system_text, user_prompt, sec)
+                out = _gen_with_fallback(system_text, user_prompt)
 
                 # Upsert into proposal_drafts
                 cur = conn.cursor()
@@ -3061,8 +3046,12 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
+                _gen_count += 1
+                _gen_names.append(sec)
             st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
-            st.rerun()
+            st.info(f"Generated: {_gen_count} section(s): {', '.join(_gen_names)}")
+
+
 
         # Compliance validation settings
         st.markdown("#### Compliance validation settings")
@@ -3189,6 +3178,7 @@ def render_proposal_builder():
             conn.commit()
             st.success("Drafts saved.")
 
+        
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
 
