@@ -1237,6 +1237,20 @@ def render_proposal_builder():
             export_md = st.button("Assemble full proposal (Markdown)")
             export_docx = st.button("Export Proposal DOCX (guardrails)")
 
+        # Compliance Validation Controls
+        st.markdown("#### Compliance validation settings")
+        colv1, colv2, colv3 = st.columns(3)
+        with colv1:
+            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0, help="0 means no limit check")
+            pb_font = st.text_input("Required font", value="Times New Roman")
+        with colv2:
+            pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
+            pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
+        with colv3:
+            pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
+            pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
+
+
         base_context = build_context(max_rows=6)
 
         def _render_pp_blurbs(ids):
@@ -1311,13 +1325,53 @@ Follow the solicitation exactly (format, page limits, fonts, submission method) 
             conn.commit()
             st.success("Drafts saved.")
 
-        def _validate_text_for_guardrails(md_text: str, page_limit: int = None):
-            issues = []
-            words = md_text.split()
-            est_pages = max(1, int(len(words) / 500))
-            if page_limit and est_pages > page_limit:
-                issues.append(f"Estimated pages {est_pages} exceed limit {page_limit}.")
-            return issues, est_pages
+        
+def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
+                                  margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
+    issues = []
+    warnings = []
+    body = (md_text or "").strip()
+
+    # Basic content checks
+    if not body:
+        issues.append("No content assembled for export.")
+        return issues, 0
+
+    # Placeholder checks
+    placeholders = ["TBD", "INSERT", "[BRACKET]", "{PLACEHOLDER}", "lorem ipsum"]
+    for ph in placeholders:
+        if ph.lower() in body.lower():
+            issues.append(f"Placeholder text '{ph}' detected. Remove before export.")
+
+    # Word/page estimate
+    words = body.split()
+    est_pages = max(1, int(len(words) / 500))  # heuristic ~500 words/page
+    if page_limit and est_pages > page_limit:
+        issues.append(f"Estimated pages {est_pages} exceed limit {page_limit}.")
+
+    # Font/size are enforced during DOCX build; here we flag if requested but not standard
+    if require_font and require_font.lower() not in ("times new roman","arial","calibri","garamond","helvetica"):
+        warnings.append(f"Requested font '{require_font}' is uncommon for federal proposals.")
+
+    if require_size_pt and (require_size_pt < 10 or require_size_pt > 13):
+        warnings.append(f"Requested font size {require_size_pt}pt is atypical for body text.")
+
+    # Margins/spacing advisory
+    if margins_in is not None and (margins_in < 0.5 or margins_in > 1.5):
+        warnings.append(f"Margin {margins_in}\" may violate standard 1\" requirement.")
+
+    if line_spacing is not None and (line_spacing < 1.0 or line_spacing > 2.0):
+        warnings.append(f"Line spacing {line_spacing} looks unusual.")
+
+    # Filename pattern
+    if filename_pattern:
+        # Very simple validation tokens
+        tokens = ["{company}", "{solicitation}", "{section}", "{date}"]
+        if not any(t in filename_pattern for t in tokens):
+            warnings.append("Filename pattern lacks tokens like {company} or {date}.")
+
+    return issues, est_pages
+
 
         if export_md:
             parts = []
@@ -1597,6 +1651,48 @@ try:
 except Exception as _e_qc:
     st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
 
+
+    st.markdown("### Vendor ranking (scorecards)")
+    try:
+        conn = get_db()
+        # Responsiveness proxy: count outreach_log entries per vendor with "Sent" or "Preview"
+        resp = pd.read_sql_query("""
+            select v.id, v.company,
+                   coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
+                   coalesce(sum(case when o.status like 'Preview%' then 1 else 0 end),0) as preview
+            from vendors v left join outreach_log o on v.id = o.vendor_id
+            group by v.id, v.company
+        """, conn)
+        vdf = pd.read_sql_query("select id, company, certifications, set_asides, coalesce(distance_miles, 0) as distance_miles from vendors", conn)
+        merged = vdf.merge(resp, how="left", on=["id","company"]).fillna({"sent":0,"preview":0})
+        # Simple scoring model
+        def _score_row(r):
+            score = 0
+            # Responsiveness
+            score += min(20, (int(r["sent"]) + int(r["preview"])) * 2)
+            # Certifications present
+            score += 20 if (r.get("certifications") or "").strip() else 10
+            # Distance (closer is better)
+            d = float(r.get("distance_miles") or 0)
+            score += 20 if d == 0 else (15 if d <= 25 else (10 if d <= 100 else 5))
+            # Set-asides
+            score += 20 if (r.get("set_asides") or "").strip() else 10
+            # Past performance proxy (existence in library)
+            try:
+                pp = pd.read_sql_query("select count(*) as cnt from past_performance where agency like ? or naics <> ''", conn, params=(f"%{get_setting('company_name','ELA')}%",))
+                has_pp = int(pp.iloc[0]["cnt"]) > 0
+            except Exception:
+                has_pp = False
+            score += 20 if has_pp else 10
+            return min(100, score)
+
+        merged["score"] = merged.apply(_score_row, axis=1)
+        merged = merged.sort_values("score", ascending=False)
+        st.dataframe(merged[["company","score","certifications","set_asides","distance_miles","sent","preview"]].head(25), use_container_width=True)
+    except Exception as _e_vs:
+        st.caption(f"[Vendor ranking note: {_e_vs}]")
+
+
 # Win Probability tab body (last-1)
 try:
     with tabs[-1]:
@@ -1708,6 +1804,29 @@ with tabs[0]:
         conn.commit()
         __ctx_pipeline = True
         st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+
+
+# Analytics mini-dashboard
+try:
+    conn = get_db()
+    df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
+    if not df_all.empty:
+        st.markdown("### Pipeline analytics")
+        st.bar_chart(df_all.set_index("status"))
+    # Forecast (probability-adjusted revenue) using win_scores if any
+    try:
+        dfw = pd.read_sql_query("""
+            select o.id, o.title, o.agency, coalesce(w.score, 50) as score
+            from opportunities o left join win_scores w on o.id = w.opp_id
+        """, conn)
+        if not dfw.empty:
+            dfw["prob"] = dfw["score"]/100.0
+            # No revenue field available, so treat prob as index only
+            st.dataframe(dfw[["id","title","agency","score","prob"]])
+    except Exception as _e_wa:
+        st.caption(f"[Win score analytics note: {_e_wa}]")
+except Exception as _e_dash:
+    st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
 if globals().get("__ctx_pipeline", False):
@@ -2242,6 +2361,18 @@ with tabs[__tabs_base + 0]:
     due_today = pd.read_sql_query("select * from deadlines where date(due_date)=date('now') and status='Open'", conn)
     if not due_today.empty:
         st.dataframe(due_today[["title","due_date","source","notes"]])
+        # Email reminders via Microsoft Graph
+        st.markdown("#### Send email reminders")
+        to_addr = st.text_input("Send reminders to email", value="")
+        if st.button("Email reminders for items due today"):
+            if to_addr:
+                body_lines = ["The following items are due today:"]
+                for _, r in due_today.iterrows():
+                    body_lines.append(f"- {r['title']} (source: {r.get('source','')})")
+                status = send_via_graph(to_addr, "Reminders: items due today", "\n".join(body_lines))
+                st.info(f"Email status: {status}")
+            else:
+                st.info("Enter an email address to send reminders.")
     else:
         st.write("No items due today.")
 
@@ -2372,15 +2503,51 @@ with tabs[__tabs_base + 3]:
         gna = st.number_input("G and A percent", min_value=0.0, max_value=100.0, step=0.5, value=5.0)
         profit = st.number_input("Profit percent", min_value=0.0, max_value=100.0, step=0.5, value=8.0)
         igce = st.number_input("Budget or IGCE if known", min_value=0.0, step=100.0, value=0.0)
+        terms_days = st.number_input("Payment terms (days)", min_value=0, step=1, value=30, help="Net terms for government payment")
+        advance_pct = st.number_input("Factoring advance (%)", min_value=0.0, max_value=100.0, step=1.0, value=85.0)
+        fac_rate = st.number_input("Factoring fee per 30 days (%)", min_value=0.0, max_value=10.0, step=0.1, value=2.0)
         run = st.form_submit_button("Calculate")
     if run:
         total = base_cost * (1 + overhead/100.0) * (1 + gna/100.0) * (1 + profit/100.0)
         note = _lpta_note(total, budget_hint=igce if igce > 0 else None)
         st.metric("Total price", f"${total:,.2f}")
         st.info(f"LPTA note: {note}")
+
+        # Cash flow factoring model (simple)
+        # Advance paid at day 0: advance_pct% of invoice; fee accrues until terms_days
+        advance_amt = total * (advance_pct/100.0)
+        period_factor = max(1, int(round(terms_days / 30.0)))
+        fee = (fac_rate/100.0) * period_factor * total
+        remainder = total - advance_amt - fee
+        st.write({"Advance": round(advance_amt,2), "Estimated fee": round(fee,2), "Remainder on payment": round(remainder,2)})
+
         conn = get_db()
-        conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note)
-                        values(?,?,?,?,?,?,?)""",
-                     (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note))
-        conn.commit()
+        try:
+            cur = conn.cursor()
+            # Ensure columns exist
+            try: cur.execute("alter table pricing_scenarios add column terms_days integer")
+            except Exception: pass
+            try: cur.execute("alter table pricing_scenarios add column factoring_rate real")
+            except Exception: pass
+            try: cur.execute("alter table pricing_scenarios add column advance_pct real")
+            except Exception: pass
+
+            conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct)
+                            values(?,?,?,?,?,?,?,?,?,?)""",
+                        (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note, int(terms_days), float(fac_rate), float(advance_pct)))
+            conn.commit()
+        except Exception as _e_pc:
+            st.caption(f"[Pricing save note: {_e_pc}]")
+
+    st.markdown("### Scenario comparison")
+    conn = get_db()
+    try:
+        dfp = pd.read_sql_query("select id, created_at, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct from pricing_scenarios order by id desc limit 20", conn)
+        if not dfp.empty:
+            dfp["effective_fee"] = (dfp["factoring_rate"].fillna(0.0)/100.0) * (dfp["terms_days"].fillna(30)/30.0) * dfp["total_price"]
+            st.dataframe(dfp, use_container_width=True)
+        else:
+            st.caption("No scenarios yet.")
+    except Exception as _e_cmp:
+        st.caption(f"[Scenario table note: {_e_cmp}]")
 # === End new features ===
