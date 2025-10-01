@@ -6,6 +6,42 @@ from urllib.parse import quote_plus, urljoin, urlparse
 import pandas as pd
 import numpy as np
 import streamlit as st
+
+# === Performance helpers ===
+@st.cache_resource
+def get_cached_conn():
+    # cache the underlying db connection
+    return get_db()
+
+@st.cache_data(ttl=60)
+def list_sessions_cached(conn):
+    import pandas as pd
+    try:
+        return list_sessions_cached(conn)
+    except Exception:
+        return None
+
+@st.cache_data(ttl=30)
+def drafts_index_cached(conn, session_id):
+    import pandas as pd
+    try:
+        return pd.read_sql_query(
+            "select id, section, updated_at from proposal_drafts where session_id=? order by section",
+            conn, params=(session_id,)
+        )
+    except Exception:
+        return None
+
+def ensure_indexes(conn):
+    try:
+        cur = conn.cursor()
+        cur.execute("create index if not exists idx_drafts_session on proposal_drafts(session_id)")
+        cur.execute("create index if not exists idx_files_session on rfp_files(session_id)")
+        cur.execute("create index if not exists idx_sessions_created on rfp_sessions(created_at)")
+        conn.commit()
+    except Exception:
+        pass
+
 import requests
 from PyPDF2 import PdfReader
 import docx
@@ -299,8 +335,10 @@ def linkedin_company_search(keyword: str) -> str:
     return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
 
 def build_context(max_rows=6):
-    conn = get_db()
-    g = pd.read_sql_query("select * from goals limit 1", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+g = pd.read_sql_query("select * from goals limit 1", conn)
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
@@ -575,8 +613,10 @@ def get_db():
 
 
 def run_migrations():
-    conn = get_db()
-    cur = conn.cursor()
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+cur = conn.cursor()
     # opportunities table expansions
 
     try: cur.execute("alter table compliance_items add column owner text")
@@ -593,8 +633,10 @@ def run_migrations():
     conn.commit()
 
 def ensure_schema():
-    conn = get_db()
-    cur = conn.cursor()
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+cur = conn.cursor()
     for ddl in SCHEMA.values(): cur.execute(ddl)
     # seed goals
     cur.execute("select count(*) from goals")
@@ -644,12 +686,16 @@ ensure_schema()
 run_migrations()
 # ---------- Utilities ----------
 def get_setting(key, default=""):
-    conn = get_db(); row = conn.execute("select value from settings where key=?", (key,)).fetchone()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; row = conn.execute("select value from settings where key=?", (key,)).fetchone()
     return row[0] if row else default
 
 def set_setting(key, value):
-    conn = get_db()
-    conn.execute("""insert into settings(key,value) values(?,?)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+conn.execute("""insert into settings(key,value) values(?,?)
                     on conflict(key) do update set value=excluded.value, updated_at=current_timestamp""",
                  (key, str(value)))
     conn.commit()
@@ -825,8 +871,10 @@ tabs = st.tabs([
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
     try:
-        conn = get_db()
-    except Exception:
+        conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+except Exception:
         return
     try:
         conn.execute("""create table if not exists past_performance (
@@ -871,8 +919,10 @@ def get_past_performance_df():
 
 def upsert_win_score(opp_id: int, score: float, factors: dict):
     try:
-        conn = get_db()
-        conn.execute("""            insert into win_scores(opp_id, score, factors_json, computed_at)
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+conn.execute("""            insert into win_scores(opp_id, score, factors_json, computed_at)
             values(?,?,?, current_timestamp)
             on conflict(opp_id) do update set
                 score=excluded.score,
@@ -925,8 +975,10 @@ try:
     with tabs[-3]:
         st.subheader("Past Performance Library")
         st.caption("Create reusable blurbs linked by NAICS and agency. Insert into Proposal Builder later.")
-        conn = get_db()
-        df_pp = get_past_performance_df()
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+df_pp = get_past_performance_df()
         st.dataframe(df_pp, use_container_width=True)
 
         with st.form("pp_form", clear_on_submit=True):
@@ -960,8 +1012,10 @@ except Exception as _e_pp:
 try:
     with tabs[-2]:
         st.subheader("Subcontractor Quote Comparison")
-        conn = get_db()
-        df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
         df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
         opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
         opp_pick = st.selectbox("Opportunity", options=opp_opts)
@@ -1008,8 +1062,10 @@ except Exception as _e_qc:
 
     st.markdown("### Vendor ranking (scorecards)")
     try:
-        conn = get_db()
-        # Responsiveness proxy: count outreach_log entries per vendor with "Sent" or "Preview"
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+# Responsiveness proxy: count outreach_log entries per vendor with "Sent" or "Preview"
         resp = pd.read_sql_query("""
             select v.id, v.company,
                    coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
@@ -1051,8 +1107,10 @@ except Exception as _e_qc:
 try:
     with tabs[-1]:
         st.subheader("Win Probability")
-        conn = get_db()
-        df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
         df_pp = get_past_performance_df()
         if df_opp.empty:
             st.info("No opportunities in pipeline")
@@ -1086,8 +1144,10 @@ except Exception as _e_win:
 
 with tabs[0]:
     st.subheader("Opportunities pipeline")
-    conn = get_db()
-    df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
     # Ensure optional columns exist
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
@@ -1165,8 +1225,10 @@ with tabs[0]:
 
     # Analytics mini-dashboard
     try:
-        conn = get_db()
-        df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
         if not df_all.empty:
             st.markdown("### Pipeline analytics")
             st.bar_chart(df_all.set_index("status"))
@@ -1308,7 +1370,9 @@ with tabs[1]:
                 st.caption("Tip: Click a link to review a site before saving.")
 
             if save_btn and not save_sel.empty:
-                conn = get_db(); cur = conn.cursor()
+                conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
                 saved = 0
                 # Include NAICS tag choice from the UI if present
                 naics_tag = ",".join(naics_choice) if "naics_choice" in locals() and naics_choice else ""
@@ -1373,8 +1437,10 @@ with tabs[2]:
 
     st.subheader("POC and networking hub")
     st.caption("Add or clean up government POCs and vendor contacts. Link key contacts to opportunities in your notes.")
-    conn = get_db()
-    df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
         cur = conn.cursor()
@@ -1390,7 +1456,9 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
-    conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; df_v = pd.read_sql_query("select * from vendors", conn)
     t = pd.read_sql_query("select * from email_templates order by name", conn)
     names = t["name"].tolist() if not t.empty else ["RFQ Request"]
     pick_t = st.selectbox("Template", options=names)
@@ -1431,7 +1499,9 @@ with tabs[3]:
 # === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
 
 def _ensure_opportunity_columns():
-    conn = get_db(); cur = conn.cursor()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
     except Exception: pass
@@ -1442,7 +1512,9 @@ def _ensure_opportunity_columns():
     conn.commit()
 
 def _get_table_cols(name):
-    conn = get_db(); cur = conn.cursor()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
     cur.execute(f"pragma table_info({name})")
     return [r[1] for r in cur.fetchall()]
 
@@ -1495,7 +1567,9 @@ def save_opportunities(df, default_assignee=None):
 
     inserted = 0
     updated = 0
-    conn = get_db(); cur = conn.cursor()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
     for _, r in df.iterrows():
         nid = r.get("sam_notice_id")
         if not nid:
@@ -1549,8 +1623,10 @@ def save_opportunities(df, default_assignee=None):
 with tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
-    conn = get_db()
-    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
 
     col1, col2, col3 = st.columns(3)
@@ -1689,8 +1765,10 @@ with tabs[7]:
 
 with tabs[8]:
     st.subheader("Export to Excel workbook")
-    conn = get_db()
-    v = pd.read_sql_query("select * from vendors", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
     c = pd.read_sql_query("select * from contacts", conn)
     bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
@@ -1727,9 +1805,11 @@ with tabs[10]:
 
 with tabs[11]:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
-    conn = get_db()
+    conn = get_cached_conn()
 
-    # Sessions
+    
+        ensure_indexes(conn)
+# Sessions
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
     session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
     pick = st.selectbox("Session", options=session_titles, index=0)
@@ -1896,8 +1976,10 @@ __tabs_base = 13  # 'Deadlines' tab index
 
 with tabs[__tabs_base + 0]:
     st.subheader("Deadline tracker")
-    conn = get_db()
-    colA, colB = st.columns(2)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+colA, colB = st.columns(2)
     with colA:
         st.caption("From opportunities table")
         o = pd.read_sql_query("select id, title, agency, response_due, status from opportunities order by response_due asc nulls last", conn)
@@ -1944,8 +2026,10 @@ with tabs[__tabs_base + 0]:
 
 with tabs[__tabs_base + 1]:
     st.subheader("Section L and M checklist")
-    conn = get_db()
-    opp_pick_df = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+opp_pick_df = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
     opp_opt = [""] + [f"{int(r.id)}: {r.title}" for _, r in opp_pick_df.iterrows()]
     opp_sel = st.selectbox("Link checklist to opportunity", options=opp_opt, index=0, key="lm_opp_sel")
     opp_id_val = int(opp_sel.split(":")[0]) if opp_sel else None
@@ -2015,8 +2099,10 @@ with tabs[__tabs_base + 1]:
 with tabs[__tabs_base + 2]:
     pass
     st.subheader("RFQ generator to subcontractors")
-    conn = get_db()
-    vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
     st.caption("Compose RFQ")
     with st.form("rfq_form"):
         sel = st.multiselect("Recipients", vendors["company"].tolist())
@@ -2086,8 +2172,10 @@ with tabs[__tabs_base + 3]:
         remainder = total - advance_amt - fee
         st.write({"Advance": round(advance_amt,2), "Estimated fee": round(fee,2), "Remainder on payment": round(remainder,2)})
 
-        conn = get_db()
-        try:
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+try:
             cur = conn.cursor()
             # Ensure columns exist
             try: cur.execute("alter table pricing_scenarios add column terms_days integer")
@@ -2105,8 +2193,10 @@ with tabs[__tabs_base + 3]:
             st.caption(f"[Pricing save note: {_e_pc}]")
 
     st.markdown("### Scenario comparison")
-    conn = get_db()
-    try:
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+try:
         dfp = pd.read_sql_query("select id, created_at, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct from pricing_scenarios order by id desc limit 20", conn)
         if not dfp.empty:
             dfp["effective_fee"] = (dfp["factoring_rate"].fillna(0.0)/100.0) * (dfp["terms_days"].fillna(30)/30.0) * dfp["total_price"]
@@ -2134,8 +2224,10 @@ def _parse_sam_date(s: str):
 
 # ---------- Context for Chat ----------
 def build_context(max_rows=6):
-    conn = get_db()
-    g = pd.read_sql_query("select * from goals limit 1", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+g = pd.read_sql_query("select * from goals limit 1", conn)
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
@@ -2436,7 +2528,9 @@ def sam_search(
 
 
 def _ensure_opportunity_columns():
-    conn = get_db(); cur = conn.cursor()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
     except Exception: pass
@@ -2447,7 +2541,9 @@ def _ensure_opportunity_columns():
     conn.commit()
 
 def _get_table_cols(name):
-    conn = get_db(); cur = conn.cursor()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
     cur.execute(f"pragma table_info({name})")
     return [r[1] for r in cur.fetchall()]
 
@@ -2500,7 +2596,9 @@ def save_opportunities(df, default_assignee=None):
 
     inserted = 0
     updated = 0
-    conn = get_db(); cur = conn.cursor()
+    conn = get_cached_conn()
+        ensure_indexes(conn)
+; cur = conn.cursor()
     for _, r in df.iterrows():
         nid = r.get("sam_notice_id")
         if not nid:
@@ -2598,8 +2696,10 @@ with st.sidebar:
         st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
 
     st.subheader("Watch list NAICS")
-    conn = get_db()
-    df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
+    conn = get_cached_conn()
+    
+        ensure_indexes(conn)
+df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
     saved_codes = df_saved["code"].tolist()
     naics_options = sorted(set(saved_codes + NAICS_SEEDS))
     st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
@@ -2673,10 +2773,12 @@ def render_rfp_analyzer():
         st.subheader("RFP Analyzer")
         st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
 
-        conn = get_db()
+        conn = get_cached_conn()
 
-        # Sessions like Chat Assistant
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        
+        ensure_indexes(conn)
+# Sessions like Chat Assistant
+        sessions = list_sessions_cached(conn)
         session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("RFP session", options=session_titles, index=0)
 
@@ -2871,8 +2973,10 @@ def render_proposal_builder():
         st.subheader("Proposal Builder")
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
 
-        conn = get_db()
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        conn = get_cached_conn()
+        
+        ensure_indexes(conn)
+sessions = list_sessions_cached(conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first.")
             return
@@ -3204,3 +3308,5 @@ except Exception:
         st.experimental_rerun()
     except Exception:
         pass
+st.stop()
+
