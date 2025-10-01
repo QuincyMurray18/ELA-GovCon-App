@@ -1741,7 +1741,13 @@ with tabs[11]:
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
-            st.rerun()
+            try:
+                st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
         st.caption("Pick an existing chat from the dropdown above to continue.")
     else:
         # Parse session id
@@ -1769,7 +1775,13 @@ with tabs[11]:
                     added += 1
                 conn.commit()
                 st.success(f"Added {added} file(s).")
+                try:
                 st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
             # Show existing attachments
             files_df = pd.read_sql_query(
@@ -2675,12 +2687,24 @@ def render_rfp_analyzer():
             if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
+                try:
                 st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
             return
 
         if not pick:
             st.info("Select a chat session to continue.")
             st.stop()
+
+        # Build company snapshot for prompts
+        try:
+            context_snap = build_context(max_rows=6)
+        except Exception:
+            context_snap = ""
 
         session_id = parse_pick_id(pick)
         if session_id is None:
@@ -2700,7 +2724,13 @@ def render_rfp_analyzer():
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
-            st.rerun()
+            try:
+                st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
         files_df = pd.read_sql_query(
             "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
@@ -2717,7 +2747,13 @@ def render_rfp_analyzer():
                     conn.execute("delete from rfp_files where id=?", (int(del_id),))
                     conn.commit()
                     st.success(f"Deleted file id {del_id}.")
-                    st.rerun()
+                    try:
+                st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
         # Previous messages
         hist = pd.read_sql_query(
@@ -2838,12 +2874,6 @@ def render_proposal_builder():
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
 
         conn = get_db()
-
-        # Ensure a company context snapshot for prompts
-        try:
-            context_snap = build_context(max_rows=6)
-        except Exception:
-            context_snap = ""
         sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first.")
@@ -2916,17 +2946,13 @@ def render_proposal_builder():
         # === Generate selected sections ===
         if regenerate:
 
-            used_fallback = False  # track if fallback template used
-
             def _gen_with_fallback(system_text, user_prompt):
-                nonlocal used_fallback
                 try:
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
                     _out = f"LLM error: {type(_e).__name__}: {_e}"
                 bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
                 if bad:
-                    used_fallback = True
                     heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
                     tmpl = [
                         f"## {heading}",
@@ -3010,21 +3036,12 @@ def render_proposal_builder():
                 generated_count += 1
 
             if generated_count:
-                msg = f"Generated {generated_count} draft(s)."
-                if used_fallback:
-                    st.info(msg + " Used fallback templates because no OpenAI key or the LLM failed.")
-                else:
-                    st.success(msg + " Scroll down to 'Proposal Drafts' to review and edit.")
+                st.success(f"Generated {generated_count} draft(s). Scroll down to 'Proposal Drafts' to review and edit.")
             else:
                 st.warning("No sections were generated. Double-check your selections above.")
 
             try:
                 st.rerun()
-            except Exception:
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    pass
             except Exception:
                 try:
                     st.experimental_rerun()
@@ -3066,17 +3083,18 @@ def render_proposal_builder():
                 saved += 1
             conn.commit()
             st.success(f"Saved {saved} section(s).")
-        st.markdown("#### Compliance validation settings")
-        colv1, colv2, colv3 = st.columns(3)
-        with colv1:
-            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
-            pb_font = st.text_input("Required font", value="Times New Roman")
-        with colv2:
-            pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
-            pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
-        with colv3:
-            pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
-            pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
+        with st.expander("Compliance validation settings", expanded=False):
+    st.markdown("#### Compliance validation settings")
+            colv1, colv2, colv3 = st.columns(3)
+            with colv1:
+                pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
+                pb_font = st.text_input("Required font", value="Times New Roman")
+            with colv2:
+                pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
+                pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
+            with colv3:
+                pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
+                pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
 
         # Assemble full proposal in Markdown
         if export_md:
