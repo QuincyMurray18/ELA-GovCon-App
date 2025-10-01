@@ -298,10 +298,10 @@ def run_migrations():
     cur = conn.cursor()
     # opportunities table expansions
 
-try: cur.execute("alter table compliance_items add column owner text")
-except Exception: pass
-try: cur.execute("alter table compliance_items add column snippet text")
-except Exception: pass
+    try: cur.execute("alter table compliance_items add column owner text")
+    except Exception: pass
+    try: cur.execute("alter table compliance_items add column snippet text")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
     except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
@@ -310,7 +310,6 @@ except Exception: pass
     try: cur.execute("alter table vendors add column distance_miles real")
     except Exception: pass
     conn.commit()
-
 
 def ensure_schema():
     conn = get_db()
