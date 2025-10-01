@@ -1706,30 +1706,54 @@ with tabs[0]:
             deleted += 1
 
         conn.commit()
+        __ctx_pipeline = True
         st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
 
-st.markdown("### Tasks for selected opportunity")
-try:
-    sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
-    if sel_id:
-        df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
-        if df_tasks.empty:
-            df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
-        grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
-        if st.button("Save tasks"):
-            cur = conn.cursor()
-            for _, r in grid_tasks.iterrows():
-                if pd.isna(r.get("id")):
-                    cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
-                                (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
-                else:
-                    cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
-                                (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
-            conn.commit()
-            st.success("Tasks saved.")
-except Exception as _e_tasks:
-    st.caption(f"[Tasks panel note: {_e_tasks}]")
 
+if globals().get("__ctx_pipeline", False):
+
+
+    st.markdown("### Tasks for selected opportunity")
+
+    try:
+
+        sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
+
+        if sel_id:
+
+            df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
+
+            if df_tasks.empty:
+
+                df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+
+            grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
+
+            if st.button("Save tasks"):
+
+                cur = conn.cursor()
+
+                for _, r in grid_tasks.iterrows():
+
+                    if pd.isna(r.get("id")):
+
+                        cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
+
+                                    (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
+
+                    else:
+
+                        cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
+
+                                    (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
+
+                conn.commit()
+
+                st.success("Tasks saved.")
+
+    except Exception as _e_tasks:
+
+        st.caption(f"[Tasks panel note: {_e_tasks}]")
 with tabs[1]:
     st.subheader("Find subcontractors and rank by fit")
     trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial"))
