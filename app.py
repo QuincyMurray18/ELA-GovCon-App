@@ -641,6 +641,7 @@ ELA Management LLC
 
 ensure_schema()
 
+run_migrations()
 # ---------- Utilities ----------
 def get_setting(key, default=""):
     conn = get_db(); row = conn.execute("select value from settings where key=?", (key,)).fetchone()
@@ -1159,73 +1160,78 @@ with tabs[0]:
         st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
 
 
-# Analytics mini-dashboard
-try:
-    conn = get_db()
-    df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
-    if not df_all.empty:
-        st.markdown("### Pipeline analytics")
-        st.bar_chart(df_all.set_index("status"))
-    # Forecast (probability-adjusted revenue) using win_scores if any
+# Analytics mini-dashboard (scoped to Pipeline tab)
+with tabs[0]:
+
+    # Analytics mini-dashboard
     try:
-        dfw = pd.read_sql_query("""
-            select o.id, o.title, o.agency, coalesce(w.score, 50) as score
-            from opportunities o left join win_scores w on o.id = w.opp_id
-        """, conn)
-        if not dfw.empty:
-            dfw["prob"] = dfw["score"]/100.0
-            # No revenue field available, so treat prob as index only
-            st.dataframe(dfw[["id","title","agency","score","prob"]])
-    except Exception as _e_wa:
-        st.caption(f"[Win score analytics note: {_e_wa}]")
-except Exception as _e_dash:
-    st.caption(f"[Analytics dash note: {_e_dash}]")
+        conn = get_db()
+        df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
+        if not df_all.empty:
+            st.markdown("### Pipeline analytics")
+            st.bar_chart(df_all.set_index("status"))
+        # Forecast (probability-adjusted revenue) using win_scores if any
+        try:
+            dfw = pd.read_sql_query("""
+                select o.id, o.title, o.agency, coalesce(w.score, 50) as score
+                from opportunities o left join win_scores w on o.id = w.opp_id
+            """, conn)
+            if not dfw.empty:
+                dfw["prob"] = dfw["score"]/100.0
+                # No revenue field available, so treat prob as index only
+                st.dataframe(dfw[["id","title","agency","score","prob"]])
+        except Exception as _e_wa:
+            st.caption(f"[Win score analytics note: {_e_wa}]")
+    except Exception as _e_dash:
+        st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
-if globals().get("__ctx_pipeline", False):
+with tabs[0]:
+
+    if globals().get("__ctx_pipeline", False):
 
 
-    st.markdown("### Tasks for selected opportunity")
+        st.markdown("### Tasks for selected opportunity")
 
-    try:
+        try:
 
-        sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
+            sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
 
-        if sel_id:
+            if sel_id:
 
-            df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
+                df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
 
-            if df_tasks.empty:
+                if df_tasks.empty:
 
-                df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
+                    df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
 
-            grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
+                grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
 
-            if st.button("Save tasks"):
+                if st.button("Save tasks"):
 
-                cur = conn.cursor()
+                    cur = conn.cursor()
 
-                for _, r in grid_tasks.iterrows():
+                    for _, r in grid_tasks.iterrows():
 
-                    if pd.isna(r.get("id")):
+                        if pd.isna(r.get("id")):
 
-                        cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
+                            cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
 
-                                    (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
+                                        (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
 
-                    else:
+                        else:
 
-                        cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
+                            cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
 
-                                    (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
+                                        (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
 
-                conn.commit()
+                    conn.commit()
 
-                st.success("Tasks saved.")
+                    st.success("Tasks saved.")
 
-    except Exception as _e_tasks:
+        except Exception as _e_tasks:
 
-        st.caption(f"[Tasks panel note: {_e_tasks}]")
+            st.caption(f"[Tasks panel note: {_e_tasks}]")
 with tabs[1]:
     st.subheader("Find subcontractors and rank by fit")
     trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial"))
@@ -1421,6 +1427,125 @@ with tabs[3]:
             st.success(f"Processed {sent} messages")
 
 
+
+# === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
+
+def _ensure_opportunity_columns():
+    conn = get_db(); cur = conn.cursor()
+    # Add columns if missing
+    try: cur.execute("alter table opportunities add column status text default 'New'")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
+    conn.commit()
+
+def _get_table_cols(name):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"pragma table_info({name})")
+    return [r[1] for r in cur.fetchall()]
+
+def _to_sqlite_value(v):
+    # Normalize pandas/NumPy/complex types to Python primitives or None
+    try:
+        import numpy as np
+        import pandas as pd
+        if v is None:
+            return None
+        # Pandas NA
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        # Numpy scalars
+        if isinstance(v, (np.generic,)):
+            return v.item()
+        # Lists/dicts -> JSON
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        # Bytes -> decode
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode("utf-8", "ignore")
+            except Exception:
+                return str(v)
+        # Other types: cast to str for safety
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
+    except Exception:
+        # Fallback minimal handling
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        return v
+
+def save_opportunities(df, default_assignee=None):
+    """Upsert into opportunities and handle legacy schemas gracefully."""
+    if df is None or getattr(df, "empty", True):
+        return 0, 0
+    try:
+        df = df.where(df.notnull(), None)
+    except Exception:
+        pass
+
+    _ensure_opportunity_columns()
+    cols = set(_get_table_cols("opportunities"))
+
+    inserted = 0
+    updated = 0
+    conn = get_db(); cur = conn.cursor()
+    for _, r in df.iterrows():
+        nid = r.get("sam_notice_id")
+        if not nid:
+            continue
+        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+
+        base_fields = {
+            "sam_notice_id": nid,
+            "title": r.get("title"),
+            "agency": r.get("agency"),
+            "naics": r.get("naics"),
+            "psc": r.get("psc"),
+            "place_of_performance": r.get("place_of_performance"),
+            "response_due": r.get("response_due"),
+            "posted": r.get("posted"),
+            "type": r.get("type"),
+            "url": r.get("url"),
+            "attachments_json": r.get("attachments_json"),
+        }
+        # Sanitize all base fields
+        for k, v in list(base_fields.items()):
+            base_fields[k] = _to_sqlite_value(v)
+
+        if row:
+            cur.execute(
+                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            )
+            updated += 1
+        else:
+            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
+            insert_vals = [base_fields[c] for c in insert_cols]
+            if "status" in cols:
+                insert_cols.append("status"); insert_vals.append("New")
+            if "assignee" in cols:
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+            if "quick_note" in cols:
+                insert_cols.append("quick_note"); insert_vals.append("")
+            placeholders = ",".join("?" for _ in insert_cols)
+            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+            inserted += 1
+
+    conn.commit()
+    return inserted, updated
+
+
 with tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
@@ -1599,13 +1724,17 @@ with tabs[10]:
         prompt = f"Context\n{support}\n\nQuestion\n{q}"
         st.markdown(llm(system, prompt, max_tokens=900))
 
+
 with tabs[11]:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
+
+    # Sessions
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
     session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
     pick = st.selectbox("Session", options=session_titles, index=0)
-    
+
+    # Create new session
     if pick == "➤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
         new_title = st.text_input("New chat title", value=default_title)
@@ -1615,6 +1744,7 @@ with tabs[11]:
             st.rerun()
         st.caption("Pick an existing chat from the dropdown above to continue.")
     else:
+        # Parse session id
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
@@ -1622,93 +1752,114 @@ with tabs[11]:
             cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
             st.caption(f"Session #{session_id} — {cur_title}")
 
+            # File uploads for this chat session
+            up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT)", type=["pdf","docx","doc","txt"],
+                                        accept_multiple_files=True, key=f"chat_up_{session_id}")
+            if up_files and st.button("Add files to this chat"):
+                added = 0
+                for up in up_files:
+                    try:
+                        text = read_doc(up)[:800_000]
+                    except Exception:
+                        text = ""
+                    conn.execute(
+                        "insert into chat_files(session_id, filename, mimetype, content_text) values(?,?,?,?)",
+                        (session_id, up.name, getattr(up, "type", ""), text)
+                    )
+                    added += 1
+                conn.commit()
+                st.success(f"Added {added} file(s).")
+                st.rerun()
 
-        # Build doc context
-        rows = pd.read_sql_query(
-            "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
-            conn, params=(session_id,)
-        )
-        doc_snips = ""
-        if not rows.empty:
-            chunks, labels = [], []
-            for _, r in rows.iterrows():
-                cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-                chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
-            vec, X = embed_texts(chunks)
-            top = search_chunks(user_msg, vec, X, chunks, k=min(8, len(chunks)))
-            parts, used = [], set()
-            for sn in top:
-                idx = chunks.index(sn) if sn in chunks else -1
-                fname = labels[idx] if 0 <= idx < len(labels) else "attachment"
-                key = (fname, sn[:60])
-                if key in used: continue
-                used.add(key)
-                parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-            if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
+            # Show existing attachments
+            files_df = pd.read_sql_query(
+                "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
+                conn, params=(session_id,)
+            )
+            if not files_df.empty:
+                st.caption("Attached files")
+                st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
 
-        try:
-            context_snap = build_context(max_rows=6)
-        except NameError:
-            context_snap = ""
-        sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
-        if doc_snips: sys_blocks.append(doc_snips)
-        msgs_window = msgs_window if "msgs_window" in locals() else []
-        msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
+            # Helper to pull doc snippets most relevant to the user's question
+            def _chat_doc_snips(question_text: str) -> str:
+                rows = pd.read_sql_query(
+                    "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
+                    conn, params=(session_id,)
+                )
+                if rows.empty:
+                    return ""
+                chunks, labels = [], []
+                for _, r in rows.iterrows():
+                    cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                    chunks.extend(cs)
+                    labels.extend([r["filename"]] * len(cs))
+                vec, X = embed_texts(chunks)
+                top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
+                parts, used = [], set()
+                for sn in top:
+                    try:
+                        idx = chunks.index(sn)
+                        fname = labels[idx]
+                    except Exception:
+                        fname = "attachment"
+                    key = (fname, sn[:60])
+                    if key in used:
+                        continue
+                    used.add(key)
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
-        assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
-        conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
+            # Show chat history
+            hist = pd.read_sql_query(
+                "select role, content, created_at from chat_messages where session_id=? order by id asc",
+                conn, params=(session_id,)
+            )
+            for _, row in hist.iterrows():
+                if row["role"] == "user":
+                    st.chat_message("user").markdown(row["content"])
+                elif row["role"] == "assistant":
+                    st.chat_message("assistant").markdown(row["content"])
 
-        if 'user_msg' in locals() and user_msg:
+            # Chat input lives inside the tab to avoid bleed-through
+            user_msg = st.chat_input("Type your message")
+            if user_msg:
+                # Save user's message
+                conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
+                             (session_id, "user", user_msg))
+                conn.commit()
 
-            st.chat_message("user").markdown(user_msg)
+                # Build system + context
+                try:
+                    context_snap = build_context(max_rows=6)
+                except Exception:
+                    context_snap = ""
+                doc_snips = _chat_doc_snips(user_msg)
 
-            st.chat_message("assistant").markdown(assistant_out)
+                system_text = "\n\n".join(filter(None, [
+                    "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
+                    f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
+                    doc_snips
+                ]))
 
-# --- Minimal guarded chat input to prevent NameError ---
-user_msg = st.text_input("Type your message", key="chat_input_tab11")
-if user_msg:
-    # Build document snippets only when there is a user message
-    rows = pd.read_sql_query(
-        "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
-        conn, params=(session_id,)
-    )
-    doc_snips = ""
-    if not rows.empty:
-        chunks, labels = [], []
-        for _, r in rows.iterrows():
-            cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-            chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
-        vec, X = embed_texts(chunks)
-        top = search_chunks(user_msg, vec, X, chunks, k=min(8, len(chunks)))
-        parts, used = [], set()
-        for sn in top:
-            idx = chunks.index(sn) if sn in chunks else -1
-            fname = labels[idx] if 0 <= idx < len(labels) else "attachment"
-            key = (fname, sn[:60])
-            if key in used: continue
-            used.add(key)
-            parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-        if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
+                # Construct rolling window of previous messages for context
+                msgs_db = pd.read_sql_query(
+                    "select role, content from chat_messages where session_id=? order by id asc",
+                    conn, params=(session_id,)
+                ).to_dict(orient="records")
 
-    try:
-        context_snap = build_context(max_rows=6)
-    except NameError:
-        context_snap = ""
-    sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
-    if doc_snips: sys_blocks.append(doc_snips)
+                # Keep last ~12 user/assistant turns
+                window = msgs_db[-24:] if len(msgs_db) > 24 else msgs_db
+                messages = [{"role": "system", "content": system_text}] + window
 
-    msgs_window = [{"role":"user","content": user_msg}]
-    msgs_window = msgs_window if "msgs_window" in locals() else []
-    msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
+                assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
+                conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
+                             (session_id, "assistant", assistant_out))
+                conn.commit()
 
-    assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
-    conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
+                st.chat_message("user").markdown(user_msg)
+                st.chat_message("assistant").markdown(assistant_out)
 
-    if 'user_msg' in locals() and user_msg:
 
-        st.chat_message("user").markdown(user_msg)
-
-        st.chat_message("assistant").markdown(assistant_out)
 
 # ===== end app.py =====
 
@@ -2741,6 +2892,87 @@ def render_proposal_builder():
             save_all = st.button("Save edited drafts")
             export_md = st.button("Assemble full proposal (Markdown)")
             export_docx = st.button("Export Proposal DOCX (guardrails)")
+        # === Generate selected sections ===
+        if regenerate:
+            # Helper: pull top snippets from attached RFP files for this session
+            def _pb_doc_snips(question_text: str):
+                rows = pd.read_sql_query(
+                    "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+                    conn, params=(session_id,)
+                )
+                if rows.empty:
+                    return ""
+                chunks, labels = [], []
+                for _, r in rows.iterrows():
+                    cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
+                vec, X = embed_texts(chunks)
+                top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
+                parts, used = [], set()
+                for sn in top:
+                    try:
+                        idx = chunks.index(sn); fname = labels[idx]
+                    except Exception:
+                        fname = "attachment"
+                    key = (fname, sn[:60])
+                    if key in used: continue
+                    used.add(key)
+                    parts.append(f"\\n--- {fname} ---\\n{sn.strip()}\\n")
+                return "Attached RFP snippets (most relevant first):\\n" + "\\n".join(parts[:16]) if parts else ""
+
+            # Pull past performance selections text if any
+            pp_text = ""
+            if selected_pp_ids:
+                qmarks = ",".join(["?"]*len(selected_pp_ids))
+                df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
+                lines = []
+                for _, r in df_sel.iterrows():
+                    lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                pp_text = "\\n".join(lines)
+
+            # Build common system context
+            try:
+                context_snap = build_context(max_rows=6)
+            except Exception:
+                context_snap = ""
+
+            # Section-specific prompts
+            section_prompts = {
+                "Executive Summary": "Write an executive summary that aligns our capabilities to the requirement. Emphasize value, risk mitigation, and rapid mobilization.",
+                "Technical Approach": "Describe a compliant, phase-oriented technical approach keyed to the PWS/SOW, referencing SLAs and QC steps.",
+                "Management & Staffing Plan": "Provide management structure, roles, key personnel, surge plan, and communication/QA practices.",
+                "Past Performance": "Summarize the selected past performance items, mapping relevance to scope, scale, and outcomes.",
+                "Pricing Assumptions/Notes": "List pricing basis, inclusions/exclusions, assumptions, and any risk-based contingencies. No dollar totals.",
+                "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
+            }
+
+            for sec, on in actions.items():
+                if not on:
+                    continue
+                # Build doc context keyed to the section
+                doc_snips = _pb_doc_snips(sec)
+                system_text = "\\n\\n".join(filter(None, [
+                    "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
+                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
+                    doc_snips,
+                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                ]))
+                user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
+
+                out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
+
+                # Upsert into proposal_drafts
+                cur = conn.cursor()
+                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
+                else:
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
+                conn.commit()
+            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            st.rerun()
+
 
         # Compliance validation settings
         st.markdown("#### Compliance validation settings")
@@ -2841,14 +3073,12 @@ def render_proposal_builder():
 
         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         # Refresh drafts after generation so new content appears immediately
-        if regenerate:
-            drafts_df = pd.read_sql_query(
-                "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-                conn, params=(session_id,)
-            )
-            existing = {r["section"]: r for _, r in drafts_df.iterrows()}
+        drafts_df = pd.read_sql_query(
+            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+            conn, params=(session_id,)
+        )
+        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         edited_blocks = {}
         for sec in order:
             if not actions.get(sec, False):
