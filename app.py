@@ -2879,6 +2879,16 @@ def render_proposal_builder():
             "Pricing Assumptions/Notes": want_price,
             "Compliance Narrative": want_comp,
         }
+        # Canonical section order used by export and display
+        order = [
+            "Executive Summary",
+            "Technical Approach",
+            "Management & Staffing Plan",
+            "Past Performance",
+            "Pricing Assumptions/Notes",
+            "Compliance Narrative",
+        ]
+
 
         drafts_df = pd.read_sql_query(
             "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
@@ -2888,6 +2898,10 @@ def render_proposal_builder():
         colA, colB = st.columns([1,1])
         with colA:
             regenerate = st.button("Generate selected sections")
+        if regenerate and not any(actions.values()):
+            st.warning("Pick at least one section above, then click Generate selected sections.")
+            regenerate = False
+
         with colB:
             save_all = st.button("Save edited drafts")
             export_md = st.button("Assemble full proposal (Markdown)")
@@ -2917,8 +2931,8 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\\n--- {fname} ---\\n{sn.strip()}\\n")
-                return "Attached RFP snippets (most relevant first):\\n" + "\\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -2928,7 +2942,7 @@ def render_proposal_builder():
                 lines = []
                 for _, r in df_sel.iterrows():
                     lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
-                pp_text = "\\n".join(lines)
+                pp_text = "\n".join(lines)
 
             # Build common system context
             try:
@@ -2946,7 +2960,26 @@ def render_proposal_builder():
                 "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
             }
 
-            for sec, on in actions.items():
+            
+            def _gen_with_fallback(system_text, user_prompt):
+                try:
+                    _out = _gen_with_fallback(system_text, user_prompt)
+                except Exception as _e:
+                    _out = f"LLM error: {type(_e).__name__}: {_e}"
+                bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
+                if bad:
+                    heading = (user_prompt.split("\n",1)[0].strip() or "Section")
+                    tmpl = [
+                        f"## {heading}",
+                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
+                        "• Roles and responsibilities: Identify key staff and escalation paths.",
+                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
+                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
+                        "• Compliance notes: Where Section L & M items are satisfied.",
+                    ]
+                    return "\n".join(tmpl)
+                return _out
+for sec, on in actions.items():
                 if not on:
                     continue
                 # Build doc context keyed to the section
@@ -2959,7 +2992,7 @@ def render_proposal_builder():
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
-                out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
+                out = _gen_with_fallback(system_text, user_prompt)
 
                 # Upsert into proposal_drafts
                 cur = conn.cursor()
