@@ -94,32 +94,6 @@ _OPENAI_FALLBACK_MODELS = [
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
-# ---- Early settings stubs (overridden later) ----
-try:
-    _ = get_setting
-except NameError:
-    def get_setting(key: str, default: str = ""):
-        try:
-            conn = get_db()
-            conn.execute("create table if not exists settings(key text primary key, value text)")
-            row = conn.execute("select value from settings where key=?", (key,)).fetchone()
-            return row[0] if row else default
-        except Exception:
-            return default
-
-try:
-    _ = set_setting
-except NameError:
-    def set_setting(key: str, value: str):
-        try:
-            conn = get_db()
-            conn.execute("create table if not exists settings(key text primary key, value text)")
-            conn.execute("insert into settings(key,value) values(?,?) on conflict(key) do update set value=excluded.value", (key, str(value)))
-            conn.commit()
-        except Exception:
-            pass
-
-
 # ---- Date helpers for SAM search ----
 
 # ---- SAM date parsing helper ----
@@ -596,209 +570,8 @@ def parse_pick_id(pick):
     except Exception:
         return None
 
-# ---- Hoisted opportunity persistence ----
-def save_opportunities(df, default_assignee=None):
-    """Upsert into opportunities and handle legacy schemas gracefully."""
-    if df is None or getattr(df, "empty", True):
-        return 0, 0
-    try:
-        df = df.where(df.notnull(), None)
-    except Exception:
-        pass
-
-    _ensure_opportunity_columns()
-    cols = set(_get_table_cols("opportunities"))
-
-    inserted = 0
-    updated = 0
-    conn = get_db(); cur = conn.cursor()
-    for _, r in df.iterrows():
-        nid = r.get("sam_notice_id")
-        if not nid:
-            continue
-        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
-        row = cur.fetchone()
-
-        base_fields = {
-            "sam_notice_id": nid,
-            "title": r.get("title"),
-            "agency": r.get("agency"),
-            "naics": r.get("naics"),
-            "psc": r.get("psc"),
-            "place_of_performance": r.get("place_of_performance"),
-            "response_due": r.get("response_due"),
-            "posted": r.get("posted"),
-            "type": r.get("type"),
-            "url": r.get("url"),
-            "attachments_json": r.get("attachments_json"),
-        }
-        # Sanitize all base fields
-        for k, v in list(base_fields.items()):
-            base_fields[k] = _to_sqlite_value(v)
-
-        if row:
-            cur.execute(
-                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
-                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
-                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
-                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
-                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
-            )
-            updated += 1
-        else:
-            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
-            insert_vals = [base_fields[c] for c in insert_cols]
-            if "status" in cols:
-                insert_cols.append("status"); insert_vals.append("New")
-            if "assignee" in cols:
-                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
-            if "quick_note" in cols:
-                insert_cols.append("quick_note"); insert_vals.append("")
-            placeholders = ",".join("?" for _ in insert_cols)
-            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
-            inserted += 1
-
-    conn.commit()
-    return inserted, updated
-# ---------- UI ----------
-with st.sidebar:
-    st.subheader("Configuration")
-    company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
-    home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX"))
-    default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial"))
-    if st.button("Save configuration"):
-        set_setting("company_name", company_name); set_setting("home_loc", home_loc); set_setting("default_trade", default_trade)
-        st.success("Saved")
-
-    st.subheader("API Key Status")
-    def _ok(v): return "✔" if v else "✘"
-    st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
-    st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
-    st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
-    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
-    if st.button("Test model"):
-        st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
-
-    if st.button("Test SAM key"):
-        try:
-            today_us = _us_date(datetime.utcnow().date())
-            test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
-                           "postedFrom": today_us, "postedTo": today_us}
-            headers = {"X-Api-Key": SAM_API_KEY}
-            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
-            st.write("HTTP", r.status_code)
-            text_preview = (r.text or "")[:1000]
-            try:
-                jj = r.json()
-                api_msg = ""
-                if isinstance(jj, dict):
-                    api_msg = jj.get("message") or (jj.get("error") or {}).get("message") or ""
-                if api_msg:
-                    st.error(f"API reported: {api_msg}"); st.code(text_preview)
-                elif r.status_code == 200:
-                    st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
-                else:
-                    st.warning("Non-200 but JSON returned."); st.code(text_preview)
-            except Exception as e:
-                st.error(f"JSON parse error: {e}"); st.code(text_preview)
-        except Exception as e:
-            st.error(f"Request failed: {e}")
-
-    if st.button("Test Google Places key"):
-        vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
-        st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
-
-    st.subheader("Watch list NAICS")
-    conn = get_db()
-    df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
-    saved_codes = df_saved["code"].tolist()
-    naics_options = sorted(set(saved_codes + NAICS_SEEDS))
-    st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
-                   default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
-    new_code = st.text_input("Add a single NAICS code")
-    col_n1, col_n2 = st.columns(2)
-    with col_n1:
-        if st.button("Add code"):
-            val = (new_code or "").strip()
-            if val:
-                conn.execute("insert or ignore into naics_watch(code,label) values(?,?)", (val, val)); conn.commit(); st.success(f"Added {val}")
-    with col_n2:
-        if st.button("Clear all saved codes"):
-            conn.execute("delete from naics_watch"); conn.commit(); st.success("Cleared saved codes")
-    if st.button("Save NAICS list"):
-        keep = sorted(set([c.strip() for c in st.session_state.naics_watch if str(c).strip()]))
-        cur = conn.cursor(); cur.execute("delete from naics_watch")
-        for c in keep: cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
-        conn.commit(); st.success("Saved NAICS watch list")
-
-    naics_csv = st.file_uploader("Import NAICS CSV (column 'code')", type=["csv"])
-    if naics_csv and st.button("Import NAICS from CSV"):
-        df_in = pd.read_csv(naics_csv)
-        if "code" in df_in.columns:
-            cur = conn.cursor()
-            for c in df_in["code"].astype(str).fillna("").str.strip():
-                if c: cur.execute("insert or ignore into naics_watch(code,label) values(?,?)", (c, c))
-            conn.commit(); st.success("Imported")
-        else:
-            st.info("CSV must have a column named code")
-
-    st.subheader("Goals")
-    g = pd.read_sql_query("select * from goals limit 1", conn)
-    if g.empty:
-        conn.execute("insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
-                     (datetime.now().year, 156, 600000, 1, 0)); conn.commit()
-        g = pd.read_sql_query("select * from goals limit 1", conn)
-    row = g.iloc[0]; goal_id = int(row["id"])
-    with st.form("goals_form", clear_on_submit=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            bids_target = st.number_input("Bids target", min_value=0, step=1, value=int(row["bids_target"]))
-            bids_submitted = st.number_input("Bids submitted", min_value=0, step=1, value=int(row["bids_submitted"]))
-        with col2:
-            revenue_target = st.number_input("Revenue target", min_value=0.0, step=1000.0, value=float(row["revenue_target"]))
-            revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"]))
-        if st.form_submit_button("Save goals"):
-            conn.execute("update goals set bids_target=?, revenue_target=?, bids_submitted=?, revenue_won=? where id=?",
-                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
-            conn.commit(); st.success("Goals updated")
-    colq1, colq2 = st.columns(2)
-    with colq1:
-        if st.button("Log new bid"):
-            conn.execute("update goals set bids_submitted = bids_submitted + 1 where id=?", (goal_id,)); conn.commit(); st.success("Bid logged")
-    with colq2:
-        add_amt = st.number_input("Add award amount", min_value=0.0, step=1000.0, value=0.0, key="award_add_amt")
-        if st.button("Log award"):
-            if add_amt > 0:
-                conn.execute("update goals set revenue_won = revenue_won + ? where id=?", (float(add_amt), goal_id)); conn.commit()
-                st.success(f"Award logged for ${add_amt:,.0f}")
-            else:
-                st.info("Enter a positive amount")
-    g = pd.read_sql_query("select * from goals limit 1", conn); row = g.iloc[0]
-    st.metric("Bids target", int(row["bids_target"]))
-    st.metric("Bids submitted", int(row["bids_submitted"]))
-    st.metric("Revenue target", f"${float(row['revenue_target']):,.0f}")
-    st.metric("Revenue won", f"${float(row['revenue_won']):,.0f}")
-
-
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-
-
-
-# ---- Settings helpers ----
-def get_setting(key: str, default: str = ""):
-    conn = get_db()
-    conn.execute("create table if not exists settings(key text primary key, value text, updated_at text default current_timestamp)")
-    row = conn.execute("select value from settings where key=?", (key,)).fetchone()
-    return row[0] if row else default
-
-def set_setting(key: str, value: str):
-    conn = get_db()
-    conn.execute("create table if not exists settings(key text primary key, value text, updated_at text default current_timestamp)")
-    conn.execute("insert into settings(key, value) values(?,?) on conflict(key) do update set value=excluded.value, updated_at=current_timestamp",
-                 (key, str(value)))
-    conn.commit()
 
 
 def run_migrations():
@@ -2551,6 +2324,187 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
+def save_opportunities(df, default_assignee=None):
+    """Upsert into opportunities and handle legacy schemas gracefully."""
+    if df is None or getattr(df, "empty", True):
+        return 0, 0
+    try:
+        df = df.where(df.notnull(), None)
+    except Exception:
+        pass
+
+    _ensure_opportunity_columns()
+    cols = set(_get_table_cols("opportunities"))
+
+    inserted = 0
+    updated = 0
+    conn = get_db(); cur = conn.cursor()
+    for _, r in df.iterrows():
+        nid = r.get("sam_notice_id")
+        if not nid:
+            continue
+        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+
+        base_fields = {
+            "sam_notice_id": nid,
+            "title": r.get("title"),
+            "agency": r.get("agency"),
+            "naics": r.get("naics"),
+            "psc": r.get("psc"),
+            "place_of_performance": r.get("place_of_performance"),
+            "response_due": r.get("response_due"),
+            "posted": r.get("posted"),
+            "type": r.get("type"),
+            "url": r.get("url"),
+            "attachments_json": r.get("attachments_json"),
+        }
+        # Sanitize all base fields
+        for k, v in list(base_fields.items()):
+            base_fields[k] = _to_sqlite_value(v)
+
+        if row:
+            cur.execute(
+                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            )
+            updated += 1
+        else:
+            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
+            insert_vals = [base_fields[c] for c in insert_cols]
+            if "status" in cols:
+                insert_cols.append("status"); insert_vals.append("New")
+            if "assignee" in cols:
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+            if "quick_note" in cols:
+                insert_cols.append("quick_note"); insert_vals.append("")
+            placeholders = ",".join("?" for _ in insert_cols)
+            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+            inserted += 1
+
+    conn.commit()
+    return inserted, updated
+# ---------- UI ----------
+with st.sidebar:
+    st.subheader("Configuration")
+    company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
+    home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX"))
+    default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial"))
+    if st.button("Save configuration"):
+        set_setting("company_name", company_name); set_setting("home_loc", home_loc); set_setting("default_trade", default_trade)
+        st.success("Saved")
+
+    st.subheader("API Key Status")
+    def _ok(v): return "✔" if v else "✘"
+    st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
+    st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
+    st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
+    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
+    if st.button("Test model"):
+        st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
+
+    if st.button("Test SAM key"):
+        try:
+            today_us = _us_date(datetime.utcnow().date())
+            test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
+                           "postedFrom": today_us, "postedTo": today_us}
+            headers = {"X-Api-Key": SAM_API_KEY}
+            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+            st.write("HTTP", r.status_code)
+            text_preview = (r.text or "")[:1000]
+            try:
+                jj = r.json()
+                api_msg = ""
+                if isinstance(jj, dict):
+                    api_msg = jj.get("message") or (jj.get("error") or {}).get("message") or ""
+                if api_msg:
+                    st.error(f"API reported: {api_msg}"); st.code(text_preview)
+                elif r.status_code == 200:
+                    st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
+                else:
+                    st.warning("Non-200 but JSON returned."); st.code(text_preview)
+            except Exception as e:
+                st.error(f"JSON parse error: {e}"); st.code(text_preview)
+        except Exception as e:
+            st.error(f"Request failed: {e}")
+
+    if st.button("Test Google Places key"):
+        vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
+        st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
+
+    st.subheader("Watch list NAICS")
+    conn = get_db()
+    df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
+    saved_codes = df_saved["code"].tolist()
+    naics_options = sorted(set(saved_codes + NAICS_SEEDS))
+    st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
+                   default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
+    new_code = st.text_input("Add a single NAICS code")
+    col_n1, col_n2 = st.columns(2)
+    with col_n1:
+        if st.button("Add code"):
+            val = (new_code or "").strip()
+            if val:
+                conn.execute("insert or ignore into naics_watch(code,label) values(?,?)", (val, val)); conn.commit(); st.success(f"Added {val}")
+    with col_n2:
+        if st.button("Clear all saved codes"):
+            conn.execute("delete from naics_watch"); conn.commit(); st.success("Cleared saved codes")
+    if st.button("Save NAICS list"):
+        keep = sorted(set([c.strip() for c in st.session_state.naics_watch if str(c).strip()]))
+        cur = conn.cursor(); cur.execute("delete from naics_watch")
+        for c in keep: cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
+        conn.commit(); st.success("Saved NAICS watch list")
+
+    naics_csv = st.file_uploader("Import NAICS CSV (column 'code')", type=["csv"])
+    if naics_csv and st.button("Import NAICS from CSV"):
+        df_in = pd.read_csv(naics_csv)
+        if "code" in df_in.columns:
+            cur = conn.cursor()
+            for c in df_in["code"].astype(str).fillna("").str.strip():
+                if c: cur.execute("insert or ignore into naics_watch(code,label) values(?,?)", (c, c))
+            conn.commit(); st.success("Imported")
+        else:
+            st.info("CSV must have a column named code")
+
+    st.subheader("Goals")
+    g = pd.read_sql_query("select * from goals limit 1", conn)
+    if g.empty:
+        conn.execute("insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
+                     (datetime.now().year, 156, 600000, 1, 0)); conn.commit()
+        g = pd.read_sql_query("select * from goals limit 1", conn)
+    row = g.iloc[0]; goal_id = int(row["id"])
+    with st.form("goals_form", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            bids_target = st.number_input("Bids target", min_value=0, step=1, value=int(row["bids_target"]))
+            bids_submitted = st.number_input("Bids submitted", min_value=0, step=1, value=int(row["bids_submitted"]))
+        with col2:
+            revenue_target = st.number_input("Revenue target", min_value=0.0, step=1000.0, value=float(row["revenue_target"]))
+            revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"]))
+        if st.form_submit_button("Save goals"):
+            conn.execute("update goals set bids_target=?, revenue_target=?, bids_submitted=?, revenue_won=? where id=?",
+                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
+            conn.commit(); st.success("Goals updated")
+    colq1, colq2 = st.columns(2)
+    with colq1:
+        if st.button("Log new bid"):
+            conn.execute("update goals set bids_submitted = bids_submitted + 1 where id=?", (goal_id,)); conn.commit(); st.success("Bid logged")
+    with colq2:
+        add_amt = st.number_input("Add award amount", min_value=0.0, step=1000.0, value=0.0, key="award_add_amt")
+        if st.button("Log award"):
+            if add_amt > 0:
+                conn.execute("update goals set revenue_won = revenue_won + ? where id=?", (float(add_amt), goal_id)); conn.commit()
+                st.success(f"Award logged for ${add_amt:,.0f}")
+            else:
+                st.info("Enter a positive amount")
+    g = pd.read_sql_query("select * from goals limit 1", conn); row = g.iloc[0]
+    st.metric("Bids target", int(row["bids_target"]))
+    st.metric("Bids submitted", int(row["bids_submitted"]))
+    st.metric("Revenue target", f"${float(row['revenue_target']):,.0f}")
+    st.metric("Revenue won", f"${float(row['revenue_won']):,.0f}")
 
 def render_rfp_analyzer():
     try:
