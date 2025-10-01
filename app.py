@@ -2838,6 +2838,12 @@ def render_proposal_builder():
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
 
         conn = get_db()
+
+        # Ensure a company context snapshot for prompts
+        try:
+            context_snap = build_context(max_rows=6)
+        except Exception:
+            context_snap = ""
         sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first.")
@@ -2897,7 +2903,7 @@ def render_proposal_builder():
 
         colA, colB = st.columns([1,1])
         with colA:
-            regenerate = st.button("Generate selected sections")
+            regenerate = st.button("Generate selected sections", key=f"pb_gen_btn_{datetime.now().strftime('%H%M%S%f')}")
         if regenerate and not any(actions.values()):
             st.warning("Pick at least one section above, then click Generate selected sections.")
             regenerate = False
@@ -2910,13 +2916,17 @@ def render_proposal_builder():
         # === Generate selected sections ===
         if regenerate:
 
+            used_fallback = False  # track if fallback template used
+
             def _gen_with_fallback(system_text, user_prompt):
+                nonlocal used_fallback
                 try:
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
                     _out = f"LLM error: {type(_e).__name__}: {_e}"
                 bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
                 if bad:
+                    used_fallback = True
                     heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
                     tmpl = [
                         f"## {heading}",
@@ -3000,11 +3010,26 @@ def render_proposal_builder():
                 generated_count += 1
 
             if generated_count:
-                st.success(f"Generated {generated_count} draft(s). Scroll down to 'Proposal Drafts' to review and edit.")
+                msg = f"Generated {generated_count} draft(s)."
+                if used_fallback:
+                    st.info(msg + " Used fallback templates because no OpenAI key or the LLM failed.")
+                else:
+                    st.success(msg + " Scroll down to 'Proposal Drafts' to review and edit.")
             else:
                 st.warning("No sections were generated. Double-check your selections above.")
 
-            st.rerun()
+            try:
+                st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
         # === Drafts editor (always visible) ===
         st.markdown("#### Proposal Drafts")
