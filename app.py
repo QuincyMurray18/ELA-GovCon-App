@@ -2906,7 +2906,6 @@ def render_proposal_builder():
             save_all = st.button("Save edited drafts")
             export_md = st.button("Assemble full proposal (Markdown)")
             export_docx = st.button("Export Proposal DOCX (guardrails)")
-        
         # === Generate selected sections ===
         if regenerate:
 
@@ -2929,18 +2928,21 @@ def render_proposal_builder():
                     return "\n".join(tmpl)
                 return _out
 
-            # Helper: top snippets from attached RFP files for this session
+            # Helper: pull top snippets from attached RFP files for this session
             def _pb_doc_snips(question_text: str):
                 rows = pd.read_sql_query(
-                    "select filename as label, content_text from rfp_files where session_id=? and ifnull(content_text, '') <> '' order by uploaded_at desc",
+                    "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
                     conn, params=(session_id,)
                 )
-                if rows.empty: return ""
-                # naive relevance: keep first N
-                chunks = rows["content_text"].tolist()
-                labels = rows["label"].tolist()
+                if rows.empty:
+                    return ""
+                chunks, labels = [], []
+                for _, r in rows.iterrows():
+                    cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
+                vec, X = embed_texts(chunks)
+                top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
                 parts, used = [], set()
-                top = chunks[:12]
                 for sn in top:
                     try:
                         idx = chunks.index(sn); fname = labels[idx]
@@ -2949,20 +2951,24 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
             if selected_pp_ids:
                 qmarks = ",".join(["?"]*len(selected_pp_ids))
-                df_sel = pd.read_sql_query(f"select title, agency, value, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
-                lines_pp = []
+                df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
+                lines = []
                 for _, r in df_sel.iterrows():
-                    lines_pp.append(f"- {r['title']} — {r['agency']}; estimated ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
-                pp_text = "\n".join(lines_pp)
+                    lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                pp_text = "\n".join(lines)
 
-            generated_count = 0
+            # Build common system context
+            try:
+                context_snap = build_context(max_rows=6)
+            except Exception:
+                context_snap = ""
 
             # Section-specific prompts
             section_prompts = {
@@ -2973,16 +2979,18 @@ def render_proposal_builder():
                 "Pricing Assumptions/Notes": "List pricing basis, inclusions/exclusions, assumptions, and any risk-based contingencies. No dollar totals.",
                 "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
             }
-            for sec in order:
-                if not actions.get(sec, False):
+
+            
+            for sec, on in actions.items():
+                if not on:
                     continue
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
-                system_text = "\n\n".join(filter(None, [
-                    "You are a federal proposal writer. Produce a compliant, concise draft with clear headings and bullets.",
-                    f"Company snapshot:\n{context_snap}" if 'context_snap' in locals() and context_snap else "",
+                system_text = "\\n\\n".join(filter(None, [
+                    "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
+                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
                     doc_snips,
-                    f"Past Performance selections:\n{pp_text}" if pp_text and (sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
@@ -2997,50 +3005,11 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
-                generated_count += 1
-
-            if generated_count:
-                st.success(f"Generated {generated_count} draft(s). Scroll down to 'Proposal Drafts' to review and edit.")
-            else:
-                st.warning("No sections were generated. Double-check your selections above.")
-
+            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
             st.rerun()
 
-        # === Drafts editor (always visible) ===
-        st.markdown("#### Proposal Drafts")
-        _df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
-        )
-        existing = {r["section"]: r for _, r in _df.iterrows()} if not _df.empty else {}
-        edited_blocks = {}
 
-        for sec in order:
-            if not actions.get(sec, False):
-                continue
-            st.markdown(f"**{sec}**")
-            txt_default = existing.get(sec, {}).get("content", "")
-            edited_blocks[sec] = st.text_area(
-                f"Edit — {sec}",
-                value=txt_default,
-                height=260,
-                key=f"pb_edit_{session_id}_{sec}"
-            )
-
-        # Save edited drafts
-        if save_all and edited_blocks:
-            cur = conn.cursor()
-            saved = 0
-            for sec, txt in edited_blocks.items():
-                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (txt, int(row[0])))
-                else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, txt))
-                saved += 1
-            conn.commit()
-            st.success(f"Saved {saved} section(s).")
+        # Compliance validation settings
         st.markdown("#### Compliance validation settings")
         colv1, colv2, colv3 = st.columns(3)
         with colv1:
@@ -3137,12 +3106,41 @@ def render_proposal_builder():
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        # === End new features ===
+        st.markdown("### Drafts")
+        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
+        # Refresh drafts after generation so new content appears immediately
+        drafts_df = pd.read_sql_query(
+            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+            conn, params=(session_id,)
+        )
+        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
+        edited_blocks = {}
+        for sec in order:
+            if not actions.get(sec, False):
+                continue
+            st.markdown(f"**{sec}**")
+            txt = existing.get(sec, {}).get("content", "")
+            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
 
+        if save_all and edited_blocks:
+            cur = conn.cursor()
+            for sec, content in edited_blocks.items():
+                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
+                else:
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
+            conn.commit()
+            st.success("Drafts saved.")
 
-
+        
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
+
+# === End new features ===
+
+
 # ---- Attach feature tabs now that functions are defined ----
 try:
     with tabs[5]:
