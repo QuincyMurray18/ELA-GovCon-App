@@ -92,7 +92,7 @@ _OPENAI_FALLBACK_MODELS = [
     "gpt-4o-mini","gpt-4o",
 ]
 
-st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
+st.set_page_config(page_title="GovCon Copilot Pro", page_icon="Ã°Å¸Â§Â°", layout="wide")
 DB_PATH = "govcon.db"
 
 NAICS_SEEDS = [
@@ -409,7 +409,7 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
             rsp = client.chat.completions.create(model=model_name, messages=messages,
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
-                try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
+                try: st.toast(f"Using fallback model: {model_name}", icon="Ã¢Å¡â„¢Ã¯Â¸Â")
                 except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
@@ -424,7 +424,7 @@ def llm_messages(messages, temp=0.2, max_tokens=1400):
             rsp = client.chat.completions.create(model=model_name, messages=messages,
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
-                try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
+                try: st.toast(f"Using fallback model: {model_name}", icon="Ã¢Å¡â„¢Ã¯Â¸Â")
                 except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
@@ -475,7 +475,7 @@ def build_context(max_rows=6):
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
                       f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
-    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    naics_line = ", ".join(codes[:20]) + (" â€¦" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
         "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
         conn, params=(max_rows,)
@@ -755,7 +755,7 @@ def sam_search(
                             "min_due_days": min_days, "noticeType": notice_types,
                             "active": active, "limit": limit}}
         if df.empty:
-            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+            info["hint"] = "Try min_days=0â€“1, add keyword, increase look-back, or clear noticeType."
         return df, info
     except requests.RequestException as e:
         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
@@ -879,7 +879,7 @@ def save_opportunities(df, default_assignee=None):
     return inserted, updated
 # ---------- UI ----------
 st.title("GovCon Copilot Pro")
-st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+st.caption("SubK sourcing â€¢ SAM watcher â€¢ proposals â€¢ outreach â€¢ CRM â€¢ goals â€¢ chat with memory & file uploads")
 
 
 
@@ -894,11 +894,11 @@ with st.sidebar:
         st.success("Saved")
 
     st.subheader("API Key Status")
-    def _ok(v): return "✔" if v else "✘"
+    def _ok(v): return "âœ”" if v else "âœ˜"
     st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
     st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
-    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
+    st.caption(f"OpenAI SDK: {_openai_version} â€¢ Model: {OPENAI_MODEL}")
     if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
 
@@ -1011,10 +1011,10 @@ def render_rfp_analyzer():
 
         # Sessions like Chat Assistant
         sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
-        session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
+        session_titles = ["âž¤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
         pick = st.selectbox("RFP session", options=session_titles, index=0)
 
-        if pick == "➤ New RFP thread":
+        if pick == "âž¤ New RFP thread":
             default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
             new_title = st.text_input("Thread title", value=default_title)
             if st.button("Start RFP thread"):
@@ -1533,7 +1533,7 @@ try:
                 value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0)
                 role = st.text_input("Role", value="Prime")
                 location = st.text_input("Location", value="")
-                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
+                highlights = st.text_area("Highlights bullets", height=120, value="â€¢ Scope coverage\nâ€¢ Key metrics\nâ€¢ Outcomes")
             contact_name = st.text_input("POC name", value="")
             contact_email = st.text_input("POC email", value="")
             contact_phone = st.text_input("POC phone", value="")
@@ -1707,7 +1707,7 @@ with tabs[0]:
 
         conn.commit()
         __ctx_pipeline = True
-        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+        st.success(f"Saved â€” updated {updated} row(s), deleted {deleted} row(s).")
 
 
 if globals().get("__ctx_pipeline", False):
@@ -1877,7 +1877,7 @@ with tabs[1]:
             if info and not info.get("ok", True):
                 msg += f" ({info.get('reason','')})"
             if not GOOGLE_PLACES_KEY:
-                msg += " — Google Places key is missing."
+                msg += " â€” Google Places key is missing."
             st.warning(msg)
 
 
@@ -1951,7 +1951,7 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
-    st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
+    st.markdown("> **Flow:** Set All active â†’ apply filters â†’ open attachments â†’ choose assignee â†’ **Search** then **Save to pipeline**")
     conn = get_db()
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
@@ -2024,7 +2024,7 @@ with tabs[4]:
         if st.button("Save selected to pipeline"):
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
-            st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+            st.success(f"Saved to pipeline â€” inserted {ins}, updated {upd}.")
     else:
         st.info("No active results yet. Click **Run search now**.")
 
@@ -2066,9 +2066,9 @@ with tabs[6]:
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", value="Responsive project management for federal facilities and services")
     core = st.text_area("Core competencies", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
-    diff = st.text_area("Differentiators", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
+    diff = st.text_area("Differentiators", value="Fast mobilization â€¢ Quality controls â€¢ Transparent reporting â€¢ Nationwide partner network")
     past_perf = st.text_area("Representative experience", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
-    contact = st.text_area("Contact info", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
+    contact = st.text_area("Contact info", value="ELA Management LLC â€¢ info@elamanagement.com â€¢ 555 555 5555 â€¢ UEI XXXXXXX â€¢ CAGE XXXXX")
     if st.button("Generate one page"):
         system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
         prompt = f"""Company {company}
@@ -2086,7 +2086,7 @@ with tabs[7]:
     st.subheader("White paper builder")
     title = st.text_input("Title", value="Improving Facility Readiness with Outcome based Service Contracts")
     thesis = st.text_area("Thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
-    audience = st.text_input("Audience", value="Facility Managers • Contracting Officers • Program Managers")
+    audience = st.text_input("Audience", value="Facility Managers â€¢ Contracting Officers â€¢ Program Managers")
     if st.button("Draft white paper"):
         system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
@@ -2133,10 +2133,10 @@ with tabs[11]:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
-    session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
+    session_titles = ["âž¤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
     pick = st.selectbox("Session", options=session_titles, index=0)
     
-    if pick == "➤ New chat":
+    if pick == "âž¤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
         new_title = st.text_input("New chat title", value=default_title)
         if st.button("Start chat"):
@@ -2150,7 +2150,7 @@ with tabs[11]:
             st.info("Select a valid session to continue.")
         else:
             cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
-            st.caption(f"Session #{session_id} — {cur_title}")
+            st.caption(f"Session #{session_id} â€” {cur_title}")
 
 
         # Build doc context
