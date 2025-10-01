@@ -2963,6 +2963,16 @@ def render_proposal_builder():
                 pp_text = "\n".join(lines_pp)
 
             generated_count = 0
+
+            # Section-specific prompts
+            section_prompts = {
+                "Executive Summary": "Write an executive summary that aligns our capabilities to the requirement. Emphasize value, risk mitigation, and rapid mobilization.",
+                "Technical Approach": "Describe a compliant, phase-oriented technical approach keyed to the PWS/SOW, referencing SLAs and QC steps.",
+                "Management & Staffing Plan": "Provide management structure, roles, key personnel, surge plan, and communication/QA practices.",
+                "Past Performance": "Summarize the selected past performance items, mapping relevance to scope, scale, and outcomes.",
+                "Pricing Assumptions/Notes": "List pricing basis, inclusions/exclusions, assumptions, and any risk-based contingencies. No dollar totals.",
+                "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
+            }
             for sec in order:
                 if not actions.get(sec, False):
                     continue
