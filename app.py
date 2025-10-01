@@ -342,16 +342,14 @@ def set_setting(key, value):
 def read_doc(uploaded_file):
     suffix = uploaded_file.name.lower().split(".")[-1]
     if suffix in ["doc","docx"]:
-        d = docx.Document(uploaded_file); return "
-".join(p.text for p in d.paragraphs)
+        d = docx.Document(uploaded_file); return "\n".join(p.text for p in d.paragraphs)
 
     if suffix == "pdf":
         # Try text first
         try:
             r = PdfReader(uploaded_file)
             txt_pages = [(p.extract_text() or "").strip() for p in r.pages]
-            text_all = "
-".join(txt_pages).strip()
+            text_all = "\n".join(txt_pages).strip()
             if text_all:
                 return text_all
         except Exception:
@@ -364,8 +362,7 @@ def read_doc(uploaded_file):
             ocr_text = []
             for img in pages[:50]:
                 ocr_text.append(pytesseract.image_to_string(img))
-            return "
-".join(ocr_text)
+            return "\n".join(ocr_text)
         except Exception as e:
             return f"[OCR fallback failed: {e}]"
 
@@ -1315,7 +1312,6 @@ if st.button("Build & Export DOCX", key=f"pb_export_docx_{session_id}"):
         parts.append(f"# {sec}
 " + ((cur.fetchone() or [""])[0] or ""))
     assembled = "
-
 ".join(parts)
     words = len(assembled.split()); est_pages = max(1, int(round(words / 450)))
     if est_pages > max_pages:
