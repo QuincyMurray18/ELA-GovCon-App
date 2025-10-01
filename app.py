@@ -94,6 +94,32 @@ _OPENAI_FALLBACK_MODELS = [
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
+# ---- Early settings stubs (overridden later) ----
+try:
+    _ = get_setting
+except NameError:
+    def get_setting(key: str, default: str = ""):
+        try:
+            conn = get_db()
+            conn.execute("create table if not exists settings(key text primary key, value text)")
+            row = conn.execute("select value from settings where key=?", (key,)).fetchone()
+            return row[0] if row else default
+        except Exception:
+            return default
+
+try:
+    _ = set_setting
+except NameError:
+    def set_setting(key: str, value: str):
+        try:
+            conn = get_db()
+            conn.execute("create table if not exists settings(key text primary key, value text)")
+            conn.execute("insert into settings(key,value) values(?,?) on conflict(key) do update set value=excluded.value", (key, str(value)))
+            conn.commit()
+        except Exception:
+            pass
+
+
 # ---- Date helpers for SAM search ----
 
 # ---- SAM date parsing helper ----
