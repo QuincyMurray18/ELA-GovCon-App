@@ -3081,8 +3081,7 @@ def render_proposal_builder():
                 saved += 1
             conn.commit()
             st.success(f"Saved {saved} section(s).")
-with st.expander("Compliance validation settings", expanded=False):
-with st.expander("Compliance validation settings", expanded=False):
+            with st.expander("Compliance validation settings", expanded=False):
                 colv1, colv2, colv3 = st.columns(3)
                 with colv1:
                     pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
