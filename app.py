@@ -1374,6 +1374,7 @@ with tabs[11]:
             context_snap = ""
         sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
         if doc_snips: sys_blocks.append(doc_snips)
+        msgs_window = msgs_window if "msgs_window" in locals() else []
         msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
 
         assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
@@ -1415,6 +1416,7 @@ if user_msg:
     if doc_snips: sys_blocks.append(doc_snips)
 
     msgs_window = [{"role":"user","content": user_msg}]
+    msgs_window = msgs_window if "msgs_window" in locals() else []
     msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
 
     assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
