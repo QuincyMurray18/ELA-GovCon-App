@@ -2850,6 +2850,20 @@ def render_proposal_builder():
             st.info("Select a valid session to continue.")
             st.stop()
 
+# Sections order used by multiple actions
+order = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing Plan",
+    "Past Performance",
+    "Pricing Assumptions/Notes",
+    "Compliance Narrative",
+]
+
+if not OPENAI_API_KEY:
+    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
+
+
         st.markdown("**Attach past performance to include**")
         df_pp = get_past_performance_df()
         selected_pp_ids = []
@@ -3070,16 +3084,28 @@ def render_proposal_builder():
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.markdown("### Drafts")
-        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
-        edited_blocks = {}
-        for sec in order:
-            if not actions.get(sec, False):
-                continue
-            st.markdown(f"**{sec}**")
-            txt = existing.get(sec, {}).get("content", "")
-            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
+        
+st.markdown("### Drafts")
+drafts_df = pd.read_sql_query(
+    "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+    conn, params=(session_id,)
+)
+if drafts_df.empty:
+    st.info("No drafts saved yet.")
+    edited_blocks = {}
+else:
+    edited_blocks = {}
+    for sec in order:
+        row = drafts_df[drafts_df["section"] == sec].head(1)
+        if row.empty:
+            continue
+        st.markdown(f"**{sec}**")
+        edited_blocks[sec] = st.text_area(
+            f"Edit {sec}",
+            value=(row["content"].iloc[0] or ""),
+            height=240,
+            key=f"pb_{sec}"
+        )
 
         if save_all and edited_blocks:
             cur = conn.cursor()
