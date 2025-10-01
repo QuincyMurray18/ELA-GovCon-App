@@ -451,881 +451,7 @@ def to_xlsx_bytes(df_dict):
             df.to_excel(w, index=False, sheet_name=name[:31])
     return bio.getvalue()
 
-# ---------- Dates (US format for SAM) ----------
-def _us_date(d: datetime.date) -> str:
-    return d.strftime("%m/%d/%Y")
 
-def _parse_sam_date(s: str):
-    if not s: return None
-    s = s.replace("Z","").strip()
-    for fmt in ("%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%m/%d/%Y"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except Exception:
-            continue
-    return None
-
-# ---------- Context for Chat ----------
-def build_context(max_rows=6):
-    conn = get_db()
-    g = pd.read_sql_query("select * from goals limit 1", conn)
-    goals_line = ""
-    if not g.empty:
-        rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
-    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
-    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
-    opp = pd.read_sql_query(
-        "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
-        conn, params=(max_rows,)
-    )
-    opp_lines = ["- " + " | ".join(filter(None, [
-        str(r["title"])[:80], str(r["agency"])[:40],
-        f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
-    ])) for _, r in opp.iterrows()]
-    vend = pd.read_sql_query(
-        """select trim(substr(naics,1,6)) as code, count(*) as cnt
-           from vendors where ifnull(naics,'')<>''
-           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
-        conn, params=(max_rows,)
-    )
-    vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
-    return "\n".join([
-        f"Company: {get_setting('company_name','ELA Management LLC')}",
-        f"Home location: {get_setting('home_loc','Houston, TX')}",
-        f"Goals: {goals_line or 'not set'}",
-        f"NAICS watch: {naics_line}",
-        "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
-        *opp_lines,
-        "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
-        *vend_lines,
-    ])
-
-# ---------- External integrations ----------
-def linkedin_company_search(keyword: str) -> str:
-    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
-
-def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
-    """
-    Google Places Text Search + Details (phone + website).
-    Returns (list_of_vendors, info). Emails are NOT provided by Places.
-    """
-    if not GOOGLE_PLACES_KEY:
-        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
-    try:
-        # 1) Text Search
-        search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-        search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests.get(search_url, params=search_params, timeout=25)
-        status_code = rs.status_code
-        data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
-        api_status = data.get("status","")
-        results = data.get("results", []) or []
-
-        if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
-            return ([] if strict else results), {
-                "ok": False, "reason": api_status or "http_error", "http": status_code,
-                "api_status": api_status, "count": len(results),
-                "raw_preview": (rs.text or "")[:800],
-                "note": "Enable billing + 'Places API' in Google Cloud."
-            }
-
-        # 2) Details per result
-        out = []
-        for item in results:
-            place_id = item.get("place_id")
-            phone, website = "", ""
-            if place_id:
-                det_url = "https://maps.googleapis.com/maps/api/place/details/json"
-                det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests.get(det_url, params=det_params, timeout=20)
-                det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
-                det = det_json.get("result", {})
-                phone = det.get("formatted_phone_number", "") or ""
-                website = det.get("website", "") or ""
-
-            out.append({
-                "company": item.get("name"),
-                "naics": "",
-                "trades": "",
-                "phone": phone,
-                "email": "",  # Emails not provided by Google Places
-                "website": website,
-                "city": location.split(",")[0].strip() if "," in location else location,
-                "state": location.split(",")[-1].strip() if "," in location else "",
-                "certifications": "",
-                "set_asides": "",
-                "notes": item.get("formatted_address",""),
-                "source": "GooglePlaces",
-            })
-        info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
-                "raw_preview": (rs.text or "")[:800]}
-        return out, info
-    except Exception as e:
-        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
-
-def send_via_graph(to_addr, subject, body):
-    if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
-        return "Graph not configured"
-    try:
-        token_r = requests.post(
-            f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token",
-            data={"client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
-                  "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"},
-            timeout=20,
-        )
-        token = token_r.json().get("access_token")
-        if not token: return f"Graph token error: {token_r.text[:200]}"
-        r = requests.post(
-            f"https://graph.microsoft.com/v1.0/users/me/sendMail",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"message": {"subject": subject, "body": {"contentType": "Text", "content": body},
-                              "toRecipients": [{"emailAddress": {"address": to_addr}}]}, "saveToSentItems": "true"},
-            timeout=20,
-        )
-        return "Sent" if r.status_code in (200, 202) else f"Graph send error {r.status_code}: {r.text[:200]}"
-    except Exception as e:
-        return f"Graph send exception: {e}"
-
-# ---------- Email Scraper (polite, small crawl) ----------
-EMAIL_REGEX = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
-
-def _clean_url(url: str) -> str:
-    if not url: return ""
-    if not url.startswith(("http://","https://")): return "http://" + url
-    return url
-
-def _same_domain(u1: str, u2: str) -> bool:
-    try:
-        d1 = urlparse(u1).netloc.split(":")[0].lower()
-        d2 = urlparse(u2).netloc.split(":")[0].lower()
-        return d1.endswith(d2) or d2.endswith(d1)
-    except Exception:
-        return True
-
-def _allowed_by_robots(base_url: str, path: str) -> bool:
-    try:
-        parsed = urlparse(base_url)
-        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-        r = requests.get(robots_url, timeout=8)
-        if r.status_code != 200 or "Disallow" not in r.text: return True
-        disallows = []
-        for line in r.text.splitlines():
-            line = line.strip()
-            if not line or not line.lower().startswith("disallow:"): continue
-            rule = line.split(":",1)[1].strip()
-            if rule: disallows.append(rule)
-        for rule in disallows:
-            if path.startswith(rule): return False
-        return True
-    except Exception:
-        return True
-
-def _fetch(url: str, timeout=12) -> str:
-    try:
-        headers = {"User-Agent": "ELA-GovCon-Scraper/1.0 (+contact via site form)"}
-        r = requests.get(url, headers=headers, timeout=timeout)
-        if r.status_code != 200 or not r.headers.get("Content-Type","").lower().startswith("text"):
-            return ""
-        return r.text[:1_000_000]
-    except Exception:
-        return ""
-
-def _extract_emails(text: str) -> set:
-    emails = set()
-    for m in EMAIL_REGEX.finditer(text or ""):
-        e = m.group(0).strip().strip(".,;:)")
-        if not e.lower().endswith((".png",".jpg",".gif",".svg",".jpeg")):
-            emails.add(e)
-    return emails
-
-def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_only=True) -> dict:
-    if BeautifulSoup is None:
-        return {"emails": set(), "visited": 0, "errors": ["beautifulsoup4 not installed"]}
-    seed_url = _clean_url(seed_url)
-    try:
-        parsed = urlparse(seed_url); base = f"{parsed.scheme}://{parsed.netloc}"
-    except Exception:
-        return {"emails": set(), "visited": 0, "errors": ["bad seed url"]}
-    queue = [seed_url, urljoin(base,"/contact"), urljoin(base,"/contact-us"),
-             urljoin(base,"/contacts"), urljoin(base,"/about"), urljoin(base,"/support")]
-    seen, emails, visited, errors = set(), set(), 0, []
-    while queue and visited < max_pages:
-        url = queue.pop(0)
-        if url in seen: continue
-        seen.add(url)
-        if not _allowed_by_robots(seed_url, urlparse(url).path): continue
-        html = _fetch(url)
-        if not html: continue
-        visited += 1
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-                if href.startswith("mailto:"):
-                    emails.add(href.replace("mailto:","").split("?")[0])
-            emails |= _extract_emails(soup.get_text(separator=" ", strip=True))
-            for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-                if href.startswith(("#","mailto:","javascript:")): continue
-                nxt = urljoin(url, href)
-                if same_domain_only and not _same_domain(seed_url, nxt): continue
-                if any(nxt.lower().endswith(suf) for suf in [".pdf",".doc",".docx",".xlsx",".ppt",".zip",".jpg",".png",".gif",".svg"]):
-                    continue
-                if nxt not in seen and len(queue) < (max_pages*3):
-                    queue.append(nxt)
-        except Exception as e:
-            errors.append(str(e))
-        time.sleep(delay_s)
-    return {"emails": emails, "visited": visited, "errors": errors}
-
-# ---------- SAM search ----------
-def sam_search(
-    naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
-    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
-):
-    if not SAM_API_KEY:
-        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
-    base = "https://api.sam.gov/opportunities/v2/search"
-    today = datetime.utcnow().date()
-    min_due_date = today + timedelta(days=min_days)
-    posted_from = _us_date(today - timedelta(days=posted_from_days))
-    posted_to   = _us_date(today)
-
-    params = {
-        "api_key": SAM_API_KEY,
-        "limit": str(limit),
-        "response": "json",
-        "sort": "-publishedDate",
-        "active": active,
-        "postedFrom": posted_from,   # MM/dd/yyyy
-        "postedTo": posted_to,       # MM/dd/yyyy
-    }
-    # Enforce only Solicitation + Combined when notice_types is blank
-    if not notice_types:
-        notice_types = "Combined Synopsis/Solicitation,Solicitation"
-    params["noticeType"] = notice_types
-
-    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
-    if keyword:      params["keywords"] = keyword
-
-    try:
-        headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests.get(base, params=params, headers=headers, timeout=40)
-        status = r.status_code
-        raw_preview = (r.text or "")[:1000]
-        try:
-            data = r.json()
-        except Exception:
-            return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
-        if status != 200:
-            err_msg = ""
-            if isinstance(data, dict):
-                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
-            return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
-        if isinstance(data, dict) and data.get("message"):
-            return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
-
-        items = data.get("opportunitiesData", []) or []
-        rows = []
-        for opp in items:
-            due_str = opp.get("responseDeadLine") or ""
-            d = _parse_sam_date(due_str)
-            due_ok = (d is None) or (d >= min_due_date)
-            if not due_ok: continue
-            docs = opp.get("documents", []) or []
-            rows.append({
-                "sam_notice_id": opp.get("noticeId"),
-                "title": opp.get("title"),
-                "agency": opp.get("organizationName"),
-                "naics": ",".join(opp.get("naicsCodes", [])),
-                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
-                "response_due": due_str,
-                "posted": opp.get("publishedDate",""),
-                "type": opp.get("type",""),
-                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
-            })
-        df = pd.DataFrame(rows)
-        info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
-                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
-                            "postedFrom": posted_from, "postedTo": posted_to,
-                            "min_due_days": min_days, "noticeType": notice_types,
-                            "active": active, "limit": limit}}
-        if df.empty:
-            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
-        return df, info
-    except requests.RequestException as e:
-        return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
-
-
-
-
-def _ensure_opportunity_columns():
-    conn = get_db(); cur = conn.cursor()
-    # Add columns if missing
-    try: cur.execute("alter table opportunities add column status text default 'New'")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column assignee text")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception: pass
-    conn.commit()
-
-def _get_table_cols(name):
-    conn = get_db(); cur = conn.cursor()
-    cur.execute(f"pragma table_info({name})")
-    return [r[1] for r in cur.fetchall()]
-
-def _to_sqlite_value(v):
-    # Normalize pandas/NumPy/complex types to Python primitives or None
-    try:
-        import numpy as np
-        import pandas as pd
-        if v is None:
-            return None
-        # Pandas NA
-        try:
-            if pd.isna(v):
-                return None
-        except Exception:
-            pass
-        # Numpy scalars
-        if isinstance(v, (np.generic,)):
-            return v.item()
-        # Lists/dicts -> JSON
-        if isinstance(v, (list, dict)):
-            return json.dumps(v)
-        # Bytes -> decode
-        if isinstance(v, (bytes, bytearray)):
-            try:
-                return v.decode("utf-8", "ignore")
-            except Exception:
-                return str(v)
-        # Other types: cast to str for safety
-        if not isinstance(v, (str, int, float)):
-            return str(v)
-        return v
-    except Exception:
-        # Fallback minimal handling
-        if isinstance(v, (list, dict)):
-            return json.dumps(v)
-        return v
-
-def save_opportunities(df, default_assignee=None):
-    """Upsert into opportunities and handle legacy schemas gracefully."""
-    if df is None or getattr(df, "empty", True):
-        return 0, 0
-    try:
-        df = df.where(df.notnull(), None)
-    except Exception:
-        pass
-
-    _ensure_opportunity_columns()
-    cols = set(_get_table_cols("opportunities"))
-
-    inserted = 0
-    updated = 0
-    conn = get_db(); cur = conn.cursor()
-    for _, r in df.iterrows():
-        nid = r.get("sam_notice_id")
-        if not nid:
-            continue
-        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
-        row = cur.fetchone()
-
-        base_fields = {
-            "sam_notice_id": nid,
-            "title": r.get("title"),
-            "agency": r.get("agency"),
-            "naics": r.get("naics"),
-            "psc": r.get("psc"),
-            "place_of_performance": r.get("place_of_performance"),
-            "response_due": r.get("response_due"),
-            "posted": r.get("posted"),
-            "type": r.get("type"),
-            "url": r.get("url"),
-            "attachments_json": r.get("attachments_json"),
-        }
-        # Sanitize all base fields
-        for k, v in list(base_fields.items()):
-            base_fields[k] = _to_sqlite_value(v)
-
-        if row:
-            cur.execute(
-                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
-                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
-                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
-                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
-                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
-            )
-            updated += 1
-        else:
-            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
-            insert_vals = [base_fields[c] for c in insert_cols]
-            if "status" in cols:
-                insert_cols.append("status"); insert_vals.append("New")
-            if "assignee" in cols:
-                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
-            if "quick_note" in cols:
-                insert_cols.append("quick_note"); insert_vals.append("")
-            placeholders = ",".join("?" for _ in insert_cols)
-            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
-            inserted += 1
-
-    conn.commit()
-    return inserted, updated
-# ---------- UI ----------
-st.title("GovCon Copilot Pro")
-st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
-
-
-
-
-with st.sidebar:
-    st.subheader("Configuration")
-    company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
-    home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX"))
-    default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial"))
-    if st.button("Save configuration"):
-        set_setting("company_name", company_name); set_setting("home_loc", home_loc); set_setting("default_trade", default_trade)
-        st.success("Saved")
-
-    st.subheader("API Key Status")
-    def _ok(v): return "✔" if v else "✘"
-    st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
-    st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
-    st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
-    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
-    if st.button("Test model"):
-        st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
-
-    if st.button("Test SAM key"):
-        try:
-            today_us = _us_date(datetime.utcnow().date())
-            test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
-                           "postedFrom": today_us, "postedTo": today_us}
-            headers = {"X-Api-Key": SAM_API_KEY}
-            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
-            st.write("HTTP", r.status_code)
-            text_preview = (r.text or "")[:1000]
-            try:
-                jj = r.json()
-                api_msg = ""
-                if isinstance(jj, dict):
-                    api_msg = jj.get("message") or (jj.get("error") or {}).get("message") or ""
-                if api_msg:
-                    st.error(f"API reported: {api_msg}"); st.code(text_preview)
-                elif r.status_code == 200:
-                    st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
-                else:
-                    st.warning("Non-200 but JSON returned."); st.code(text_preview)
-            except Exception as e:
-                st.error(f"JSON parse error: {e}"); st.code(text_preview)
-        except Exception as e:
-            st.error(f"Request failed: {e}")
-
-    if st.button("Test Google Places key"):
-        vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
-        st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
-
-    st.subheader("Watch list NAICS")
-    conn = get_db()
-    df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
-    saved_codes = df_saved["code"].tolist()
-    naics_options = sorted(set(saved_codes + NAICS_SEEDS))
-    st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
-                   default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
-    new_code = st.text_input("Add a single NAICS code")
-    col_n1, col_n2 = st.columns(2)
-    with col_n1:
-        if st.button("Add code"):
-            val = (new_code or "").strip()
-            if val:
-                conn.execute("insert or ignore into naics_watch(code,label) values(?,?)", (val, val)); conn.commit(); st.success(f"Added {val}")
-    with col_n2:
-        if st.button("Clear all saved codes"):
-            conn.execute("delete from naics_watch"); conn.commit(); st.success("Cleared saved codes")
-    if st.button("Save NAICS list"):
-        keep = sorted(set([c.strip() for c in st.session_state.naics_watch if str(c).strip()]))
-        cur = conn.cursor(); cur.execute("delete from naics_watch")
-        for c in keep: cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
-        conn.commit(); st.success("Saved NAICS watch list")
-
-    naics_csv = st.file_uploader("Import NAICS CSV (column 'code')", type=["csv"])
-    if naics_csv and st.button("Import NAICS from CSV"):
-        df_in = pd.read_csv(naics_csv)
-        if "code" in df_in.columns:
-            cur = conn.cursor()
-            for c in df_in["code"].astype(str).fillna("").str.strip():
-                if c: cur.execute("insert or ignore into naics_watch(code,label) values(?,?)", (c, c))
-            conn.commit(); st.success("Imported")
-        else:
-            st.info("CSV must have a column named code")
-
-    st.subheader("Goals")
-    g = pd.read_sql_query("select * from goals limit 1", conn)
-    if g.empty:
-        conn.execute("insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
-                     (datetime.now().year, 156, 600000, 1, 0)); conn.commit()
-        g = pd.read_sql_query("select * from goals limit 1", conn)
-    row = g.iloc[0]; goal_id = int(row["id"])
-    with st.form("goals_form", clear_on_submit=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            bids_target = st.number_input("Bids target", min_value=0, step=1, value=int(row["bids_target"]))
-            bids_submitted = st.number_input("Bids submitted", min_value=0, step=1, value=int(row["bids_submitted"]))
-        with col2:
-            revenue_target = st.number_input("Revenue target", min_value=0.0, step=1000.0, value=float(row["revenue_target"]))
-            revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"]))
-        if st.form_submit_button("Save goals"):
-            conn.execute("update goals set bids_target=?, revenue_target=?, bids_submitted=?, revenue_won=? where id=?",
-                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
-            conn.commit(); st.success("Goals updated")
-    colq1, colq2 = st.columns(2)
-    with colq1:
-        if st.button("Log new bid"):
-            conn.execute("update goals set bids_submitted = bids_submitted + 1 where id=?", (goal_id,)); conn.commit(); st.success("Bid logged")
-    with colq2:
-        add_amt = st.number_input("Add award amount", min_value=0.0, step=1000.0, value=0.0, key="award_add_amt")
-        if st.button("Log award"):
-            if add_amt > 0:
-                conn.execute("update goals set revenue_won = revenue_won + ? where id=?", (float(add_amt), goal_id)); conn.commit()
-                st.success(f"Award logged for ${add_amt:,.0f}")
-            else:
-                st.info("Enter a positive amount")
-    g = pd.read_sql_query("select * from goals limit 1", conn); row = g.iloc[0]
-    st.metric("Bids target", int(row["bids_target"]))
-    st.metric("Bids submitted", int(row["bids_submitted"]))
-    st.metric("Revenue target", f"${float(row['revenue_target']):,.0f}")
-    st.metric("Revenue won", f"${float(row['revenue_won']):,.0f}")
-
-def render_rfp_analyzer():
-    try:
-        st.subheader("RFP Analyzer")
-        st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
-
-        conn = get_db()
-
-        # Sessions like Chat Assistant
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
-        session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
-        pick = st.selectbox("RFP session", options=session_titles, index=0)
-
-        if pick == "➤ New RFP thread":
-            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
-            new_title = st.text_input("Thread title", value=default_title)
-            if st.button("Start RFP thread"):
-                conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
-                conn.commit()
-                st.rerun()
-            return
-
-        if not pick:
-            st.info("Select a chat session to continue.")
-            st.stop()
-
-        session_id = parse_pick_id(pick)
-        if session_id is None:
-            st.info("Select a valid session to continue.")
-            st.stop()
-        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
-        st.caption(f"RFP thread #{session_id}  {cur_title}")
-        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
-        st.caption(f"RFP thread #{session_id}  {cur_title}")
-
-        # File uploader with persistence
-        uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
-        if uploads and st.button("Add files to RFP thread"):
-            added = 0
-            for up in uploads:
-                text = read_doc(up)[:800_000]
-                conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
-                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
-                added += 1
-            conn.commit()
-            st.success(f"Added {added} file(s) to this thread.")
-            st.rerun()
-
-        files_df = pd.read_sql_query(
-            "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
-            conn, params=(session_id,)
-        )
-        if files_df.empty:
-            st.caption("No files yet.")
-        else:
-            st.caption("Attached files")
-            st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
-            del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
-            if st.button("Delete selected RFP file"):
-                if del_id > 0:
-                    conn.execute("delete from rfp_files where id=?", (int(del_id),))
-                    conn.commit()
-                    st.success(f"Deleted file id {del_id}.")
-                    st.rerun()
-
-        # Previous messages
-        hist = pd.read_sql_query(
-            "select role, content, created_at from rfp_messages where session_id=? order by id asc",
-            conn, params=(session_id,)
-        )
-        if hist.empty:
-            st.info("No messages yet. Use the quick actions or ask a question below.")
-        else:
-            for _, row in hist.iterrows():
-                if row["role"] == "user":
-                    st.chat_message("user").markdown(row["content"])
-                elif row["role"] == "assistant":
-                    st.chat_message("assistant").markdown(row["content"])
-                else:
-                    st.caption(f"System updated at {row['created_at']}")
-
-        # Helper to build doc context
-        def _rfp_context_for(question_text: str):
-            rows = pd.read_sql_query(
-                "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
-                conn, params=(session_id,)
-            )
-            if rows.empty:
-                return ""
-            chunks, labels = [], []
-            for _, r in rows.iterrows():
-                cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-                chunks.extend(cs)
-                labels.extend([r["filename"]]*len(cs))
-            vec, X = embed_texts(chunks)
-            top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
-            parts, used = [], set()
-            for sn in top:
-                try:
-                    idx = chunks.index(sn)
-                    fname = labels[idx]
-                except Exception:
-                    idx, fname = -1, "attachment"
-                key = (fname, sn[:60])
-                if key in used:
-                    continue
-                used.add(key)
-                parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-            return "Attached document snippets most relevant first:\n" + "\n".join(parts[:16]) if parts else ""
-
-        # Quick action buttons
-        colA, colB, colC, colD = st.columns(4)
-        qa = None
-        with colA:
-            if st.button("Compliance matrix"):
-                qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
-        with colB:
-            if st.button("Evaluation factors"):
-                qa = "Summarize the evaluation factors and their relative importance and scoring approach."
-        with colC:
-            if st.button("Submission checklist"):
-                qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
-        with colD:
-            if st.button("Grade my draft"):
-                qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
-
-        # Free form follow up like chat
-        user_q = st.chat_input("Ask a question about the RFP or use a quick action above")
-        pending_prompt = qa or user_q
-
-        if pending_prompt:
-            # Save user turn
-            conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "user", pending_prompt))
-            conn.commit()
-
-            # Build system and context using company snapshot and RFP snippets
-            context_snap = build_context(max_rows=6)
-            doc_snips = _rfp_context_for(pending_prompt)
-
-            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
-    Context snapshot:
-    {context_snap}
-    {doc_snips if doc_snips else ""}"""
-
-            # Compose rolling window like Chat Assistant
-            msgs_db = pd.read_sql_query(
-                "select role, content from rfp_messages where session_id=? order by id asc",
-                conn, params=(session_id,)
-            ).to_dict(orient="records")
-
-            # Keep up to 12 user turns
-            pruned, user_turns = [], 0
-            for m in msgs_db[::-1]:
-                if m["role"] == "assistant":
-                    pruned.append(m)
-                    continue
-                if m["role"] == "user":
-                    if user_turns < 12:
-                        pruned.append(m)
-                        user_turns += 1
-                    continue
-            msgs_window = list(reversed(pruned))
-            messages = [{"role": "system", "content": sys_text}] + msgs_window
-
-            assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
-            conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "assistant", assistant_out))
-            conn.commit()
-
-            st.chat_message("user").markdown(pending_prompt)
-            st.chat_message("assistant").markdown(assistant_out)
-    except Exception as e:
-        st.error(f"RFP Analyzer error: {e}")
-
-def render_proposal_builder():
-    try:
-        st.subheader("Proposal Builder")
-        st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
-
-        conn = get_db()
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
-        if sessions.empty:
-            st.warning("Create an RFP thread in RFP Analyzer first.")
-            return
-
-        opts = [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
-        pick = st.selectbox("Select RFP thread", options=opts, index=0, key="pb_session_pick")
-        session_id = parse_pick_id(pick)
-        if session_id is None:
-            st.info("Select a valid session to continue.")
-            st.stop()
-
-        st.markdown("**Attach past performance to include**")
-        df_pp = get_past_performance_df()
-        selected_pp_ids = []
-        if not df_pp.empty:
-            df_pp["pick"] = False
-            edited_pp = st.data_editor(df_pp[["id","title","agency","naics","period","value","role","highlights","pick"]], use_container_width=True, num_rows="fixed", key="pp_pick_grid")
-            selected_pp_ids = [int(x) for x in edited_pp[edited_pp["pick"]==True]["id"].tolist()]
-        else:
-            st.caption("No past performance records yet. Add some in Past Performance tab.")
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            want_exec = st.checkbox("Executive Summary", True)
-            want_tech = st.checkbox("Technical Approach", True)
-        with col2:
-            want_mgmt = st.checkbox("Management & Staffing Plan", True)
-            want_past = st.checkbox("Past Performance", True)
-        with col3:
-            want_price = st.checkbox("Pricing Assumptions/Notes", True)
-            want_comp = st.checkbox("Compliance Narrative", True)
-
-        actions = {
-            "Executive Summary": want_exec,
-            "Technical Approach": want_tech,
-            "Management & Staffing Plan": want_mgmt,
-            "Past Performance": want_past,
-            "Pricing Assumptions/Notes": want_price,
-            "Compliance Narrative": want_comp,
-        }
-
-        drafts_df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
-        )
-
-        colA, colB = st.columns([1,1])
-        with colA:
-            regenerate = st.button("Generate selected sections")
-        with colB:
-            save_all = st.button("Save edited drafts")
-            export_md = st.button("Assemble full proposal (Markdown)")
-            export_docx = st.button("Export Proposal DOCX (guardrails)")
-
-        # Compliance Validation Controls
-        st.markdown("#### Compliance validation settings")
-        colv1, colv2, colv3 = st.columns(3)
-        with colv1:
-            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0, help="0 means no limit check")
-            pb_font = st.text_input("Required font", value="Times New Roman")
-        with colv2:
-            pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
-            pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
-        with colv3:
-            pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
-            pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
-
-
-        base_context = build_context(max_rows=6)
-
-        def _render_pp_blurbs(ids):
-            if not ids:
-                return ""
-            rows = pd.read_sql_query(f"select title, agency, period, value, role, highlights from past_performance where id in ({','.join(str(i) for i in ids)})", conn)
-            parts = []
-            for _, r in rows.iterrows():
-                parts.append(f"**{r['title']}**  {r['agency']}  {r['period']}  ${float(r['value'] or 0):,.0f}  {r['role'] or ''}\n{r['highlights'] or ''}")
-            return "\n\n".join(parts)
-
-        finders = [name for name, on in actions.items() if on]
-        if regenerate and finders:
-            for sec in finders:
-                need = f"Write the '{sec}' section of a federal proposal for the selected solicitation. Follow instructions in Sections L & M and the SOW/PWS. Be specific and actionable. Include bullets and tables where useful. Avoid placeholders."
-                if sec == "Past Performance" and selected_pp_ids:
-                    need += "\n\nIncorporate the following past performance blurbs and synthesize:\n" + _render_pp_blurbs(selected_pp_ids)
-                doc_snips = _proposal_context_for(conn, session_id, need)
-                sys_text = f"""You are a capture/proposal writer for federal procurements.
-Company/context snapshot:
-{base_context}
-
-{doc_snips if doc_snips else ""}
-Follow the solicitation exactly (format, page limits, fonts, submission method) when relevant. If unclear, make conservative assumptions and note them briefly."""
-
-                msgs_db = pd.read_sql_query(
-                    "select role, content from rfp_messages where session_id=? order by id asc",
-                    conn, params=(session_id,)
-                ).to_dict(orient="records")
-                pruned, user_turns = [], 0
-                for m in msgs_db[::-1]:
-                    if m["role"] == "assistant":
-                        pruned.append(m); continue
-                    if m["role"] == "user":
-                        if user_turns < 8:
-                            pruned.append(m); user_turns += 1
-                        continue
-                msgs_window = list(reversed(pruned))
-                messages = [{"role":"system","content":sys_text}] + msgs_window + [{"role":"user","content": need}]
-                out = llm_messages(messages, temp=0.2, max_tokens=1400)
-
-                cur = conn.cursor()
-                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
-                else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
-                conn.commit()
-            st.success("Drafted selected sections. Scroll down to review and edit.")
-
-        st.markdown("### Drafts")
-        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
-        edited_blocks = {}
-        for sec in order:
-            if not actions.get(sec, False):
-                continue
-            st.markdown(f"**{sec}**")
-            txt = existing.get(sec, {}).get("content", "")
-            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
-
-        if save_all and edited_blocks:
-            cur = conn.cursor()
-            for sec, content in edited_blocks.items():
-                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
-                else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
-            conn.commit()
-            st.success("Drafts saved.")
-
-        
 def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
                                   margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
     issues = []
@@ -2550,4 +1676,882 @@ with tabs[__tabs_base + 3]:
             st.caption("No scenarios yet.")
     except Exception as _e_cmp:
         st.caption(f"[Scenario table note: {_e_cmp}]")
+
+
+
+# ---------- Dates (US format for SAM) ----------
+def _us_date(d: datetime.date) -> str:
+    return d.strftime("%m/%d/%Y")
+
+def _parse_sam_date(s: str):
+    if not s: return None
+    s = s.replace("Z","").strip()
+    for fmt in ("%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%m/%d/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None
+
+# ---------- Context for Chat ----------
+def build_context(max_rows=6):
+    conn = get_db()
+    g = pd.read_sql_query("select * from goals limit 1", conn)
+    goals_line = ""
+    if not g.empty:
+        rr = g.iloc[0]
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
+                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    opp = pd.read_sql_query(
+        "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
+        conn, params=(max_rows,)
+    )
+    opp_lines = ["- " + " | ".join(filter(None, [
+        str(r["title"])[:80], str(r["agency"])[:40],
+        f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
+    ])) for _, r in opp.iterrows()]
+    vend = pd.read_sql_query(
+        """select trim(substr(naics,1,6)) as code, count(*) as cnt
+           from vendors where ifnull(naics,'')<>''
+           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
+        conn, params=(max_rows,)
+    )
+    vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
+    return "\n".join([
+        f"Company: {get_setting('company_name','ELA Management LLC')}",
+        f"Home location: {get_setting('home_loc','Houston, TX')}",
+        f"Goals: {goals_line or 'not set'}",
+        f"NAICS watch: {naics_line}",
+        "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
+        *opp_lines,
+        "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
+        *vend_lines,
+    ])
+
+# ---------- External integrations ----------
+def linkedin_company_search(keyword: str) -> str:
+    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
+
+def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
+    """
+    Google Places Text Search + Details (phone + website).
+    Returns (list_of_vendors, info). Emails are NOT provided by Places.
+    """
+    if not GOOGLE_PLACES_KEY:
+        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
+    try:
+        # 1) Text Search
+        search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
+        rs = requests.get(search_url, params=search_params, timeout=25)
+        status_code = rs.status_code
+        data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
+        api_status = data.get("status","")
+        results = data.get("results", []) or []
+
+        if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
+            return ([] if strict else results), {
+                "ok": False, "reason": api_status or "http_error", "http": status_code,
+                "api_status": api_status, "count": len(results),
+                "raw_preview": (rs.text or "")[:800],
+                "note": "Enable billing + 'Places API' in Google Cloud."
+            }
+
+        # 2) Details per result
+        out = []
+        for item in results:
+            place_id = item.get("place_id")
+            phone, website = "", ""
+            if place_id:
+                det_url = "https://maps.googleapis.com/maps/api/place/details/json"
+                det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
+                rd = requests.get(det_url, params=det_params, timeout=20)
+                det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
+                det = det_json.get("result", {})
+                phone = det.get("formatted_phone_number", "") or ""
+                website = det.get("website", "") or ""
+
+            out.append({
+                "company": item.get("name"),
+                "naics": "",
+                "trades": "",
+                "phone": phone,
+                "email": "",  # Emails not provided by Google Places
+                "website": website,
+                "city": location.split(",")[0].strip() if "," in location else location,
+                "state": location.split(",")[-1].strip() if "," in location else "",
+                "certifications": "",
+                "set_asides": "",
+                "notes": item.get("formatted_address",""),
+                "source": "GooglePlaces",
+            })
+        info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
+                "raw_preview": (rs.text or "")[:800]}
+        return out, info
+    except Exception as e:
+        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
+
+def send_via_graph(to_addr, subject, body):
+    if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
+        return "Graph not configured"
+    try:
+        token_r = requests.post(
+            f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token",
+            data={"client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
+                  "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"},
+            timeout=20,
+        )
+        token = token_r.json().get("access_token")
+        if not token: return f"Graph token error: {token_r.text[:200]}"
+        r = requests.post(
+            f"https://graph.microsoft.com/v1.0/users/me/sendMail",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"message": {"subject": subject, "body": {"contentType": "Text", "content": body},
+                              "toRecipients": [{"emailAddress": {"address": to_addr}}]}, "saveToSentItems": "true"},
+            timeout=20,
+        )
+        return "Sent" if r.status_code in (200, 202) else f"Graph send error {r.status_code}: {r.text[:200]}"
+    except Exception as e:
+        return f"Graph send exception: {e}"
+
+# ---------- Email Scraper (polite, small crawl) ----------
+EMAIL_REGEX = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+
+def _clean_url(url: str) -> str:
+    if not url: return ""
+    if not url.startswith(("http://","https://")): return "http://" + url
+    return url
+
+def _same_domain(u1: str, u2: str) -> bool:
+    try:
+        d1 = urlparse(u1).netloc.split(":")[0].lower()
+        d2 = urlparse(u2).netloc.split(":")[0].lower()
+        return d1.endswith(d2) or d2.endswith(d1)
+    except Exception:
+        return True
+
+def _allowed_by_robots(base_url: str, path: str) -> bool:
+    try:
+        parsed = urlparse(base_url)
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        r = requests.get(robots_url, timeout=8)
+        if r.status_code != 200 or "Disallow" not in r.text: return True
+        disallows = []
+        for line in r.text.splitlines():
+            line = line.strip()
+            if not line or not line.lower().startswith("disallow:"): continue
+            rule = line.split(":",1)[1].strip()
+            if rule: disallows.append(rule)
+        for rule in disallows:
+            if path.startswith(rule): return False
+        return True
+    except Exception:
+        return True
+
+def _fetch(url: str, timeout=12) -> str:
+    try:
+        headers = {"User-Agent": "ELA-GovCon-Scraper/1.0 (+contact via site form)"}
+        r = requests.get(url, headers=headers, timeout=timeout)
+        if r.status_code != 200 or not r.headers.get("Content-Type","").lower().startswith("text"):
+            return ""
+        return r.text[:1_000_000]
+    except Exception:
+        return ""
+
+def _extract_emails(text: str) -> set:
+    emails = set()
+    for m in EMAIL_REGEX.finditer(text or ""):
+        e = m.group(0).strip().strip(".,;:)")
+        if not e.lower().endswith((".png",".jpg",".gif",".svg",".jpeg")):
+            emails.add(e)
+    return emails
+
+def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_only=True) -> dict:
+    if BeautifulSoup is None:
+        return {"emails": set(), "visited": 0, "errors": ["beautifulsoup4 not installed"]}
+    seed_url = _clean_url(seed_url)
+    try:
+        parsed = urlparse(seed_url); base = f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return {"emails": set(), "visited": 0, "errors": ["bad seed url"]}
+    queue = [seed_url, urljoin(base,"/contact"), urljoin(base,"/contact-us"),
+             urljoin(base,"/contacts"), urljoin(base,"/about"), urljoin(base,"/support")]
+    seen, emails, visited, errors = set(), set(), 0, []
+    while queue and visited < max_pages:
+        url = queue.pop(0)
+        if url in seen: continue
+        seen.add(url)
+        if not _allowed_by_robots(seed_url, urlparse(url).path): continue
+        html = _fetch(url)
+        if not html: continue
+        visited += 1
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if href.startswith("mailto:"):
+                    emails.add(href.replace("mailto:","").split("?")[0])
+            emails |= _extract_emails(soup.get_text(separator=" ", strip=True))
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if href.startswith(("#","mailto:","javascript:")): continue
+                nxt = urljoin(url, href)
+                if same_domain_only and not _same_domain(seed_url, nxt): continue
+                if any(nxt.lower().endswith(suf) for suf in [".pdf",".doc",".docx",".xlsx",".ppt",".zip",".jpg",".png",".gif",".svg"]):
+                    continue
+                if nxt not in seen and len(queue) < (max_pages*3):
+                    queue.append(nxt)
+        except Exception as e:
+            errors.append(str(e))
+        time.sleep(delay_s)
+    return {"emails": emails, "visited": visited, "errors": errors}
+
+# ---------- SAM search ----------
+def sam_search(
+    naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
+    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
+):
+    if not SAM_API_KEY:
+        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+    base = "https://api.sam.gov/opportunities/v2/search"
+    today = datetime.utcnow().date()
+    min_due_date = today + timedelta(days=min_days)
+    posted_from = _us_date(today - timedelta(days=posted_from_days))
+    posted_to   = _us_date(today)
+
+    params = {
+        "api_key": SAM_API_KEY,
+        "limit": str(limit),
+        "response": "json",
+        "sort": "-publishedDate",
+        "active": active,
+        "postedFrom": posted_from,   # MM/dd/yyyy
+        "postedTo": posted_to,       # MM/dd/yyyy
+    }
+    # Enforce only Solicitation + Combined when notice_types is blank
+    if not notice_types:
+        notice_types = "Combined Synopsis/Solicitation,Solicitation"
+    params["noticeType"] = notice_types
+
+    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
+    if keyword:      params["keywords"] = keyword
+
+    try:
+        headers = {"X-Api-Key": SAM_API_KEY}
+        r = requests.get(base, params=params, headers=headers, timeout=40)
+        status = r.status_code
+        raw_preview = (r.text or "")[:1000]
+        try:
+            data = r.json()
+        except Exception:
+            return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
+        if status != 200:
+            err_msg = ""
+            if isinstance(data, dict):
+                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
+            return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
+        if isinstance(data, dict) and data.get("message"):
+            return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
+
+        items = data.get("opportunitiesData", []) or []
+        rows = []
+        for opp in items:
+            due_str = opp.get("responseDeadLine") or ""
+            d = _parse_sam_date(due_str)
+            due_ok = (d is None) or (d >= min_due_date)
+            if not due_ok: continue
+            docs = opp.get("documents", []) or []
+            rows.append({
+                "sam_notice_id": opp.get("noticeId"),
+                "title": opp.get("title"),
+                "agency": opp.get("organizationName"),
+                "naics": ",".join(opp.get("naicsCodes", [])),
+                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+                "response_due": due_str,
+                "posted": opp.get("publishedDate",""),
+                "type": opp.get("type",""),
+                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
+            })
+        df = pd.DataFrame(rows)
+        info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
+                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+                            "postedFrom": posted_from, "postedTo": posted_to,
+                            "min_due_days": min_days, "noticeType": notice_types,
+                            "active": active, "limit": limit}}
+        if df.empty:
+            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+        return df, info
+    except requests.RequestException as e:
+        return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
+
+
+
+
+def _ensure_opportunity_columns():
+    conn = get_db(); cur = conn.cursor()
+    # Add columns if missing
+    try: cur.execute("alter table opportunities add column status text default 'New'")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
+    conn.commit()
+
+def _get_table_cols(name):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"pragma table_info({name})")
+    return [r[1] for r in cur.fetchall()]
+
+def _to_sqlite_value(v):
+    # Normalize pandas/NumPy/complex types to Python primitives or None
+    try:
+        import numpy as np
+        import pandas as pd
+        if v is None:
+            return None
+        # Pandas NA
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        # Numpy scalars
+        if isinstance(v, (np.generic,)):
+            return v.item()
+        # Lists/dicts -> JSON
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        # Bytes -> decode
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode("utf-8", "ignore")
+            except Exception:
+                return str(v)
+        # Other types: cast to str for safety
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
+    except Exception:
+        # Fallback minimal handling
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        return v
+
+def save_opportunities(df, default_assignee=None):
+    """Upsert into opportunities and handle legacy schemas gracefully."""
+    if df is None or getattr(df, "empty", True):
+        return 0, 0
+    try:
+        df = df.where(df.notnull(), None)
+    except Exception:
+        pass
+
+    _ensure_opportunity_columns()
+    cols = set(_get_table_cols("opportunities"))
+
+    inserted = 0
+    updated = 0
+    conn = get_db(); cur = conn.cursor()
+    for _, r in df.iterrows():
+        nid = r.get("sam_notice_id")
+        if not nid:
+            continue
+        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+
+        base_fields = {
+            "sam_notice_id": nid,
+            "title": r.get("title"),
+            "agency": r.get("agency"),
+            "naics": r.get("naics"),
+            "psc": r.get("psc"),
+            "place_of_performance": r.get("place_of_performance"),
+            "response_due": r.get("response_due"),
+            "posted": r.get("posted"),
+            "type": r.get("type"),
+            "url": r.get("url"),
+            "attachments_json": r.get("attachments_json"),
+        }
+        # Sanitize all base fields
+        for k, v in list(base_fields.items()):
+            base_fields[k] = _to_sqlite_value(v)
+
+        if row:
+            cur.execute(
+                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            )
+            updated += 1
+        else:
+            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
+            insert_vals = [base_fields[c] for c in insert_cols]
+            if "status" in cols:
+                insert_cols.append("status"); insert_vals.append("New")
+            if "assignee" in cols:
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+            if "quick_note" in cols:
+                insert_cols.append("quick_note"); insert_vals.append("")
+            placeholders = ",".join("?" for _ in insert_cols)
+            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+            inserted += 1
+
+    conn.commit()
+    return inserted, updated
+# ---------- UI ----------
+st.title("GovCon Copilot Pro")
+st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+
+
+
+
+with st.sidebar:
+    st.subheader("Configuration")
+    company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
+    home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX"))
+    default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial"))
+    if st.button("Save configuration"):
+        set_setting("company_name", company_name); set_setting("home_loc", home_loc); set_setting("default_trade", default_trade)
+        st.success("Saved")
+
+    st.subheader("API Key Status")
+    def _ok(v): return "✔" if v else "✘"
+    st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
+    st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
+    st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
+    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
+    if st.button("Test model"):
+        st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
+
+    if st.button("Test SAM key"):
+        try:
+            today_us = _us_date(datetime.utcnow().date())
+            test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
+                           "postedFrom": today_us, "postedTo": today_us}
+            headers = {"X-Api-Key": SAM_API_KEY}
+            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+            st.write("HTTP", r.status_code)
+            text_preview = (r.text or "")[:1000]
+            try:
+                jj = r.json()
+                api_msg = ""
+                if isinstance(jj, dict):
+                    api_msg = jj.get("message") or (jj.get("error") or {}).get("message") or ""
+                if api_msg:
+                    st.error(f"API reported: {api_msg}"); st.code(text_preview)
+                elif r.status_code == 200:
+                    st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
+                else:
+                    st.warning("Non-200 but JSON returned."); st.code(text_preview)
+            except Exception as e:
+                st.error(f"JSON parse error: {e}"); st.code(text_preview)
+        except Exception as e:
+            st.error(f"Request failed: {e}")
+
+    if st.button("Test Google Places key"):
+        vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
+        st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
+
+    st.subheader("Watch list NAICS")
+    conn = get_db()
+    df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
+    saved_codes = df_saved["code"].tolist()
+    naics_options = sorted(set(saved_codes + NAICS_SEEDS))
+    st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
+                   default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
+    new_code = st.text_input("Add a single NAICS code")
+    col_n1, col_n2 = st.columns(2)
+    with col_n1:
+        if st.button("Add code"):
+            val = (new_code or "").strip()
+            if val:
+                conn.execute("insert or ignore into naics_watch(code,label) values(?,?)", (val, val)); conn.commit(); st.success(f"Added {val}")
+    with col_n2:
+        if st.button("Clear all saved codes"):
+            conn.execute("delete from naics_watch"); conn.commit(); st.success("Cleared saved codes")
+    if st.button("Save NAICS list"):
+        keep = sorted(set([c.strip() for c in st.session_state.naics_watch if str(c).strip()]))
+        cur = conn.cursor(); cur.execute("delete from naics_watch")
+        for c in keep: cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
+        conn.commit(); st.success("Saved NAICS watch list")
+
+    naics_csv = st.file_uploader("Import NAICS CSV (column 'code')", type=["csv"])
+    if naics_csv and st.button("Import NAICS from CSV"):
+        df_in = pd.read_csv(naics_csv)
+        if "code" in df_in.columns:
+            cur = conn.cursor()
+            for c in df_in["code"].astype(str).fillna("").str.strip():
+                if c: cur.execute("insert or ignore into naics_watch(code,label) values(?,?)", (c, c))
+            conn.commit(); st.success("Imported")
+        else:
+            st.info("CSV must have a column named code")
+
+    st.subheader("Goals")
+    g = pd.read_sql_query("select * from goals limit 1", conn)
+    if g.empty:
+        conn.execute("insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
+                     (datetime.now().year, 156, 600000, 1, 0)); conn.commit()
+        g = pd.read_sql_query("select * from goals limit 1", conn)
+    row = g.iloc[0]; goal_id = int(row["id"])
+    with st.form("goals_form", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            bids_target = st.number_input("Bids target", min_value=0, step=1, value=int(row["bids_target"]))
+            bids_submitted = st.number_input("Bids submitted", min_value=0, step=1, value=int(row["bids_submitted"]))
+        with col2:
+            revenue_target = st.number_input("Revenue target", min_value=0.0, step=1000.0, value=float(row["revenue_target"]))
+            revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"]))
+        if st.form_submit_button("Save goals"):
+            conn.execute("update goals set bids_target=?, revenue_target=?, bids_submitted=?, revenue_won=? where id=?",
+                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
+            conn.commit(); st.success("Goals updated")
+    colq1, colq2 = st.columns(2)
+    with colq1:
+        if st.button("Log new bid"):
+            conn.execute("update goals set bids_submitted = bids_submitted + 1 where id=?", (goal_id,)); conn.commit(); st.success("Bid logged")
+    with colq2:
+        add_amt = st.number_input("Add award amount", min_value=0.0, step=1000.0, value=0.0, key="award_add_amt")
+        if st.button("Log award"):
+            if add_amt > 0:
+                conn.execute("update goals set revenue_won = revenue_won + ? where id=?", (float(add_amt), goal_id)); conn.commit()
+                st.success(f"Award logged for ${add_amt:,.0f}")
+            else:
+                st.info("Enter a positive amount")
+    g = pd.read_sql_query("select * from goals limit 1", conn); row = g.iloc[0]
+    st.metric("Bids target", int(row["bids_target"]))
+    st.metric("Bids submitted", int(row["bids_submitted"]))
+    st.metric("Revenue target", f"${float(row['revenue_target']):,.0f}")
+    st.metric("Revenue won", f"${float(row['revenue_won']):,.0f}")
+
+def render_rfp_analyzer():
+    try:
+        st.subheader("RFP Analyzer")
+        st.caption("Upload RFP package and chat with memory. Use quick actions or ask your own questions.")
+
+        conn = get_db()
+
+        # Sessions like Chat Assistant
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        session_titles = ["➤ New RFP thread"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
+        pick = st.selectbox("RFP session", options=session_titles, index=0)
+
+        if pick == "➤ New RFP thread":
+            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
+            new_title = st.text_input("Thread title", value=default_title)
+            if st.button("Start RFP thread"):
+                conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
+                conn.commit()
+                st.rerun()
+            return
+
+        if not pick:
+            st.info("Select a chat session to continue.")
+            st.stop()
+
+        session_id = parse_pick_id(pick)
+        if session_id is None:
+            st.info("Select a valid session to continue.")
+            st.stop()
+        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
+        st.caption(f"RFP thread #{session_id}  {cur_title}")
+        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
+        st.caption(f"RFP thread #{session_id}  {cur_title}")
+
+        # File uploader with persistence
+        uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
+        if uploads and st.button("Add files to RFP thread"):
+            added = 0
+            for up in uploads:
+                text = read_doc(up)[:800_000]
+                conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
+                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
+                added += 1
+            conn.commit()
+            st.success(f"Added {added} file(s) to this thread.")
+            st.rerun()
+
+        files_df = pd.read_sql_query(
+            "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
+            conn, params=(session_id,)
+        )
+        if files_df.empty:
+            st.caption("No files yet.")
+        else:
+            st.caption("Attached files")
+            st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
+            del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
+            if st.button("Delete selected RFP file"):
+                if del_id > 0:
+                    conn.execute("delete from rfp_files where id=?", (int(del_id),))
+                    conn.commit()
+                    st.success(f"Deleted file id {del_id}.")
+                    st.rerun()
+
+        # Previous messages
+        hist = pd.read_sql_query(
+            "select role, content, created_at from rfp_messages where session_id=? order by id asc",
+            conn, params=(session_id,)
+        )
+        if hist.empty:
+            st.info("No messages yet. Use the quick actions or ask a question below.")
+        else:
+            for _, row in hist.iterrows():
+                if row["role"] == "user":
+                    st.chat_message("user").markdown(row["content"])
+                elif row["role"] == "assistant":
+                    st.chat_message("assistant").markdown(row["content"])
+                else:
+                    st.caption(f"System updated at {row['created_at']}")
+
+        # Helper to build doc context
+        def _rfp_context_for(question_text: str):
+            rows = pd.read_sql_query(
+                "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+                conn, params=(session_id,)
+            )
+            if rows.empty:
+                return ""
+            chunks, labels = [], []
+            for _, r in rows.iterrows():
+                cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                chunks.extend(cs)
+                labels.extend([r["filename"]]*len(cs))
+            vec, X = embed_texts(chunks)
+            top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
+            parts, used = [], set()
+            for sn in top:
+                try:
+                    idx = chunks.index(sn)
+                    fname = labels[idx]
+                except Exception:
+                    idx, fname = -1, "attachment"
+                key = (fname, sn[:60])
+                if key in used:
+                    continue
+                used.add(key)
+                parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+            return "Attached document snippets most relevant first:\n" + "\n".join(parts[:16]) if parts else ""
+
+        # Quick action buttons
+        colA, colB, colC, colD = st.columns(4)
+        qa = None
+        with colA:
+            if st.button("Compliance matrix"):
+                qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
+        with colB:
+            if st.button("Evaluation factors"):
+                qa = "Summarize the evaluation factors and their relative importance and scoring approach."
+        with colC:
+            if st.button("Submission checklist"):
+                qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
+        with colD:
+            if st.button("Grade my draft"):
+                qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
+
+        # Free form follow up like chat
+        user_q = st.chat_input("Ask a question about the RFP or use a quick action above")
+        pending_prompt = qa or user_q
+
+        if pending_prompt:
+            # Save user turn
+            conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
+                         (session_id, "user", pending_prompt))
+            conn.commit()
+
+            # Build system and context using company snapshot and RFP snippets
+            context_snap = build_context(max_rows=6)
+            doc_snips = _rfp_context_for(pending_prompt)
+
+            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
+    Context snapshot:
+    {context_snap}
+    {doc_snips if doc_snips else ""}"""
+
+            # Compose rolling window like Chat Assistant
+            msgs_db = pd.read_sql_query(
+                "select role, content from rfp_messages where session_id=? order by id asc",
+                conn, params=(session_id,)
+            ).to_dict(orient="records")
+
+            # Keep up to 12 user turns
+            pruned, user_turns = [], 0
+            for m in msgs_db[::-1]:
+                if m["role"] == "assistant":
+                    pruned.append(m)
+                    continue
+                if m["role"] == "user":
+                    if user_turns < 12:
+                        pruned.append(m)
+                        user_turns += 1
+                    continue
+            msgs_window = list(reversed(pruned))
+            messages = [{"role": "system", "content": sys_text}] + msgs_window
+
+            assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
+            conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
+                         (session_id, "assistant", assistant_out))
+            conn.commit()
+
+            st.chat_message("user").markdown(pending_prompt)
+            st.chat_message("assistant").markdown(assistant_out)
+    except Exception as e:
+        st.error(f"RFP Analyzer error: {e}")
+
+def render_proposal_builder():
+    try:
+        st.subheader("Proposal Builder")
+        st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
+
+        conn = get_db()
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        if sessions.empty:
+            st.warning("Create an RFP thread in RFP Analyzer first.")
+            return
+
+        opts = [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
+        pick = st.selectbox("Select RFP thread", options=opts, index=0, key="pb_session_pick")
+        session_id = parse_pick_id(pick)
+        if session_id is None:
+            st.info("Select a valid session to continue.")
+            st.stop()
+
+        st.markdown("**Attach past performance to include**")
+        df_pp = get_past_performance_df()
+        selected_pp_ids = []
+        if not df_pp.empty:
+            df_pp["pick"] = False
+            edited_pp = st.data_editor(df_pp[["id","title","agency","naics","period","value","role","highlights","pick"]], use_container_width=True, num_rows="fixed", key="pp_pick_grid")
+            selected_pp_ids = [int(x) for x in edited_pp[edited_pp["pick"]==True]["id"].tolist()]
+        else:
+            st.caption("No past performance records yet. Add some in Past Performance tab.")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            want_exec = st.checkbox("Executive Summary", True)
+            want_tech = st.checkbox("Technical Approach", True)
+        with col2:
+            want_mgmt = st.checkbox("Management & Staffing Plan", True)
+            want_past = st.checkbox("Past Performance", True)
+        with col3:
+            want_price = st.checkbox("Pricing Assumptions/Notes", True)
+            want_comp = st.checkbox("Compliance Narrative", True)
+
+        actions = {
+            "Executive Summary": want_exec,
+            "Technical Approach": want_tech,
+            "Management & Staffing Plan": want_mgmt,
+            "Past Performance": want_past,
+            "Pricing Assumptions/Notes": want_price,
+            "Compliance Narrative": want_comp,
+        }
+
+        drafts_df = pd.read_sql_query(
+            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+            conn, params=(session_id,)
+        )
+
+        colA, colB = st.columns([1,1])
+        with colA:
+            regenerate = st.button("Generate selected sections")
+        with colB:
+            save_all = st.button("Save edited drafts")
+            export_md = st.button("Assemble full proposal (Markdown)")
+            export_docx = st.button("Export Proposal DOCX (guardrails)")
+
+        # Compliance Validation Controls
+        st.markdown("#### Compliance validation settings")
+        colv1, colv2, colv3 = st.columns(3)
+        with colv1:
+            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0, help="0 means no limit check")
+            pb_font = st.text_input("Required font", value="Times New Roman")
+        with colv2:
+            pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
+            pb_margins = st.number_input("Margins (inches)", min_value=0.5, max_value=1.5, value=1.0, step=0.25)
+        with colv3:
+            pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
+            pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
+
+
+        base_context = build_context(max_rows=6)
+
+        def _render_pp_blurbs(ids):
+            if not ids:
+                return ""
+            rows = pd.read_sql_query(f"select title, agency, period, value, role, highlights from past_performance where id in ({','.join(str(i) for i in ids)})", conn)
+            parts = []
+            for _, r in rows.iterrows():
+                parts.append(f"**{r['title']}**  {r['agency']}  {r['period']}  ${float(r['value'] or 0):,.0f}  {r['role'] or ''}\n{r['highlights'] or ''}")
+            return "\n\n".join(parts)
+
+        finders = [name for name, on in actions.items() if on]
+        if regenerate and finders:
+            for sec in finders:
+                need = f"Write the '{sec}' section of a federal proposal for the selected solicitation. Follow instructions in Sections L & M and the SOW/PWS. Be specific and actionable. Include bullets and tables where useful. Avoid placeholders."
+                if sec == "Past Performance" and selected_pp_ids:
+                    need += "\n\nIncorporate the following past performance blurbs and synthesize:\n" + _render_pp_blurbs(selected_pp_ids)
+                doc_snips = _proposal_context_for(conn, session_id, need)
+                sys_text = f"""You are a capture/proposal writer for federal procurements.
+Company/context snapshot:
+{base_context}
+
+{doc_snips if doc_snips else ""}
+Follow the solicitation exactly (format, page limits, fonts, submission method) when relevant. If unclear, make conservative assumptions and note them briefly."""
+
+                msgs_db = pd.read_sql_query(
+                    "select role, content from rfp_messages where session_id=? order by id asc",
+                    conn, params=(session_id,)
+                ).to_dict(orient="records")
+                pruned, user_turns = [], 0
+                for m in msgs_db[::-1]:
+                    if m["role"] == "assistant":
+                        pruned.append(m); continue
+                    if m["role"] == "user":
+                        if user_turns < 8:
+                            pruned.append(m); user_turns += 1
+                        continue
+                msgs_window = list(reversed(pruned))
+                messages = [{"role":"system","content":sys_text}] + msgs_window + [{"role":"user","content": need}]
+                out = llm_messages(messages, temp=0.2, max_tokens=1400)
+
+                cur = conn.cursor()
+                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
+                else:
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
+                conn.commit()
+            st.success("Drafted selected sections. Scroll down to review and edit.")
+
+        st.markdown("### Drafts")
+        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
+        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
+        edited_blocks = {}
+        for sec in order:
+            if not actions.get(sec, False):
+                continue
+            st.markdown(f"**{sec}**")
+            txt = existing.get(sec, {}).get("content", "")
+            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
+
+        if save_all and edited_blocks:
+            cur = conn.cursor()
+            for sec, content in edited_blocks.items():
+                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
+                else:
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
+            conn.commit()
+            st.success("Drafts saved.")
+
+        
 # === End new features ===
