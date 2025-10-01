@@ -591,7 +591,6 @@ def run_migrations():
     try: cur.execute("alter table vendors add column distance_miles real")
     except Exception: pass
     conn.commit()
-                generated_count += 1
 
 def ensure_schema():
     conn = get_db()
@@ -2881,16 +2880,6 @@ def render_proposal_builder():
             "Compliance Narrative": want_comp,
         }
 
-        
-        # Canonical section order available to all downstream blocks
-        order = [
-            "Executive Summary",
-            "Technical Approach",
-            "Management & Staffing Plan",
-            "Past Performance",
-            "Pricing Assumptions/Notes",
-            "Compliance Narrative"
-        ]
         drafts_df = pd.read_sql_query(
             "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
             conn, params=(session_id,)
@@ -2905,7 +2894,6 @@ def render_proposal_builder():
             export_docx = st.button("Export Proposal DOCX (guardrails)")
         # === Generate selected sections ===
         if regenerate:
-            generated_count = 0
             # Helper: pull top snippets from attached RFP files for this session
             def _pb_doc_snips(question_text: str):
                 rows = pd.read_sql_query(
@@ -2982,8 +2970,7 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
-            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.") if generated_count else st.warning("No sections were selected or generated.")
-            st.rerun()
+            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
 
 
         # Compliance validation settings
@@ -3084,7 +3071,6 @@ def render_proposal_builder():
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         st.markdown("### Drafts")
-
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
         existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         edited_blocks = {}
@@ -3101,9 +3087,9 @@ def render_proposal_builder():
                 cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
                 row = cur.fetchone()
                 if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
+                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
                 else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
+                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
             conn.commit()
             st.success("Drafts saved.")
 
