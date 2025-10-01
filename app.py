@@ -188,7 +188,12 @@ def sam_search(
         for opp in items:
             due_str = opp.get("responseDeadLine") or ""
             d = _parse_sam_date(due_str)
-            due_ok = (d is None) or (d >= min_due_date)
+            d_dt = _coerce_dt(d)
+            min_dt = _coerce_dt(min_due_date)
+            if min_dt is None:
+                due_ok = True  # allow when min date unknown
+            else:
+                due_ok = (d_dt is None) or (d_dt >= min_dt)
             if not due_ok: continue
             docs = opp.get("documents", []) or []
             rows.append({
@@ -2220,7 +2225,12 @@ def sam_search(
         for opp in items:
             due_str = opp.get("responseDeadLine") or ""
             d = _parse_sam_date(due_str)
-            due_ok = (d is None) or (d >= min_due_date)
+            d_dt = _coerce_dt(d)
+            min_dt = _coerce_dt(min_due_date)
+            if min_dt is None:
+                due_ok = True  # allow when min date unknown
+            else:
+                due_ok = (d_dt is None) or (d_dt >= min_dt)
             if not due_ok: continue
             docs = opp.get("documents", []) or []
             rows.append({
