@@ -2908,6 +2908,26 @@ def render_proposal_builder():
             export_docx = st.button("Export Proposal DOCX (guardrails)")
         # === Generate selected sections ===
         if regenerate:
+
+            def _gen_with_fallback(system_text, user_prompt):
+                try:
+                    _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
+                except Exception as _e:
+                    _out = f"LLM error: {type(_e).__name__}: {_e}"
+                bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
+                if bad:
+                    heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
+                    tmpl = [
+                        f"## {heading}",
+                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
+                        "• Roles and responsibilities: Identify key staff and escalation paths.",
+                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
+                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
+                        "• Compliance notes: Where Section L & M items are satisfied.",
+                    ]
+                    return "\n".join(tmpl)
+                return _out
+
             # Helper: pull top snippets from attached RFP files for this session
             def _pb_doc_snips(question_text: str):
                 rows = pd.read_sql_query(
@@ -2961,25 +2981,7 @@ def render_proposal_builder():
             }
 
             
-            def _gen_with_fallback(system_text, user_prompt):
-                try:
-                    _out = _gen_with_fallback(system_text, user_prompt)
-                except Exception as _e:
-                    _out = f"LLM error: {type(_e).__name__}: {_e}"
-                bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
-                if bad:
-                    heading = (user_prompt.split("\n",1)[0].strip() or "Section")
-                    tmpl = [
-                        f"## {heading}",
-                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
-                        "• Roles and responsibilities: Identify key staff and escalation paths.",
-                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
-                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
-                        "• Compliance notes: Where Section L & M items are satisfied.",
-                    ]
-                    return "\n".join(tmpl)
-                return _out
-for sec, on in actions.items():
+            for sec, on in actions.items():
                 if not on:
                     continue
                 # Build doc context keyed to the section
