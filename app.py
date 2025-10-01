@@ -2850,6 +2850,20 @@ def render_proposal_builder():
             st.info("Select a valid session to continue.")
             st.stop()
 
+        # --- quick diagnostics/status bar ---
+        _files_count_df = pd.read_sql_query(
+            "select count(*) as n from rfp_files where session_id=?",
+            conn, params=(session_id,)
+        )
+        _files_count = int(_files_count_df.iloc[0]["n"]) if not _files_count_df.empty else 0
+        col_status1, col_status2 = st.columns(2)
+        with col_status1:
+            st.metric("RFP files attached", _files_count)
+        with col_status2:
+            st.metric("OpenAI key detected", "Yes" if OPENAI_API_KEY else "No")
+        if not OPENAI_API_KEY:
+            st.warning("OpenAI key not set — I’ll generate offline scaffolds. Set OPENAI_API_KEY to enable AI drafting.")
+
         st.markdown("**Attach past performance to include**")
         df_pp = get_past_performance_df()
         selected_pp_ids = []
@@ -2897,7 +2911,7 @@ def render_proposal_builder():
 
         colA, colB = st.columns([1,1])
         with colA:
-            regenerate = st.button("Generate selected section(s)")
+            regenerate = st.button("Generate selected sections")
         if regenerate and not any(actions.values()):
             st.warning("Pick at least one section above, then click Generate selected sections.")
             regenerate = False
@@ -2909,23 +2923,66 @@ def render_proposal_builder():
         # === Generate selected sections ===
         if regenerate:
 
-            def _gen_with_fallback(system_text, user_prompt):
+            def _gen_with_fallback(system_text, user_prompt, sec_name):
+                """
+                Always return usable content.
+                If the model fails or key is missing, return a solid scaffold for the given section.
+                """
                 try:
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
                     _out = f"LLM error: {type(_e).__name__}: {_e}"
                 bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
                 if bad:
-                    heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
-                    tmpl = [
-                        f"## {heading}",
-                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
-                        "• Roles and responsibilities: Identify key staff and escalation paths.",
-                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
-                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
-                        "• Compliance notes: Where Section L & M items are satisfied.",
-                    ]
-                    return "\n".join(tmpl)
+                    scaffolds = {
+                        "Executive Summary": "\n".join([
+                            "## Executive Summary",
+                            "• Customer mission and objectives we support",
+                            "• Our value proposition aligned to the PWS",
+                            "• Rapid mobilization plan and risk mitigation",
+                            "• Outcome metrics and continuous improvement",
+                            "• Compliance with Section L&M and key differentiators"
+                        ]),
+                        "Technical Approach": "\n".join([
+                            "## Technical Approach",
+                            "• Understanding of scope and constraints",
+                            "• Phased approach with tasks mapped to PWS",
+                            "• Quality control (inspection schedule, KPIs, CAPA)",
+                            "• Staffing, equipment, materials, and surge plan",
+                            "• Safety, security, and environmental compliance"
+                        ]),
+                        "Management & Staffing Plan": "\n".join([
+                            "## Management & Staffing Plan",
+                            "• Org chart and roles (PM, QA, Leads, SMEs)",
+                            "• Recruiting, onboarding, and training",
+                            "• Scheduling, coverage, and backup procedures",
+                            "• Communications and escalation paths",
+                            "• Risk management and performance reviews"
+                        ]),
+                        "Past Performance": "\n".join([
+                            "## Past Performance",
+                            "• Relevant projects summary (scope/scale/NAICS)",
+                            "• Quantified outcomes and CPARS quotes (if any)",
+                            "• Relevance mapping to this requirement",
+                            "• Lessons learned applied here"
+                        ]),
+                        "Pricing Assumptions/Notes": "\n".join([
+                            "## Pricing Assumptions/Notes",
+                            "• Basis of estimate and labor categories",
+                            "• Inclusions and exclusions",
+                            "• Assumptions and dependencies",
+                            "• Risk-based contingencies",
+                            "• Notes on travel/ODCs (if applicable)"
+                        ]),
+                        "Compliance Narrative": "\n".join([
+                            "## Compliance Narrative",
+                            "• Section L: volumes, page limits, formatting",
+                            "• Section M: factors and where addressed",
+                            "• Submission method, due date/time zone, file naming",
+                            "• Crosswalk mapping (requirement → response location)"
+                        ]),
+                    }
+                    return scaffolds.get(sec_name, f"## {sec_name}\n• Overview\n• Details\n• QA & Risks\n• Compliance")
                 return _out
 
             # Helper: pull top snippets from attached RFP files for this session
@@ -2951,8 +3008,8 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -2980,21 +3037,20 @@ def render_proposal_builder():
                 "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
             }
 
-            
             for sec, on in actions.items():
                 if not on:
                     continue
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
-                system_text = "\\n\\n".join(filter(None, [
+                system_text = "\n\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
+                    f"Company snapshot:\n{context_snap}" if context_snap else "",
                     doc_snips,
-                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                    f"Past Performance selections:\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
-                out = _gen_with_fallback(system_text, user_prompt)
+                out = _gen_with_fallback(system_text, user_prompt, sec)
 
                 # Upsert into proposal_drafts
                 cur = conn.cursor()
@@ -3007,7 +3063,6 @@ def render_proposal_builder():
                 conn.commit()
             st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
             st.rerun()
-
 
         # Compliance validation settings
         st.markdown("#### Compliance validation settings")
@@ -3107,33 +3162,20 @@ def render_proposal_builder():
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         st.markdown("### Drafts")
-        all_drafts_df = pd.read_sql_query(
-            "select id, section, substr(content,1,80) as preview, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
-        )
-        if all_drafts_df.empty:
-            st.info("No drafts yet — choose sections above and click **Generate selected section(s)**.")
-        else:
-            st.dataframe(all_drafts_df, use_container_width=True)
-
-        # Build editable blocks — prefer showing sections that exist already,
-        # and also show any sections the user has checked for generation.
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        existing_map = {}
-        _df_existing = pd.read_sql_query(
-            "select section, content from proposal_drafts where session_id=?",
+        # Refresh drafts after generation so new content appears immediately
+        drafts_df = pd.read_sql_query(
+            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
             conn, params=(session_id,)
         )
-        for _, _r in _df_existing.iterrows():
-            existing_map[_r["section"]] = _r["content"] or ""
-
+        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         edited_blocks = {}
         for sec in order:
-            # Show an editor if the section has a draft already OR it's selected to be generated
-            if (sec in existing_map) or actions.get(sec, False):
-                st.markdown(f"**{sec}**")
-                txt_val = existing_map.get(sec, "")
-                edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt_val, height=240, key=f"pb_{sec}")
+            if not actions.get(sec, False):
+                continue
+            st.markdown(f"**{sec}**")
+            txt = existing.get(sec, {}).get("content", "")
+            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
 
         if save_all and edited_blocks:
             cur = conn.cursor()
@@ -3146,8 +3188,8 @@ def render_proposal_builder():
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
             conn.commit()
             st.success("Drafts saved.")
-            except Exception as e:
-                st.error(f"Proposal Builder error: {e}")    except Exception as e:
+
+    except Exception as e:
         st.error(f"Proposal Builder error: {e}")
 
 # === End new features ===
