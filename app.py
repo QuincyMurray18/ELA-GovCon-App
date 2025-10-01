@@ -2465,11 +2465,11 @@ def render_proposal_builder():
             export_md = st.button("Assemble full proposal (Markdown)")
             export_docx = st.button("Export Proposal DOCX (guardrails)")
 
-        # Compliance Validation Controls
+        # Compliance validation settings
         st.markdown("#### Compliance validation settings")
         colv1, colv2, colv3 = st.columns(3)
         with colv1:
-            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0, help="0 means no limit check")
+            pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
             pb_font = st.text_input("Required font", value="Times New Roman")
         with colv2:
             pb_font_size = st.number_input("Required size (pt)", min_value=8, max_value=14, step=1, value=12)
@@ -2478,57 +2478,89 @@ def render_proposal_builder():
             pb_line_spacing = st.number_input("Line spacing", min_value=1.0, max_value=2.0, value=1.0, step=0.1)
             pb_file_pat = st.text_input("Filename pattern", value="{company}_{solicitation}_{section}_{date}")
 
-
-        base_context = build_context(max_rows=6)
-
-        def _render_pp_blurbs(ids):
-            if not ids:
-                return ""
-            rows = pd.read_sql_query(f"select title, agency, period, value, role, highlights from past_performance where id in ({','.join(str(i) for i in ids)})", conn)
+        # Assemble full proposal in Markdown
+        if export_md:
             parts = []
-            for _, r in rows.iterrows():
-                parts.append(f"**{r['title']}**  {r['agency']}  {r['period']}  ${float(r['value'] or 0):,.0f}  {r['role'] or ''}\n{r['highlights'] or ''}")
-            return "\n\n".join(parts)
-
-        finders = [name for name, on in actions.items() if on]
-        if regenerate and finders:
-            for sec in finders:
-                need = f"Write the '{sec}' section of a federal proposal for the selected solicitation. Follow instructions in Sections L & M and the SOW/PWS. Be specific and actionable. Include bullets and tables where useful. Avoid placeholders."
-                if sec == "Past Performance" and selected_pp_ids:
-                    need += "\n\nIncorporate the following past performance blurbs and synthesize:\n" + _render_pp_blurbs(selected_pp_ids)
-                doc_snips = _proposal_context_for(conn, session_id, need)
-                sys_text = f"""You are a capture/proposal writer for federal procurements.
-Company/context snapshot:
-{base_context}
-
-{doc_snips if doc_snips else ""}
-Follow the solicitation exactly (format, page limits, fonts, submission method) when relevant. If unclear, make conservative assumptions and note them briefly."""
-
-                msgs_db = pd.read_sql_query(
-                    "select role, content from rfp_messages where session_id=? order by id asc",
-                    conn, params=(session_id,)
-                ).to_dict(orient="records")
-                pruned, user_turns = [], 0
-                for m in msgs_db[::-1]:
-                    if m["role"] == "assistant":
-                        pruned.append(m); continue
-                    if m["role"] == "user":
-                        if user_turns < 8:
-                            pruned.append(m); user_turns += 1
-                        continue
-                msgs_window = list(reversed(pruned))
-                messages = [{"role":"system","content":sys_text}] + msgs_window + [{"role":"user","content": need}]
-                out = llm_messages(messages, temp=0.2, max_tokens=1400)
-
+            for sec in order:
+                if sec not in actions or not actions[sec]:
+                    continue
                 cur = conn.cursor()
-                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
                 row = cur.fetchone()
-                if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (out, int(row[0])))
-                else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
-                conn.commit()
-            st.success("Drafted selected sections. Scroll down to review and edit.")
+                if row and row[0]:
+                    parts.append(f"# {sec}\n\n{row[0].strip()}\n")
+            assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
+            st.markdown("#### Assembled Proposal (Markdown preview)")
+            st.code(assembled, language="markdown")
+            st.download_button("Download proposal.md", data=assembled.encode("utf-8"),
+                               file_name="proposal.md", mime="text/markdown")
+
+        # Export DOCX with guardrails
+        if export_docx:
+            from docx import Document
+            from docx.shared import Inches, Pt
+            from docx.oxml.ns import qn
+
+            parts = []
+            for sec in order:
+                cur = conn.cursor()
+                cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                row = cur.fetchone()
+                if row and row[0]:
+                    parts.append((sec, row[0].strip()))
+            full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
+
+            issues, _ = _validate_text_for_guardrails(
+                full_text,
+                page_limit=int(pb_page_limit) if pb_page_limit else None,
+                require_font=pb_font or None,
+                require_size_pt=int(pb_font_size) if pb_font_size else None,
+                margins_in=float(pb_margins) if pb_margins else None,
+                line_spacing=float(pb_line_spacing) if pb_line_spacing else None,
+                filename_pattern=pb_file_pat or None
+            )
+            if issues:
+                st.error("Export blocked until these issues are resolved:")
+                for x in issues:
+                    st.markdown(f"- {x}")
+                st.stop()
+
+            doc = Document()
+            for section in doc.sections:
+                section.top_margin = Inches(pb_margins or 1)
+                section.bottom_margin = Inches(pb_margins or 1)
+                section.left_margin = Inches(pb_margins or 1)
+                section.right_margin = Inches(pb_margins or 1)
+
+            style = doc.styles["Normal"]
+            req_font = pb_font or "Times New Roman"
+            style.font.name = req_font
+            style._element.rPr.rFonts.set(qn("w:eastAsia"), req_font)
+            style.font.size = Pt(pb_font_size or 12)
+
+            for sec, txt in parts:
+                doc.add_heading(sec, level=1)
+                for para in txt.split("\n\n"):
+                    doc.add_paragraph(para)
+
+            bio = io.BytesIO()
+            doc.save(bio)
+            bio.seek(0)
+
+            company = get_setting("company_name","ELA Management LLC")
+            today = datetime.now().strftime("%Y%m%d")
+            safe_title = (sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "RFP").replace(" ", "_")
+            fname = (pb_file_pat or "{company}_{solicitation}_{date}").format(
+                company=company.replace(" ", "_"),
+                solicitation=safe_title,
+                section="FullProposal",
+                date=today
+            )
+            if not fname.lower().endswith(".docx"):
+                fname += ".docx"
+
+            st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
