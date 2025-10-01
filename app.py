@@ -3137,41 +3137,12 @@ def render_proposal_builder():
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.markdown("### Drafts")
-        order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        # Refresh drafts after generation so new content appears immediately
-        drafts_df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
-        )
-        existing = {r["section"]: r for _, r in drafts_df.iterrows()}
-        edited_blocks = {}
-        for sec in order:
-            if not actions.get(sec, False):
-                continue
-            st.markdown(f"**{sec}**")
-            txt = existing.get(sec, {}).get("content", "")
-            edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
+        # === End new features ===
 
-        if save_all and edited_blocks:
-            cur = conn.cursor()
-            for sec, content in edited_blocks.items():
-                cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
-                row = cur.fetchone()
-                if row:
-                    cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
-                else:
-                    cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
-            conn.commit()
-            st.success("Drafts saved.")
 
-        
+
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
-
-# === End new features ===
-
-
 # ---- Attach feature tabs now that functions are defined ----
 try:
     with tabs[5]:
