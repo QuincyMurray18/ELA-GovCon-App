@@ -1379,8 +1379,12 @@ with tabs[11]:
 
         assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
         conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
-        st.chat_message("user").markdown(user_msg)
-        st.chat_message("assistant").markdown(assistant_out)
+
+        if 'user_msg' in locals() and user_msg:
+
+            st.chat_message("user").markdown(user_msg)
+
+            st.chat_message("assistant").markdown(assistant_out)
 
 # --- Minimal guarded chat input to prevent NameError ---
 user_msg = st.text_input("Type your message", key="chat_input_tab11")
@@ -1421,8 +1425,12 @@ if user_msg:
 
     assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
     conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
-    st.chat_message("user").markdown(user_msg)
-    st.chat_message("assistant").markdown(assistant_out)
+
+    if 'user_msg' in locals() and user_msg:
+
+        st.chat_message("user").markdown(user_msg)
+
+        st.chat_message("assistant").markdown(assistant_out)
 
 # ===== end app.py =====
 
