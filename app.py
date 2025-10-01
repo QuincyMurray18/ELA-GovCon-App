@@ -337,7 +337,7 @@ def linkedin_company_search(keyword: str) -> str:
 def build_context(max_rows=6):
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 g = pd.read_sql_query("select * from goals limit 1", conn)
     goals_line = ""
     if not g.empty:
@@ -615,7 +615,7 @@ def get_db():
 def run_migrations():
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 cur = conn.cursor()
     # opportunities table expansions
 
@@ -635,7 +635,7 @@ cur = conn.cursor()
 def ensure_schema():
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 cur = conn.cursor()
     for ddl in SCHEMA.values(): cur.execute(ddl)
     # seed goals
@@ -687,14 +687,14 @@ run_migrations()
 # ---------- Utilities ----------
 def get_setting(key, default=""):
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; row = conn.execute("select value from settings where key=?", (key,)).fetchone()
     return row[0] if row else default
 
 def set_setting(key, value):
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 conn.execute("""insert into settings(key,value) values(?,?)
                     on conflict(key) do update set value=excluded.value, updated_at=current_timestamp""",
                  (key, str(value)))
@@ -1146,7 +1146,7 @@ with tabs[0]:
     st.subheader("Opportunities pipeline")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
     # Ensure optional columns exist
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
@@ -1439,7 +1439,7 @@ with tabs[2]:
     st.caption("Add or clean up government POCs and vendor contacts. Link key contacts to opportunities in your notes.")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
@@ -1457,7 +1457,7 @@ with tabs[3]:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; df_v = pd.read_sql_query("select * from vendors", conn)
     t = pd.read_sql_query("select * from email_templates order by name", conn)
     names = t["name"].tolist() if not t.empty else ["RFQ Request"]
@@ -1500,7 +1500,7 @@ with tabs[3]:
 
 def _ensure_opportunity_columns():
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
@@ -1513,7 +1513,7 @@ def _ensure_opportunity_columns():
 
 def _get_table_cols(name):
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; cur = conn.cursor()
     cur.execute(f"pragma table_info({name})")
     return [r[1] for r in cur.fetchall()]
@@ -1568,7 +1568,7 @@ def save_opportunities(df, default_assignee=None):
     inserted = 0
     updated = 0
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; cur = conn.cursor()
     for _, r in df.iterrows():
         nid = r.get("sam_notice_id")
@@ -1625,7 +1625,7 @@ with tabs[4]:
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
 
@@ -1767,7 +1767,7 @@ with tabs[8]:
     st.subheader("Export to Excel workbook")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
     c = pd.read_sql_query("select * from contacts", conn)
@@ -1808,7 +1808,7 @@ with tabs[11]:
     conn = get_cached_conn()
 
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 # Sessions
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
     session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
@@ -1978,7 +1978,7 @@ with tabs[__tabs_base + 0]:
     st.subheader("Deadline tracker")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 colA, colB = st.columns(2)
     with colA:
         st.caption("From opportunities table")
@@ -2028,7 +2028,7 @@ with tabs[__tabs_base + 1]:
     st.subheader("Section L and M checklist")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 opp_pick_df = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
     opp_opt = [""] + [f"{int(r.id)}: {r.title}" for _, r in opp_pick_df.iterrows()]
     opp_sel = st.selectbox("Link checklist to opportunity", options=opp_opt, index=0, key="lm_opp_sel")
@@ -2101,7 +2101,7 @@ with tabs[__tabs_base + 2]:
     st.subheader("RFQ generator to subcontractors")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
     st.caption("Compose RFQ")
     with st.form("rfq_form"):
@@ -2195,7 +2195,7 @@ try:
     st.markdown("### Scenario comparison")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 try:
         dfp = pd.read_sql_query("select id, created_at, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct from pricing_scenarios order by id desc limit 20", conn)
         if not dfp.empty:
@@ -2226,7 +2226,7 @@ def _parse_sam_date(s: str):
 def build_context(max_rows=6):
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 g = pd.read_sql_query("select * from goals limit 1", conn)
     goals_line = ""
     if not g.empty:
@@ -2529,7 +2529,7 @@ def sam_search(
 
 def _ensure_opportunity_columns():
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
@@ -2542,7 +2542,7 @@ def _ensure_opportunity_columns():
 
 def _get_table_cols(name):
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; cur = conn.cursor()
     cur.execute(f"pragma table_info({name})")
     return [r[1] for r in cur.fetchall()]
@@ -2597,7 +2597,7 @@ def save_opportunities(df, default_assignee=None):
     inserted = 0
     updated = 0
     conn = get_cached_conn()
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 ; cur = conn.cursor()
     for _, r in df.iterrows():
         nid = r.get("sam_notice_id")
@@ -2698,7 +2698,7 @@ with st.sidebar:
     st.subheader("Watch list NAICS")
     conn = get_cached_conn()
     
-        ensure_indexes(conn)
+    ensure_indexes(conn)
 df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
     saved_codes = df_saved["code"].tolist()
     naics_options = sorted(set(saved_codes + NAICS_SEEDS))
