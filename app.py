@@ -758,6 +758,23 @@ def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
+
+
+# ---- Settings helpers ----
+def get_setting(key: str, default: str = ""):
+    conn = get_db()
+    conn.execute("create table if not exists settings(key text primary key, value text, updated_at text default current_timestamp)")
+    row = conn.execute("select value from settings where key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+def set_setting(key: str, value: str):
+    conn = get_db()
+    conn.execute("create table if not exists settings(key text primary key, value text, updated_at text default current_timestamp)")
+    conn.execute("insert into settings(key, value) values(?,?) on conflict(key) do update set value=excluded.value, updated_at=current_timestamp",
+                 (key, str(value)))
+    conn.commit()
+
+
 def run_migrations():
     conn = get_db()
     cur = conn.cursor()
