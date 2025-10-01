@@ -1960,87 +1960,23 @@ with tabs[11]:
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
     session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
     pick = st.selectbox("Session", options=session_titles, index=0)
+    
     if pick == "➤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
         new_title = st.text_input("New chat title", value=default_title)
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
-            conn.commit(); st.rerun()
-        st.caption("Continuing without halting")
-
+            conn.commit()
+            st.rerun()
+        st.caption("Pick an existing chat from the dropdown above to continue.")
+    else:
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
-            st.stop()
-    cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
-    st.caption(f"Session #{session_id} — {cur_title}")
+        else:
+            cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
+            st.caption(f"Session #{session_id} — {cur_title}")
 
-    g = pd.read_sql_query("select * from goals limit 1", conn)
-    goals_line = ""
-    if not g.empty:
-        rr = g.iloc[0]
-        goals_line = f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}."
-    default_system = f"""You are a senior federal contracting copilot.
-Company: {get_setting('company_name','ELA Management LLC')}.
-Home location: {get_setting('home_loc','Houston, TX')}.
-Default trade: {get_setting('default_trade','Janitorial')}.
-Goals: {goals_line}
-Keep responses concise and actionable. Use bullet points when helpful. Ask clarifying questions only when necessary."""
-    sys_prompt = st.text_area("System instructions (optional)", value=default_system, height=120)
-
-    st.markdown("**Attach files for this chat** (PDF, DOCX, TXT)")
-    uploads = st.file_uploader("Drop files here", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="chat_uploads")
-    if uploads and st.button("Add to chat"):
-        added = 0
-        for up in uploads:
-            text = read_doc(up)[:800_000]
-            conn.execute("""insert into chat_files(session_id, filename, mimetype, content_text)
-                            values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
-            added += 1
-        conn.commit(); st.success(f"Added {added} file(s) to this chat.")
-
-    files_df = pd.read_sql_query(
-        "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
-        conn, params=(session_id,)
-    )
-    if files_df.empty:
-        st.caption("No files attached yet.")
-    else:
-        st.caption("Attached files:")
-        st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
-        del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0)
-        if st.button("Delete selected file") and del_id > 0:
-            conn.execute("delete from chat_files where id=?", (int(del_id),)); conn.commit(); st.success(f"Deleted file id {del_id}."); st.rerun()
-
-    hist = pd.read_sql_query("select role, content, created_at from chat_messages where session_id=? order by id asc",
-                             conn, params=(session_id,))
-    if hist.empty:
-        st.info("No messages yet. Ask your first question below.")
-    else:
-        for _, row in hist.iterrows():
-            if row["role"] == "user": st.chat_message("user").markdown(row["content"])
-            elif row["role"] == "assistant": st.chat_message("assistant").markdown(row["content"])
-            else: st.caption(f"ðŸ§  System updated at {row['created_at']}")
-
-    user_msg = st.chat_input("Ask a question… e.g., 'Draft staffing plan for janitorial at VA clinic'")
-    if user_msg:
-        last_sys = pd.read_sql_query(
-            "select id, content from chat_messages where session_id=? and role='system' order by id desc limit 1",
-            conn, params=(session_id,))
-        if last_sys.empty or last_sys.iloc[0]["content"] != sys_prompt:
-            conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "system", sys_prompt)); conn.commit()
-        conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "user", user_msg)); conn.commit()
-
-        msgs = pd.read_sql_query("select role, content from chat_messages where session_id=? order by id asc",
-                                 conn, params=(session_id,)).to_dict(orient="records")
-        pruned, sys_seen, user_turns = [], False, 0
-        for m in msgs[::-1]:
-            if m["role"] == "assistant": pruned.append(m); continue
-            if m["role"] == "user":
-                if user_turns < 12: pruned.append(m); user_turns += 1
-                continue
-            if m["role"] == "system" and not sys_seen: pruned.append(m); sys_seen = True
-        msgs_window = list(reversed(pruned))
 
         # Build doc context
         rows = pd.read_sql_query(
