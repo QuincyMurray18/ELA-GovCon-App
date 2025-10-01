@@ -101,12 +101,25 @@ except NameError:
     def linkedin_company_search(q: str) -> str:
         return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(q)}"
 
+
 try:
     _ = google_places_search
 except NameError:
-    def google_places_search(q: str) -> str:
-        # Default to Maps search URL when API helper isn't loaded yet
-        return f"https://www.google.com/maps/search/{quote_plus(q)}"
+    def google_places_search(*args, **kwargs):
+        """
+        Fallback stub when real google_places_search isn't loaded yet.
+        Accepts flexible signatures, e.g. (query, location, radius_meters).
+        Returns (results, info) where results is a list and info is a dict.
+        """
+        try:
+            query = args[0] if len(args) >= 1 else kwargs.get("query","")
+            loc = args[1] if len(args) >= 2 else kwargs.get("location","")
+            radius_m = args[2] if len(args) >= 3 else kwargs.get("radius_meters", 1609)
+        except Exception:
+            query, loc, radius_m = "", "", 1609
+        url = f"https://www.google.com/maps/search/{quote_plus(str(query)+' '+str(loc))}"
+        # Provide an empty result set and metadata so callers expecting tuple unpacking won't crash
+        return [], {"url": url, "note": "Fallback google_places_search stub used", "radius_m": radius_m}
 
 try:
     _ = build_context
