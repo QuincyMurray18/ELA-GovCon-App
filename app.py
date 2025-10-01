@@ -2564,6 +2564,9 @@ def render_proposal_builder():
             st.success("Drafts saved.")
 
         
+    except Exception as e:
+        st.error(f"Proposal Builder error: {e}")
+
 # === End new features ===
 
 
