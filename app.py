@@ -1249,39 +1249,36 @@ Follow the solicitation exactly (format, page limits, fonts, submission method) 
             txt = existing.get(sec, {}).get("content", "")
             edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=220, key=f"pb_{sec}")
 
-# Insert past performance snippets into 'Past Performance' section
-st.markdown("#### Insert past performance")
-try:
-    df_pp = pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", conn)
-except Exception:
-    df_pp = pd.DataFrame()
-if not df_pp.empty:
-    picks = st.multiselect(
-        "Choose records to insert",
-        options=[f"{int(r.id)}: {r.title} — {r.agency}" for _, r in df_pp.iterrows()],
-        key=f"pp_pick_{session_id}"
-    )
-    if st.button("Insert selected past performance", key=f"pp_ins_{session_id}") and picks:
-        for pick_row in picks:
-            rid = int(str(pick_row).split(":")[0])
-            row = df_pp[df_pp["id"]==rid].iloc[0]
-            snippet = f"{row['title']} — {row['agency']}  NAICS {row.get('naics','') or ''}
-{row.get('highlights','') or ''}
-Contact: {row.get('contact_name','') or ''} {row.get('contact_email','') or ''} {row.get('contact_phone','') or ''}
-"
-            cur = conn.cursor()
-            # ensure section exists
-            cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, "Past Performance"))
-            prev = (cur.fetchone() or [""])[0] or ""
-            if prev == "":
-                cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, "Past Performance", ""))
-                conn.commit()
-                prev = ""
-            cur.execute("update proposal_drafts set content=? , updated_at=current_timestamp where session_id=? and section=?", (prev + "
+            # Insert past performance snippets into 'Past Performance' section
+            st.markdown("#### Insert past performance")
+            try:
+                df_pp = pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", conn)
+            except Exception:
+                df_pp = pd.DataFrame()
+            if not df_pp.empty:
+                picks = st.multiselect(
+                    "Choose records to insert",
+                    options=[f"{int(r.id)}: {r.title} — {r.agency}" for _, r in df_pp.iterrows()],
+                    key=f"pp_pick_{session_id}"
+                )
+                if st.button("Insert selected past performance", key=f"pp_ins_{session_id}") and picks:
+                    for pick_row in picks:
+                        rid = int(str(pick_row).split(":")[0])
+                        row = df_pp[df_pp["id"]==rid].iloc[0]
+                        snippet = f"{row['title']} — {row['agency']}  NAICS {row.get('naics', '') or ''}\n{row.get('highlights', '') or ''}\nContact: {row.get('contact_name', '') or ''} {row.get('contact_email', '') or ''} {row.get('contact_phone', '') or ''}\n"
+                        cur = conn.cursor()
+                        # ensure section exists
+                        cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, "Past Performance"))
+                        prev = (cur.fetchone() or [""])[0] or ""
+                        if prev == "":
+                            cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, "Past Performance", ""))
+                            conn.commit()
+                            prev = ""
+                        cur.execute("update proposal_drafts set content=? , updated_at=current_timestamp where session_id=? and section=?", (prev + "
 
-" + snippet, session_id, "Past Performance"))
-            conn.commit()
-        st.success("Inserted selected past performance into the 'Past Performance' section.")
+            " + snippet, session_id, "Past Performance"))
+                        conn.commit()
+                    st.success("Inserted selected past performance into the 'Past Performance' section.")
 else:
     st.caption("No past performance records found.")
 
