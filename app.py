@@ -499,61 +499,7 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
     return issues, est_pages
 
 
-        if export_md:
-        parts = []
-        for sec in order:
-            if sec not in actions or not actions[sec]:
-                continue
-            cur = conn.cursor()
-            cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
-            row = cur.fetchone()
-            if row and row[0]:
-                parts.append(f"# {sec}\n\n{row[0].strip()}\n")
-        assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
-        st.markdown("#### Assembled Proposal (Markdown preview)")
-        st.code(assembled, language="markdown")
-        st.download_button("Download proposal.md", data=assembled.encode("utf-8"), file_name="proposal.md", mime="text/markdown")
 
-        if export_docx:
-        from docx import Document
-        from docx.shared import Inches, Pt
-        from docx.oxml.ns import qn
-
-        parts = []
-        for sec in order:
-            cur = conn.cursor()
-            cur.execute("select content from proposal_drafts where session_id=? and section=?", (session_id, sec))
-            row = cur.fetchone()
-            if row and row[0]:
-                parts.append((sec, row[0].strip()))
-        full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
-
-        issues, _ = _validate_text_for_guardrails(full_text, page_limit=None)
-        for x in issues:
-            st.warning(x)
-
-        doc = Document()
-        for section in doc.sections:
-            section.top_margin = Inches(1)
-            section.bottom_margin = Inches(1)
-            section.left_margin = Inches(1)
-            section.right_margin = Inches(1)
-        style = doc.styles["Normal"]
-        style.font.name = "Times New Roman"
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
-        style.font.size = Pt(12)
-
-        for sec, txt in parts:
-            doc.add_heading(sec, level=1)
-            for para in txt.split("\n\n"):
-                doc.add_paragraph(para)
-
-        bio = io.BytesIO(); doc.save(bio); bio.seek(0)
-        st.download_button("Download Proposal.docx", data=bio.getvalue(), file_name="Proposal.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-    except Exception as e:
-        st.error(f"Proposal Builder error: {e}")
-        st.exception(e)
 
 def _proposal_context_for(conn, session_id: int, question_text: str):
     rows = pd.read_sql_query(
@@ -1303,9 +1249,7 @@ with tabs[4]:
 
 # Removed RFP mini-analyzer from SAM Watch
 
-with tabs[5]:
-    render_rfp_analyzer()
-
+# (moved) RFP Analyzer call will be added after definition
 with tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
@@ -1430,12 +1374,48 @@ with tabs[11]:
         conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
         st.chat_message("user").markdown(user_msg)
         st.chat_message("assistant").markdown(assistant_out)
+
+# --- Minimal guarded chat input to prevent NameError ---
+user_msg = st.chat_input("Type your message")
+if user_msg:
+    # Build document snippets only when there is a user message
+    rows = pd.read_sql_query(
+        "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
+        conn, params=(session_id,)
+    )
+    doc_snips = ""
+    if not rows.empty:
+        chunks, labels = [], []
+        for _, r in rows.iterrows():
+            cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+            chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
+        vec, X = embed_texts(chunks)
+        top = search_chunks(user_msg, vec, X, chunks, k=min(8, len(chunks)))
+        parts, used = [], set()
+        for sn in top:
+            idx = chunks.index(sn) if sn in chunks else -1
+            fname = labels[idx] if 0 <= idx < len(labels) else "attachment"
+            key = (fname, sn[:60])
+            if key in used: continue
+            used.add(key)
+            parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+        if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
+
+    context_snap = build_context(max_rows=6)
+    sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
+    if doc_snips: sys_blocks.append(doc_snips)
+
+    msgs_window = [{"role":"user","content": user_msg}]
+    msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
+
+    assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
+    conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
+    st.chat_message("user").markdown(user_msg)
+    st.chat_message("assistant").markdown(assistant_out)
+
 # ===== end app.py =====
 
-with tabs[12]:
-    render_proposal_builder()
-
-
+# (moved) Proposal Builder call will be added after definition
 # === New Feature Tabs Implementation ===
 
 def _parse_date_any(s):
@@ -2261,8 +2241,6 @@ def render_rfp_analyzer():
             st.stop()
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
-        cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
-        st.caption(f"RFP thread #{session_id}  {cur_title}")
 
         # File uploader with persistence
         uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
@@ -2587,3 +2565,10 @@ def render_proposal_builder():
 
         
 # === End new features ===
+
+# ---- Attach feature tabs now that functions are defined ----
+with tabs[5]:
+    render_rfp_analyzer()
+
+with tabs[12]:
+    render_proposal_builder()
