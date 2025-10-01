@@ -2567,8 +2567,14 @@ def render_proposal_builder():
 # === End new features ===
 
 # ---- Attach feature tabs now that functions are defined ----
-with tabs[5]:
-    render_rfp_analyzer()
+try:
+    with tabs[5]:
+        render_rfp_analyzer()
+except Exception as e:
+    st.caption(f"[RFP Analyzer tab note: {e}]")
 
-with tabs[12]:
-    render_proposal_builder()
+try:
+    with tabs[12]:
+        render_proposal_builder()
+except Exception as e:
+    st.caption(f"[Proposal Builder tab note: {e}]")
