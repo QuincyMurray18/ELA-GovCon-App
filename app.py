@@ -140,6 +140,17 @@ except NameError:
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
+
+# === Global proposal section order ===
+ORDER_SECTIONS = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing Plan",
+    "Past Performance",
+    "Pricing Assumptions/Notes",
+    "Compliance Narrative",
+]
+
 def _coerce_dt(x):
     if isinstance(x, datetime):
         return x
@@ -2864,7 +2875,7 @@ def render_proposal_builder():
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
 
         conn = get_db()
-        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
+        sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions ORDER_SECTIONS by created_at desc", conn)
         if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first.")
             return
@@ -2882,15 +2893,6 @@ def render_proposal_builder():
         st.error(f"Proposal Builder error: {e}")
 
     # === Definitions outside try/except ===
-    order = [
-        "Executive Summary",
-        "Technical Approach",
-        "Management & Staffing Plan",
-        "Past Performance",
-        "Pricing Assumptions/Notes",
-        "Compliance Narrative",
-    ]
-
     if not OPENAI_API_KEY:
         st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
 
