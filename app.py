@@ -3107,7 +3107,6 @@ def render_proposal_builder():
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
                 try:
-                        try:
                 st.markdown("### Drafts")
 
                 # Always show a table of existing drafts for quick confirmation
