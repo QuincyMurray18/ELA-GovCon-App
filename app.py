@@ -2985,7 +2985,11 @@ def render_proposal_builder():
                 if not on:
                     continue
                 # Build doc context keyed to the section
+                try:
                 doc_snips = _pb_doc_snips(sec)
+            except Exception as _sn_e:
+                st.caption(f"[Snippets note for {sec}: {_sn_e}]")
+                doc_snips = ""
                 system_text = "\\n\\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
                     f"Company snapshot:\\n{context_snap}" if context_snap else "",
@@ -3016,7 +3020,7 @@ def render_proposal_builder():
                     st.dataframe(df_after, use_container_width=True)
             except Exception as _q_e:
                 st.caption(f"[Drafts refresh note: {_q_e}]")
-            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            st.success(f"Generated or updated section drafts. If any are missing, check the notes above. ")
 
 
         # Compliance validation settings
