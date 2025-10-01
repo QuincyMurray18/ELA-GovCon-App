@@ -641,6 +641,7 @@ ELA Management LLC
 
 ensure_schema()
 
+run_migrations()
 # ---------- Utilities ----------
 def get_setting(key, default=""):
     conn = get_db(); row = conn.execute("select value from settings where key=?", (key,)).fetchone()
