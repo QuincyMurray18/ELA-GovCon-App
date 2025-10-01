@@ -591,6 +591,7 @@ def run_migrations():
     try: cur.execute("alter table vendors add column distance_miles real")
     except Exception: pass
     conn.commit()
+                generated_count += 1
 
 def ensure_schema():
     conn = get_db()
@@ -2904,6 +2905,7 @@ def render_proposal_builder():
             export_docx = st.button("Export Proposal DOCX (guardrails)")
         # === Generate selected sections ===
         if regenerate:
+            generated_count = 0
             # Helper: pull top snippets from attached RFP files for this session
             def _pb_doc_snips(question_text: str):
                 rows = pd.read_sql_query(
@@ -2980,7 +2982,7 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
-            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.") if generated_count else st.warning("No sections were selected or generated.")
             st.rerun()
 
 
