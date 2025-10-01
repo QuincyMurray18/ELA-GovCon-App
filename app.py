@@ -1368,7 +1368,10 @@ with tabs[11]:
                 parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
             if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
 
-        context_snap = build_context(max_rows=6)
+        try:
+            context_snap = build_context(max_rows=6)
+        except NameError:
+            context_snap = ""
         sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
         if doc_snips: sys_blocks.append(doc_snips)
         msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
@@ -1404,7 +1407,10 @@ if user_msg:
             parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
         if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
 
-    context_snap = build_context(max_rows=6)
+    try:
+        context_snap = build_context(max_rows=6)
+    except NameError:
+        context_snap = ""
     sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
     if doc_snips: sys_blocks.append(doc_snips)
 
@@ -2341,7 +2347,10 @@ def render_rfp_analyzer():
             conn.commit()
 
             # Build system and context using company snapshot and RFP snippets
-            context_snap = build_context(max_rows=6)
+            try:
+                context_snap = build_context(max_rows=6)
+            except NameError:
+                context_snap = ""
             doc_snips = _rfp_context_for(pending_prompt)
 
             sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
