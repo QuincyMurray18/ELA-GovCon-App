@@ -3106,48 +3106,51 @@ def render_proposal_builder():
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.markdown("### Drafts")
+                try:
+            st.markdown("### Drafts")
 
-# Always show a table of existing drafts for quick confirmation
-all_drafts_df = pd.read_sql_query(
-    "select id, section, substr(content,1,80) as preview, updated_at from proposal_drafts where session_id=? order by section",
-    conn, params=(session_id,)
-)
-if all_drafts_df.empty:
-    st.info("No drafts yet — choose sections above and click **Generate selected section(s)**.")
-else:
-    st.dataframe(all_drafts_df, use_container_width=True)
+            # Always show a table of existing drafts for quick confirmation
+            all_drafts_df = pd.read_sql_query(
+                "select id, section, substr(content,1,80) as preview, updated_at from proposal_drafts where session_id=? order by section",
+                conn, params=(session_id,)
+            )
+            if all_drafts_df.empty:
+                st.info("No drafts yet — choose sections above and click **Generate selected section(s)**.")
+            else:
+                st.dataframe(all_drafts_df, use_container_width=True)
 
-# Build editable blocks — prefer showing sections that exist already,
-# and also show any sections the user has checked for generation.
-order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-existing_map = {}
-_df_existing = pd.read_sql_query(
-    "select section, content from proposal_drafts where session_id=?",
-    conn, params=(session_id,)
-)
-for _, _r in _df_existing.iterrows():
-    existing_map[_r["section"]] = _r["content"] or ""
+            # Build editable blocks — prefer showing sections that exist already,
+            # and also show any sections the user has checked for generation.
+            order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
+            existing_map = {}
+            _df_existing = pd.read_sql_query(
+                "select section, content from proposal_drafts where session_id=?",
+                conn, params=(session_id,)
+            )
+            for _, _r in _df_existing.iterrows():
+                existing_map[_r["section"]] = _r["content"] or ""
 
-edited_blocks = {}
-for sec in order:
-    # Show an editor if the section has a draft already OR it's selected to be generated
-    if (sec in existing_map) or actions.get(sec, False):
-        st.markdown(f"**{sec}**")
-        txt_val = existing_map.get(sec, "")
-        edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt_val, height=240, key=f"pb_{sec}")
+            edited_blocks = {}
+            for sec in order:
+                # Show an editor if the section has a draft already OR it's selected to be generated
+                if (sec in existing_map) or actions.get(sec, False):
+                    st.markdown(f"**{sec}**")
+                    txt_val = existing_map.get(sec, "")
+                    edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt_val, height=240, key=f"pb_{sec}")
 
-if save_all and edited_blocks:
-    cur = conn.cursor()
-    for sec, content in edited_blocks.items():
-        cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
-        row = cur.fetchone()
-        if row:
-            cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
-        else:
-            cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
-    conn.commit()
-    st.success("Drafts saved.")
+            if save_all and edited_blocks:
+                cur = conn.cursor()
+                for sec, content in edited_blocks.items():
+                    cur.execute("select id from proposal_drafts where session_id=? and section=?", (session_id, sec))
+                    row = cur.fetchone()
+                    if row:
+                        cur.execute("update proposal_drafts set content=?, updated_at=current_timestamp where id=?", (content, int(row[0])))
+                    else:
+                        cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, content))
+                conn.commit()
+                st.success("Drafts saved.")
+        except Exception as e:
+            st.error(f"Proposal Builder error: {e}")
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
 
