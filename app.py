@@ -1599,13 +1599,17 @@ with tabs[10]:
         prompt = f"Context\n{support}\n\nQuestion\n{q}"
         st.markdown(llm(system, prompt, max_tokens=900))
 
+
 with tabs[11]:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
+
+    # Sessions
     sessions = pd.read_sql_query("select id, title, created_at from chat_sessions order by created_at desc", conn)
     session_titles = ["➤ New chat"] + [f"{r['id']}: {r['title'] or '(untitled)'}" for _, r in sessions.iterrows()]
     pick = st.selectbox("Session", options=session_titles, index=0)
-    
+
+    # Create new session
     if pick == "➤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
         new_title = st.text_input("New chat title", value=default_title)
@@ -1615,6 +1619,7 @@ with tabs[11]:
             st.rerun()
         st.caption("Pick an existing chat from the dropdown above to continue.")
     else:
+        # Parse session id
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
@@ -1622,93 +1627,114 @@ with tabs[11]:
             cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
             st.caption(f"Session #{session_id} — {cur_title}")
 
+            # File uploads for this chat session
+            up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT)", type=["pdf","docx","doc","txt"],
+                                        accept_multiple_files=True, key=f"chat_up_{session_id}")
+            if up_files and st.button("Add files to this chat"):
+                added = 0
+                for up in up_files:
+                    try:
+                        text = read_doc(up)[:800_000]
+                    except Exception:
+                        text = ""
+                    conn.execute(
+                        "insert into chat_files(session_id, filename, mimetype, content_text) values(?,?,?,?)",
+                        (session_id, up.name, getattr(up, "type", ""), text)
+                    )
+                    added += 1
+                conn.commit()
+                st.success(f"Added {added} file(s).")
+                st.rerun()
 
-        # Build doc context
-        rows = pd.read_sql_query(
-            "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
-            conn, params=(session_id,)
-        )
-        doc_snips = ""
-        if not rows.empty:
-            chunks, labels = [], []
-            for _, r in rows.iterrows():
-                cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-                chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
-            vec, X = embed_texts(chunks)
-            top = search_chunks(user_msg, vec, X, chunks, k=min(8, len(chunks)))
-            parts, used = [], set()
-            for sn in top:
-                idx = chunks.index(sn) if sn in chunks else -1
-                fname = labels[idx] if 0 <= idx < len(labels) else "attachment"
-                key = (fname, sn[:60])
-                if key in used: continue
-                used.add(key)
-                parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-            if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
+            # Show existing attachments
+            files_df = pd.read_sql_query(
+                "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
+                conn, params=(session_id,)
+            )
+            if not files_df.empty:
+                st.caption("Attached files")
+                st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
 
-        try:
-            context_snap = build_context(max_rows=6)
-        except NameError:
-            context_snap = ""
-        sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
-        if doc_snips: sys_blocks.append(doc_snips)
-        msgs_window = msgs_window if "msgs_window" in locals() else []
-        msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
+            # Helper to pull doc snippets most relevant to the user's question
+            def _chat_doc_snips(question_text: str) -> str:
+                rows = pd.read_sql_query(
+                    "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
+                    conn, params=(session_id,)
+                )
+                if rows.empty:
+                    return ""
+                chunks, labels = [], []
+                for _, r in rows.iterrows():
+                    cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
+                    chunks.extend(cs)
+                    labels.extend([r["filename"]] * len(cs))
+                vec, X = embed_texts(chunks)
+                top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
+                parts, used = [], set()
+                for sn in top:
+                    try:
+                        idx = chunks.index(sn)
+                        fname = labels[idx]
+                    except Exception:
+                        fname = "attachment"
+                    key = (fname, sn[:60])
+                    if key in used:
+                        continue
+                    used.add(key)
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
-        assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
-        conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
+            # Show chat history
+            hist = pd.read_sql_query(
+                "select role, content, created_at from chat_messages where session_id=? order by id asc",
+                conn, params=(session_id,)
+            )
+            for _, row in hist.iterrows():
+                if row["role"] == "user":
+                    st.chat_message("user").markdown(row["content"])
+                elif row["role"] == "assistant":
+                    st.chat_message("assistant").markdown(row["content"])
 
-        if 'user_msg' in locals() and user_msg:
+            # Chat input lives inside the tab to avoid bleed-through
+            user_msg = st.chat_input("Type your message")
+            if user_msg:
+                # Save user's message
+                conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
+                             (session_id, "user", user_msg))
+                conn.commit()
 
-            st.chat_message("user").markdown(user_msg)
+                # Build system + context
+                try:
+                    context_snap = build_context(max_rows=6)
+                except Exception:
+                    context_snap = ""
+                doc_snips = _chat_doc_snips(user_msg)
 
-            st.chat_message("assistant").markdown(assistant_out)
+                system_text = "\n\n".join(filter(None, [
+                    "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
+                    f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
+                    doc_snips
+                ]))
 
-# --- Minimal guarded chat input to prevent NameError ---
-user_msg = st.text_input("Type your message", key="chat_input_tab11")
-if user_msg:
-    # Build document snippets only when there is a user message
-    rows = pd.read_sql_query(
-        "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
-        conn, params=(session_id,)
-    )
-    doc_snips = ""
-    if not rows.empty:
-        chunks, labels = [], []
-        for _, r in rows.iterrows():
-            cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-            chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
-        vec, X = embed_texts(chunks)
-        top = search_chunks(user_msg, vec, X, chunks, k=min(8, len(chunks)))
-        parts, used = [], set()
-        for sn in top:
-            idx = chunks.index(sn) if sn in chunks else -1
-            fname = labels[idx] if 0 <= idx < len(labels) else "attachment"
-            key = (fname, sn[:60])
-            if key in used: continue
-            used.add(key)
-            parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-        if parts: doc_snips = "Attached document snippets (most relevant first):\n" + "\n".join(parts[:16])
+                # Construct rolling window of previous messages for context
+                msgs_db = pd.read_sql_query(
+                    "select role, content from chat_messages where session_id=? order by id asc",
+                    conn, params=(session_id,)
+                ).to_dict(orient="records")
 
-    try:
-        context_snap = build_context(max_rows=6)
-    except NameError:
-        context_snap = ""
-    sys_blocks = [f"Context snapshot (keep answers consistent with this):\n{context_snap}"]
-    if doc_snips: sys_blocks.append(doc_snips)
+                # Keep last ~12 user/assistant turns
+                window = msgs_db[-24:] if len(msgs_db) > 24 else msgs_db
+                messages = [{"role": "system", "content": system_text}] + window
 
-    msgs_window = [{"role":"user","content": user_msg}]
-    msgs_window = msgs_window if "msgs_window" in locals() else []
-    msgs_with_ctx = [{"role":"system","content":"\n\n".join(sys_blocks)}] + msgs_window
+                assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
+                conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
+                             (session_id, "assistant", assistant_out))
+                conn.commit()
 
-    assistant_out = llm_messages(msgs_with_ctx, temp=0.2, max_tokens=1200)
-    conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)", (session_id, "assistant", assistant_out)); conn.commit()
+                st.chat_message("user").markdown(user_msg)
+                st.chat_message("assistant").markdown(assistant_out)
 
-    if 'user_msg' in locals() and user_msg:
 
-        st.chat_message("user").markdown(user_msg)
-
-        st.chat_message("assistant").markdown(assistant_out)
 
 # ===== end app.py =====
 
