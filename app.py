@@ -2932,7 +2932,7 @@ def render_proposal_builder():
             # Helper: top snippets from attached RFP files for this session
             def _pb_doc_snips(question_text: str):
                 rows = pd.read_sql_query(
-                    "select label, content_text from attachments where session_id=? and content_text is not null order by uploaded_at desc",
+                    "select filename as label, content_text from rfp_files where session_id=? and ifnull(content_text, '') <> '' order by uploaded_at desc",
                     conn, params=(session_id,)
                 )
                 if rows.empty: return ""
