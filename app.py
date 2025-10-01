@@ -95,6 +95,35 @@ _OPENAI_FALLBACK_MODELS = [
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
 # ---- Date helpers for SAM search ----
+
+# ---- SAM date parsing helper ----
+try:
+    _ = _parse_sam_date
+except NameError:
+    from datetime import datetime
+    def _parse_sam_date(s):
+        """Parse common SAM.gov date/time strings into datetime; return original on failure."""
+        if s is None:
+            return None
+        if isinstance(s, datetime):
+            return s
+        txt = str(s).strip()
+        # Try a few common SAM formats
+        fmts = [
+            "%m/%d/%Y %I:%M %p %Z",   # 09/30/2025 02:00 PM ET
+            "%m/%d/%Y %H:%M %Z",      # 09/30/2025 14:00 ET
+            "%m/%d/%Y %I:%M %p",      # 09/30/2025 02:00 PM
+            "%m/%d/%Y %H:%M",         # 09/30/2025 14:00
+            "%m/%d/%Y",               # 09/30/2025
+            "%Y-%m-%dT%H:%M:%SZ",     # 2025-09-30T18:00:00Z
+            "%Y-%m-%d"                # 2025-09-30
+        ]
+        for f in fmts:
+            try:
+                return datetime.strptime(txt, f)
+            except Exception:
+                pass
+        return txt
 try:
     _ = _us_date
 except NameError:
