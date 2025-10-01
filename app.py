@@ -26,8 +26,8 @@ def drafts_index_cached(conn, session_id):
     import pandas as pd
     try:
         return pd.read_sql_query(
-            "select id, section, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
+        "select id, section, updated_at from proposal_drafts where session_id=? order by section",
+        conn, params=(session_id,)
         )
     except Exception:
         return None
@@ -55,15 +55,15 @@ except Exception:
     convert_from_bytes = None
 
 CLAUSE_RISKS = {
-    "liquidated damages": "May require payments for delays. Propose realistic schedule and mitigation plan.",
-    "termination for convenience": "Government can end the contract at any time. Manage inventory and subcontracts carefully.",
-    "termination for default": "Strict performance risk. Include QA steps and corrective action plan.",
-    "excessive bonding": "High bonding can strain cash flow. Ask if alternatives are allowed.",
-    "unusual penalties": "Flag for legal review. Request clarification if ambiguous.",
-    "indemnification": "Risk transfer to contractor. Verify insurance coverage.",
-    "personal services": "May conflict with FAR rules if not intended. Confirm classification.",
-    "pay when paid": "Cash flow risk for subs. Negotiate fair terms.",
-    "liability cap absent": "Unlimited liability. Seek cap or clarify scope.",
+"liquidated damages": "May require payments for delays. Propose realistic schedule and mitigation plan.",
+"termination for convenience": "Government can end the contract at any time. Manage inventory and subcontracts carefully.",
+"termination for default": "Strict performance risk. Include QA steps and corrective action plan.",
+"excessive bonding": "High bonding can strain cash flow. Ask if alternatives are allowed.",
+"unusual penalties": "Flag for legal review. Request clarification if ambiguous.",
+"indemnification": "Risk transfer to contractor. Verify insurance coverage.",
+"personal services": "May conflict with FAR rules if not intended. Confirm classification.",
+"pay when paid": "Cash flow risk for subs. Negotiate fair terms.",
+"liability cap absent": "Unlimited liability. Seek cap or clarify scope.",
 }
 def _find_clause_risks(text: str, top_k: int = 6):
     text_l = (text or "").lower()
@@ -121,11 +121,11 @@ except Exception as e:
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
 _OPENAI_FALLBACK_MODELS = [
-    OPENAI_MODEL,
-    "gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
-    "gpt-5-mini","gpt-5-mini-2025-08-07",
-    "gpt-5-nano","gpt-5-nano-2025-08-07",
-    "gpt-4o-mini","gpt-4o",
+OPENAI_MODEL,
+"gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
+"gpt-5-mini","gpt-5-mini-2025-08-07",
+"gpt-5-nano","gpt-5-nano-2025-08-07",
+"gpt-4o-mini","gpt-4o",
 ]
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
@@ -146,13 +146,13 @@ except NameError:
         txt = str(s).strip()
         # Try a few common SAM formats
         fmts = [
-            "%m/%d/%Y %I:%M %p %Z",   # 09/30/2025 02:00 PM ET
-            "%m/%d/%Y %H:%M %Z",      # 09/30/2025 14:00 ET
-            "%m/%d/%Y %I:%M %p",      # 09/30/2025 02:00 PM
-            "%m/%d/%Y %H:%M",         # 09/30/2025 14:00
-            "%m/%d/%Y",               # 09/30/2025
-            "%Y-%m-%dT%H:%M:%SZ",     # 2025-09-30T18:00:00Z
-            "%Y-%m-%d"                # 2025-09-30
+        "%m/%d/%Y %I:%M %p %Z",   # 09/30/2025 02:00 PM ET
+        "%m/%d/%Y %H:%M %Z",      # 09/30/2025 14:00 ET
+        "%m/%d/%Y %I:%M %p",      # 09/30/2025 02:00 PM
+        "%m/%d/%Y %H:%M",         # 09/30/2025 14:00
+        "%m/%d/%Y",               # 09/30/2025
+        "%Y-%m-%dT%H:%M:%SZ",     # 2025-09-30T18:00:00Z
+        "%Y-%m-%d"                # 2025-09-30
         ]
         for f in fmts:
             try:
@@ -186,8 +186,8 @@ def _coerce_dt(x):
         return None
 
 def sam_search(
-    naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
-    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
+naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
+notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
 ):
     if not SAM_API_KEY:
         return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
@@ -198,13 +198,13 @@ def sam_search(
     posted_to   = _us_date(today)
 
     params = {
-        "api_key": SAM_API_KEY,
-        "limit": str(limit),
-        "response": "json",
-        "sort": "-publishedDate",
-        "active": active,
-        "postedFrom": posted_from,   # MM/dd/yyyy
-        "postedTo": posted_to,       # MM/dd/yyyy
+    "api_key": SAM_API_KEY,
+    "limit": str(limit),
+    "response": "json",
+    "sort": "-publishedDate",
+    "active": active,
+    "postedFrom": posted_from,   # MM/dd/yyyy
+    "postedTo": posted_to,       # MM/dd/yyyy
     }
     # Enforce only Solicitation + Combined when notice_types is blank
     if not notice_types:
@@ -245,24 +245,24 @@ def sam_search(
             if not due_ok: continue
             docs = opp.get("documents", []) or []
             rows.append({
-                "sam_notice_id": opp.get("noticeId"),
-                "title": opp.get("title"),
-                "agency": opp.get("organizationName"),
-                "naics": ",".join(opp.get("naicsCodes", [])),
-                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
-                "response_due": due_str,
-                "posted": opp.get("publishedDate",""),
-                "type": opp.get("type",""),
-                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
+            "sam_notice_id": opp.get("noticeId"),
+            "title": opp.get("title"),
+            "agency": opp.get("organizationName"),
+            "naics": ",".join(opp.get("naicsCodes", [])),
+            "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+            "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+            "response_due": due_str,
+            "posted": opp.get("publishedDate",""),
+            "type": opp.get("type",""),
+            "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+            "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
             })
         df = pd.DataFrame(rows)
         info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
-                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
-                            "postedFrom": posted_from, "postedTo": posted_to,
-                            "min_due_days": min_days, "noticeType": notice_types,
-                            "active": active, "limit": limit}}
+        "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+        "postedFrom": posted_from, "postedTo": posted_to,
+        "min_due_days": min_days, "noticeType": notice_types,
+        "active": active, "limit": limit}}
         if df.empty:
             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
         return df, info
@@ -291,10 +291,10 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
 
         if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
             return ([] if strict else results), {
-                "ok": False, "reason": api_status or "http_error", "http": status_code,
-                "api_status": api_status, "count": len(results),
-                "raw_preview": (rs.text or "")[:800],
-                "note": "Enable billing + 'Places API' in Google Cloud."
+            "ok": False, "reason": api_status or "http_error", "http": status_code,
+            "api_status": api_status, "count": len(results),
+            "raw_preview": (rs.text or "")[:800],
+            "note": "Enable billing + 'Places API' in Google Cloud."
             }
 
         # 2) Details per result
@@ -312,21 +312,21 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
                 website = det.get("website", "") or ""
 
             out.append({
-                "company": item.get("name"),
-                "naics": "",
-                "trades": "",
-                "phone": phone,
-                "email": "",  # Emails not provided by Google Places
-                "website": website,
-                "city": location.split(",")[0].strip() if "," in location else location,
-                "state": location.split(",")[-1].strip() if "," in location else "",
-                "certifications": "",
-                "set_asides": "",
-                "notes": item.get("formatted_address",""),
-                "source": "GooglePlaces",
+            "company": item.get("name"),
+            "naics": "",
+            "trades": "",
+            "phone": phone,
+            "email": "",  # Emails not provided by Google Places
+            "website": website,
+            "city": location.split(",")[0].strip() if "," in location else location,
+            "state": location.split(",")[-1].strip() if "," in location else "",
+            "certifications": "",
+            "set_asides": "",
+            "notes": item.get("formatted_address",""),
+            "source": "GooglePlaces",
             })
         info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
-                "raw_preview": (rs.text or "")[:800]}
+        "raw_preview": (rs.text or "")[:800]}
         return out, info
     except Exception as e:
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
@@ -339,37 +339,37 @@ def build_context(max_rows=6):
     
     ensure_indexes(conn)
 g = pd.read_sql_query("select * from goals limit 1", conn)
-    goals_line = ""
-    if not g.empty:
+goals_line = ""
+if not g.empty:
         rr = g.iloc[0]
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
-        "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
-        conn, params=(max_rows,)
+    "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
+    conn, params=(max_rows,)
     )
     opp_lines = ["- " + " | ".join(filter(None, [
-        str(r["title"])[:80], str(r["agency"])[:40],
-        f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
+    str(r["title"])[:80], str(r["agency"])[:40],
+    f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
     ])) for _, r in opp.iterrows()]
     vend = pd.read_sql_query(
-        """select trim(substr(naics,1,6)) as code, count(*) as cnt
-           from vendors where ifnull(naics,'')<>''
-           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
-        conn, params=(max_rows,)
+    """select trim(substr(naics,1,6)) as code, count(*) as cnt
+    from vendors where ifnull(naics,'')<>''
+    group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
+    conn, params=(max_rows,)
     )
     vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
     return "\n".join([
-        f"Company: {get_setting('company_name','ELA Management LLC')}",
-        f"Home location: {get_setting('home_loc','Houston, TX')}",
-        f"Goals: {goals_line or 'not set'}",
-        f"NAICS watch: {naics_line}",
-        "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
-        *opp_lines,
-        "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
-        *vend_lines,
+    f"Company: {get_setting('company_name','ELA Management LLC')}",
+    f"Home location: {get_setting('home_loc','Houston, TX')}",
+    f"Goals: {goals_line or 'not set'}",
+    f"NAICS watch: {naics_line}",
+    "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
+    *opp_lines,
+    "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
+    *vend_lines,
     ])
 
 # ---------- External integrations ----------
@@ -415,189 +415,189 @@ st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM •
 DB_PATH = "govcon.db"
 
 NAICS_SEEDS = [
-    "561210","721110","562991","326191","336611","531120","531","722310","561990","722514","561612",
-    "561730","311511","238990","311812","561720","811210","236118","238220","237990","311423",
-    "562910","236220","332420","238320","541380","541519","561710","423730","238210","562211",
-    "541214","541330","541512","541511","541370","611430","611699","611310","611710","562111","562119",
-    "624230","488999","485510","485410","488510","541614","332994","334220","336992","561320","561311","541214"
+"561210","721110","562991","326191","336611","531120","531","722310","561990","722514","561612",
+"561730","311511","238990","311812","561720","811210","236118","238220","237990","311423",
+"562910","236220","332420","238320","541380","541519","561710","423730","238210","562211",
+"541214","541330","541512","541511","541370","611430","611699","611310","611710","562111","562119",
+"624230","488999","485510","485410","488510","541614","332994","334220","336992","561320","561311","541214"
 ]
 
 SCHEMA = {
-    "vendors": """
-    create table if not exists vendors (
-        id integer primary key,
-        company text, naics text, trades text, phone text, email text, website text,
-        city text, state text, certifications text, set_asides text, notes text, source text,
-        created_at text default current_timestamp, updated_at text default current_timestamp
-    );
-    """,
-    "opportunities": """
-    create table if not exists opportunities (
-        id integer primary key,
-        sam_notice_id text, title text, agency text, naics text, psc text,
-        place_of_performance text, response_due text, posted text, type text, url text,
-        attachments_json text, status text default 'New', created_at text default current_timestamp
-    );
-    """,
-    "contacts": """
-    create table if not exists contacts (
-        id integer primary key,
-        name text, org text, role text, email text, phone text, source text, notes text,
-        created_at text default current_timestamp
-    );
-    """,
-    "outreach_log": """
-    create table if not exists outreach_log (
-        id integer primary key,
-        vendor_id integer, contact_method text, to_addr text, subject text, body text, sent_at text, status text,
-        foreign key(vendor_id) references vendors(id)
-    );
-    """,
-    "goals": """
-    create table if not exists goals (
-        id integer primary key,
-        year integer, bids_target integer, revenue_target real, bids_submitted integer, revenue_won real
-    );
-    """,
-    "settings": """
-    create table if not exists settings (
-        key text primary key, value text, updated_at text default current_timestamp
-    );
-    """,
-    "email_templates": """
-    create table if not exists email_templates (
-        name text primary key, subject text, body text, updated_at text default current_timestamp
-    );
-    """,
-    "naics_watch": """
-    create table if not exists naics_watch (
-        code text primary key, label text, created_at text default current_timestamp
-    );
-    """,
-    "chat_sessions": """
-    create table if not exists chat_sessions (
-        id integer primary key, title text, created_at text default current_timestamp
-    );
-    """,
-    "chat_messages": """
-    create table if not exists chat_messages (
-        id integer primary key, session_id integer, role text, content text,
-        created_at text default current_timestamp,
-        foreign key(session_id) references chat_sessions(id)
-    );
-    """,
-    "chat_files": """
-    create table if not exists chat_files (
-        id integer primary key,
-        session_id integer,
-        filename text,
-        mimetype text,
-        content_text text,
-        uploaded_at text default current_timestamp,
-        foreign key(session_id) references chat_sessions(id)
-    );
-    """,
+"vendors": """
+create table if not exists vendors (
+id integer primary key,
+company text, naics text, trades text, phone text, email text, website text,
+city text, state text, certifications text, set_asides text, notes text, source text,
+created_at text default current_timestamp, updated_at text default current_timestamp
+);
+""",
+"opportunities": """
+create table if not exists opportunities (
+id integer primary key,
+sam_notice_id text, title text, agency text, naics text, psc text,
+place_of_performance text, response_due text, posted text, type text, url text,
+attachments_json text, status text default 'New', created_at text default current_timestamp
+);
+""",
+"contacts": """
+create table if not exists contacts (
+id integer primary key,
+name text, org text, role text, email text, phone text, source text, notes text,
+created_at text default current_timestamp
+);
+""",
+"outreach_log": """
+create table if not exists outreach_log (
+id integer primary key,
+vendor_id integer, contact_method text, to_addr text, subject text, body text, sent_at text, status text,
+foreign key(vendor_id) references vendors(id)
+);
+""",
+"goals": """
+create table if not exists goals (
+id integer primary key,
+year integer, bids_target integer, revenue_target real, bids_submitted integer, revenue_won real
+);
+""",
+"settings": """
+create table if not exists settings (
+key text primary key, value text, updated_at text default current_timestamp
+);
+""",
+"email_templates": """
+create table if not exists email_templates (
+name text primary key, subject text, body text, updated_at text default current_timestamp
+);
+""",
+"naics_watch": """
+create table if not exists naics_watch (
+code text primary key, label text, created_at text default current_timestamp
+);
+""",
+"chat_sessions": """
+create table if not exists chat_sessions (
+id integer primary key, title text, created_at text default current_timestamp
+);
+""",
+"chat_messages": """
+create table if not exists chat_messages (
+id integer primary key, session_id integer, role text, content text,
+created_at text default current_timestamp,
+foreign key(session_id) references chat_sessions(id)
+);
+""",
+"chat_files": """
+create table if not exists chat_files (
+id integer primary key,
+session_id integer,
+filename text,
+mimetype text,
+content_text text,
+uploaded_at text default current_timestamp,
+foreign key(session_id) references chat_sessions(id)
+);
+""",
 }
 
 SCHEMA.update({
-    "rfp_sessions": """
-    create table if not exists rfp_sessions (
-        id integer primary key,
-        title text,
-        created_at text default current_timestamp
-    );
-    """,
-    "rfp_messages": """
-    create table if not exists rfp_messages (
-        id integer primary key,
-        session_id integer,
-        role text,
-        content text,
-        created_at text default current_timestamp,
-        foreign key(session_id) references rfp_sessions(id)
-    );
-    """,
-    "rfp_files": """
-    create table if not exists rfp_files (
-        id integer primary key,
-        session_id integer,
-        filename text,
-        mimetype text,
-        content_text text,
-        uploaded_at text default current_timestamp,
-        foreign key(session_id) references rfp_sessions(id)
-    );
-    """
+"rfp_sessions": """
+create table if not exists rfp_sessions (
+id integer primary key,
+title text,
+created_at text default current_timestamp
+);
+""",
+"rfp_messages": """
+create table if not exists rfp_messages (
+id integer primary key,
+session_id integer,
+role text,
+content text,
+created_at text default current_timestamp,
+foreign key(session_id) references rfp_sessions(id)
+);
+""",
+"rfp_files": """
+create table if not exists rfp_files (
+id integer primary key,
+session_id integer,
+filename text,
+mimetype text,
+content_text text,
+uploaded_at text default current_timestamp,
+foreign key(session_id) references rfp_sessions(id)
+);
+"""
 })
 
 
 SCHEMA.update({
-    "proposal_drafts": """
-    create table if not exists proposal_drafts (
-        id integer primary key,
-        session_id integer,
-        section text,
-        content text,
-        updated_at text default current_timestamp,
-        foreign key(session_id) references rfp_sessions(id)
-    );
-    """
+"proposal_drafts": """
+create table if not exists proposal_drafts (
+id integer primary key,
+session_id integer,
+section text,
+content text,
+updated_at text default current_timestamp,
+foreign key(session_id) references rfp_sessions(id)
+);
+"""
 })
 
 # === Added schema for new features ===
 SCHEMA.update({
-    "deadlines": """
-    create table if not exists deadlines (
-        id integer primary key,
-        opp_id integer,
-        title text,
-        due_date text,
-        source text,
-        status text default 'Open',
-        notes text,
-        created_at text default current_timestamp
-    );
-    """,
-    "compliance_items": """
-    create table if not exists compliance_items (
-        id integer primary key,
-        opp_id integer,
-        item text,
-        required integer default 1,
-        status text default 'Pending',
-        source_page text,
-        notes text,
-        created_at text default current_timestamp
-    );
-    """,
-    "rfq_outbox": """
-    create table if not exists rfq_outbox (
-        id integer primary key,
-        vendor_id integer,
-        company text,
-        to_email text,
-        subject text,
-        body text,
-        due_date text,
-        files_json text,
-        sent_at text,
-        status text default 'Draft',
-        created_at text default current_timestamp
-    );
-    """,
-    "pricing_scenarios": """
-    create table if not exists pricing_scenarios (
-        id integer primary key,
-        opp_id integer,
-        base_cost real,
-        overhead_pct real,
-        gna_pct real,
-        profit_pct real,
-        total_price real,
-        lpta_note text,
-        created_at text default current_timestamp
-    );
-    """
+"deadlines": """
+create table if not exists deadlines (
+id integer primary key,
+opp_id integer,
+title text,
+due_date text,
+source text,
+status text default 'Open',
+notes text,
+created_at text default current_timestamp
+);
+""",
+"compliance_items": """
+create table if not exists compliance_items (
+id integer primary key,
+opp_id integer,
+item text,
+required integer default 1,
+status text default 'Pending',
+source_page text,
+notes text,
+created_at text default current_timestamp
+);
+""",
+"rfq_outbox": """
+create table if not exists rfq_outbox (
+id integer primary key,
+vendor_id integer,
+company text,
+to_email text,
+subject text,
+body text,
+due_date text,
+files_json text,
+sent_at text,
+status text default 'Draft',
+created_at text default current_timestamp
+);
+""",
+"pricing_scenarios": """
+create table if not exists pricing_scenarios (
+id integer primary key,
+opp_id integer,
+base_cost real,
+overhead_pct real,
+gna_pct real,
+profit_pct real,
+total_price real,
+lpta_note text,
+created_at text default current_timestamp
+);
+"""
 })
 
 
@@ -619,48 +619,48 @@ def run_migrations():
 cur = conn.cursor()
     # opportunities table expansions
 
-    try: cur.execute("alter table compliance_items add column owner text")
-    except Exception: pass
-    try: cur.execute("alter table compliance_items add column snippet text")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column assignee text")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception: pass
+try: cur.execute("alter table compliance_items add column owner text")
+except Exception: pass
+try: cur.execute("alter table compliance_items add column snippet text")
+except Exception: pass
+try: cur.execute("alter table opportunities add column assignee text")
+except Exception: pass
+try: cur.execute("alter table opportunities add column quick_note text")
+except Exception: pass
     # vendors table expansions
-    try: cur.execute("alter table vendors add column distance_miles real")
-    except Exception: pass
-    conn.commit()
+try: cur.execute("alter table vendors add column distance_miles real")
+except Exception: pass
+conn.commit()
 
 def ensure_schema():
     conn = get_cached_conn()
     
     ensure_indexes(conn)
 cur = conn.cursor()
-    for ddl in SCHEMA.values(): cur.execute(ddl)
+for ddl in SCHEMA.values(): cur.execute(ddl)
     # seed goals
-    cur.execute("select count(*) from goals")
-    if cur.fetchone()[0] == 0:
+cur.execute("select count(*) from goals")
+if cur.fetchone()[0] == 0:
         cur.execute(
-            "insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
-            (datetime.now().year, 156, 600000, 1, 0)
+        "insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
+        (datetime.now().year, 156, 600000, 1, 0)
         )
     defaults = {
-        "company_name": "ELA Management LLC",
-        "home_loc": "Houston, TX",
-        "default_trade": "Janitorial",
-        "outreach_subject": "Quote request for upcoming federal project",
-        "outreach_scope": "Routine janitorial five days weekly include supplies supervision and reporting. Provide monthly price and any one time services."
+    "company_name": "ELA Management LLC",
+    "home_loc": "Houston, TX",
+    "default_trade": "Janitorial",
+    "outreach_subject": "Quote request for upcoming federal project",
+    "outreach_scope": "Routine janitorial five days weekly include supplies supervision and reporting. Provide monthly price and any one time services."
     }
     for k, v in defaults.items():
         cur.execute("insert into settings(key,value) values(?,?) on conflict(key) do nothing", (k, v))
     cur.execute("""
-        insert into email_templates(name, subject, body)
-        values(?,?,?)
-        on conflict(name) do nothing
+    insert into email_templates(name, subject, body)
+    values(?,?,?)
+    on conflict(name) do nothing
     """, ("RFQ Request",
-          "Quote request for upcoming federal project",
-          """Hello {company},
+    "Quote request for upcoming federal project",
+    """Hello {company},
 
 ELA Management LLC requests a quote for the following work.
 
@@ -675,8 +675,8 @@ Quote due
 Thank you
 ELA Management LLC
 """))
-    cur.execute("select count(*) from naics_watch")
-    if cur.fetchone()[0] == 0:
+cur.execute("select count(*) from naics_watch")
+if cur.fetchone()[0] == 0:
         for c in sorted(set(NAICS_SEEDS)):
             cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
     conn.commit()
@@ -689,16 +689,16 @@ def get_setting(key, default=""):
     conn = get_cached_conn()
     ensure_indexes(conn)
 ; row = conn.execute("select value from settings where key=?", (key,)).fetchone()
-    return row[0] if row else default
+return row[0] if row else default
 
 def set_setting(key, value):
     conn = get_cached_conn()
     
     ensure_indexes(conn)
 conn.execute("""insert into settings(key,value) values(?,?)
-                    on conflict(key) do update set value=excluded.value, updated_at=current_timestamp""",
-                 (key, str(value)))
-    conn.commit()
+on conflict(key) do update set value=excluded.value, updated_at=current_timestamp""",
+(key, str(value)))
+conn.commit()
 
 def read_doc(uploaded_file):
     suffix = uploaded_file.name.lower().split(".")[-1]
@@ -735,7 +735,7 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
     for model_name in _OPENAI_FALLBACK_MODELS:
         try:
             rsp = client.chat.completions.create(model=model_name, messages=messages,
-                                                 temperature=temp, max_tokens=max_tokens)
+            temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
                 except Exception: pass
@@ -750,7 +750,7 @@ def llm_messages(messages, temp=0.2, max_tokens=1400):
     for model_name in _OPENAI_FALLBACK_MODELS:
         try:
             rsp = client.chat.completions.create(model=model_name, messages=messages,
-                                                 temperature=temp, max_tokens=max_tokens)
+            temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
                 except Exception: pass
@@ -781,7 +781,7 @@ def to_xlsx_bytes(df_dict):
 
 
 def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
-                                  margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
+margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
     issues = []
     warnings = []
     body = (md_text or "").strip()
@@ -831,8 +831,8 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
 def _proposal_context_for(conn, session_id: int, question_text: str):
     rows = pd.read_sql_query(
-        "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
-        conn, params=(session_id,)
+    "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+    conn, params=(session_id,)
     )
     if rows.empty:
         return ""
@@ -857,13 +857,13 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
 
 
 tabs = st.tabs([
-    "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
-    "RFP Analyzer","Capability Statement","White Paper Builder",
-    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
-    "Deadlines",
-    "L&M Checklist",
-    "RFQ Generator",
-    "Pricing Calculator","Past Performance","Quote Comparison","Win Probability"])
+"Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
+"RFP Analyzer","Capability Statement","White Paper Builder",
+"Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
+"Deadlines",
+"L&M Checklist",
+"RFQ Generator",
+"Pricing Calculator","Past Performance","Quote Comparison","Win Probability"])
 
 
 
@@ -878,32 +878,32 @@ except Exception:
         return
     try:
         conn.execute("""create table if not exists past_performance (
-            id integer primary key,
-            title text, agency text, naics text, psc text,
-            period text, value real, role text, location text,
-            highlights text,
-            contact_name text, contact_email text, contact_phone text,
-            created_at text default current_timestamp,
-            updated_at text default current_timestamp
+        id integer primary key,
+        title text, agency text, naics text, psc text,
+        period text, value real, role text, location text,
+        highlights text,
+        contact_name text, contact_email text, contact_phone text,
+        created_at text default current_timestamp,
+        updated_at text default current_timestamp
         );""")
         conn.execute("""create table if not exists vendor_quotes (
-            id integer primary key,
-            opp_id integer, vendor_id integer, company text,
-            subtotal real, taxes real, shipping real, total real,
-            lead_time text, notes text, files_json text,
-            created_at text default current_timestamp
+        id integer primary key,
+        opp_id integer, vendor_id integer, company text,
+        subtotal real, taxes real, shipping real, total real,
+        lead_time text, notes text, files_json text,
+        created_at text default current_timestamp
         );""")
         conn.execute("""create table if not exists win_scores (
-            id integer primary key,
-            opp_id integer unique, score real, factors_json text,
-            computed_at text default current_timestamp
+        id integer primary key,
+        opp_id integer unique, score real, factors_json text,
+        computed_at text default current_timestamp
         );""")
         conn.execute("""create table if not exists tasks (
-            id integer primary key,
-            opp_id integer, title text, assignee text, due_date text,
-            status text default 'Open', notes text,
-            created_at text default current_timestamp,
-            updated_at text default current_timestamp
+        id integer primary key,
+        opp_id integer, title text, assignee text, due_date text,
+        status text default 'Open', notes text,
+        created_at text default current_timestamp,
+        updated_at text default current_timestamp
         );""")
         conn.commit()
     except Exception:
@@ -923,14 +923,14 @@ def upsert_win_score(opp_id: int, score: float, factors: dict):
         
         ensure_indexes(conn)
 conn.execute("""            insert into win_scores(opp_id, score, factors_json, computed_at)
-            values(?,?,?, current_timestamp)
-            on conflict(opp_id) do update set
-                score=excluded.score,
-                factors_json=excluded.factors_json,
-                computed_at=current_timestamp
-        """, (int(opp_id), float(score), json.dumps(factors)))
-        conn.commit()
-    except Exception:
+values(?,?,?, current_timestamp)
+on conflict(opp_id) do update set
+score=excluded.score,
+factors_json=excluded.factors_json,
+computed_at=current_timestamp
+""", (int(opp_id), float(score), json.dumps(factors)))
+conn.commit()
+except Exception:
         pass
 
 def compute_win_score_row(opp_row, past_perf_df):
@@ -979,9 +979,9 @@ try:
         
         ensure_indexes(conn)
 df_pp = get_past_performance_df()
-        st.dataframe(df_pp, use_container_width=True)
+st.dataframe(df_pp, use_container_width=True)
 
-        with st.form("pp_form", clear_on_submit=True):
+with st.form("pp_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
                 title = st.text_input("Project title")
@@ -1000,8 +1000,8 @@ df_pp = get_past_performance_df()
             submit = st.form_submit_button("Save record")
         if submit:
             conn.execute("""insert into past_performance
-                (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
-                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
+            (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
+            values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
             conn.commit()
             st.success("Saved")
             st.experimental_rerun()
@@ -1016,10 +1016,10 @@ try:
         
         ensure_indexes(conn)
 df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
-        df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
-        opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
-        opp_pick = st.selectbox("Opportunity", options=opp_opts)
-        if opp_pick:
+df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
+opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
+opp_pick = st.selectbox("Opportunity", options=opp_opts)
+if opp_pick:
             opp_id = int(opp_pick.split(":")[0])
 
             with st.form("qc_add"):
@@ -1040,8 +1040,8 @@ df_opp = pd.read_sql_query("select id, title from opportunities order by posted 
                 company = df_vendors[df_vendors["id"]==vendor_id]["company"].iloc[0]
                 total = float(subtotal) + float(taxes) + float(shipping)
                 conn.execute("""insert into vendor_quotes(opp_id, vendor_id, company, subtotal, taxes, shipping, total, lead_time, notes, files_json)
-                                values(?,?,?,?,?,?,?,?,?,?)""",                             (opp_id, vendor_id, company, float(subtotal), float(taxes), float(shipping), total, lead_time, notes,
-                              json.dumps([s.strip() for s in files.split(",") if s.strip()])))
+                values(?,?,?,?,?,?,?,?,?,?)""",                             (opp_id, vendor_id, company, float(subtotal), float(taxes), float(shipping), total, lead_time, notes,
+                json.dumps([s.strip() for s in files.split(",") if s.strip()])))
                 conn.commit()
                 st.success("Saved")
 
@@ -1067,11 +1067,11 @@ except Exception as _e_qc:
         ensure_indexes(conn)
 # Responsiveness proxy: count outreach_log entries per vendor with "Sent" or "Preview"
         resp = pd.read_sql_query("""
-            select v.id, v.company,
-                   coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
-                   coalesce(sum(case when o.status like 'Preview%' then 1 else 0 end),0) as preview
-            from vendors v left join outreach_log o on v.id = o.vendor_id
-            group by v.id, v.company
+        select v.id, v.company,
+        coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
+        coalesce(sum(case when o.status like 'Preview%' then 1 else 0 end),0) as preview
+        from vendors v left join outreach_log o on v.id = o.vendor_id
+        group by v.id, v.company
         """, conn)
         vdf = pd.read_sql_query("select id, company, certifications, set_asides, coalesce(distance_miles, 0) as distance_miles from vendors", conn)
         merged = vdf.merge(resp, how="left", on=["id","company"]).fillna({"sent":0,"preview":0})
@@ -1111,21 +1111,21 @@ try:
         
         ensure_indexes(conn)
 df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
-        df_pp = get_past_performance_df()
-        if df_opp.empty:
+df_pp = get_past_performance_df()
+if df_opp.empty:
             st.info("No opportunities in pipeline")
         else:
             rows = []
             for _, r in df_opp.iterrows():
                 s, f = compute_win_score_row(r, df_pp)
                 rows.append({
-                    "id": r.get("id"),
-                    "title": r.get("title"),
-                    "agency": r.get("agency"),
-                    "naics": r.get("naics"),
-                    "response_due": r.get("response_due"),
-                    "score": s,
-                    "factors": f
+                "id": r.get("id"),
+                "title": r.get("title"),
+                "agency": r.get("agency"),
+                "naics": r.get("naics"),
+                "response_due": r.get("response_due"),
+                "score": s,
+                "factors": f
                 })
                 try:
                     upsert_win_score(int(r.get("id")), s, f)
@@ -1149,7 +1149,7 @@ with tabs[0]:
     ensure_indexes(conn)
 df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
     # Ensure optional columns exist
-    for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
+for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
             df_opp[_col] = _default
     if "url" in df_opp.columns and "Link" not in df_opp.columns:
@@ -1170,13 +1170,13 @@ df_opp = pd.read_sql_query("select * from opportunities order by posted desc", c
         pass
 
     edit = st.data_editor(
-        df_opp,
-        column_config={
-            "status": st.column_config.SelectboxColumn("status", options=["New","Reviewing","Bidding","Submitted"]),
-            "assignee": st.column_config.SelectboxColumn("assignee", options=assignees),
-            "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
-        },
-        use_container_width=True, num_rows="dynamic", key="opp_grid"
+    df_opp,
+    column_config={
+    "status": st.column_config.SelectboxColumn("status", options=["New","Reviewing","Bidding","Submitted"]),
+    "assignee": st.column_config.SelectboxColumn("assignee", options=assignees),
+    "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
+    },
+    use_container_width=True, num_rows="dynamic", key="opp_grid"
     )
     if st.button("Save pipeline changes"):
         cur = conn.cursor()
@@ -1202,9 +1202,9 @@ df_opp = pd.read_sql_query("select * from opportunities order by posted desc", c
                 except Exception:
                     continue
                 cur.execute(
-                    "update opportunities set status=?, response_due=?, title=?, agency=?, assignee=?, quick_note=? where id=?",
-                    (r.get("status","New"), r.get("response_due"), r.get("title"), r.get("agency"),
-                     r.get("assignee",""), r.get("quick_note",""), rid)
+                "update opportunities set status=?, response_due=?, title=?, agency=?, assignee=?, quick_note=? where id=?",
+                (r.get("status","New"), r.get("response_due"), r.get("title"), r.get("agency"),
+                r.get("assignee",""), r.get("quick_note",""), rid)
                 )
                 updated += 1
 
@@ -1229,14 +1229,14 @@ with tabs[0]:
         
         ensure_indexes(conn)
 df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
-        if not df_all.empty:
+if not df_all.empty:
             st.markdown("### Pipeline analytics")
             st.bar_chart(df_all.set_index("status"))
         # Forecast (probability-adjusted revenue) using win_scores if any
         try:
             dfw = pd.read_sql_query("""
-                select o.id, o.title, o.agency, coalesce(w.score, 50) as score
-                from opportunities o left join win_scores w on o.id = w.opp_id
+            select o.id, o.title, o.agency, coalesce(w.score, 50) as score
+            from opportunities o left join win_scores w on o.id = w.opp_id
             """, conn)
             if not dfw.empty:
                 dfw["prob"] = dfw["score"]/100.0
@@ -1279,13 +1279,13 @@ with tabs[0]:
 
                             cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
 
-                                        (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
+                            (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
 
                         else:
 
                             cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
 
-                                        (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
+                            (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
 
                     conn.commit()
 
@@ -1346,17 +1346,17 @@ with tabs[1]:
 
             # Show as editable grid with clickable links
             edited = st.data_editor(
-                df_new[["company","phone","email","city","state","notes","Link","Save"]].rename(columns={
-                    "company": "Company", "phone": "Phone", "email": "Email",
-                    "city": "City", "state": "State", "notes": "Notes"
-                }),
-                column_config={
-                    "Link": st.column_config.LinkColumn("Link", display_text="Open"),
-                    "Save": st.column_config.CheckboxColumn("Save")
-                },
-                use_container_width=True,
-                num_rows="fixed",
-                key="vendor_import_grid"
+            df_new[["company","phone","email","city","state","notes","Link","Save"]].rename(columns={
+            "company": "Company", "phone": "Phone", "email": "Email",
+            "city": "City", "state": "State", "notes": "Notes"
+            }),
+            column_config={
+            "Link": st.column_config.LinkColumn("Link", display_text="Open"),
+            "Save": st.column_config.CheckboxColumn("Save")
+            },
+            use_container_width=True,
+            num_rows="fixed",
+            key="vendor_import_grid"
             )
 
             # Save only selected rows
@@ -1373,14 +1373,14 @@ with tabs[1]:
                 conn = get_cached_conn()
         ensure_indexes(conn)
 ; cur = conn.cursor()
-                saved = 0
+saved = 0
                 # Include NAICS tag choice from the UI if present
-                naics_tag = ",".join(naics_choice) if "naics_choice" in locals() and naics_choice else ""
+naics_tag = ",".join(naics_choice) if "naics_choice" in locals() and naics_choice else ""
 
-                for _, r in save_sel.rename(columns={
-                    "Company":"company","Phone":"phone","Email":"email",
-                    "City":"city","State":"state","Notes":"notes"
-                }).iterrows():
+for _, r in save_sel.rename(columns={
+"Company":"company","Phone":"phone","Email":"email",
+"City":"city","State":"state","Notes":"notes"
+}).iterrows():
                     company = (r.get("company") or "").strip()
                     phone = (r.get("phone") or "").strip()
                     website = (r.get("Link") or "").strip()
@@ -1403,13 +1403,13 @@ with tabs[1]:
 
                     if vid:
                         cur.execute(
-                            "update vendors set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, notes=?, source=?, updated_at=current_timestamp where id=?",
-                            (company, naics_tag, trade, phone, email, website, city, state, extra_note, source, int(vid))
+                        "update vendors set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, notes=?, source=?, updated_at=current_timestamp where id=?",
+                        (company, naics_tag, trade, phone, email, website, city, state, extra_note, source, int(vid))
                         )
                     else:
                         cur.execute(
-                            "insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes,source) values(?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (company, naics_tag, trade, phone, email, website, city, state, "", "", extra_note, source)
+                        "insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes,source) values(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (company, naics_tag, trade, phone, email, website, city, state, "", "", extra_note, source)
                         )
                     saved += 1
                 conn.commit()
@@ -1441,16 +1441,16 @@ with tabs[2]:
     
     ensure_indexes(conn)
 df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
-    grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
-    if st.button("Save contacts"):
+grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
+if st.button("Save contacts"):
         cur = conn.cursor()
         for _, r in grid.iterrows():
             if pd.isna(r["id"]):
                 cur.execute("""insert into contacts(name,org,role,email,phone,source,notes) values(?,?,?,?,?,?,?)""",
-                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"]))
+                (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"]))
             else:
                 cur.execute("""update contacts set name=?, org=?, role=?, email=?, phone=?, source=?, notes=? where id=?""",
-                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
+                (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
         conn.commit(); st.success("Saved")
 
 with tabs[3]:
@@ -1459,18 +1459,18 @@ with tabs[3]:
     conn = get_cached_conn()
     ensure_indexes(conn)
 ; df_v = pd.read_sql_query("select * from vendors", conn)
-    t = pd.read_sql_query("select * from email_templates order by name", conn)
-    names = t["name"].tolist() if not t.empty else ["RFQ Request"]
-    pick_t = st.selectbox("Template", options=names)
-    tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
-    subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
-    body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
-    subj = st.text_input("Subject", value=subj_default)
-    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220)
-    if st.button("Save template"):
+t = pd.read_sql_query("select * from email_templates order by name", conn)
+names = t["name"].tolist() if not t.empty else ["RFQ Request"]
+pick_t = st.selectbox("Template", options=names)
+tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
+subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
+body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
+subj = st.text_input("Subject", value=subj_default)
+body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220)
+if st.button("Save template"):
         conn.execute("""insert into email_templates(name, subject, body) values(?,?,?)
-                        on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp""",
-                     (pick_t, subj, body)); conn.commit(); st.success("Template saved")
+        on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp""",
+        (pick_t, subj, body)); conn.commit(); st.success("Template saved")
     picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
     scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
@@ -1489,8 +1489,8 @@ with tabs[3]:
             for m in st.session_state["mail_bodies"]:
                 status = send_via_graph(m["to"], m["subject"], m["body"]) if send_method=="Microsoft Graph" else "Preview"
                 get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
-                                 values(?,?,?,?,?,?,?)""",
-                                 (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
+                values(?,?,?,?,?,?,?)""",
+                (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 get_db().commit(); sent += 1
             st.success(f"Processed {sent} messages")
 
@@ -1503,20 +1503,20 @@ def _ensure_opportunity_columns():
     ensure_indexes(conn)
 ; cur = conn.cursor()
     # Add columns if missing
-    try: cur.execute("alter table opportunities add column status text default 'New'")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column assignee text")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception: pass
-    conn.commit()
+try: cur.execute("alter table opportunities add column status text default 'New'")
+except Exception: pass
+try: cur.execute("alter table opportunities add column assignee text")
+except Exception: pass
+try: cur.execute("alter table opportunities add column quick_note text")
+except Exception: pass
+conn.commit()
 
 def _get_table_cols(name):
     conn = get_cached_conn()
     ensure_indexes(conn)
 ; cur = conn.cursor()
-    cur.execute(f"pragma table_info({name})")
-    return [r[1] for r in cur.fetchall()]
+cur.execute(f"pragma table_info({name})")
+return [r[1] for r in cur.fetchall()]
 
 def _to_sqlite_value(v):
     # Normalize pandas/NumPy/complex types to Python primitives or None
@@ -1570,7 +1570,7 @@ def save_opportunities(df, default_assignee=None):
     conn = get_cached_conn()
     ensure_indexes(conn)
 ; cur = conn.cursor()
-    for _, r in df.iterrows():
+for _, r in df.iterrows():
         nid = r.get("sam_notice_id")
         if not nid:
             continue
@@ -1578,17 +1578,17 @@ def save_opportunities(df, default_assignee=None):
         row = cur.fetchone()
 
         base_fields = {
-            "sam_notice_id": nid,
-            "title": r.get("title"),
-            "agency": r.get("agency"),
-            "naics": r.get("naics"),
-            "psc": r.get("psc"),
-            "place_of_performance": r.get("place_of_performance"),
-            "response_due": r.get("response_due"),
-            "posted": r.get("posted"),
-            "type": r.get("type"),
-            "url": r.get("url"),
-            "attachments_json": r.get("attachments_json"),
+        "sam_notice_id": nid,
+        "title": r.get("title"),
+        "agency": r.get("agency"),
+        "naics": r.get("naics"),
+        "psc": r.get("psc"),
+        "place_of_performance": r.get("place_of_performance"),
+        "response_due": r.get("response_due"),
+        "posted": r.get("posted"),
+        "type": r.get("type"),
+        "url": r.get("url"),
+        "attachments_json": r.get("attachments_json"),
         }
         # Sanitize all base fields
         for k, v in list(base_fields.items()):
@@ -1596,11 +1596,11 @@ def save_opportunities(df, default_assignee=None):
 
         if row:
             cur.execute(
-                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
-                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
-                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
-                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
-                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+            response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+            (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+            base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+            base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
             )
             updated += 1
         else:
@@ -1627,10 +1627,10 @@ with tabs[4]:
     
     ensure_indexes(conn)
 codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
-    st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
+st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
+col1, col2, col3 = st.columns(3)
+with col1:
         min_days = st.number_input("Minimum days until due", min_value=0, step=1, value=3)
         posted_from_days = st.number_input("Posted window (days back)", min_value=1, step=1, value=30)
         active_only = st.checkbox("All active opportunities", value=True)
@@ -1652,9 +1652,9 @@ codes = pd.read_sql_query("select code from naics_watch order by code", conn)["c
 
         if st.button("Run search now"):
             df, info = sam_search(
-                codes, min_days=min_days, limit=150,
-                keyword=keyword or None, posted_from_days=int(posted_from_days),
-                notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
+            codes, min_days=min_days, limit=150,
+            keyword=keyword or None, posted_from_days=int(posted_from_days),
+            notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
             )
             st.session_state["sam_results_df"] = df
             st.session_state["sam_results_info"] = info
@@ -1682,13 +1682,13 @@ codes = pd.read_sql_query("select code from naics_watch order by code", conn)["c
             grid_df["Save"] = False
 
         edited = st.data_editor(
-            grid_df,
-            column_config={
-                "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
-            },
-            use_container_width=True,
-            num_rows="fixed",
-            key="sam_watch_grid"
+        grid_df,
+        column_config={
+        "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
+        },
+        use_container_width=True,
+        num_rows="fixed",
+        key="sam_watch_grid"
         )
         # Save only selected rows
         save_sel = edited[edited.get("Save", False)==True] if "Save" in edited.columns else edited.iloc[0:0]
@@ -1705,8 +1705,8 @@ codes = pd.read_sql_query("select code from naics_watch order by code", conn)["c
         if st.button("Broad test (keyword only)"):
             kw = keyword.strip() or "janitorial"
             df, info = sam_search(
-                [], min_days=0, limit=100, keyword=kw, posted_from_days=60,
-                notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
+            [], min_days=0, limit=100, keyword=kw, posted_from_days=60,
+            notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
             )
             st.session_state["sam_results_df"] = df
             st.session_state["sam_results_info"] = info
@@ -1751,7 +1751,7 @@ Contact {contact}
 NAICS {", ".join(sorted(set(NAICS_SEEDS)))}
 Certifications Small Business
 Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
-        st.markdown(llm(system, prompt, max_tokens=900))
+st.markdown(llm(system, prompt, max_tokens=900))
 
 with tabs[7]:
     st.subheader("White paper builder")
@@ -1769,11 +1769,11 @@ with tabs[8]:
     
     ensure_indexes(conn)
 v = pd.read_sql_query("select * from vendors", conn)
-    o = pd.read_sql_query("select * from opportunities", conn)
-    c = pd.read_sql_query("select * from contacts", conn)
-    bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
-    st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+o = pd.read_sql_query("select * from opportunities", conn)
+c = pd.read_sql_query("select * from contacts", conn)
+bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
+st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
+mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 with tabs[9]:
     st.subheader("Auto extract key details")
@@ -1783,8 +1783,8 @@ with tabs[9]:
         chunks = chunk_text(combined)
         vec, X = embed_texts(chunks)
         snips = search_chunks(
-            "scope technical specs performance metrics timeline deliverables submission instructions evaluation factors price schedule wage determination place of performance points of contact site visit clauses",
-            vec, X, chunks, k=10
+        "scope technical specs performance metrics timeline deliverables submission instructions evaluation factors price schedule wage determination place of performance points of contact site visit clauses",
+        vec, X, chunks, k=10
         )
         system = "You are a federal contracting assistant. Use headings and tight bullets."
         prompt = "Source slices\n" + "\n\n".join(snips) + "\n\nExtract fields now"
@@ -1840,7 +1840,7 @@ with tabs[11]:
 
             # File uploads for this chat session
             up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT)", type=["pdf","docx","doc","txt"],
-                                        accept_multiple_files=True, key=f"chat_up_{session_id}")
+            accept_multiple_files=True, key=f"chat_up_{session_id}")
             if up_files and st.button("Add files to this chat"):
                 added = 0
                 for up in up_files:
@@ -1849,8 +1849,8 @@ with tabs[11]:
                     except Exception:
                         text = ""
                     conn.execute(
-                        "insert into chat_files(session_id, filename, mimetype, content_text) values(?,?,?,?)",
-                        (session_id, up.name, getattr(up, "type", ""), text)
+                    "insert into chat_files(session_id, filename, mimetype, content_text) values(?,?,?,?)",
+                    (session_id, up.name, getattr(up, "type", ""), text)
                     )
                     added += 1
                 conn.commit()
@@ -1864,8 +1864,8 @@ with tabs[11]:
                         pass
             # Show existing attachments
             files_df = pd.read_sql_query(
-                "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
-                conn, params=(session_id,)
+            "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
+            conn, params=(session_id,)
             )
             if not files_df.empty:
                 st.caption("Attached files")
@@ -1874,8 +1874,8 @@ with tabs[11]:
             # Helper to pull doc snippets most relevant to the user's question
             def _chat_doc_snips(question_text: str) -> str:
                 rows = pd.read_sql_query(
-                    "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
-                    conn, params=(session_id,)
+                "select filename, content_text from chat_files where session_id=? and ifnull(content_text,'')<>''",
+                conn, params=(session_id,)
                 )
                 if rows.empty:
                     return ""
@@ -1902,8 +1902,8 @@ with tabs[11]:
 
             # Show chat history
             hist = pd.read_sql_query(
-                "select role, content, created_at from chat_messages where session_id=? order by id asc",
-                conn, params=(session_id,)
+            "select role, content, created_at from chat_messages where session_id=? order by id asc",
+            conn, params=(session_id,)
             )
             for _, row in hist.iterrows():
                 if row["role"] == "user":
@@ -1916,7 +1916,7 @@ with tabs[11]:
             if user_msg:
                 # Save user's message
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
-                             (session_id, "user", user_msg))
+                (session_id, "user", user_msg))
                 conn.commit()
 
                 # Build system + context
@@ -1927,15 +1927,15 @@ with tabs[11]:
                 doc_snips = _chat_doc_snips(user_msg)
 
                 system_text = "\n\n".join(filter(None, [
-                    "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
-                    f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
-                    doc_snips
+                "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
+                f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
+                doc_snips
                 ]))
 
                 # Construct rolling window of previous messages for context
                 msgs_db = pd.read_sql_query(
-                    "select role, content from chat_messages where session_id=? order by id asc",
-                    conn, params=(session_id,)
+                "select role, content from chat_messages where session_id=? order by id asc",
+                conn, params=(session_id,)
                 ).to_dict(orient="records")
 
                 # Keep last ~12 user/assistant turns
@@ -1944,7 +1944,7 @@ with tabs[11]:
 
                 assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
-                             (session_id, "assistant", assistant_out))
+                (session_id, "assistant", assistant_out))
                 conn.commit()
 
                 st.chat_message("user").markdown(user_msg)
@@ -1980,7 +1980,7 @@ with tabs[__tabs_base + 0]:
     
     ensure_indexes(conn)
 colA, colB = st.columns(2)
-    with colA:
+with colA:
         st.caption("From opportunities table")
         o = pd.read_sql_query("select id, title, agency, response_due, status from opportunities order by response_due asc nulls last", conn)
         if not o.empty:
@@ -2000,7 +2000,7 @@ colA, colB = st.columns(2)
             notes = st.text_area("Notes", "")
             if st.form_submit_button("Add"):
                 conn.execute("insert into deadlines(opp_id,title,due_date,source,notes) values(?,?,?,?,?)",
-                             (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
+                (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
                 conn.commit()
                 st.success("Added")
 
@@ -2030,12 +2030,12 @@ with tabs[__tabs_base + 1]:
     
     ensure_indexes(conn)
 opp_pick_df = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
-    opp_opt = [""] + [f"{int(r.id)}: {r.title}" for _, r in opp_pick_df.iterrows()]
-    opp_sel = st.selectbox("Link checklist to opportunity", options=opp_opt, index=0, key="lm_opp_sel")
-    opp_id_val = int(opp_sel.split(":")[0]) if opp_sel else None
+opp_opt = [""] + [f"{int(r.id)}: {r.title}" for _, r in opp_pick_df.iterrows()]
+opp_sel = st.selectbox("Link checklist to opportunity", options=opp_opt, index=0, key="lm_opp_sel")
+opp_id_val = int(opp_sel.split(":")[0]) if opp_sel else None
 
-    up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
-    if up and st.button("Generate checklist"):
+up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
+if up and st.button("Generate checklist"):
         items = []
         for f in up:
             name = f.name
@@ -2065,15 +2065,15 @@ opp_pick_df = pd.read_sql_query("select id, title from opportunities order by po
                     return ""
 
             anchors = {
-                "technical": r"(technical volume|technical proposal)",
-                "price": r"(price volume|pricing|schedule of items)",
-                "past performance": r"\bpast performance\b",
-                "representations": r"(reps(?: and)? certs|52\.212-3)",
-                "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
-                "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
-                "delivery": r"(delivery|period of performance|pop:)",
-                "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
-                "due date": r"(offers due|responses due|closing date)",
+            "technical": r"(technical volume|technical proposal)",
+            "price": r"(price volume|pricing|schedule of items)",
+            "past performance": r"\bpast performance\b",
+            "representations": r"(reps(?: and)? certs|52\.212-3)",
+            "page limit": r"(page limit|not exceed \d+\s*pages|\d+\s*page\s*limit)",
+            "font": r"(font\s*(size)?\s*\d+|times new roman|arial)",
+            "delivery": r"(delivery|period of performance|pop:)",
+            "submission": r"(submit .*? to|email .*? to|via sam\.gov)",
+            "due date": r"(offers due|responses due|closing date)",
             }
             for label, pat in anchors.items():
                 sn = _snip(txt or "", pat)
@@ -2088,7 +2088,7 @@ opp_pick_df = pd.read_sql_query("select id, title from opportunities order by po
         st.dataframe(df, use_container_width=True)
         for r in items:
             conn.execute("insert into compliance_items(opp_id,item,required,status,owner,source_page,notes,snippet) values(?,?,?,?,?,?,?,?)",
-                         (r["opp_id"], r["item"], 1 if r["required"] else 0, r["status"], r["owner"], r["source_page"], r["notes"], r.get("snippet","")))
+            (r["opp_id"], r["item"], 1 if r["required"] else 0, r["status"], r["owner"], r["source_page"], r["notes"], r.get("snippet","")))
         conn.commit()
         st.success("Checklist saved with page anchors, owners and snippets")
 
@@ -2103,8 +2103,8 @@ with tabs[__tabs_base + 2]:
     
     ensure_indexes(conn)
 vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
-    st.caption("Compose RFQ")
-    with st.form("rfq_form"):
+st.caption("Compose RFQ")
+with st.form("rfq_form"):
         sel = st.multiselect("Recipients", vendors["company"].tolist())
         scope = st.text_area("Scope", st.session_state.get("default_scope", "Provide labor materials equipment and supervision per attached specifications"), height=120)
         qty = st.text_input("Quantities or CLIN list", "")
@@ -2112,16 +2112,16 @@ vendors = pd.read_sql_query("select id, company, email, phone, trades from vendo
         files = st.text_input("File names to reference", "")
         subject = st.text_input("Email subject", "Quote request for upcoming federal project")
         body = st.text_area("Email body preview", height=240,
-            value=(f"Hello, \n\nELA Management LLC requests a quote.\n\nScope\n{scope}\n\nQuantities\n{qty}\n\nDue by {due.strftime('%Y-%m-%d')}\n\nFiles\n{files}\n\nPlease reply with price lead time and any exclusions.\n\nThank you.")
+        value=(f"Hello, \n\nELA Management LLC requests a quote.\n\nScope\n{scope}\n\nQuantities\n{qty}\n\nDue by {due.strftime('%Y-%m-%d')}\n\nFiles\n{files}\n\nPlease reply with price lead time and any exclusions.\n\nThank you.")
         )
         submit = st.form_submit_button("Generate drafts")
     if submit:
         recs = vendors[vendors["company"].isin(sel)]
         for _, r in recs.iterrows():
             conn.execute("""insert into rfq_outbox(vendor_id, company, to_email, subject, body, due_date, files_json, status)
-                            values(?,?,?,?,?,?,?,?)""",
-                         (int(r["id"]), r["company"], r.get("email",""), subject, body, due.strftime("%Y-%m-%d"),
-                          json.dumps([f.strip() for f in files.split(",") if f.strip()]), "Draft"))
+            values(?,?,?,?,?,?,?,?)""",
+            (int(r["id"]), r["company"], r.get("email",""), subject, body, due.strftime("%Y-%m-%d"),
+            json.dumps([f.strip() for f in files.split(",") if f.strip()]), "Draft"))
         conn.commit()
         st.success(f"Created {len(recs)} RFQ draft(s)")
     st.markdown("#### Drafts")
@@ -2143,7 +2143,7 @@ vendors = pd.read_sql_query("select id, company, email, phone, trades from vendo
                 doc.add_paragraph(para)
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 with tabs[__tabs_base + 3]:
     st.subheader("Pricing calculator")
@@ -2186,8 +2186,8 @@ try:
             except Exception: pass
 
             conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct)
-                            values(?,?,?,?,?,?,?,?,?,?)""",
-                        (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note, int(terms_days), float(fac_rate), float(advance_pct)))
+            values(?,?,?,?,?,?,?,?,?,?)""",
+            (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note, int(terms_days), float(fac_rate), float(advance_pct)))
             conn.commit()
         except Exception as _e_pc:
             st.caption(f"[Pricing save note: {_e_pc}]")
@@ -2228,37 +2228,37 @@ def build_context(max_rows=6):
     
     ensure_indexes(conn)
 g = pd.read_sql_query("select * from goals limit 1", conn)
-    goals_line = ""
-    if not g.empty:
+goals_line = ""
+if not g.empty:
         rr = g.iloc[0]
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
-        "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
-        conn, params=(max_rows,)
+    "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
+    conn, params=(max_rows,)
     )
     opp_lines = ["- " + " | ".join(filter(None, [
-        str(r["title"])[:80], str(r["agency"])[:40],
-        f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
+    str(r["title"])[:80], str(r["agency"])[:40],
+    f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
     ])) for _, r in opp.iterrows()]
     vend = pd.read_sql_query(
-        """select trim(substr(naics,1,6)) as code, count(*) as cnt
-           from vendors where ifnull(naics,'')<>''
-           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
-        conn, params=(max_rows,)
+    """select trim(substr(naics,1,6)) as code, count(*) as cnt
+    from vendors where ifnull(naics,'')<>''
+    group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
+    conn, params=(max_rows,)
     )
     vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
     return "\n".join([
-        f"Company: {get_setting('company_name','ELA Management LLC')}",
-        f"Home location: {get_setting('home_loc','Houston, TX')}",
-        f"Goals: {goals_line or 'not set'}",
-        f"NAICS watch: {naics_line}",
-        "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
-        *opp_lines,
-        "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
-        *vend_lines,
+    f"Company: {get_setting('company_name','ELA Management LLC')}",
+    f"Home location: {get_setting('home_loc','Houston, TX')}",
+    f"Goals: {goals_line or 'not set'}",
+    f"NAICS watch: {naics_line}",
+    "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
+    *opp_lines,
+    "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
+    *vend_lines,
     ])
 
 # ---------- External integrations ----------
@@ -2284,10 +2284,10 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
 
         if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
             return ([] if strict else results), {
-                "ok": False, "reason": api_status or "http_error", "http": status_code,
-                "api_status": api_status, "count": len(results),
-                "raw_preview": (rs.text or "")[:800],
-                "note": "Enable billing + 'Places API' in Google Cloud."
+            "ok": False, "reason": api_status or "http_error", "http": status_code,
+            "api_status": api_status, "count": len(results),
+            "raw_preview": (rs.text or "")[:800],
+            "note": "Enable billing + 'Places API' in Google Cloud."
             }
 
         # 2) Details per result
@@ -2305,21 +2305,21 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
                 website = det.get("website", "") or ""
 
             out.append({
-                "company": item.get("name"),
-                "naics": "",
-                "trades": "",
-                "phone": phone,
-                "email": "",  # Emails not provided by Google Places
-                "website": website,
-                "city": location.split(",")[0].strip() if "," in location else location,
-                "state": location.split(",")[-1].strip() if "," in location else "",
-                "certifications": "",
-                "set_asides": "",
-                "notes": item.get("formatted_address",""),
-                "source": "GooglePlaces",
+            "company": item.get("name"),
+            "naics": "",
+            "trades": "",
+            "phone": phone,
+            "email": "",  # Emails not provided by Google Places
+            "website": website,
+            "city": location.split(",")[0].strip() if "," in location else location,
+            "state": location.split(",")[-1].strip() if "," in location else "",
+            "certifications": "",
+            "set_asides": "",
+            "notes": item.get("formatted_address",""),
+            "source": "GooglePlaces",
             })
         info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
-                "raw_preview": (rs.text or "")[:800]}
+        "raw_preview": (rs.text or "")[:800]}
         return out, info
     except Exception as e:
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
@@ -2329,19 +2329,19 @@ def send_via_graph(to_addr, subject, body):
         return "Graph not configured"
     try:
         token_r = requests.post(
-            f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token",
-            data={"client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
-                  "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"},
-            timeout=20,
+        f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token",
+        data={"client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
+        "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"},
+        timeout=20,
         )
         token = token_r.json().get("access_token")
         if not token: return f"Graph token error: {token_r.text[:200]}"
         r = requests.post(
-            f"https://graph.microsoft.com/v1.0/users/me/sendMail",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"message": {"subject": subject, "body": {"contentType": "Text", "content": body},
-                              "toRecipients": [{"emailAddress": {"address": to_addr}}]}, "saveToSentItems": "true"},
-            timeout=20,
+        f"https://graph.microsoft.com/v1.0/users/me/sendMail",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"message": {"subject": subject, "body": {"contentType": "Text", "content": body},
+        "toRecipients": [{"emailAddress": {"address": to_addr}}]}, "saveToSentItems": "true"},
+        timeout=20,
         )
         return "Sent" if r.status_code in (200, 202) else f"Graph send error {r.status_code}: {r.text[:200]}"
     except Exception as e:
@@ -2408,7 +2408,7 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
     except Exception:
         return {"emails": set(), "visited": 0, "errors": ["bad seed url"]}
     queue = [seed_url, urljoin(base,"/contact"), urljoin(base,"/contact-us"),
-             urljoin(base,"/contacts"), urljoin(base,"/about"), urljoin(base,"/support")]
+    urljoin(base,"/contacts"), urljoin(base,"/about"), urljoin(base,"/support")]
     seen, emails, visited, errors = set(), set(), 0, []
     while queue and visited < max_pages:
         url = queue.pop(0)
@@ -2441,8 +2441,8 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
 
 # ---------- SAM search ----------
 def sam_search(
-    naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
-    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
+naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
+notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
 ):
     if not SAM_API_KEY:
         return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
@@ -2453,13 +2453,13 @@ def sam_search(
     posted_to   = _us_date(today)
 
     params = {
-        "api_key": SAM_API_KEY,
-        "limit": str(limit),
-        "response": "json",
-        "sort": "-publishedDate",
-        "active": active,
-        "postedFrom": posted_from,   # MM/dd/yyyy
-        "postedTo": posted_to,       # MM/dd/yyyy
+    "api_key": SAM_API_KEY,
+    "limit": str(limit),
+    "response": "json",
+    "sort": "-publishedDate",
+    "active": active,
+    "postedFrom": posted_from,   # MM/dd/yyyy
+    "postedTo": posted_to,       # MM/dd/yyyy
     }
     # Enforce only Solicitation + Combined when notice_types is blank
     if not notice_types:
@@ -2500,24 +2500,24 @@ def sam_search(
             if not due_ok: continue
             docs = opp.get("documents", []) or []
             rows.append({
-                "sam_notice_id": opp.get("noticeId"),
-                "title": opp.get("title"),
-                "agency": opp.get("organizationName"),
-                "naics": ",".join(opp.get("naicsCodes", [])),
-                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
-                "response_due": due_str,
-                "posted": opp.get("publishedDate",""),
-                "type": opp.get("type",""),
-                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
+            "sam_notice_id": opp.get("noticeId"),
+            "title": opp.get("title"),
+            "agency": opp.get("organizationName"),
+            "naics": ",".join(opp.get("naicsCodes", [])),
+            "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+            "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+            "response_due": due_str,
+            "posted": opp.get("publishedDate",""),
+            "type": opp.get("type",""),
+            "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+            "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
             })
         df = pd.DataFrame(rows)
         info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
-                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
-                            "postedFrom": posted_from, "postedTo": posted_to,
-                            "min_due_days": min_days, "noticeType": notice_types,
-                            "active": active, "limit": limit}}
+        "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+        "postedFrom": posted_from, "postedTo": posted_to,
+        "min_due_days": min_days, "noticeType": notice_types,
+        "active": active, "limit": limit}}
         if df.empty:
             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
         return df, info
@@ -2532,20 +2532,20 @@ def _ensure_opportunity_columns():
     ensure_indexes(conn)
 ; cur = conn.cursor()
     # Add columns if missing
-    try: cur.execute("alter table opportunities add column status text default 'New'")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column assignee text")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception: pass
-    conn.commit()
+try: cur.execute("alter table opportunities add column status text default 'New'")
+except Exception: pass
+try: cur.execute("alter table opportunities add column assignee text")
+except Exception: pass
+try: cur.execute("alter table opportunities add column quick_note text")
+except Exception: pass
+conn.commit()
 
 def _get_table_cols(name):
     conn = get_cached_conn()
     ensure_indexes(conn)
 ; cur = conn.cursor()
-    cur.execute(f"pragma table_info({name})")
-    return [r[1] for r in cur.fetchall()]
+cur.execute(f"pragma table_info({name})")
+return [r[1] for r in cur.fetchall()]
 
 def _to_sqlite_value(v):
     # Normalize pandas/NumPy/complex types to Python primitives or None
@@ -2599,7 +2599,7 @@ def save_opportunities(df, default_assignee=None):
     conn = get_cached_conn()
     ensure_indexes(conn)
 ; cur = conn.cursor()
-    for _, r in df.iterrows():
+for _, r in df.iterrows():
         nid = r.get("sam_notice_id")
         if not nid:
             continue
@@ -2607,17 +2607,17 @@ def save_opportunities(df, default_assignee=None):
         row = cur.fetchone()
 
         base_fields = {
-            "sam_notice_id": nid,
-            "title": r.get("title"),
-            "agency": r.get("agency"),
-            "naics": r.get("naics"),
-            "psc": r.get("psc"),
-            "place_of_performance": r.get("place_of_performance"),
-            "response_due": r.get("response_due"),
-            "posted": r.get("posted"),
-            "type": r.get("type"),
-            "url": r.get("url"),
-            "attachments_json": r.get("attachments_json"),
+        "sam_notice_id": nid,
+        "title": r.get("title"),
+        "agency": r.get("agency"),
+        "naics": r.get("naics"),
+        "psc": r.get("psc"),
+        "place_of_performance": r.get("place_of_performance"),
+        "response_due": r.get("response_due"),
+        "posted": r.get("posted"),
+        "type": r.get("type"),
+        "url": r.get("url"),
+        "attachments_json": r.get("attachments_json"),
         }
         # Sanitize all base fields
         for k, v in list(base_fields.items()):
@@ -2625,11 +2625,11 @@ def save_opportunities(df, default_assignee=None):
 
         if row:
             cur.execute(
-                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
-                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
-                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
-                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
-                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+            response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+            (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+            base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+            base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
             )
             updated += 1
         else:
@@ -2670,7 +2670,7 @@ with st.sidebar:
         try:
             today_us = _us_date(datetime.utcnow().date())
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
-                           "postedFrom": today_us, "postedTo": today_us}
+            "postedFrom": today_us, "postedTo": today_us}
             headers = {"X-Api-Key": SAM_API_KEY}
             r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
             st.write("HTTP", r.status_code)
@@ -2700,13 +2700,13 @@ with st.sidebar:
     
     ensure_indexes(conn)
 df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
-    saved_codes = df_saved["code"].tolist()
-    naics_options = sorted(set(saved_codes + NAICS_SEEDS))
-    st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
-                   default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
-    new_code = st.text_input("Add a single NAICS code")
-    col_n1, col_n2 = st.columns(2)
-    with col_n1:
+saved_codes = df_saved["code"].tolist()
+naics_options = sorted(set(saved_codes + NAICS_SEEDS))
+st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
+default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
+new_code = st.text_input("Add a single NAICS code")
+col_n1, col_n2 = st.columns(2)
+with col_n1:
         if st.button("Add code"):
             val = (new_code or "").strip()
             if val:
@@ -2735,7 +2735,7 @@ df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
     g = pd.read_sql_query("select * from goals limit 1", conn)
     if g.empty:
         conn.execute("insert into goals(year,bids_target,revenue_target,bids_submitted,revenue_won) values(?,?,?,?,?)",
-                     (datetime.now().year, 156, 600000, 1, 0)); conn.commit()
+        (datetime.now().year, 156, 600000, 1, 0)); conn.commit()
         g = pd.read_sql_query("select * from goals limit 1", conn)
     row = g.iloc[0]; goal_id = int(row["id"])
     with st.form("goals_form", clear_on_submit=False):
@@ -2748,7 +2748,7 @@ df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
             revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"]))
         if st.form_submit_button("Save goals"):
             conn.execute("update goals set bids_target=?, revenue_target=?, bids_submitted=?, revenue_won=? where id=?",
-                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
+            (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
             conn.commit(); st.success("Goals updated")
     colq1, colq2 = st.columns(2)
     with colq1:
@@ -2821,7 +2821,7 @@ def render_rfp_analyzer():
             for up in uploads:
                 text = read_doc(up)[:800_000]
                 conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
-                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
+                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
@@ -2834,8 +2834,8 @@ def render_rfp_analyzer():
                     pass
 
         files_df = pd.read_sql_query(
-            "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
-            conn, params=(session_id,)
+        "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
+        conn, params=(session_id,)
         )
         if files_df.empty:
             st.caption("No files yet.")
@@ -2857,8 +2857,8 @@ def render_rfp_analyzer():
                             pass
         # Previous messages
         hist = pd.read_sql_query(
-            "select role, content, created_at from rfp_messages where session_id=? order by id asc",
-            conn, params=(session_id,)
+        "select role, content, created_at from rfp_messages where session_id=? order by id asc",
+        conn, params=(session_id,)
         )
         if hist.empty:
             st.info("No messages yet. Use the quick actions or ask a question below.")
@@ -2874,8 +2874,8 @@ def render_rfp_analyzer():
         # Helper to build doc context
         def _rfp_context_for(question_text: str):
             rows = pd.read_sql_query(
-                "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
-                conn, params=(session_id,)
+            "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
+            conn, params=(session_id,)
             )
             if rows.empty:
                 return ""
@@ -2923,7 +2923,7 @@ def render_rfp_analyzer():
         if pending_prompt:
             # Save user turn
             conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "user", pending_prompt))
+            (session_id, "user", pending_prompt))
             conn.commit()
 
             # Build system and context using company snapshot and RFP snippets
@@ -2939,14 +2939,14 @@ def render_rfp_analyzer():
     {doc_snips if doc_snips else ""}"""
 
             # Compose rolling window like Chat Assistant
-            msgs_db = pd.read_sql_query(
-                "select role, content from rfp_messages where session_id=? order by id asc",
-                conn, params=(session_id,)
-            ).to_dict(orient="records")
+    msgs_db = pd.read_sql_query(
+    "select role, content from rfp_messages where session_id=? order by id asc",
+    conn, params=(session_id,)
+    ).to_dict(orient="records")
 
             # Keep up to 12 user turns
-            pruned, user_turns = [], 0
-            for m in msgs_db[::-1]:
+    pruned, user_turns = [], 0
+    for m in msgs_db[::-1]:
                 if m["role"] == "assistant":
                     pruned.append(m)
                     continue
@@ -2960,7 +2960,7 @@ def render_rfp_analyzer():
 
             assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
             conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "assistant", assistant_out))
+            (session_id, "assistant", assistant_out))
             conn.commit()
 
             st.chat_message("user").markdown(pending_prompt)
@@ -2977,7 +2977,7 @@ def render_proposal_builder():
         
         ensure_indexes(conn)
 sessions = list_sessions_cached(conn)
-        if sessions.empty:
+if sessions.empty:
             st.warning("Create an RFP thread in RFP Analyzer first.")
             return
 
@@ -3010,27 +3010,27 @@ sessions = list_sessions_cached(conn)
             want_comp = st.checkbox("Compliance Narrative", True)
 
         actions = {
-            "Executive Summary": want_exec,
-            "Technical Approach": want_tech,
-            "Management & Staffing Plan": want_mgmt,
-            "Past Performance": want_past,
-            "Pricing Assumptions/Notes": want_price,
-            "Compliance Narrative": want_comp,
+        "Executive Summary": want_exec,
+        "Technical Approach": want_tech,
+        "Management & Staffing Plan": want_mgmt,
+        "Past Performance": want_past,
+        "Pricing Assumptions/Notes": want_price,
+        "Compliance Narrative": want_comp,
         }
         # Canonical section order used by export and display
         order = [
-            "Executive Summary",
-            "Technical Approach",
-            "Management & Staffing Plan",
-            "Past Performance",
-            "Pricing Assumptions/Notes",
-            "Compliance Narrative",
+        "Executive Summary",
+        "Technical Approach",
+        "Management & Staffing Plan",
+        "Past Performance",
+        "Pricing Assumptions/Notes",
+        "Compliance Narrative",
         ]
 
 
         drafts_df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
+        "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+        conn, params=(session_id,)
         )
 
         colA, colB = st.columns([1,1])
@@ -3057,12 +3057,12 @@ sessions = list_sessions_cached(conn)
                 if bad:
                     heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
                     tmpl = [
-                        f"## {heading}",
-                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
-                        "• Roles and responsibilities: Identify key staff and escalation paths.",
-                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
-                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
-                        "• Compliance notes: Where Section L & M items are satisfied.",
+                    f"## {heading}",
+                    "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
+                    "• Roles and responsibilities: Identify key staff and escalation paths.",
+                    "• Quality assurance: Inspections, KPIs, and corrective actions.",
+                    "• Risk mitigation: Top risks and mitigations tied to timeline.",
+                    "• Compliance notes: Where Section L & M items are satisfied.",
                     ]
                     return "\n".join(tmpl)
                 return _out
@@ -3070,8 +3070,8 @@ sessions = list_sessions_cached(conn)
             # Helper: top snippets from attached RFP files for this session
             def _pb_doc_snips(question_text: str):
                 rows = pd.read_sql_query(
-                    "select filename as label, content_text from rfp_files where session_id=? and ifnull(content_text, '') <> '' order by uploaded_at desc",
-                    conn, params=(session_id,)
+                "select filename as label, content_text from rfp_files where session_id=? and ifnull(content_text, '') <> '' order by uploaded_at desc",
+                conn, params=(session_id,)
                 )
                 if rows.empty: return ""
                 # naive relevance: keep first N
@@ -3104,12 +3104,12 @@ sessions = list_sessions_cached(conn)
 
             # Section-specific prompts
             section_prompts = {
-                "Executive Summary": "Write an executive summary that aligns our capabilities to the requirement. Emphasize value, risk mitigation, and rapid mobilization.",
-                "Technical Approach": "Describe a compliant, phase-oriented technical approach keyed to the PWS/SOW, referencing SLAs and QC steps.",
-                "Management & Staffing Plan": "Provide management structure, roles, key personnel, surge plan, and communication/QA practices.",
-                "Past Performance": "Summarize the selected past performance items, mapping relevance to scope, scale, and outcomes.",
-                "Pricing Assumptions/Notes": "List pricing basis, inclusions/exclusions, assumptions, and any risk-based contingencies. No dollar totals.",
-                "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
+            "Executive Summary": "Write an executive summary that aligns our capabilities to the requirement. Emphasize value, risk mitigation, and rapid mobilization.",
+            "Technical Approach": "Describe a compliant, phase-oriented technical approach keyed to the PWS/SOW, referencing SLAs and QC steps.",
+            "Management & Staffing Plan": "Provide management structure, roles, key personnel, surge plan, and communication/QA practices.",
+            "Past Performance": "Summarize the selected past performance items, mapping relevance to scope, scale, and outcomes.",
+            "Pricing Assumptions/Notes": "List pricing basis, inclusions/exclusions, assumptions, and any risk-based contingencies. No dollar totals.",
+            "Compliance Narrative": "Map our response to Section L&M: where requirements are addressed, page limits, fonts, submission method."
             }
             for sec in order:
                 if not actions.get(sec, False):
@@ -3117,10 +3117,10 @@ sessions = list_sessions_cached(conn)
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
                 system_text = "\n\n".join(filter(None, [
-                    "You are a federal proposal writer. Produce a compliant, concise draft with clear headings and bullets.",
-                    f"Company snapshot:\n{context_snap}" if 'context_snap' in locals() and context_snap else "",
-                    doc_snips,
-                    f"Past Performance selections:\n{pp_text}" if pp_text and (sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                "You are a federal proposal writer. Produce a compliant, concise draft with clear headings and bullets.",
+                f"Company snapshot:\n{context_snap}" if 'context_snap' in locals() and context_snap else "",
+                doc_snips,
+                f"Past Performance selections:\n{pp_text}" if pp_text and (sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
@@ -3153,8 +3153,8 @@ sessions = list_sessions_cached(conn)
         # === Drafts editor (always visible) ===
         st.markdown("#### Proposal Drafts")
         _df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
+        "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
+        conn, params=(session_id,)
         )
         existing = {r["section"]: r for _, r in _df.iterrows()} if not _df.empty else {}
         edited_blocks = {}
@@ -3165,10 +3165,10 @@ sessions = list_sessions_cached(conn)
             st.markdown(f"**{sec}**")
             txt_default = existing.get(sec, {}).get("content", "")
             edited_blocks[sec] = st.text_area(
-                f"Edit — {sec}",
-                value=txt_default,
-                height=260,
-                key=f"pb_edit_{session_id}_{sec}"
+            f"Edit — {sec}",
+            value=txt_default,
+            height=260,
+            key=f"pb_edit_{session_id}_{sec}"
             )
 
         # Save edited drafts
@@ -3212,7 +3212,7 @@ sessions = list_sessions_cached(conn)
             st.markdown("#### Assembled Proposal (Markdown preview)")
             st.code(assembled, language="markdown")
             st.download_button("Download proposal.md", data=assembled.encode("utf-8"),
-                               file_name="proposal.md", mime="text/markdown")
+            file_name="proposal.md", mime="text/markdown")
 
         # Export DOCX with guardrails
         if export_docx:
@@ -3230,13 +3230,13 @@ sessions = list_sessions_cached(conn)
             full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
 
             issues, _ = _validate_text_for_guardrails(
-                full_text,
-                page_limit=int(pb_page_limit) if pb_page_limit else None,
-                require_font=pb_font or None,
-                require_size_pt=int(pb_font_size) if pb_font_size else None,
-                margins_in=float(pb_margins) if pb_margins else None,
-                line_spacing=float(pb_line_spacing) if pb_line_spacing else None,
-                filename_pattern=pb_file_pat or None
+            full_text,
+            page_limit=int(pb_page_limit) if pb_page_limit else None,
+            require_font=pb_font or None,
+            require_size_pt=int(pb_font_size) if pb_font_size else None,
+            margins_in=float(pb_margins) if pb_margins else None,
+            line_spacing=float(pb_line_spacing) if pb_line_spacing else None,
+            filename_pattern=pb_file_pat or None
             )
             if issues:
                 st.error("Export blocked until these issues are resolved:")
@@ -3270,16 +3270,16 @@ sessions = list_sessions_cached(conn)
             today = datetime.now().strftime("%Y%m%d")
             safe_title = (sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "RFP").replace(" ", "_")
             fname = (pb_file_pat or "{company}_{solicitation}_{date}").format(
-                company=company.replace(" ", "_"),
-                solicitation=safe_title,
-                section="FullProposal",
-                date=today
+            company=company.replace(" ", "_"),
+            solicitation=safe_title,
+            section="FullProposal",
+            date=today
             )
             if not fname.lower().endswith(".docx"):
                 fname += ".docx"
 
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         # === End new features ===
 
