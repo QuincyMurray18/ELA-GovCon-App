@@ -2566,6 +2566,7 @@ def render_proposal_builder():
         
 # === End new features ===
 
+
 # ---- Attach feature tabs now that functions are defined ----
 try:
     with tabs[5]:
