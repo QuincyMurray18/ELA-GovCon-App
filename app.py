@@ -3207,12 +3207,3 @@ except Exception:
         st.experimental_rerun()
     except Exception:
         pass
-
-# Compatibility rerun (supports older Streamlit)
-try:
-    st.rerun()
-except Exception:
-    try:
-        st.experimental_rerun()
-    except Exception:
-        pass
