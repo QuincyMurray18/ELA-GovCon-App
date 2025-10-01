@@ -40,7 +40,8 @@ try:
     from openai import OpenAI  # openai>=1.40.0 recommended
     _openai_version = getattr(_openai_pkg, "__version__", "unknown")
 except Exception as e:
-    raise RuntimeError("OpenAI SDK missing or too old. Install: openai>=1.40.0") from e
+    st.warning("OpenAI SDK missing or too old. Chat features disabled until installed.")
+    OpenAI = None
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
@@ -1946,7 +1947,7 @@ with tabs[11]:
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit(); st.rerun()
-        st.stop()
+        st.caption("Continuing without halting")
 
     session_id = int(pick.split(":")[0])
     cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
