@@ -2890,7 +2890,7 @@ def render_proposal_builder():
             "Pricing Assumptions/Notes",
             "Compliance Narrative"
         ]
-drafts_df = pd.read_sql_query(
+        drafts_df = pd.read_sql_query(
             "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
             conn, params=(session_id,)
         )
@@ -3084,7 +3084,6 @@ drafts_df = pd.read_sql_query(
         st.markdown("### Drafts")
 
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        )
         existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         edited_blocks = {}
         for sec in order:
