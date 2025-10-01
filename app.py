@@ -93,6 +93,27 @@ _OPENAI_FALLBACK_MODELS = [
 ]
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
+
+# ---- Safety helpers (fallbacks to avoid NameError at first render) ----
+try:
+    _ = linkedin_company_search
+except NameError:
+    def linkedin_company_search(q: str) -> str:
+        return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(q)}"
+
+try:
+    _ = google_places_search
+except NameError:
+    def google_places_search(q: str) -> str:
+        # Default to Maps search URL when API helper isn't loaded yet
+        return f"https://www.google.com/maps/search/{quote_plus(q)}"
+
+try:
+    _ = build_context
+except NameError:
+    def build_context(max_rows: int = 6) -> str:
+        return ""
+
 st.title("GovCon Copilot Pro")
 st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
 
