@@ -1379,7 +1379,7 @@ with tabs[11]:
         st.chat_message("assistant").markdown(assistant_out)
 
 # --- Minimal guarded chat input to prevent NameError ---
-user_msg = st.chat_input("Type your message")
+user_msg = st.text_input("Type your message", key="chat_input_tab11")
 if user_msg:
     # Build document snippets only when there is a user message
     rows = pd.read_sql_query(
