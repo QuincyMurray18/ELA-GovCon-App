@@ -954,9 +954,9 @@ def render_rfp_analyzer():
             return
 
         if not pick:
-        st.info("Select a chat session to continue.")
-        pick = ""
-        st.stop()
+            st.info("Select a chat session to continue.")
+            pick = ""
+            st.stop()
     session_id = int(pick.split(":")[0])
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
