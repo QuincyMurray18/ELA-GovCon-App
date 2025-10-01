@@ -1266,6 +1266,225 @@ tabs = st.tabs([
     "Pricing Calculator","Past Performance","Quote Comparison","Win Probability"])
 
 
+
+
+# === Begin injected: extra schema, helpers, and three tab bodies ===
+def _ensure_extra_schema():
+    try:
+        conn = get_db()
+    except Exception:
+        return
+    try:
+        conn.execute("""create table if not exists past_performance (
+            id integer primary key,
+            title text, agency text, naics text, psc text,
+            period text, value real, role text, location text,
+            highlights text,
+            contact_name text, contact_email text, contact_phone text,
+            created_at text default current_timestamp,
+            updated_at text default current_timestamp
+        );""")
+        conn.execute("""create table if not exists vendor_quotes (
+            id integer primary key,
+            opp_id integer, vendor_id integer, company text,
+            subtotal real, taxes real, shipping real, total real,
+            lead_time text, notes text, files_json text,
+            created_at text default current_timestamp
+        );""")
+        conn.execute("""create table if not exists win_scores (
+            id integer primary key,
+            opp_id integer unique, score real, factors_json text,
+            computed_at text default current_timestamp
+        );""")
+        conn.execute("""create table if not exists tasks (
+            id integer primary key,
+            opp_id integer, title text, assignee text, due_date text,
+            status text default 'Open', notes text,
+            created_at text default current_timestamp,
+            updated_at text default current_timestamp
+        );""")
+        conn.commit()
+    except Exception:
+        pass
+
+_ensure_extra_schema()
+
+def get_past_performance_df():
+    try:
+        return pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", get_db())
+    except Exception:
+        return pd.DataFrame()
+
+def upsert_win_score(opp_id: int, score: float, factors: dict):
+    try:
+        conn = get_db()
+        conn.execute("""            insert into win_scores(opp_id, score, factors_json, computed_at)
+            values(?,?,?, current_timestamp)
+            on conflict(opp_id) do update set
+                score=excluded.score,
+                factors_json=excluded.factors_json,
+                computed_at=current_timestamp
+        """, (int(opp_id), float(score), json.dumps(factors)))
+        conn.commit()
+    except Exception:
+        pass
+
+def compute_win_score_row(opp_row, past_perf_df):
+    from datetime import datetime as _dt
+    # Factors
+    score = 0
+    factors = {}
+    # NAICS match signal
+    opp_naics = (opp_row.get("naics") or "").split(",")[0].strip()
+    has_pp_same_naics = not past_perf_df[past_perf_df.get("naics", pd.Series(dtype=str)).fillna("").str.contains(opp_naics, na=False)].empty if opp_naics else False
+    factors["naics_match"] = 25 if has_pp_same_naics else 10
+    score += factors["naics_match"]
+    # Set-aside fit signal
+    t = (opp_row.get("type") or "").lower()
+    setaside_fit = 20 if ("small business" in t or "total small business" in t) else 10
+    factors["set_aside_fit"] = setaside_fit
+    score += setaside_fit
+    # Agency familiarity
+    opp_agency = (opp_row.get("agency") or "").strip().lower()
+    has_pp_same_agency = not past_perf_df[past_perf_df.get("agency", pd.Series(dtype=str)).fillna("").str.lower().str.contains(opp_agency)].empty if opp_agency else False
+    factors["agency_familiarity"] = 25 if has_pp_same_agency else 10
+    score += factors["agency_familiarity"]
+    # Time runway
+    try:
+        due = _parse_date_any(opp_row.get("response_due") or "")
+    except Exception:
+        due = None
+    runway = (due - _dt.now()).days if due else 21
+    runway_pts = 20 if runway >= 14 else (10 if runway >= 7 else 5)
+    factors["time_runway"] = runway_pts
+    score += runway_pts
+    # Attachment presence for clarity
+    has_docs = bool(opp_row.get("attachments_json"))
+    factors["docs_avail"] = 10 if has_docs else 5
+    score += factors["docs_avail"]
+    # Cap 100
+    score = min(100, score)
+    return score, factors
+
+# Past Performance tab body (assumes appended as last-3 tab)
+try:
+    with tabs[-3]:
+        st.subheader("Past Performance Library")
+        st.caption("Create reusable blurbs linked by NAICS and agency. Insert into Proposal Builder later.")
+        conn = get_db()
+        df_pp = get_past_performance_df()
+        st.dataframe(df_pp, use_container_width=True)
+
+        with st.form("pp_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                title = st.text_input("Project title")
+                agency = st.text_input("Agency")
+                naics = st.text_input("NAICS", value="")
+                psc = st.text_input("PSC", value="")
+                period = st.text_input("Period", value="")
+            with col2:
+                value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0)
+                role = st.text_input("Role", value="Prime")
+                location = st.text_input("Location", value="")
+                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
+            contact_name = st.text_input("POC name", value="")
+            contact_email = st.text_input("POC email", value="")
+            contact_phone = st.text_input("POC phone", value="")
+            submit = st.form_submit_button("Save record")
+        if submit:
+            conn.execute("""insert into past_performance
+                (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
+                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
+            conn.commit()
+            st.success("Saved")
+            st.experimental_rerun()
+except Exception as _e_pp:
+    st.caption(f"[Past Performance tab init note: {_e_pp}]")
+
+# Quote Comparison tab body (last-2)
+try:
+    with tabs[-2]:
+        st.subheader("Subcontractor Quote Comparison")
+        conn = get_db()
+        df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
+        df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
+        opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
+        opp_pick = st.selectbox("Opportunity", options=opp_opts)
+        if opp_pick:
+            opp_id = int(opp_pick.split(":")[0])
+
+            with st.form("qc_add"):
+                cols = st.columns(2)
+                with cols[0]:
+                    v_opts = [""] + [f"{int(r.id)}: {r.company}" for _, r in df_vendors.iterrows()]
+                    v_pick = st.selectbox("Vendor", options=v_opts)
+                    subtotal = st.number_input("Subtotal", min_value=0.0, step=100.0, value=0.0)
+                    taxes = st.number_input("Taxes", min_value=0.0, step=50.0, value=0.0)
+                    shipping = st.number_input("Shipping", min_value=0.0, step=50.0, value=0.0)
+                with cols[1]:
+                    lead_time = st.text_input("Lead time", value="")
+                    notes = st.text_area("Notes", height=120, value="")
+                    files = st.text_input("Files list", value="")
+                add_btn = st.form_submit_button("Save quote line")
+            if add_btn and v_pick:
+                vendor_id = int(v_pick.split(":")[0])
+                company = df_vendors[df_vendors["id"]==vendor_id]["company"].iloc[0]
+                total = float(subtotal) + float(taxes) + float(shipping)
+                conn.execute("""insert into vendor_quotes(opp_id, vendor_id, company, subtotal, taxes, shipping, total, lead_time, notes, files_json)
+                                values(?,?,?,?,?,?,?,?,?,?)""",                             (opp_id, vendor_id, company, float(subtotal), float(taxes), float(shipping), total, lead_time, notes,
+                              json.dumps([s.strip() for s in files.split(",") if s.strip()])))
+                conn.commit()
+                st.success("Saved")
+
+            dfq = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by total asc", conn, params=(opp_id,))
+            if dfq.empty:
+                st.info("No quotes yet")
+            else:
+                st.dataframe(dfq[["company","subtotal","taxes","shipping","total","lead_time","notes"]], use_container_width=True)
+                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist())
+                if pick_winner and st.button("Pick Winner"):
+                    st.success(f"Winner selected {pick_winner}. Use Pricing Calculator to model markup.")
+except Exception as _e_qc:
+    st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
+
+# Win Probability tab body (last-1)
+try:
+    with tabs[-1]:
+        st.subheader("Win Probability")
+        conn = get_db()
+        df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+        df_pp = get_past_performance_df()
+        if df_opp.empty:
+            st.info("No opportunities in pipeline")
+        else:
+            rows = []
+            for _, r in df_opp.iterrows():
+                s, f = compute_win_score_row(r, df_pp)
+                rows.append({
+                    "id": r.get("id"),
+                    "title": r.get("title"),
+                    "agency": r.get("agency"),
+                    "naics": r.get("naics"),
+                    "response_due": r.get("response_due"),
+                    "score": s,
+                    "factors": f
+                })
+                try:
+                    upsert_win_score(int(r.get("id")), s, f)
+                except Exception:
+                    pass
+            df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
+            st.dataframe(df_scores[["id","title","agency","naics","response_due","score"]], use_container_width=True)
+            pick = st.number_input("Opportunity ID for factor breakdown", min_value=0, step=1, value=0)
+            if pick:
+                row = next((x for x in rows if x["id"]==int(pick)), None)
+                if row:
+                    st.json(row["factors"])
+except Exception as _e_win:
+    st.caption(f"[Win Probability tab init note: {_e_win}]")
+# === End injected ===
+
 with tabs[0]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
