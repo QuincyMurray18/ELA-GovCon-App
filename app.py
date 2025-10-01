@@ -1074,7 +1074,7 @@ with tabs[1]:
 
     with colB:
         st.markdown("LinkedIn quick search")
-        st.link_button("Open LinkedIn", linkedin_company_search(f"{trade} {loc}"))
+        st.link_button("Open LinkedIn", f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(trade + ' ' + loc)}")
 
     with colC:
         st.markdown("Google search")
