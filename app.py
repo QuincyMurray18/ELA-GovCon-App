@@ -2293,7 +2293,7 @@ with tabs[__tabs_base + 1]:
     st.dataframe(items, use_container_width=True)
 
 with tabs[__tabs_base + 2]:
-with tabs[__tabs_base + 2]:
+    pass
     st.subheader("RFQ generator to subcontractors")
     conn = get_db()
     vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
