@@ -137,6 +137,18 @@ except NameError:
 
 
 # ---- Hoisted SAM helper (duplicate for early use) ----
+
+# ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
+from datetime import datetime
+def _coerce_dt(x):
+    if isinstance(x, datetime):
+        return x
+    try:
+        y = _parse_sam_date(x)
+        return y if isinstance(y, datetime) else None
+    except Exception:
+        return None
+
 def sam_search(
     naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
     notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
