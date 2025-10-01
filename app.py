@@ -2951,8 +2951,8 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -3005,8 +3005,18 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
+            # Refresh drafts view immediately (no rerun) and show count
+            try:
+                df_after = pd.read_sql_query(
+                    "select id, section, substr(content,1,60) as preview, updated_at from proposal_drafts where session_id=? order by section",
+                    conn, params=(session_id,)
+                )
+                st.caption(f"Drafts now in database for this thread: {len(df_after)}")
+                if not df_after.empty:
+                    st.dataframe(df_after, use_container_width=True)
+            except Exception as _q_e:
+                st.caption(f"[Drafts refresh note: {_q_e}]")
             st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
-            st.rerun()
 
 
         # Compliance validation settings
