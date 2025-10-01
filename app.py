@@ -1776,13 +1776,12 @@ with tabs[11]:
                 conn.commit()
                 st.success(f"Added {added} file(s).")
                 try:
-                st.rerun()
-            except Exception:
-                try:
-                    st.experimental_rerun()
+                    st.rerun()
                 except Exception:
-                    pass
-
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        pass
             # Show existing attachments
             files_df = pd.read_sql_query(
                 "select id, filename, length(content_text) as chars, uploaded_at from chat_files where session_id=? order by id desc",
@@ -2688,12 +2687,12 @@ def render_rfp_analyzer():
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
                 try:
-                st.rerun()
-            except Exception:
-                try:
-                    st.experimental_rerun()
+                    st.rerun()
                 except Exception:
-                    pass
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        pass
             return
 
         if not pick:
@@ -2748,13 +2747,12 @@ def render_rfp_analyzer():
                     conn.commit()
                     st.success(f"Deleted file id {del_id}.")
                     try:
-                st.rerun()
-            except Exception:
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    pass
-
+                        st.rerun()
+                    except Exception:
+                        try:
+                            st.experimental_rerun()
+                        except Exception:
+                            pass
         # Previous messages
         hist = pd.read_sql_query(
             "select role, content, created_at from rfp_messages where session_id=? order by id asc",
