@@ -2877,19 +2877,6 @@ def render_proposal_builder():
             st.stop()
 
 # Sections order used by multiple actions
-order = [
-    "Executive Summary",
-    "Technical Approach",
-    "Management & Staffing Plan",
-    "Past Performance",
-    "Pricing Assumptions/Notes",
-    "Compliance Narrative",
-]
-
-if not OPENAI_API_KEY:
-    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
-
-# Sections order used by multiple actions
 
 if not OPENAI_API_KEY:
     st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
@@ -3078,20 +3065,7 @@ if not OPENAI_API_KEY:
                     st.markdown(f"- {x}")
                 st.stop()
 
-# Sections order used by multiple actions
-order = [
-    "Executive Summary",
-    "Technical Approach",
-    "Management & Staffing Plan",
-    "Past Performance",
-    "Pricing Assumptions/Notes",
-    "Compliance Narrative",
-]
-
-if not OPENAI_API_KEY:
-    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
-
-            doc = Document()
+doc = Document()
             for section in doc.sections:
                 section.top_margin = Inches(pb_margins or 1)
                 section.bottom_margin = Inches(pb_margins or 1)
@@ -3129,6 +3103,19 @@ if not OPENAI_API_KEY:
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         
+
+# Sections order used by multiple actions
+order = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing Plan",
+    "Past Performance",
+    "Pricing Assumptions/Notes",
+    "Compliance Narrative",
+]
+
+if not OPENAI_API_KEY:
+    st.warning("OpenAI key not set. Generator will insert a placeholder message instead of real text.")
 st.markdown("### Drafts")
 drafts_df = pd.read_sql_query(
     "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
