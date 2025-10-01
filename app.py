@@ -2903,7 +2903,7 @@ def render_proposal_builder():
 
         colA, colB = st.columns([1,1])
         with colA:
-            regenerate = st.button("Generate selected sections", key=f"pb_gen_btn_{datetime.now().strftime('%H%M%S%f')}")
+            regenerate = st.button("Generate selected sections", key="pb_gen_btn")
         if regenerate and not any(actions.values()):
             st.warning("Pick at least one section above, then click Generate selected sections.")
             regenerate = False
