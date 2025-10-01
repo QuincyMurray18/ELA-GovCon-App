@@ -94,6 +94,19 @@ _OPENAI_FALLBACK_MODELS = [
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
+# ---- Date helpers for SAM search ----
+try:
+    _ = _us_date
+except NameError:
+    from datetime import datetime
+    def _us_date(dt):
+        try:
+            return dt.strftime("%m/%d/%Y")
+        except Exception:
+            # If dt is a string or not a datetime, return as-is
+            return str(dt)
+
+
 # ---- Hoisted SAM helper (duplicate for early use) ----
 def sam_search(
     naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
