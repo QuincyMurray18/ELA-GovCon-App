@@ -3081,18 +3081,9 @@ drafts_df = pd.read_sql_query(
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.markdown("### Drafts")
-        # Refresh drafts after generation so new content appears immediately
-        drafts_df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
-        )
+        st.markdown("### Drafts"))
 
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
-        # Refresh drafts after generation so new content appears immediately
-        drafts_df = pd.read_sql_query(
-            "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
-            conn, params=(session_id,)
         )
         existing = {r["section"]: r for _, r in drafts_df.iterrows()}
         edited_blocks = {}
