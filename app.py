@@ -1228,8 +1228,8 @@ with tabs[0]:
                                         (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
 
                     conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
+
+
 
                     st.success("Tasks saved.")
 
