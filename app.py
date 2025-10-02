@@ -140,6 +140,103 @@ except NameError:
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
+
+
+# === Market pricing data helpers ===
+def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200):
+    """
+    Uses USAspending Advanced Search API to pull recent contract awards.
+    Returns a pandas DataFrame with obligated amount and basic award fields.
+    """
+    import requests, pandas as pd
+    url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
+    filters = {"time_period": []}
+    if date_from or date_to:
+        filters["time_period"].append({"start_date": date_from or None, "end_date": date_to or None})
+    if naics:
+        filters["naics_codes"] = [naics]
+    if psc:
+        filters["psc_codes"] = [psc]
+    if keyword:
+        filters["keywords"] = [keyword]
+    payload = {
+        "filters": filters,
+        "fields": ["Award ID", "Recipient Name", "Start Date", "End Date", "Award Amount", "Awarding Agency", "NAICS Code", "PSC Code"],
+        "page": 1,
+        "limit": max(1, min(int(limit), 500)),
+        "sort": "Award Amount",
+        "order": "desc"
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json().get("results", []) or []
+        rows = []
+        for it in data:
+            rows.append({
+                "award_id": it.get("Award ID"),
+                "recipient": it.get("Recipient Name"),
+                "start": it.get("Start Date"),
+                "end": it.get("End Date"),
+                "amount": it.get("Award Amount"),
+                "agency": it.get("Awarding Agency"),
+                "naics": it.get("NAICS Code"),
+                "psc": it.get("PSC Code"),
+            })
+        df = pd.DataFrame(rows)
+        return df
+    except Exception as e:
+        import pandas as pd
+        return pd.DataFrame({"error":[str(e)]})
+
+def summarize_award_prices(df):
+    """Compute quick stats for award amounts in df from USAspending."""
+    import numpy as np, pandas as pd
+    if df is None or df.empty or "amount" not in df.columns:
+        return {}
+    vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
+    if vals.empty:
+        return {}
+    return {
+        "count": int(vals.size),
+        "min": float(vals.min()),
+        "p25": float(np.percentile(vals, 25)),
+        "median": float(np.percentile(vals, 50)),
+        "p75": float(np.percentile(vals, 75)),
+        "max": float(vals.max()),
+        "mean": float(vals.mean())
+    }
+
+def gsa_calc_rates(query: str, page: int = 1):
+    """
+    GSA CALC public API for MAS services labor rates.
+    Returns a list of rate rows with vendor, labor category, and hourly ceiling rate.
+    """
+    import requests, pandas as pd
+    url = "https://api.gsa.gov/technology/calc/search"
+    params = {"q": query, "page": page}
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        js = r.json()
+        items = js.get("results", []) or []
+        rows = []
+        for it in items:
+            rows.append({
+                "vendor": it.get("vendor_name"),
+                "labor_category": it.get("labor_category"),
+                "education": it.get("education_level"),
+                "min_years_exp": it.get("min_years_experience"),
+                "hourly_ceiling": it.get("current_price"),
+                "schedule": it.get("schedule"),
+                "sin": it.get("sin")
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
 def _coerce_dt(x):
     if isinstance(x, datetime):
         return x
@@ -2106,6 +2203,53 @@ with tabs[__tabs_base + 3]:
         st.caption(f"[Scenario table note: {_e_cmp}]")
 
 
+
+    st.markdown("### Market data assist")
+    colm1, colm2 = st.columns(2)
+    with colm1:
+        naics_q = st.text_input("NAICS for history lookup", value="")
+        psc_q = st.text_input("PSC for history lookup", value="")
+        kw_q = st.text_input("Optional keyword", value="")
+    with colm2:
+        lookback_months = st.number_input("Look back months", min_value=1, step=1, value=24)
+        limit_rows = st.number_input("Max awards to pull", min_value=10, step=10, value=200)
+        want_calc = st.checkbox("Also pull GSA CALC labor rates", value=False)
+
+    if st.button("Fetch market data"):
+        from datetime import datetime as _dt, timedelta as _td
+        date_to = _dt.utcnow().date().strftime("%Y-%m-%d")
+        date_from = (_dt.utcnow().date() - _td(days=int(lookback_months)*30)).strftime("%Y-%m-%d")
+        df_awards = usaspending_search_awards(naics=naics_q.strip(), psc=psc_q.strip(), date_from=date_from, date_to=date_to, keyword=kw_q.strip(), limit=int(limit_rows))
+        if not df_awards.empty and "error" not in df_awards.columns:
+            st.caption(f"USAspending awards from {date_from} to {date_to}")
+            st.dataframe(df_awards.head(50), use_container_width=True)
+            stats = summarize_award_prices(df_awards)
+            if stats:
+                st.markdown(
+                    f"**Award amount distribution**  "
+                    f"count {stats['count']}  "
+                    f"min ${stats['min']:,.0f}  "
+                    f"p25 ${stats['p25']:,.0f}  "
+                    f"median ${stats['median']:,.0f}  "
+                    f"p75 ${stats['p75']:,.0f}  "
+                    f"max ${stats['max']:,.0f}  "
+                    f"mean ${stats['mean']:,.0f}"
+                )
+                if st.button("Set base cost from market median"):
+                    st.session_state["pricing_base_cost"] = float(stats["median"])
+                    st.success(f"Base cost set to ${stats['median']:,.2f}. Recalculate above.")
+        else:
+            st.info("No award results returned. Try broadening filters or increasing look back.")
+
+        if want_calc:
+            df_rates = gsa_calc_rates(kw_q or naics_q or psc_q or "janitorial")
+            if not df_rates.empty:
+                st.caption("GSA CALC sample labor rates")
+                st.dataframe(df_rates.head(50), use_container_width=True)
+            else:
+                st.info("No CALC rates returned. Try a simpler keyword like janitor or grounds.")
+    st.markdown("#### Notes")
+    st.write("USAspending gives award amounts for similar NAICS or PSC. CALC gives ceiling hourly rates on MAS services. Use these as sanity checks against your vendor quote or base cost.")
 
 # ---------- Dates (US format for SAM) ----------
 def _us_date(d: datetime.date) -> str:
