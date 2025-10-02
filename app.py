@@ -580,11 +580,16 @@ def run_migrations():
     # opportunities table expansions
 
     try: cur.execute("alter table compliance_items add column owner text")
+    except Exception: pass
     try: cur.execute("alter table compliance_items add column snippet text")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
     # vendors table expansions
     try: cur.execute("alter table vendors add column distance_miles real")
+    except Exception: pass
     conn.commit()
 
 def ensure_schema():
@@ -687,6 +692,7 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
+                except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
             last_err = e; continue
@@ -701,6 +707,7 @@ def llm_messages(messages, temp=0.2, max_tokens=1400):
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
+                except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
             last_err = e; continue
@@ -1427,8 +1434,11 @@ def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
     conn.commit()
 
 def _get_table_cols(name):
@@ -1947,6 +1957,7 @@ with tabs[__tabs_base + 1]:
                     txt = read_doc(f)
             finally:
                 try: f.seek(0)
+                except Exception: pass
 
             def _snip(text, pat):
                 try:
@@ -2069,8 +2080,11 @@ with tabs[__tabs_base + 3]:
             cur = conn.cursor()
             # Ensure columns exist
             try: cur.execute("alter table pricing_scenarios add column terms_days integer")
+            except Exception: pass
             try: cur.execute("alter table pricing_scenarios add column factoring_rate real")
+            except Exception: pass
             try: cur.execute("alter table pricing_scenarios add column advance_pct real")
+            except Exception: pass
 
             conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct)
                             values(?,?,?,?,?,?,?,?,?,?)""",
@@ -2414,8 +2428,11 @@ def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
     conn.commit()
 
 def _get_table_cols(name):
@@ -3071,14 +3088,7 @@ def render_proposal_builder():
                 filename_pattern=pb_file_pat or None
             )
             if issues:
-                st.warning('Export blocked until these issues are resolved. See the checklist below.')
-    if issues:
-            st.markdown("\n".join([f"- {i}" for i in issues]))
-except Exception:
-    pass
-if 'force_override' in globals() and force_override:
-    issues = []
-    st.info('Guardrails overridden by user. Proceeding to export...')
+                st.error("Export blocked until these issues are resolved:")
                 for x in issues:
                     st.markdown(f"- {x}")
                 st.stop()
