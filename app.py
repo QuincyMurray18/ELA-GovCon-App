@@ -2928,21 +2928,18 @@ def render_proposal_builder():
 
             def _gen_with_fallback(system_text, user_prompt):
                 # Immediate template if OpenAI client is not configured
-                try:
-                    from builtins import globals as _g
-                except Exception:
-                    _g = globals
-                if not _g().get('client', None):
-                    heading = (user_prompt.split('\n', 1)[0].strip() or 'Section')
-                    tmpl = [
-                        f'## {heading}',
-                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
-                        '• Roles and responsibilities: Identify key staff and escalation paths.',
-                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
-                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
-                        '• Compliance notes: Where Section L & M items are satisfied.',
-                    ]
-                    return '\n'.join(tmpl)
+                if not globals().get("client"):
+    heading = (user_prompt.split("
+", 1)[0].strip() or "Section")
+    return "
+".join([
+        f"## {heading}",
+        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
+        "• Roles and responsibilities: Identify key staff and escalation paths.",
+        "• Quality assurance: Inspections, KPIs, and corrective actions.",
+        "• Risk mitigation: Top risks and mitigations tied to timeline.",
+        "• Compliance notes: Where Section L & M items are satisfied.",
+    ])
                 try:
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
