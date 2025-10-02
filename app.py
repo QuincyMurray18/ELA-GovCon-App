@@ -386,7 +386,21 @@ NAICS_SEEDS = [
 
 SCHEMA = {
     "vendors": """
-    create table if not exists vendors (
+    
+with conn:
+    conn.execute("""
+    create table if not exists pricing_scenarios(
+        id integer primary key,
+        created_at text default current_timestamp,
+        label text,
+        base_cost real,
+        overhead real,
+        gna real,
+        profit real,
+        total real
+    )
+    """)
+create table if not exists vendors (
         id integer primary key,
         company text, naics text, trades text, phone text, email text, website text,
         city text, state text, certifications text, set_asides text, notes text, source text,
