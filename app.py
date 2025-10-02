@@ -2919,24 +2919,46 @@ def render_proposal_builder():
             export_docx = st.button("Export Proposal DOCX (guardrails)")
         # === Generate selected sections ===
         if regenerate:
+            # Diagnostics: show which sections are selected
+            try:
+                _on = [k for k,v in actions.items() if v]
+                st.info(f"Generating sections: {', '.join(_on) if _on else 'none'}")
+            except Exception:
+                pass
 
             def _gen_with_fallback(system_text, user_prompt):
+                # Immediate template if OpenAI client is not configured
+                try:
+                    from builtins import globals as _g
+                except Exception:
+                    _g = globals
+                if not _g().get('client', None):
+                    heading = (user_prompt.split('\n', 1)[0].strip() or 'Section')
+                    tmpl = [
+                        f'## {heading}',
+                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
+                        '• Roles and responsibilities: Identify key staff and escalation paths.',
+                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
+                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
+                        '• Compliance notes: Where Section L & M items are satisfied.',
+                    ]
+                    return '\n'.join(tmpl)
                 try:
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
-                    _out = f"LLM error: {type(_e).__name__}: {_e}"
-                bad = (not isinstance(_out, str)) or (_out.strip() == "") or ("Set OPENAI_API_KEY" in _out) or _out.startswith("LLM error")
+                    _out = f'LLM error: {type(_e).__name__}: {_e}'
+                bad = (not isinstance(_out, str)) or (_out.strip() == '') or ('Set OPENAI_API_KEY' in _out) or _out.startswith('LLM error')
                 if bad:
-                    heading = (user_prompt.split("\n", 1)[0].strip() or "Section")
+                    heading = (user_prompt.split('\n', 1)[0].strip() or 'Section')
                     tmpl = [
-                        f"## {heading}",
-                        "• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.",
-                        "• Roles and responsibilities: Identify key staff and escalation paths.",
-                        "• Quality assurance: Inspections, KPIs, and corrective actions.",
-                        "• Risk mitigation: Top risks and mitigations tied to timeline.",
-                        "• Compliance notes: Where Section L & M items are satisfied.",
+                        f'## {heading}',
+                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
+                        '• Roles and responsibilities: Identify key staff and escalation paths.',
+                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
+                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
+                        '• Compliance notes: Where Section L & M items are satisfied.',
                     ]
-                    return "\n".join(tmpl)
+                    return '\n'.join(tmpl)
                 return _out
 
             # Helper: pull top snippets from attached RFP files for this session
@@ -3004,7 +3026,10 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
-            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            try:
+                st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            except Exception:
+                pass
             st.rerun()
 
 
