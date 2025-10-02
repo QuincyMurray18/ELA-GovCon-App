@@ -1003,7 +1003,7 @@ try:
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
                         st.session_state["pricing_base_cost"] = float(winner_row["total"].iloc[0])
-                    st.success(f"Winner selected {pick_winner}. Open Pricing Calculator to model markup.")
+                        st.success(f"Winner selected {pick_winner}. Open Pricing Calculator to model markup.")
 except Exception as _e_qc:
     st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
 
@@ -1419,7 +1419,7 @@ with tabs[3]:
             to_addr = row.get("email","")
             body_filled = body.format(company=name, scope=scope_hint, due=due)
             st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
-        st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
+            st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
     if st.session_state.get("mail_bodies"):
         send_method = st.selectbox("Send with", ["Preview only","Microsoft Graph"])
         if st.button("Send now"):
@@ -1430,7 +1430,7 @@ with tabs[3]:
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 get_db().commit(); sent += 1
-            st.success(f"Processed {sent} messages")
+                st.success(f"Processed {sent} messages")
 
 
 
@@ -2588,7 +2588,7 @@ with st.sidebar:
                 if api_msg:
                     st.error(f"API reported: {api_msg}"); st.code(text_preview)
                 elif r.status_code == 200:
-                    st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
+                st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
             except Exception as e:
@@ -2734,7 +2734,7 @@ def render_rfp_analyzer():
                     conn.commit()
                 _gen_count += 1
                 _gen_names.append(sec)
-                    st.success(f"Deleted file id {del_id}.")
+                st.success(f"Deleted file id {del_id}.")
         
 
         # Previous messages
@@ -3048,7 +3048,7 @@ def render_proposal_builder():
                 conn.commit()
                 _gen_count += 1
                 _gen_names.append(sec)
-            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+                st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
             st.info(f"Generated: {_gen_count} section(s): {', '.join(_gen_names)}")
 
 
