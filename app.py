@@ -3091,8 +3091,8 @@ def render_proposal_builder():
                 st.warning('Export blocked until these issues are resolved. See the checklist below.')
 try:
     if issues:
-        st.markdown('
-'.join([f'- {i}' for i in issues]))
+        st.markdown("
+".join([f'- {i}' for i in issues]))
 except Exception:
     pass
 if 'force_override' in globals() and force_override:
