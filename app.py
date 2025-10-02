@@ -989,8 +989,6 @@ try:
                                 values(?,?,?,?,?,?,?,?,?,?)""",                             (opp_id, vendor_id, company, float(subtotal), float(taxes), float(shipping), total, lead_time, notes,
                               json.dumps([s.strip() for s in files.split(",") if s.strip()])))
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
                 st.success("Saved")
 
             dfq = pd.read_sql_query("select * from vendor_quotes where opp_id=? order by total asc", conn, params=(opp_id,))
@@ -1003,7 +1001,7 @@ try:
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
                         st.session_state["pricing_base_cost"] = float(winner_row["total"].iloc[0])
-                        st.success(f"Winner selected {pick_winner}. Open Pricing Calculator to model markup.")
+                    st.success(f"Winner selected {pick_winner}. Open Pricing Calculator to model markup.")
 except Exception as _e_qc:
     st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
 
@@ -1229,8 +1227,6 @@ with tabs[0]:
 
                     conn.commit()
 
-
-
                     st.success("Tasks saved.")
 
         except Exception as _e_tasks:
@@ -1353,8 +1349,6 @@ with tabs[1]:
                         )
                     saved += 1
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
                 st.success(f"Saved {saved} vendor(s).")
         else:
             msg = "No results"
@@ -1419,7 +1413,7 @@ with tabs[3]:
             to_addr = row.get("email","")
             body_filled = body.format(company=name, scope=scope_hint, due=due)
             st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
-            st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
+        st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
     if st.session_state.get("mail_bodies"):
         send_method = st.selectbox("Send with", ["Preview only","Microsoft Graph"])
         if st.button("Send now"):
@@ -1430,7 +1424,7 @@ with tabs[3]:
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 get_db().commit(); sent += 1
-                st.success(f"Processed {sent} messages")
+            st.success(f"Processed {sent} messages")
 
 
 
@@ -1747,7 +1741,7 @@ with tabs[11]:
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
-
+            st.rerun()
         st.caption("Pick an existing chat from the dropdown above to continue.")
     else:
         # Parse session id
@@ -1774,10 +1768,8 @@ with tabs[11]:
                     )
                     added += 1
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
                 st.success(f"Added {added} file(s).")
-    
+                st.rerun()
 
             # Show existing attachments
             files_df = pd.read_sql_query(
@@ -1835,8 +1827,6 @@ with tabs[11]:
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
                              (session_id, "user", user_msg))
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
 
                 # Build system + context
                 try:
@@ -1865,8 +1855,6 @@ with tabs[11]:
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
                              (session_id, "assistant", assistant_out))
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
 
                 st.chat_message("user").markdown(user_msg)
                 st.chat_message("assistant").markdown(assistant_out)
@@ -1921,8 +1909,6 @@ with tabs[__tabs_base + 0]:
                 conn.execute("insert into deadlines(opp_id,title,due_date,source,notes) values(?,?,?,?,?)",
                              (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
                 st.success("Added")
 
     st.markdown("### Due today")
@@ -2588,7 +2574,7 @@ with st.sidebar:
                 if api_msg:
                     st.error(f"API reported: {api_msg}"); st.code(text_preview)
                 elif r.status_code == 200:
-                st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
+                    st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
             except Exception as e:
@@ -2689,9 +2675,7 @@ def render_rfp_analyzer():
             if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
-    
+                st.rerun()
             return
 
         if not pick:
@@ -2716,7 +2700,7 @@ def render_rfp_analyzer():
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
-
+            st.rerun()
 
         files_df = pd.read_sql_query(
             "select id, filename, length(content_text) as chars, uploaded_at from rfp_files where session_id=? order by id desc",
@@ -2732,10 +2716,8 @@ def render_rfp_analyzer():
                 if del_id > 0:
                     conn.execute("delete from rfp_files where id=?", (int(del_id),))
                     conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
-                st.success(f"Deleted file id {del_id}.")
-        
+                    st.success(f"Deleted file id {del_id}.")
+                    st.rerun()
 
         # Previous messages
         hist = pd.read_sql_query(
@@ -2849,27 +2831,6 @@ def render_rfp_analyzer():
             st.chat_message("assistant").markdown(assistant_out)
     except Exception as e:
         st.error(f"RFP Analyzer error: {e}")
-
-
-def _ensure_proposal_tables(conn):
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS proposal_drafts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
-                section TEXT,
-                content TEXT,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
-    except Exception as e:
-        try:
-            st.error(f"DB init error (proposal_drafts): {e}")
-        except Exception:
-            pass
-
 
 def render_proposal_builder():
     try:
@@ -3020,8 +2981,6 @@ def render_proposal_builder():
             }
 
             
-            _gen_count = 0
-            _gen_names = []
             for sec, on in actions.items():
                 if not on:
                     continue
@@ -3046,11 +3005,8 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
-                _gen_count += 1
-                _gen_names.append(sec)
-                st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
-            st.info(f"Generated: {_gen_count} section(s): {', '.join(_gen_names)}")
-
+            st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+            st.rerun()
 
 
         # Compliance validation settings
