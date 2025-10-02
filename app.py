@@ -140,6 +140,103 @@ except NameError:
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
+
+
+# === Market pricing data helpers ===
+def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200):
+    """
+    Uses USAspending Advanced Search API to pull recent contract awards.
+    Returns a pandas DataFrame with obligated amount and basic award fields.
+    """
+    import requests, pandas as pd
+    url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
+    filters = {"time_period": []}
+    if date_from or date_to:
+        filters["time_period"].append({"start_date": date_from or None, "end_date": date_to or None})
+    if naics:
+        filters["naics_codes"] = [naics]
+    if psc:
+        filters["psc_codes"] = [psc]
+    if keyword:
+        filters["keywords"] = [keyword]
+    payload = {
+        "filters": filters,
+        "fields": ["Award ID", "Recipient Name", "Start Date", "End Date", "Award Amount", "Awarding Agency", "NAICS Code", "PSC Code"],
+        "page": 1,
+        "limit": max(1, min(int(limit), 500)),
+        "sort": "Award Amount",
+        "order": "desc"
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json().get("results", []) or []
+        rows = []
+        for it in data:
+            rows.append({
+                "award_id": it.get("Award ID"),
+                "recipient": it.get("Recipient Name"),
+                "start": it.get("Start Date"),
+                "end": it.get("End Date"),
+                "amount": it.get("Award Amount"),
+                "agency": it.get("Awarding Agency"),
+                "naics": it.get("NAICS Code"),
+                "psc": it.get("PSC Code"),
+            })
+        df = pd.DataFrame(rows)
+        return df
+    except Exception as e:
+        import pandas as pd
+        return pd.DataFrame({"error":[str(e)]})
+
+def summarize_award_prices(df):
+    """Compute quick stats for award amounts in df from USAspending."""
+    import numpy as np, pandas as pd
+    if df is None or df.empty or "amount" not in df.columns:
+        return {}
+    vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
+    if vals.empty:
+        return {}
+    return {
+        "count": int(vals.size),
+        "min": float(vals.min()),
+        "p25": float(np.percentile(vals, 25)),
+        "median": float(np.percentile(vals, 50)),
+        "p75": float(np.percentile(vals, 75)),
+        "max": float(vals.max()),
+        "mean": float(vals.mean())
+    }
+
+def gsa_calc_rates(query: str, page: int = 1):
+    """
+    GSA CALC public API for MAS services labor rates.
+    Returns a list of rate rows with vendor, labor category, and hourly ceiling rate.
+    """
+    import requests, pandas as pd
+    url = "https://api.gsa.gov/technology/calc/search"
+    params = {"q": query, "page": page}
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        js = r.json()
+        items = js.get("results", []) or []
+        rows = []
+        for it in items:
+            rows.append({
+                "vendor": it.get("vendor_name"),
+                "labor_category": it.get("labor_category"),
+                "education": it.get("education_level"),
+                "min_years_exp": it.get("min_years_experience"),
+                "hourly_ceiling": it.get("current_price"),
+                "schedule": it.get("schedule"),
+                "sin": it.get("sin")
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
 def _coerce_dt(x):
     if isinstance(x, datetime):
         return x
@@ -2291,100 +2388,6 @@ def send_via_graph(to_addr, subject, body):
     except Exception as e:
         return f"Graph send exception: {e}"
 
-
-# === Market pricing data helpers ===
-def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200):
-    """
-    Uses USAspending Advanced Search API to pull recent contract awards.
-    Returns a pandas DataFrame with obligated amount and basic award fields.
-    """
-    import requests, pandas as pd
-    url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
-    filters = {"time_period": []}
-    if date_from or date_to:
-        filters["time_period"].append({"start_date": date_from or None, "end_date": date_to or None})
-    if naics:
-        filters["naics_codes"] = [naics]
-    if psc:
-        filters["psc_codes"] = [psc]
-    if keyword:
-        filters["keywords"] = [keyword]
-    payload = {
-        "filters": filters,
-        "fields": ["Award ID", "Recipient Name", "Start Date", "End Date", "Award Amount", "Awarding Agency", "NAICS Code", "PSC Code"],
-        "page": 1,
-        "limit": max(1, min(int(limit), 500)),
-        "sort": "Award Amount",
-        "order": "desc"
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=30)
-        r.raise_for_status()
-        data = r.json().get("results", []) or []
-        rows = []
-        for it in data:
-            rows.append({
-                "award_id": it.get("Award ID"),
-                "recipient": it.get("Recipient Name"),
-                "start": it.get("Start Date"),
-                "end": it.get("End Date"),
-                "amount": it.get("Award Amount"),
-                "agency": it.get("Awarding Agency"),
-                "naics": it.get("NAICS Code"),
-                "psc": it.get("PSC Code"),
-            })
-        df = pd.DataFrame(rows)
-        return df
-    except Exception as e:
-        import pandas as pd
-        return pd.DataFrame({"error":[str(e)]})
-
-def summarize_award_prices(df):
-    """Compute quick stats for award amounts in df from USAspending."""
-    import numpy as np, pandas as pd
-    if df is None or df.empty or "amount" not in df.columns:
-        return {}
-    vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
-    if vals.empty:
-        return {}
-    return {
-        "count": int(vals.size),
-        "min": float(vals.min()),
-        "p25": float(np.percentile(vals, 25)),
-        "median": float(np.percentile(vals, 50)),
-        "p75": float(np.percentile(vals, 75)),
-        "max": float(vals.max()),
-        "mean": float(vals.mean())
-    }
-
-def gsa_calc_rates(query: str, page: int = 1):
-    """
-    GSA CALC public API for MAS services labor rates.
-    Returns a list of rate rows with vendor, labor category, and hourly ceiling rate.
-    """
-    import requests, pandas as pd
-    url = "https://api.gsa.gov/technology/calc/search"
-    params = {"q": query, "page": page}
-    try:
-        r = requests.get(url, params=params, timeout=20)
-        r.raise_for_status()
-        js = r.json()
-        items = js.get("results", []) or []
-        rows = []
-        for it in items:
-            rows.append({
-                "vendor": it.get("vendor_name"),
-                "labor_category": it.get("labor_category"),
-                "education": it.get("education_level"),
-                "min_years_exp": it.get("min_years_experience"),
-                "hourly_ceiling": it.get("current_price"),
-                "schedule": it.get("schedule"),
-                "sin": it.get("sin")
-            })
-        return pd.DataFrame(rows)
-    except Exception:
-        import pandas as pd
-        return pd.DataFrame()
 # ---------- Email Scraper (polite, small crawl) ----------
 EMAIL_REGEX = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 
