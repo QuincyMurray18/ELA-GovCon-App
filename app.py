@@ -3088,7 +3088,16 @@ def render_proposal_builder():
                 filename_pattern=pb_file_pat or None
             )
             if issues:
-                st.error("Export blocked until these issues are resolved:")
+                st.warning('Export blocked until these issues are resolved. See the checklist below.')
+try:
+    if issues:
+        st.markdown('
+'.join([f'- {i}' for i in issues]))
+except Exception:
+    pass
+if 'force_override' in globals() and force_override:
+    issues = []
+    st.info('Guardrails overridden by user. Proceeding to export...')
                 for x in issues:
                     st.markdown(f"- {x}")
                 st.stop()
