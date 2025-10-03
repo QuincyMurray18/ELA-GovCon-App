@@ -1836,18 +1836,20 @@ with legacy_tabs[3]:
             sent = 0
             for m in st.session_state["mail_bodies"]:
                 if send_method=="Gmail SMTP":
+                    status = _send_via_gmail(m["to"], m["subject"], m["body"])
+                elif send_method=="Office365 SMTP":
+                    _send_via_office365(m["to"], m["subject"], m["body"]); status = "Sent"
+                elif send_method=="Microsoft Graph":
+                    status = send_via_graph(m["to"], m["subject"], m["body"])
+                else:
+                    status = "Preview"
                 conn = get_db()
                 conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                 values(?,?,?,?,?,?,?)""",
                              (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 conn.commit()
                 sent += 1
-                    _send_via_gmail(m["to"], m["subject"], m["body"]); status="Sent"
-                elif send_method=="Office365 SMTP":
-                    _send_via_office365(m["to"], m["subject"], m["body"]); status="Sent"
-                elif send_method=="Microsoft Graph":
-                    status = send_via_graph(m["to"], m["subject"], m["body"])
-                else:
+            st.success(f"Processed {sent} messages")
                     status = "Preview"
                 get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                  values(?,?,?,?,?,?,?)""",
@@ -3767,7 +3769,6 @@ with conn:
         created_at text default current_timestamp
     )
     """)
-
 
 
 
