@@ -10,22 +10,6 @@ import requests
 from PyPDF2 import PdfReader
 import docx
 from sklearn.feature_extraction.text import TfidfVectorizer
-# --- Safe early stub to avoid NameError before real function is defined ---
-if 'send_via_graph' not in globals():
-    def send_via_graph(to_addr, subject, body):
-        # Placeholder; real implementation defined later in file
-        try:
-            from os import getenv
-            MS_TENANT_ID = getenv('MS_TENANT_ID')
-            MS_CLIENT_ID = getenv('MS_CLIENT_ID')
-            MS_CLIENT_SECRET = getenv('MS_CLIENT_SECRET')
-        except Exception:
-            MS_TENANT_ID = MS_CLIENT_ID = MS_CLIENT_SECRET = None
-        if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
-            return 'Graph not configured'
-        return 'Graph sender unavailable at this point in load order'
-# -------------------------------------------------------------------------
-
 # === OCR and clause risk helpers (injected) ===
 try:
     import pytesseract  # optional
@@ -908,18 +892,16 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
 
-tabs = st.tabs([
-    "Pipeline","Subcontractor Finder","Contacts","Outreach","SAM Watch",
-    "RFP Analyzer","Capability Statement","White Paper Builder",
-    "Data Export","Auto extract","Ask the doc","Chat Assistant","Proposal Builder",
-    "Deadlines",
-    "L&M Checklist",
-    "RFQ Generator",
-    "Pricing Calculator","Past Performance","Quote Comparison","Win Probability"])
-
-
-
-
+TAB_LABELS = [
+    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
+]
+tabs = st.tabs(TAB_LABELS)
+TAB = {label: i for i, label in enumerate(TAB_LABELS)}
+# Backward-compatibility: keep legacy numeric indexing working
+LEGACY_ORDER = [
+    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
+]
+legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
     try:
@@ -1020,7 +1002,7 @@ def compute_win_score_row(opp_row, past_perf_df):
 
 # Past Performance tab body (assumes appended as last-3 tab)
 try:
-    with tabs[-3]:
+    with legacy_tabs[-3]:
         st.subheader("Past Performance Library")
         st.caption("Create reusable blurbs linked by NAICS and agency. Insert into Proposal Builder later.")
         conn = get_db()
@@ -1056,7 +1038,7 @@ except Exception as _e_pp:
 
 # Quote Comparison tab body (last-2)
 try:
-    with tabs[-2]:
+    with legacy_tabs[-2]:
         st.subheader("Subcontractor Quote Comparison")
         conn = get_db()
         df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
@@ -1147,7 +1129,7 @@ except Exception as _e_qc:
 
 # Win Probability tab body (last-1)
 try:
-    with tabs[-1]:
+    with legacy_tabs[-1]:
         st.subheader("Win Probability")
         conn = get_db()
         df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -1182,7 +1164,7 @@ except Exception as _e_win:
     st.caption(f"[Win Probability tab init note: {_e_win}]")
 # === End injected ===
 
-with tabs[0]:
+with legacy_tabs[0]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -1259,7 +1241,7 @@ with tabs[0]:
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
-with tabs[0]:
+with legacy_tabs[0]:
 
     # Analytics mini-dashboard
     try:
@@ -1284,7 +1266,7 @@ with tabs[0]:
         st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
-with tabs[0]:
+with legacy_tabs[0]:
 
     if globals().get("__ctx_pipeline", False):
 
@@ -1330,7 +1312,7 @@ with tabs[0]:
         except Exception as _e_tasks:
 
             st.caption(f"[Tasks panel note: {_e_tasks}]")
-with tabs[1]:
+with legacy_tabs[1]:
     st.subheader("Find subcontractors and rank by fit")
     trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial"))
     loc = st.text_input("Place of Performance", value=get_setting("home_loc", "Houston, TX"))
@@ -1465,7 +1447,7 @@ with tabs[1]:
         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
-with tabs[2]:
+with legacy_tabs[2]:
 
 
 
@@ -1485,7 +1467,7 @@ with tabs[2]:
                             (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
         conn.commit(); st.success("Saved")
 
-with tabs[3]:
+with legacy_tabs[3]:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
@@ -1644,7 +1626,7 @@ def save_opportunities(df, default_assignee=None):
     return inserted, updated
 
 
-with tabs[4]:
+with legacy_tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
     conn = get_db()
@@ -1754,7 +1736,7 @@ with tabs[4]:
 # Removed RFP mini-analyzer from SAM Watch
 
 # (moved) RFP Analyzer call will be added after definition
-with tabs[6]:
+with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", value="Responsive project management for federal facilities and services")
@@ -1775,7 +1757,7 @@ Certifications Small Business
 Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
         st.markdown(llm(system, prompt, max_tokens=900))
 
-with tabs[7]:
+with legacy_tabs[7]:
     st.subheader("White paper builder")
     title = st.text_input("Title", value="Improving Facility Readiness with Outcome based Service Contracts")
     thesis = st.text_area("Thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
@@ -1785,7 +1767,7 @@ with tabs[7]:
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
         st.markdown(llm(system, prompt, max_tokens=1400))
 
-with tabs[8]:
+with legacy_tabs[8]:
     st.subheader("Export to Excel workbook")
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
@@ -1795,7 +1777,7 @@ with tabs[8]:
     st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-with tabs[9]:
+with legacy_tabs[9]:
     st.subheader("Auto extract key details")
     up = st.file_uploader("Upload solicitation or PWS", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="auto_up")
     if up and st.button("Extract"):
@@ -1810,7 +1792,7 @@ with tabs[9]:
         prompt = "Source slices\n" + "\n\n".join(snips) + "\n\nExtract fields now"
         st.markdown(llm(system, prompt, max_tokens=1200))
 
-with tabs[10]:
+with legacy_tabs[10]:
     st.subheader("Ask questions over the uploaded docs")
     up2 = st.file_uploader("Upload PDFs or DOCX", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="qna_up")
     q = st.text_input("Your question")
@@ -1823,7 +1805,7 @@ with tabs[10]:
         st.markdown(llm(system, prompt, max_tokens=900))
 
 
-with tabs[11]:
+with legacy_tabs[11]:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
 
@@ -1981,7 +1963,7 @@ def _lpta_note(total_price, budget_hint=None):
 # Compute dynamic base index for new tabs
 __tabs_base = 13  # 'Deadlines' tab index
 
-with tabs[__tabs_base + 0]:
+with legacy_tabs[__tabs_base + 0]:
     st.subheader("Deadline tracker")
     conn = get_db()
     colA, colB = st.columns(2)
@@ -2029,7 +2011,7 @@ with tabs[__tabs_base + 0]:
         st.write("No items due today.")
 
 
-with tabs[__tabs_base + 1]:
+with legacy_tabs[__tabs_base + 1]:
     st.subheader("Section L and M checklist")
     conn = get_db()
     opp_pick_df = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
@@ -2099,7 +2081,7 @@ with tabs[__tabs_base + 1]:
     items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
     st.dataframe(items, use_container_width=True)
 
-with tabs[__tabs_base + 2]:
+with legacy_tabs[__tabs_base + 2]:
     pass
     st.subheader("RFQ generator to subcontractors")
     conn = get_db()
@@ -2146,7 +2128,7 @@ with tabs[__tabs_base + 2]:
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-with tabs[__tabs_base + 3]:
+with legacy_tabs[__tabs_base + 3]:
     st.subheader("Pricing calculator")
     with st.form("price_calc"):
         default_base = float(st.session_state.get("pricing_base_cost", 0.0))
@@ -2481,31 +2463,103 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
     except Exception as e:
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
-def send_via_graph(to_addr, subject, body):
-    if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
-        return "Graph not configured"
+def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None) -> str:
+    """
+    Send mail using Microsoft Graph with application permissions (client credentials).
+    Uses /users/{sender}/sendMail. Returns "Sent" on success or a short diagnostic string on error.
+    Env/settings used:
+      - MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET
+      - MS_SENDER_UPN or settings key ms_sender_upn
+    """
+    try:
+        import os, requests
+        from urllib.parse import quote_plus
+    except Exception as _e_imp:
+        return f"Graph send error: missing dependency ({_e_imp})"
+
+    # Load config: prefer env, then settings table if available
+    try:
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
+    except Exception:
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or ""
+
+    # MS_* may already be loaded at module level; fall back to env/settings if empty
+    try:
+        _tenant = os.getenv("MS_TENANT_ID") or get_setting("MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
+    except Exception:
+        _tenant = os.getenv("MS_TENANT_ID") or ""
+    try:
+        _client_id = os.getenv("MS_CLIENT_ID") or get_setting("MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
+    except Exception:
+        _client_id = os.getenv("MS_CLIENT_ID") or ""
+    try:
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting("MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
+    except Exception:
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or ""
+
+    if not to_addr:
+        return "Missing recipient email"
+    if not (_tenant and _client_id and _client_secret):
+        return "Graph not configured. Set MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET"
+    if not sender:
+        return "Missing sender mailbox. Set MS_SENDER_UPN or settings key ms_sender_upn"
+
+    # Acquire app-only token
     try:
         token_r = requests.post(
-            f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token",
-            data={"client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
-                  "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"},
+            f"https://login.microsoftonline.com/{_tenant}/oauth2/v2.0/token",
+            data={
+                "client_id": _client_id,
+                "client_secret": _client_secret,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "client_credentials",
+            },
             timeout=20,
         )
+    except Exception as e:
+        return f"Graph token exception: {e}"
+
+    if token_r.status_code != 200:
+        return f"Graph token error {token_r.status_code}: {token_r.text[:300]}"
+    try:
         token = token_r.json().get("access_token")
-        if not token: return f"Graph token error: {token_r.text[:200]}"
+    except Exception:
+        token = None
+    if not token:
+        return f"Graph token error: {token_r.text[:300]}"
+
+    # Build payload
+    payload = {
+        "message": {
+            "subject": subject or "",
+            "body": {"contentType": "Text", "content": body or ""},
+            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+            "from": {"emailAddress": {"address": sender}},
+        },
+        "saveToSentItems": True,  # boolean must be used
+    }
+
+    send_url = f"https://graph.microsoft.com/v1.0/users/{quote_plus(sender)}/sendMail"
+    try:
         r = requests.post(
-            f"https://graph.microsoft.com/v1.0/users/me/sendMail",
+            send_url,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"message": {"subject": subject, "body": {"contentType": "Text", "content": body},
-                              "toRecipients": [{"emailAddress": {"address": to_addr}}]}, "saveToSentItems": "true"},
-            timeout=20,
+            json=payload,
+            timeout=30,
         )
-        return "Sent" if r.status_code in (200, 202) else f"Graph send error {r.status_code}: {r.text[:200]}"
     except Exception as e:
         return f"Graph send exception: {e}"
 
-# ---------- Email Scraper (polite, small crawl) ----------
-EMAIL_REGEX = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+    if r.status_code in (200, 202):
+        return "Sent"
+
+    # surface helpful diagnostics
+    try:
+        err_json = r.json()
+        err_txt = str(err_json)[:500]
+    except Exception:
+        err_txt = (r.text or "")[:500]
+    return f"Graph send error {r.status_code}: {err_txt}"
 
 def _clean_url(url: str) -> str:
     if not url: return ""
@@ -3427,13 +3481,13 @@ def render_proposal_builder():
 
 # ---- Attach feature tabs now that functions are defined ----
 try:
-    with tabs[5]:
+    with legacy_tabs[5]:
         render_rfp_analyzer()
 except Exception as e:
     st.caption(f"[RFP Analyzer tab note: {e}]")
 
 try:
-    with tabs[12]:
+    with legacy_tabs[12]:
         render_proposal_builder()
 except Exception as e:
     st.caption(f"[Proposal Builder tab note: {e}]")
