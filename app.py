@@ -1877,9 +1877,12 @@ with legacy_tabs[3]:
                     status = send_via_graph(m["to"], m["subject"], m["body"])
                 else:
                     status = "Preview"
-                _ensure_outreach_log(get_db()); get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
+                conn = get_db()
+_ensure_outreach_log(conn)
+conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
+conn.commit()
                 get_db().commit(); sent += 1
             st.success(f"Processed {sent} messages")
 
