@@ -1547,6 +1547,9 @@ with legacy_tabs[1]:
         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
+    st.markdown('#### Saved vendors')
+    _render_saved_vendors_manager()
+
 with legacy_tabs[2]:
 
 
@@ -3520,16 +3523,10 @@ with conn:
     """)
 
 
-# === Saved vendors manager (auto-inserted) ===
-try:
-    conn = get_db()
-except Exception as _e_getdb:
-    st.error(f"Database connection error: {_e_getdb}")
-
+# === Saved vendors manager (scoped helper) ===
 def _render_saved_vendors_manager(_container=None):
     import pandas as pd
     _c = _container or st
-    _c.markdown("### Saved vendors")
     try:
         conn = get_db()
     except Exception as e:
@@ -3567,7 +3564,6 @@ def _render_saved_vendors_manager(_container=None):
 
     if _v.empty:
         _c.info("No vendors saved yet. Use your import above or add one manually below.")
-        # Show empty editor with columns for manual add
         _v = pd.DataFrame([{
             "id": None, "company":"", "naics":"", "trades":"",
             "phone":"", "email":"", "website":"", "city":"", "state":"",
@@ -3576,7 +3572,6 @@ def _render_saved_vendors_manager(_container=None):
     else:
         _v = _v.copy()
 
-    # Build a clickable link column
     def _mk(u):
         u = "" if u is None else str(u).strip()
         if not u:
@@ -3641,6 +3636,7 @@ def _render_saved_vendors_manager(_container=None):
 
     with c2:
         try:
+            import pandas as pd
             all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
         except Exception:
             all_ids = []
@@ -3659,10 +3655,4 @@ def _render_saved_vendors_manager(_container=None):
     with c3:
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 # === End Saved vendors manager ===
-
-
-
-
-st.header("Vendors")
-_render_saved_vendors_manager()
 
