@@ -1547,6 +1547,8 @@ with legacy_tabs[1]:
         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
+    st.divider()
+# _render_saved_vendors_manager()  # disabled (was causing bleed-through)
 with legacy_tabs[2]:
 
 
@@ -3526,7 +3528,7 @@ try:
 except Exception as _e_getdb:
     st.error(f"Database connection error: {_e_getdb}")
 
-# REMOVED (kept only under Subcontractor Finder): def _render_saved_vendors_manager(_container=None):
+def _render_saved_vendors_manager(_container=None):
     import pandas as pd
     _c = _container or st
     _c.markdown("### Saved vendors")
@@ -3597,12 +3599,12 @@ except Exception as _e_getdb:
         },
         use_container_width=True,
         num_rows="dynamic",
-        key="vendors_grid"
+        key="vendors_grid_tab1"
     )
 
     c1, c2, c3 = _c.columns([1,1,2])
     with c1:
-        if _c.button("Save changes", key="vendors_save_btn"):
+        if _c.button("Save changes", key="vendors_save_btn_tab1"):
             try:
                 cur = conn.cursor()
                 try:
@@ -3644,8 +3646,8 @@ except Exception as _e_getdb:
             all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
         except Exception:
             all_ids = []
-        del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids")
-        if _c.button("Delete selected", key="vendors_del_btn"):
+        del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids_tab1")
+        if _c.button("Delete selected", key="vendors_del_btn_tab1"):
             try:
                 if del_ids:
                     cur = conn.cursor()
@@ -3661,7 +3663,3 @@ except Exception as _e_getdb:
 # === End Saved vendors manager ===
 
 
-
-
-st.header("Vendors")
-# REMOVED (kept only under Subcontractor Finder): _render_saved_vendors_manager()
