@@ -1732,12 +1732,57 @@ with legacy_tabs[3]:
             body_filled = body.format(company=name, scope=scope_hint, due=due)
             st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
         st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
+
+        # SMTP email sender helpers
+        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            msg = MIMEMultipart()
+            msg['From'] = from_addr
+            msg['To'] = to_addr
+            msg['Subject'] = subject
+            if reply_to:
+                msg['Reply-To'] = reply_to
+            msg.attach(MIMEText(body, 'plain'))
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(from_addr, [to_addr], msg.as_string())
+
+        def _send_via_gmail(to_addr, subject, body):
+            # Requires st.secrets: smtp_user, smtp_pass
+            smtp_user = st.secrets.get("smtp_user")
+            smtp_pass = st.secrets.get("smtp_pass")
+            if not smtp_user or not smtp_pass:
+                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
+            from_addr = st.secrets.get("smtp_from", smtp_user)
+            reply_to = st.secrets.get("smtp_reply_to", None)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+
+        def _send_via_office365(to_addr, subject, body):
+            # Requires st.secrets: smtp_user, smtp_pass
+            smtp_user = st.secrets.get("smtp_user")
+            smtp_pass = st.secrets.get("smtp_pass")
+            if not smtp_user or not smtp_pass:
+                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
+            from_addr = st.secrets.get("smtp_from", smtp_user)
+            reply_to = st.secrets.get("smtp_reply_to", None)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
+
     if st.session_state.get("mail_bodies"):
-        send_method = st.selectbox("Send with", ["Preview only","Microsoft Graph"])
+        send_method = st.selectbox("Send with", ["Preview only","Gmail SMTP","Office365 SMTP","Microsoft Graph"])
         if st.button("Send now"):
             sent = 0
             for m in st.session_state["mail_bodies"]:
-                status = send_via_graph(m["to"], m["subject"], m["body"]) if send_method=="Microsoft Graph" else "Preview"
+                if send_method=="Gmail SMTP":
+                    _send_via_gmail(m["to"], m["subject"], m["body"]); status="Sent"
+                elif send_method=="Office365 SMTP":
+                    _send_via_office365(m["to"], m["subject"], m["body"]); status="Sent"
+                elif send_method=="Microsoft Graph":
+                    status = send_via_graph(m["to"], m["subject"], m["body"])
+                else:
+                    status = "Preview"
                 get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
@@ -3656,7 +3701,6 @@ with conn:
         created_at text default current_timestamp
     )
     """)
-
 
 
 
