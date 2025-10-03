@@ -3881,4 +3881,3 @@ with conn:
         created_at text default current_timestamp
     )
     """)
-
