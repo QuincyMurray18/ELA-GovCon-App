@@ -1772,7 +1772,7 @@ with legacy_tabs[3]:
 
     # Ensure email_templates table exists
     try:
-    conn.execute("""
+        conn.execute("""
     create table if not exists email_templates(
     name text primary key,
     subject text,
@@ -1787,14 +1787,14 @@ with legacy_tabs[3]:
 
     # Vendors
     try:
-    df_v = pd.read_sql_query("select * from vendors", conn)
+        df_v = pd.read_sql_query("select * from vendors", conn)
     except Exception as e:
     st.error(f"Could not load vendors: {e}")
     df_v = pd.DataFrame(columns=["company","email"])
 
     # Load template list
     try:
-    t = pd.read_sql_query("select * from email_templates order by name", conn)
+        t = pd.read_sql_query("select * from email_templates order by name", conn)
     except Exception as e:
     st.error(f"Could not load templates: {e}")
     t = pd.DataFrame(columns=["name","subject","body"])
@@ -1816,7 +1816,7 @@ with legacy_tabs[3]:
     with col1:
     if st.button("Save template"):
     try:
-    conn.execute("""insert into email_templates(name, subject, body)
+        conn.execute("""insert into email_templates(name, subject, body)
     values(?,?,?)
     on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp""",
     (pick_t, subj, body))
@@ -1829,7 +1829,7 @@ with legacy_tabs[3]:
     new_name = st.text_input("New template name", value="", key="tpl_new_name")
     if st.button("Save as new") and new_name.strip():
     try:
-    conn.execute("""insert into email_templates(name, subject, body) values(?,?,?)""",
+        conn.execute("""insert into email_templates(name, subject, body) values(?,?,?)""",
     (new_name.strip(), subj, body))
     conn.commit()
     st.success(f"New template '{new_name.strip()}' created.")
@@ -1840,7 +1840,7 @@ with legacy_tabs[3]:
     with col3:
     if st.button("Delete template") and pick_t:
     try:
-    conn.execute("delete from email_templates where name=?", (pick_t,))
+        conn.execute("delete from email_templates where name=?", (pick_t,))
     conn.commit()
     st.success(f"Template '{pick_t}' deleted.")
     st.experimental_rerun()
@@ -1892,7 +1892,7 @@ with legacy_tabs[3]:
     with c3:
     if st.button("Delete template", help="Delete the selected template", key="tpl_delete"):
     try:
-    conn.execute("delete from email_templates where name=?", (pick_t,))
+        conn.execute("delete from email_templates where name=?", (pick_t,))
     conn.commit()
     st.success(f"Template '{pick_t}' deleted")
     st.experimental_rerun()
@@ -1992,13 +1992,13 @@ with legacy_tabs[3]:
     def _to_sqlite_value(v):
     # Normalize pandas/NumPy/complex types to Python primitives or None
     try:
-    import numpy as np
+        import numpy as np
     import pandas as pd
     if v is None:
     return None
     # Pandas NA
     try:
-    if pd.isna(v):
+        if pd.isna(v):
     return None
     except Exception:
     pass
@@ -2011,7 +2011,7 @@ with legacy_tabs[3]:
     # Bytes -> decode
     if isinstance(v, (bytes, bytearray)):
     try:
-    return v.decode("utf-8", "ignore")
+        return v.decode("utf-8", "ignore")
     except Exception:
     return str(v)
     # Other types: cast to str for safety
@@ -2029,7 +2029,7 @@ with legacy_tabs[3]:
     if df is None or getattr(df, "empty", True):
     return 0, 0
     try:
-    df = df.where(df.notnull(), None)
+        df = df.where(df.notnull(), None)
     except Exception:
     pass
 
