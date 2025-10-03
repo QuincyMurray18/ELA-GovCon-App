@@ -2156,6 +2156,76 @@ with tabs[__tabs_base + 3]:
                     _df["monthly_spend"] = _df.apply(lambda r: (float(r["amount"]) / r["term_months"]) if r["term_months"] and r["term_months"] > 0 else None, axis=1)
 
                     st.markdown("#### Diagnostics: term and monthly spend")
+                    # Save selected awards as benchmarks with your annotations
+                    st.markdown("#### Save selected awards to your benchmark library")
+                    try:
+                        _choices = _df["award_id"].dropna().astype(str).unique().tolist()
+                    except Exception:
+                        _choices = []
+                    _sel_awards = st.multiselect("Pick award IDs to tag", _choices, key="md_pick_awards")
+                    with st.form("md_bench_form"):
+                        _sqft = st.number_input("Facility size sqft", min_value=0, step=1000, value=0, key="md_bench_sqft")
+                        _freq = st.number_input("Visits per week", min_value=0, max_value=14, step=1, value=5, key="md_bench_freq")
+                        _facility = st.text_input("Facility type", value="", key="md_bench_facility")
+                        _scope = st.text_input("Scope tags comma separated", value="daily, restrooms, trash, floors", key="md_bench_scope")
+                        _cpi = st.number_input("Inflation adjust percent per year", min_value=0.0, max_value=20.0, value=3.0, step=0.5, key="md_bench_cpi")
+                        _note = st.text_area("Notes", value="", key="md_bench_notes")
+                        _save = st.form_submit_button("Save to benchmarks")
+                    if _save and _sel_awards:
+                        import pandas as _pd, math as _math
+                        from datetime import datetime as _dtd
+                        _rows = _df[_df["award_id"].astype(str).isin(_sel_awards)].to_dict("records")
+                        for r in _rows:
+                            _tm = r.get("term_months") or 12.0
+                            try:
+                                # Simple CPI adjustment by term in years
+                                _years = max((_tm / 12.0), 0.01)
+                                _factor = (1.0 + float(_cpi)/100.0) ** _years
+                            except Exception:
+                                _factor = 1.0
+                            _annual = float(r["amount"]) * (12.0 / _tm) if _tm and _tm > 0 else float(r["amount"])
+                            _sqft_val = float(_sqft) if _sqft and _sqft > 0 else None
+                            _dpsf = (_annual / _sqft_val) if _sqft_val else None
+                            try:
+                                conn.execute(
+                                    "insert into pricing_benchmarks(award_id, agency, recipient, start, end, amount, term_months, monthly_spend, sqft, freq_per_week, facility_type, scope_tags, dollars_per_sqft_year, cpi_factor, amount_adj, notes) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                    (str(r.get("award_id")), str(r.get("agency")), str(r.get("recipient")), str(r.get("start")), str(r.get("end")), float(r.get("amount") or 0), float(_tm or 0), float(r.get("monthly_spend") or 0), _sqft_val, int(_freq or 0), _facility, _scope, float(_dpsf) if _dpsf is not None else None, float(_factor), float(r.get("amount") or 0) * float(_factor), _note)
+                                )
+                                conn.commit()
+                            except Exception as _e:
+                                st.warning(f"Save failed for {r.get('award_id')}: {_e}")
+                        st.success(f"Saved {len(_sel_awards)} benchmark rows")
+
+                    # View and use your benchmarks
+                    with st.expander("Your benchmark library", expanded=False):
+                        try:
+                            _bench = _pd.read_sql_query("select * from pricing_benchmarks order by id desc limit 100", conn)
+                        except Exception:
+                            _bench = _pd.DataFrame()
+                        if _bench is None or _bench.empty:
+                            st.caption("No benchmarks yet. Save from the table above.")
+                        else:
+                            st.dataframe(_bench, use_container_width=True)
+                            # Compute medians for $ per sqft and monthly spend
+                            try:
+                                _med_sqft = _pd.to_numeric(_bench["dollars_per_sqft_year"], errors="coerce").dropna().median()
+                            except Exception:
+                                _med_sqft = None
+                            try:
+                                _med_month = _pd.to_numeric(_bench["monthly_spend"], errors="coerce").dropna().median()
+                            except Exception:
+                                _med_month = None
+                            if _med_sqft:
+                                st.markdown(f"**Median dollars per sqft per year across benchmarks: ${_med_sqft:,.2f}**")
+                            if _med_month:
+                                st.markdown(f"**Median monthly spend across benchmarks: ${_med_month:,.0f}**")
+                            _apply_sqft = st.number_input("Use sqft to apply median $ per sqft", min_value=0, step=1000, value=0, key="md_apply_sqft")
+                            if _apply_sqft and _apply_sqft > 0 and _med_sqft:
+                                _hint = float(_apply_sqft) * float(_med_sqft)
+                                if st.button("Set base cost from benchmark median", key="md_bench_setbase"):
+                                    st.session_state["pricing_base_cost"] = float(_hint)
+                                    st.success(f"Base cost set to ${_hint:,.2f} from benchmark median. Recalculate above.")
+    
                     st.dataframe(_df[["award_id","recipient","agency","start","end","amount","term_months","monthly_spend"]].head(50), use_container_width=True)
 
                     with st.expander("Implied $/sqft/year calculator", expanded=False):
@@ -3269,3 +3339,28 @@ try:
         render_proposal_builder()
 except Exception as e:
     st.caption(f"[Proposal Builder tab note: {e}]")
+
+with conn:
+    conn.execute("""
+    create table if not exists pricing_benchmarks(
+        id integer primary key,
+        award_id text,
+        agency text,
+        recipient text,
+        start text,
+        end text,
+        amount real,
+        term_months real,
+        monthly_spend real,
+        sqft real,
+        freq_per_week integer,
+        facility_type text,
+        scope_tags text,
+        dollars_per_sqft_year real,
+        cpi_factor real,
+        amount_adj real,
+        notes text,
+        source text default 'USAspending',
+        created_at text default current_timestamp
+    )
+    """)
