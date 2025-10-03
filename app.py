@@ -1770,50 +1770,68 @@ with legacy_tabs[3]:
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
 
+
     # --- Template manager ---
-    t = pd.read_sql_query("select * from email_templates order by name", conn)
+    t = pd.read_sql_query("select * from email_templates order by name", get_db())
     names = t["name"].tolist() if not t.empty else ["RFQ Request"]
     pick_t = st.selectbox("Template", options=names, key="tpl_pick_name")
-    tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
+    tpl = pd.read_sql_query("select subject, body from email_templates where name=?", get_db(), params=(pick_t,))
     subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
     body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
-    # Use columns for actions to prevent layout shift
+
     subj = st.text_input("Subject", value=subj_default, key="tpl_subject")
     body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key="tpl_body")
+
     colA, colB, colC, colD = st.columns([1,1,1,2])
+
     with colA:
         if st.button("Update selected", key="tpl_btn_update"):
-            conn.execute(
+            _conn = get_db()
+            _conn.execute(
                 """
-                insert into email_templates(name, subject, body)
-                values(?,?,?)
-                on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp
+                INSERT INTO email_templates(name, subject, body)
+                VALUES(?,?,?)
+                ON CONFLICT(name) DO UPDATE SET
+                    subject=excluded.subject,
+                    body=excluded.body,
+                    updated_at=CURRENT_TIMESTAMP
                 """,
                 (pick_t, subj, body),
             )
-            conn.commit()
+            _conn.commit()
             st.success(f"Updated '{pick_t}'")
             st.rerun()
+
     with colB:
         new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
         if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
-            conn.execute(
-                "insert into email_templates(name, subject, body) values(?,?,?) on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp",
+            _conn = get_db()
+            _conn.execute(
+                """
+                INSERT INTO email_templates(name, subject, body)
+                VALUES(?,?,?)
+                ON CONFLICT(name) DO UPDATE SET
+                    subject=excluded.subject,
+                    body=excluded.body,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
                 (new_name.strip(), subj, body),
             )
-            conn.commit()
+            _conn.commit()
             st.success(f"Saved as '{new_name.strip()}'")
             st.rerun()
+
     with colC:
         confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
         if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
-            conn.execute("delete from email_templates where name=?", (pick_t,))
-            conn.commit()
+            _conn = get_db()
+            _conn.execute("DELETE FROM email_templates WHERE name=?", (pick_t,))
+            _conn.commit()
             st.warning(f"Deleted '{pick_t}'")
             st.rerun()
+
     with colD:
         st.caption("Tips: Use placeholders like {company}, {scope}, {due}.")
-
     picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
     scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
