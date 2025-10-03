@@ -1706,6 +1706,33 @@ with legacy_tabs[2]:
         conn.commit(); st.success("Saved")
 
 with legacy_tabs[3]:
+        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            msg = MIMEMultipart()
+            msg['From'] = from_addr
+            msg['To'] = to_addr
+            msg['Subject'] = subject
+            if reply_to:
+                msg['Reply-To'] = reply_to
+            msg.attach(MIMEText(body, 'plain'))
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(from_addr, [to_addr], msg.as_string())
+
+        def _send_via_gmail(to_addr, subject, body):
+            # Requires st.secrets: smtp_user, smtp_pass
+            smtp_user = st.secrets.get("smtp_user")
+            smtp_pass = st.secrets.get("smtp_pass")
+            if not smtp_user or not smtp_pass:
+                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
+            from_addr = st.secrets.get("smtp_from", smtp_user)
+            reply_to = st.secrets.get("smtp_reply_to", None)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+
+        def _send_via_office365(to_addr, subject, body):
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
@@ -1734,33 +1761,7 @@ with legacy_tabs[3]:
         st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
 
         # SMTP email sender helpers
-        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart()
-            msg['From'] = from_addr
-            msg['To'] = to_addr
-            msg['Subject'] = subject
-            if reply_to:
-                msg['Reply-To'] = reply_to
-            msg.attach(MIMEText(body, 'plain'))
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, [to_addr], msg.as_string())
 
-        def _send_via_gmail(to_addr, subject, body):
-            # Requires st.secrets: smtp_user, smtp_pass
-            smtp_user = st.secrets.get("smtp_user")
-            smtp_pass = st.secrets.get("smtp_pass")
-            if not smtp_user or not smtp_pass:
-                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
-            from_addr = st.secrets.get("smtp_from", smtp_user)
-            reply_to = st.secrets.get("smtp_reply_to", None)
-            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
-
-        def _send_via_office365(to_addr, subject, body):
             # Requires st.secrets: smtp_user, smtp_pass
             smtp_user = st.secrets.get("smtp_user")
             smtp_pass = st.secrets.get("smtp_pass")
@@ -1907,8 +1908,6 @@ def save_opportunities(df, default_assignee=None):
 
     conn.commit()
     return inserted, updated
-
-
 with legacy_tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
@@ -3701,7 +3700,6 @@ with conn:
         created_at text default current_timestamp
     )
     """)
-
 
 
 
