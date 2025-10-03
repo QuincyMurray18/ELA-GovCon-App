@@ -1770,17 +1770,48 @@ with legacy_tabs[3]:
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
     t = pd.read_sql_query("select * from email_templates order by name", conn)
-    names = t["name"].tolist() if not t.empty else ["RFQ Request"]
-    pick_t = st.selectbox("Template", options=names)
+    
+names = t["name"].tolist() if not t.empty else ["RFQ Request"]
+    pick_t = st.selectbox("Template", options=names, key="tpl_pick_name")
     tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
     subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
     body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
-    subj = st.text_input("Subject", value=subj_default)
-    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220)
-    if st.button("Save template"):
-        conn.execute("""insert into email_templates(name, subject, body) values(?,?,?)
-                        on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp""",
-                     (pick_t, subj, body)); conn.commit(); st.success("Template saved")
+    subj = st.text_input("Subject", value=subj_default, key="tpl_subj")
+    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key="tpl_body")
+
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        if st.button("Save template", help="Update the selected template", key="tpl_save"):
+            conn.execute(
+                """insert into email_templates(name, subject, body) values(?,?,?)
+                   on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp""",
+                (pick_t, subj, body)
+            )
+            conn.commit()
+            st.success(f"Template '{pick_t}' saved")
+    with c2:
+        new_name = st.text_input("New template name", value="", placeholder="e.g., Vendor Intro v2", key="tpl_new_name")
+        if st.button("Save as new", help="Create a new template with this name", key="tpl_save_as_new"):
+            nm = (new_name or "").strip()
+            if not nm:
+                st.warning("Enter a new template name first")
+            elif nm in names:
+                st.warning("That template name already exists")
+            else:
+                conn.execute("insert into email_templates(name, subject, body) values(?,?,?)", (nm, subj, body))
+                conn.commit()
+                st.success(f"New template '{nm}' created")
+                st.experimental_rerun()
+    with c3:
+        if st.button("Delete template", help="Delete the selected template", key="tpl_delete"):
+            try:
+                conn.execute("delete from email_templates where name=?", (pick_t,))
+                conn.commit()
+                st.success(f"Template '{pick_t}' deleted")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Could not delete template: {e}")
+
     picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
     scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
