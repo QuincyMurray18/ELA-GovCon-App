@@ -3,68 +3,6 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
-
-# ==== Early SMTP helper so the Gmail stub can send without errors ====
-def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
-                        smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str,
-                        reply_to: str | None = None) -> None:
-    """Minimal SMTP sender used by the early Gmail stub."""
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-
-    msg = MIMEMultipart()
-    msg['From'] = from_addr
-    msg['To'] = to_addr
-    msg['Subject'] = subject
-    if reply_to:
-        msg['Reply-To'] = reply_to
-    msg.attach(MIMEText(body, 'plain'))
-
-    with smtplib.SMTP(smtp_server, smtp_port) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
-# ==== End early SMTP helper ====
-# ==== Early stub to prevent NameError for _send_via_gmail ====
-def _send_via_gmail(to_addr: str, subject: str, body: str, sender: str | None = None) -> str:
-    """
-    Early stub: tries Gmail SMTP using st.secrets; falls back to Graph; returns a status string.
-    """
-    try:
-        import streamlit as st  # for secrets and warnings
-    except Exception:
-        st = None
-    # Try Gmail SMTP if secrets are present
-    smtp_user = smtp_pass = None
-    if st and hasattr(st, "secrets"):
-        smtp_user = st.secrets.get("smtp_user")
-        smtp_pass = st.secrets.get("smtp_pass")
-    if smtp_user and smtp_pass:
-        from_addr = st.secrets.get("smtp_from", smtp_user) if st else (sender or "")
-        reply_to = st.secrets.get("smtp_reply_to") if st else None
-        try:
-            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
-            return "Sent"
-        except Exception as e:
-            if st:
-                try: st.warning(f"Gmail SMTP send failed in early stub: {e}")
-                except Exception: pass
-    # Fallback to Graph or preview
-    try:
-        sender_upn = get_setting("ms_sender_upn", "")  # may be defined elsewhere
-    except Exception:
-        sender_upn = sender or ""
-    try:
-        res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)  # defined elsewhere in app
-        return res if isinstance(res, str) else "Sent"
-    except Exception:
-        if st:
-            try: st.warning("Email preview mode (early stub): configure SMTP or Graph.")
-            except Exception: pass
-        return "Preview"
-# ==== End early stub ====
-
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -155,36 +93,64 @@ _OPENAI_FALLBACK_MODELS = [
 ]
 
 
-def _ensure_outreach_log(conn):
-    """Create outreach_log table if missing; add any missing columns safely."""
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS outreach_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vendor_id INTEGER,
-            contact_method TEXT,
-            to_addr TEXT,
-            subject TEXT,
-            body TEXT,
-            sent_at TEXT,
-            status TEXT
-        )
-    """)
-    # Ensure columns exist for legacy DBs
-    for col, ctype in [
-        ("vendor_id", "INTEGER"),
-        ("contact_method", "TEXT"),
-        ("to_addr", "TEXT"),
-        ("subject", "TEXT"),
-        ("body", "TEXT"),
-        ("sent_at", "TEXT"),
-        ("status", "TEXT"),
-    ]:
+def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
+                        smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str,
+                        reply_to: str | None = None) -> None:
+    """Top level SMTP sender. Keeps email helpers available across the app."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart()
+    msg['From'] = from_addr
+    msg['To'] = to_addr
+    msg['Subject'] = subject
+    if reply_to:
+        msg['Reply-To'] = reply_to
+    msg.attach(MIMEText(body, 'plain'))
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_addr, [to_addr], msg.as_string())
+
+
+def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
+    """
+    Gmail sender using Streamlit secrets.
+    Falls back to Microsoft Graph if Gmail is not configured.
+    Returns "Sent" or "Preview" string to avoid crashes.
+    """
+    try:
+        smtp_user = st.secrets.get("smtp_user")
+        smtp_pass = st.secrets.get("smtp_pass")
+    except Exception:
+        smtp_user = smtp_pass = None
+
+    if smtp_user and smtp_pass:
+        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
+        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
         try:
-            cur.execute(f"ALTER TABLE outreach_log ADD COLUMN {col} {ctype}")
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+            return "Sent"
+        except Exception as e:
+            try:
+                st.warning(f"Gmail SMTP send failed: {e}")
+            except Exception:
+                pass
+    # Fallback to Graph or preview
+    try:
+        sender_upn = get_setting("ms_sender_upn", "")
+    except Exception:
+        sender_upn = ""
+    try:
+        res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)
+        return res if isinstance(res, str) else "Sent"
+    except Exception:
+        try:
+            import streamlit as _st
+            _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
         except Exception:
             pass
-    conn.commit()
+        return "Preview"
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
@@ -1870,6 +1836,12 @@ with legacy_tabs[3]:
             sent = 0
             for m in st.session_state["mail_bodies"]:
                 if send_method=="Gmail SMTP":
+                conn = get_db()
+                conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
+                                values(?,?,?,?,?,?,?)""",
+                             (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
+                conn.commit()
+                sent += 1
                     _send_via_gmail(m["to"], m["subject"], m["body"]); status="Sent"
                 elif send_method=="Office365 SMTP":
                     _send_via_office365(m["to"], m["subject"], m["body"]); status="Sent"
@@ -1877,12 +1849,9 @@ with legacy_tabs[3]:
                     status = send_via_graph(m["to"], m["subject"], m["body"])
                 else:
                     status = "Preview"
-                conn = get_db()
-_ensure_outreach_log(conn)
-conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
+                get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
-conn.commit()
                 get_db().commit(); sent += 1
             st.success(f"Processed {sent} messages")
 
