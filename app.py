@@ -1768,124 +1768,241 @@ with legacy_tabs[2]:
 with legacy_tabs[3]:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
+    conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
 
-    conn = get_db()
-    df_v = pd.read_sql_query("select * from vendors", conn)
-
-    # Template manager
+    # --- Template manager ---
     t = pd.read_sql_query("select * from email_templates order by name", conn)
-    names = t["name"].tolist()
-    pick_t = st.selectbox("Choose template", options=(["➤ New template"] + names) if names else ["➤ New template"])
-
-    if pick_t == "➤ New template":
-        new_name = st.text_input("New template name")
-        subj_default, body_default = "", ""
-    else:
-        new_name = pick_t
-        tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
-        subj_default = tpl.iloc[0]["subject"] if not tpl.empty else ""
-        body_default = tpl.iloc[0]["body"] if not tpl.empty else ""
-
-    subj = st.text_input("Subject", value=subj_default)
-    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220)
-
-    col_save, col_del = st.columns([1,1])
-    with col_save:
-        if st.button("Save template"):
-            nm = (new_name or "").strip()
-            if nm:
-                conn.execute(
-                    """insert into email_templates(name, subject, body) values(?,?,?)
-                       on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp""",
-                    (nm, subj, body)
-                )
-                conn.commit()
-                st.success(f"Template '{nm}' saved")
-                st.experimental_rerun()
-            else:
-                st.error("Please enter a template name")
-    with col_del:
-        if pick_t != "➤ New template" and st.button("Delete template"):
+    names = t["name"].tolist() if not t.empty else ["RFQ Request"]
+    pick_t = st.selectbox("Template", options=names, key="tpl_pick_name")
+    tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
+    subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
+    body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
+    # Use columns for actions to prevent layout shift
+    subj = st.text_input("Subject", value=subj_default, key="tpl_subject")
+    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key="tpl_body")
+    colA, colB, colC, colD = st.columns([1,1,1,2])
+    with colA:
+        if st.button("Update selected", key="tpl_btn_update"):
+            conn.execute(
+                """
+                insert into email_templates(name, subject, body)
+                values(?,?,?)
+                on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp
+                """,
+                (pick_t, subj, body),
+            )
+            conn.commit()
+            st.success(f"Updated '{pick_t}'")
+            st.rerun()
+    with colB:
+        new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
+        if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
+            conn.execute(
+                "insert into email_templates(name, subject, body) values(?,?,?) on conflict(name) do update set subject=excluded.subject, body=excluded.body, updated_at=current_timestamp",
+                (new_name.strip(), subj, body),
+            )
+            conn.commit()
+            st.success(f"Saved as '{new_name.strip()}'")
+            st.rerun()
+    with colC:
+        confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
+        if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
             conn.execute("delete from email_templates where name=?", (pick_t,))
             conn.commit()
-            st.success(f"Template '{pick_t}' deleted")
-            st.experimental_rerun()
+            st.warning(f"Deleted '{pick_t}'")
+            st.rerun()
+    with colD:
+        st.caption("Tips: Use placeholders like {company}, {scope}, {due}.")
 
-    st.divider()
-
-    # Mail merge controls
     picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
     scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
-
     if st.button("Generate emails"):
         st.session_state["mail_bodies"] = []
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
-            to_addr = row.get("email", "")
+            to_addr = row.get("email","")
             body_filled = body.format(company=name, scope=scope_hint, due=due)
-            st.session_state["mail_bodies"].append({
-                "to": to_addr,
-                "subject": subj,
-                "body": body_filled,
-                "vendor_id": int(row["id"])
-            })
+            st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
         st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
 
-    if st.session_state.get("mail_bodies"):
-        st.subheader("Email drafts")
-        for m in st.session_state["mail_bodies"]:
-            st.text_area(f"To: {m['to']} | Subject: {m['subject']}", value=m["body"], height=180)
+        # SMTP email sender helpers
+        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            msg = MIMEMultipart()
+            msg['From'] = from_addr
+            msg['To'] = to_addr
+            msg['Subject'] = subject
+            if reply_to:
+                msg['Reply-To'] = reply_to
+            msg.attach(MIMEText(body, 'plain'))
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(from_addr, [to_addr], msg.as_string())
 
-        send_method = st.selectbox("Send with", ["Preview only", "Gmail SMTP", "Office365 SMTP"])
+        def _send_via_gmail(to_addr, subject, body):
+            # Requires st.secrets: smtp_user, smtp_pass
+            smtp_user = st.secrets.get("smtp_user")
+            smtp_pass = st.secrets.get("smtp_pass")
+            if not smtp_user or not smtp_pass:
+                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
+            from_addr = st.secrets.get("smtp_from", smtp_user)
+            reply_to = st.secrets.get("smtp_reply_to", None)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+
+        def _send_via_office365(to_addr, subject, body):
+            # Requires st.secrets: smtp_user, smtp_pass
+            smtp_user = st.secrets.get("smtp_user")
+            smtp_pass = st.secrets.get("smtp_pass")
+            if not smtp_user or not smtp_pass:
+                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
+            from_addr = st.secrets.get("smtp_from", smtp_user)
+            reply_to = st.secrets.get("smtp_reply_to", None)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
+
+    if st.session_state.get("mail_bodies"):
+        send_method = st.selectbox("Send with", ["Preview only","Gmail SMTP","Office365 SMTP","Microsoft Graph"])
         if st.button("Send now"):
             sent = 0
-
-            # SMTP helpers
-            def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
-                import smtplib
-                from email.mime.text import MIMEText
-                from email.mime.multipart import MIMEMultipart
-                msg = MIMEMultipart()
-                msg['From'] = from_addr
-                msg['To'] = to_addr
-                msg['Subject'] = subject
-                if reply_to:
-                    msg['Reply-To'] = reply_to
-                msg.attach(MIMEText(body, 'plain'))
-                with smtplib.SMTP(smtp_server, smtp_port) as server:
-                    server.starttls()
-                    server.login(smtp_user, smtp_pass)
-                    server.sendmail(from_addr, [to_addr], msg.as_string())
-
-            def _send_via_gmail(to_addr, subject, body):
-                smtp_user = st.secrets.get("smtp_user")
-                smtp_pass = st.secrets.get("smtp_pass")
-                if not smtp_user or not smtp_pass:
-                    raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
-                from_addr = st.secrets.get("smtp_from", smtp_user)
-                _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, st.secrets.get("smtp_reply_to"))
-
-            def _send_via_office365(to_addr, subject, body):
-                smtp_user = st.secrets.get("smtp_user")
-                smtp_pass = st.secrets.get("smtp_pass")
-                if not smtp_user or not smtp_pass:
-                    raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
-                from_addr = st.secrets.get("smtp_from", smtp_user)
-                _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, st.secrets.get("smtp_reply_to"))
-
             for m in st.session_state["mail_bodies"]:
-                if send_method == "Preview only":
-                    status = "Preview"
-                elif send_method == "Gmail SMTP":
-                    _send_via_gmail(m["to"], m["subject"], m["body"]); status = "Sent"
-                elif send_method == "Office365 SMTP":
+                if send_method=="Gmail SMTP":
+                    status = _send_via_gmail(m["to"], m["subject"], m["body"])
+                elif send_method=="Office365 SMTP":
                     _send_via_office365(m["to"], m["subject"], m["body"]); status = "Sent"
+                elif send_method=="Microsoft Graph":
+                    status = send_via_graph(m["to"], m["subject"], m["body"])
                 else:
                     status = "Preview"
-
+                conn = get_db()
+                conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
+                                values(?,?,?,?,?,?,?)""",
+                             (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
+                conn.commit()
                 sent += 1
             st.success(f"Processed {sent} messages")
+
+
+
+# === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
+
+def _ensure_opportunity_columns():
+    conn = get_db(); cur = conn.cursor()
+    # Add columns if missing
+    try: cur.execute("alter table opportunities add column status text default 'New'")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column assignee text")
+    except Exception: pass
+    try: cur.execute("alter table opportunities add column quick_note text")
+    except Exception: pass
+    conn.commit()
+
+def _get_table_cols(name):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"pragma table_info({name})")
+    return [r[1] for r in cur.fetchall()]
+
+def _to_sqlite_value(v):
+    # Normalize pandas/NumPy/complex types to Python primitives or None
+    try:
+        import numpy as np
+        import pandas as pd
+        if v is None:
+            return None
+        # Pandas NA
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        # Numpy scalars
+        if isinstance(v, (np.generic,)):
+            return v.item()
+        # Lists/dicts -> JSON
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        # Bytes -> decode
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode("utf-8", "ignore")
+            except Exception:
+                return str(v)
+        # Other types: cast to str for safety
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
+    except Exception:
+        # Fallback minimal handling
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        return v
+
+def save_opportunities(df, default_assignee=None):
+    """Upsert into opportunities and handle legacy schemas gracefully."""
+    if df is None or getattr(df, "empty", True):
+        return 0, 0
+    try:
+        df = df.where(df.notnull(), None)
+    except Exception:
+        pass
+
+    _ensure_opportunity_columns()
+    cols = set(_get_table_cols("opportunities"))
+
+    inserted = 0
+    updated = 0
+    conn = get_db(); cur = conn.cursor()
+    for _, r in df.iterrows():
+        nid = r.get("sam_notice_id")
+        if not nid:
+            continue
+        cur.execute("select id from opportunities where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+
+        base_fields = {
+            "sam_notice_id": nid,
+            "title": r.get("title"),
+            "agency": r.get("agency"),
+            "naics": r.get("naics"),
+            "psc": r.get("psc"),
+            "place_of_performance": r.get("place_of_performance"),
+            "response_due": r.get("response_due"),
+            "posted": r.get("posted"),
+            "type": r.get("type"),
+            "url": r.get("url"),
+            "attachments_json": r.get("attachments_json"),
+        }
+        # Sanitize all base fields
+        for k, v in list(base_fields.items()):
+            base_fields[k] = _to_sqlite_value(v)
+
+        if row:
+            cur.execute(
+                """update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+                   response_due=?, posted=?, type=?, url=?, attachments_json=? where sam_notice_id=?""",
+                (base_fields["title"], base_fields["agency"], base_fields["naics"], base_fields["psc"],
+                 base_fields["place_of_performance"], base_fields["response_due"], base_fields["posted"],
+                 base_fields["type"], base_fields["url"], base_fields["attachments_json"], base_fields["sam_notice_id"])
+            )
+            updated += 1
+        else:
+            insert_cols = ["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type","url","attachments_json"]
+            insert_vals = [base_fields[c] for c in insert_cols]
+            if "status" in cols:
+                insert_cols.append("status"); insert_vals.append("New")
+            if "assignee" in cols:
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+            if "quick_note" in cols:
+                insert_cols.append("quick_note"); insert_vals.append("")
+            placeholders = ",".join("?" for _ in insert_cols)
+            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+            inserted += 1
+
+    conn.commit()
+    return inserted, updated
+
 
 with legacy_tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
