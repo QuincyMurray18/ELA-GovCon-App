@@ -3,6 +3,29 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
+
+# ==== Early SMTP helper so the Gmail stub can send without errors ====
+def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
+                        smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str,
+                        reply_to: str | None = None) -> None:
+    """Minimal SMTP sender used by the early Gmail stub."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    msg = MIMEMultipart()
+    msg['From'] = from_addr
+    msg['To'] = to_addr
+    msg['Subject'] = subject
+    if reply_to:
+        msg['Reply-To'] = reply_to
+    msg.attach(MIMEText(body, 'plain'))
+
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_addr, [to_addr], msg.as_string())
+# ==== End early SMTP helper ====
 # ==== Early stub to prevent NameError for _send_via_gmail ====
 def _send_via_gmail(to_addr: str, subject: str, body: str, sender: str | None = None) -> str:
     """
