@@ -865,6 +865,8 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
 
 
+
+
 def _clean_placeholders(text: str) -> str:
     if not text:
         return text
@@ -3331,13 +3333,13 @@ def render_proposal_builder():
                 row = cur.fetchone()
                 if row and row[0]:
                     parts.append((sec, row[0].strip()))
-            full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
+            cleaned_parts = [(sec, _clean_placeholders(txt)) for sec, txt in parts]
+            parts = cleaned_parts
+            full_text = "
 
-# Auto-clean placeholders before validation/export
-cleaned_parts = [(sec, _clean_placeholders(txt)) for sec, txt in parts]
-full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in cleaned_parts)
-parts = cleaned_parts
+".join(f"{sec}
 
+{txt}" for sec, txt in parts)
 
             issues, _ = _validate_text_for_guardrails(
                 full_text,
