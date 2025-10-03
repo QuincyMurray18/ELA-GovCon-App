@@ -992,142 +992,6 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
     return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
 
-
-
-# Injected early definition of vendor manager to avoid NameError
-def _render_saved_vendors_manager(_container=None):
-    import pandas as pd
-    _c = _container or st
-    _c.markdown("### Saved vendors")
-    try:
-        conn = get_db()
-    except Exception as e:
-        _c.error(f"DB error: {e}")
-        return
-    try:
-        _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
-    except Exception as e:
-        _c.warning("Vendors table missing. Creating it now...")
-        try:
-            cur = conn.cursor()
-            cur.execute("""
-            create table if not exists vendors(
-                id integer primary key autoincrement,
-                company text,
-                naics text,
-                trades text,
-                phone text,
-                email text,
-                website text,
-                city text,
-                state text,
-                certifications text,
-                set_asides text,
-                notes text,
-                created_at timestamp default current_timestamp,
-                updated_at timestamp default current_timestamp
-            );
-            """)
-            conn.commit()
-            _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
-        except Exception as ce:
-            _c.error(f"Could not create/read vendors table: {ce}")
-            return
-
-    if _v.empty:
-        _c.info("No vendors saved yet. Use your import above or add one manually below.")
-        # Show empty editor with columns for manual add
-        _v = pd.DataFrame([{
-            "id": None, "company":"", "naics":"", "trades":"",
-            "phone":"", "email":"", "website":"", "city":"", "state":"",
-            "certifications":"", "set_asides":"", "notes":""
-        }])
-    else:
-        _v = _v.copy()
-
-    # Build a clickable link column
-    def _mk(u):
-        u = "" if u is None else str(u).strip()
-        if not u:
-            return ""
-        if not (u.startswith("http://") or u.startswith("https://")):
-            return "http://" + u
-        return u
-
-    _v["Link"] = _v.get("website", "").apply(_mk)
-
-    editor = _c.data_editor(
-        _v[[
-            "id","company","naics","trades","phone","email","website","city","state",
-            "certifications","set_asides","notes","Link"
-        ]],
-        column_config={
-            "Link": st.column_config.LinkColumn("Link", display_text="Open"),
-        },
-        use_container_width=True,
-        num_rows="dynamic",
-        key="vendors_grid_tab1"
-    )
-
-    c1, c2, c3 = _c.columns([1,1,2])
-    with c1:
-        if _c.button("Save changes", key="vendors_save_btn_tab1"):
-            try:
-                cur = conn.cursor()
-                try:
-                    editor = editor.where(editor.notnull(), None)
-                except Exception:
-                    pass
-                saved, updated = 0, 0
-                for _, r in editor.iterrows():
-                    vid = r.get("id")
-                    vals = (
-                        r.get("company","") or "",
-                        r.get("naics","") or "",
-                        r.get("trades","") or "",
-                        r.get("phone","") or "",
-                        r.get("email","") or "",
-                        r.get("website","") or "",
-                        r.get("city","") or "",
-                        r.get("state","") or "",
-                        r.get("certifications","") or "",
-                        r.get("set_asides","") or "",
-                        r.get("notes","") or "",
-                    )
-                    if vid is None or (isinstance(vid, float) and pd.isna(vid)) or str(vid).strip()=="" :
-                        cur.execute("""insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes)
-                                       values(?,?,?,?,?,?,?,?,?,?,?)""", vals)
-                        saved += 1
-                    else:
-                        cur.execute("""update vendors
-                                       set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, certifications=?, set_asides=?, notes=?, updated_at=current_timestamp
-                                       where id=?""", vals + (int(vid),))
-                        updated += 1
-                conn.commit()
-                _c.success(f"Saved {saved} new, updated {updated} existing")
-            except Exception as se:
-                _c.error(f"Save failed: {se}")
-
-    with c2:
-        try:
-            all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
-        except Exception:
-            all_ids = []
-        del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids_tab1")
-        if _c.button("Delete selected", key="vendors_del_btn_tab1"):
-            try:
-                if del_ids:
-                    cur = conn.cursor()
-                    for vid in del_ids:
-                        cur.execute("delete from vendors where id=?", (int(vid),))
-                    conn.commit()
-                    _c.success(f"Deleted {len(del_ids)} vendor(s)")
-            except Exception as de:
-                _c.error(f"Delete failed: {de}")
-
-    with c3:
-        _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
-
 TAB_LABELS = [
     "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
 ]
@@ -1683,8 +1547,6 @@ with legacy_tabs[1]:
         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
-    st.divider()
-    _render_saved_vendors_manager()  # show manager only inside Subcontractor Finder
 with legacy_tabs[2]:
 
 
@@ -1706,33 +1568,6 @@ with legacy_tabs[2]:
         conn.commit(); st.success("Saved")
 
 with legacy_tabs[3]:
-        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart()
-            msg['From'] = from_addr
-            msg['To'] = to_addr
-            msg['Subject'] = subject
-            if reply_to:
-                msg['Reply-To'] = reply_to
-            msg.attach(MIMEText(body, 'plain'))
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, [to_addr], msg.as_string())
-
-        def _send_via_gmail(to_addr, subject, body):
-            # Requires st.secrets: smtp_user, smtp_pass
-            smtp_user = st.secrets.get("smtp_user")
-            smtp_pass = st.secrets.get("smtp_pass")
-            if not smtp_user or not smtp_pass:
-                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
-            from_addr = st.secrets.get("smtp_from", smtp_user)
-            reply_to = st.secrets.get("smtp_reply_to", None)
-            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
-
-        def _send_via_office365(to_addr, subject, body):
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
@@ -1759,31 +1594,12 @@ with legacy_tabs[3]:
             body_filled = body.format(company=name, scope=scope_hint, due=due)
             st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
         st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
-
-        # SMTP email sender helpers
-
-            # Requires st.secrets: smtp_user, smtp_pass
-            smtp_user = st.secrets.get("smtp_user")
-            smtp_pass = st.secrets.get("smtp_pass")
-            if not smtp_user or not smtp_pass:
-                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
-            from_addr = st.secrets.get("smtp_from", smtp_user)
-            reply_to = st.secrets.get("smtp_reply_to", None)
-            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
-
     if st.session_state.get("mail_bodies"):
-        send_method = st.selectbox("Send with", ["Preview only","Gmail SMTP","Office365 SMTP","Microsoft Graph"])
+        send_method = st.selectbox("Send with", ["Preview only","Microsoft Graph"])
         if st.button("Send now"):
             sent = 0
             for m in st.session_state["mail_bodies"]:
-                if send_method=="Gmail SMTP":
-                    _send_via_gmail(m["to"], m["subject"], m["body"]); status="Sent"
-                elif send_method=="Office365 SMTP":
-                    _send_via_office365(m["to"], m["subject"], m["body"]); status="Sent"
-                elif send_method=="Microsoft Graph":
-                    status = send_via_graph(m["to"], m["subject"], m["body"])
-                else:
-                    status = "Preview"
+                status = send_via_graph(m["to"], m["subject"], m["body"]) if send_method=="Microsoft Graph" else "Preview"
                 get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
@@ -1792,9 +1608,9 @@ with legacy_tabs[3]:
 
 
 
-# === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
+    # === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
 
-def _ensure_opportunity_columns():
+    def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
@@ -1805,12 +1621,12 @@ def _ensure_opportunity_columns():
     except Exception: pass
     conn.commit()
 
-def _get_table_cols(name):
+    def _get_table_cols(name):
     conn = get_db(); cur = conn.cursor()
     cur.execute(f"pragma table_info({name})")
     return [r[1] for r in cur.fetchall()]
 
-def _to_sqlite_value(v):
+    def _to_sqlite_value(v):
     # Normalize pandas/NumPy/complex types to Python primitives or None
     try:
         import numpy as np
@@ -1845,7 +1661,7 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=None):
+    def save_opportunities(df, default_assignee=None):
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
@@ -1908,6 +1724,8 @@ def save_opportunities(df, default_assignee=None):
 
     conn.commit()
     return inserted, updated
+
+
 with legacy_tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
@@ -3702,4 +3520,148 @@ with conn:
     """)
 
 
+# === Saved vendors manager (auto-inserted) ===
+try:
+    conn = get_db()
+except Exception as _e_getdb:
+    st.error(f"Database connection error: {_e_getdb}")
 
+def _render_saved_vendors_manager(_container=None):
+    import pandas as pd
+    _c = _container or st
+    _c.markdown("### Saved vendors")
+    try:
+        conn = get_db()
+    except Exception as e:
+        _c.error(f"DB error: {e}")
+        return
+    try:
+        _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
+    except Exception as e:
+        _c.warning("Vendors table missing. Creating it now...")
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+            create table if not exists vendors(
+                id integer primary key autoincrement,
+                company text,
+                naics text,
+                trades text,
+                phone text,
+                email text,
+                website text,
+                city text,
+                state text,
+                certifications text,
+                set_asides text,
+                notes text,
+                created_at timestamp default current_timestamp,
+                updated_at timestamp default current_timestamp
+            );
+            """)
+            conn.commit()
+            _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
+        except Exception as ce:
+            _c.error(f"Could not create/read vendors table: {ce}")
+            return
+
+    if _v.empty:
+        _c.info("No vendors saved yet. Use your import above or add one manually below.")
+        # Show empty editor with columns for manual add
+        _v = pd.DataFrame([{
+            "id": None, "company":"", "naics":"", "trades":"",
+            "phone":"", "email":"", "website":"", "city":"", "state":"",
+            "certifications":"", "set_asides":"", "notes":""
+        }])
+    else:
+        _v = _v.copy()
+
+    # Build a clickable link column
+    def _mk(u):
+        u = "" if u is None else str(u).strip()
+        if not u:
+            return ""
+        if not (u.startswith("http://") or u.startswith("https://")):
+            return "http://" + u
+        return u
+
+    _v["Link"] = _v.get("website", "").apply(_mk)
+
+    editor = _c.data_editor(
+        _v[[
+            "id","company","naics","trades","phone","email","website","city","state",
+            "certifications","set_asides","notes","Link"
+        ]],
+        column_config={
+            "Link": st.column_config.LinkColumn("Link", display_text="Open"),
+        },
+        use_container_width=True,
+        num_rows="dynamic",
+        key="vendors_grid"
+    )
+
+    c1, c2, c3 = _c.columns([1,1,2])
+    with c1:
+        if _c.button("Save changes", key="vendors_save_btn"):
+            try:
+                cur = conn.cursor()
+                try:
+                    editor = editor.where(editor.notnull(), None)
+                except Exception:
+                    pass
+                saved, updated = 0, 0
+                for _, r in editor.iterrows():
+                    vid = r.get("id")
+                    vals = (
+                        r.get("company","") or "",
+                        r.get("naics","") or "",
+                        r.get("trades","") or "",
+                        r.get("phone","") or "",
+                        r.get("email","") or "",
+                        r.get("website","") or "",
+                        r.get("city","") or "",
+                        r.get("state","") or "",
+                        r.get("certifications","") or "",
+                        r.get("set_asides","") or "",
+                        r.get("notes","") or "",
+                    )
+                    if vid is None or (isinstance(vid, float) and pd.isna(vid)) or str(vid).strip()=="" :
+                        cur.execute("""insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes)
+                                       values(?,?,?,?,?,?,?,?,?,?,?)""", vals)
+                        saved += 1
+                    else:
+                        cur.execute("""update vendors
+                                       set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, certifications=?, set_asides=?, notes=?, updated_at=current_timestamp
+                                       where id=?""", vals + (int(vid),))
+                        updated += 1
+                conn.commit()
+                _c.success(f"Saved {saved} new, updated {updated} existing")
+            except Exception as se:
+                _c.error(f"Save failed: {se}")
+
+    with c2:
+        try:
+            all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
+        except Exception:
+            all_ids = []
+        del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids")
+        if _c.button("Delete selected", key="vendors_del_btn"):
+            try:
+                if del_ids:
+                    cur = conn.cursor()
+                    for vid in del_ids:
+                        cur.execute("delete from vendors where id=?", (int(vid),))
+                    conn.commit()
+                    _c.success(f"Deleted {len(del_ids)} vendor(s)")
+            except Exception as de:
+                _c.error(f"Delete failed: {de}")
+
+    with c3:
+        _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
+# === End Saved vendors manager ===
+
+
+
+
+st.header("Vendors")
+_render_saved_vendors_manager()
