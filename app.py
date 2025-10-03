@@ -11,169 +11,6 @@ from PyPDF2 import PdfReader
 import docx
 from sklearn.feature_extraction.text import TfidfVectorizer
 # === OCR and clause risk helpers (injected) ===
-
-
-
-
-
-# === Saved vendors manager helper ===
-def _render_saved_vendors_manager(_container=None):
-    import pandas as pd
-    _c = _container or st
-    try:
-        conn = get_db()
-    except Exception as e:
-        _c.error(f"DB error: {e}")
-        return
-
-    # Ensure table exists only if missing
-    try:
-        t = pd.read_sql_query("select name from sqlite_master where type='table' and name='vendors'", conn)
-        table_exists = not t.empty
-    except Exception as e:
-        _c.error(f"DB introspection failed: {e}")
-        return
-
-    if not table_exists:
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                create table if not exists vendors(
-                    id integer primary key autoincrement,
-                    company text,
-                    naics text,
-                    trades text,
-                    phone text,
-                    email text,
-                    website text,
-                    city text,
-                    state text,
-                    certifications text,
-                    set_asides text,
-                    notes text,
-                    source text,
-                    created_at timestamp default current_timestamp,
-                    updated_at timestamp default current_timestamp
-                );
-                """
-            )
-            conn.commit()
-        except Exception as ce:
-            _c.error(f"Could not create vendors table: {ce}")
-            return
-
-    # Detect available columns
-    try:
-        cols_df = pd.read_sql_query("pragma table_info(vendors)", conn)
-        cols = cols_df["name"].tolist()
-    except Exception as e:
-        _c.error(f"Could not read vendors schema: {e}")
-        return
-
-    # Build a safe ORDER BY
-    order_cols = [c for c in ["updated_at", "company"] if c in cols]
-    order_by = " order by " + ", ".join(order_cols) if order_cols else ""
-
-    # Preferred display columns
-    preferred = ["id","company","naics","trades","phone","email","website","city","state","certifications","set_asides","notes","source"]
-    display_cols = [c for c in preferred if c in cols]
-
-    try:
-        _v = pd.read_sql_query(f"select * from vendors{order_by}", conn)
-    except Exception as e:
-        _c.error(f"Could not read vendors: {e}")
-        return
-
-    if _v.empty:
-        _c.info("No vendors saved yet. Add one manually below or use Google Places import above.")
-        # Seed with one blank row using known columns
-        blank = {c: "" for c in display_cols}
-        for k in ["id"]: 
-            if k in cols: blank[k] = None
-        _v = pd.DataFrame([blank])
-    else:
-        # Only keep display columns if present
-        _v = _v[[c for c in display_cols if c in _v.columns] + ([] if "website" in display_cols else [])]
-
-    def _mk(u):
-        if not u:
-            return ""
-        u = str(u).strip()
-        if not u.startswith(("http://","https://")):
-            return "http://" + u
-        return u
-
-    if "website" in _v.columns:
-        _v["Link"] = _v["website"].fillna("").apply(_mk)
-        link_cfg = {"Link": st.column_config.LinkColumn("Link", display_text="Open")}
-    else:
-        _v["Link"] = ""
-        link_cfg = {"Link": st.column_config.TextColumn("Link")}
-
-    editor = _c.data_editor(
-        _v[[c for c in display_cols if c in _v.columns] + ["Link"]],
-        column_config=link_cfg,
-        use_container_width=True,
-        num_rows="dynamic",
-        key="vendors_grid"
-    )
-
-    c1, c2, c3 = _c.columns([1,1,2])
-    with c1:
-        if _c.button("Save changes", key="vendors_save_btn"):
-            try:
-                cur = conn.cursor()
-                try:
-                    editor = editor.where(editor.notnull(), None)
-                except Exception:
-                    pass
-                saved, updated = 0, 0
-                for _, r in editor.iterrows():
-                    vid = r.get("id") if "id" in editor.columns else None
-                    vals = tuple((r.get(k, "") or "") for k in display_cols if k != "id")
-                    if not vid:
-                        placeholders = ",".join(["?"] * len(vals))
-                        cols_insert = ",".join([k for k in display_cols if k != "id"])
-                        cur.execute(f"insert into vendors({cols_insert}) values({placeholders})", vals)
-                        saved += 1
-                    else:
-                        set_clause = ",".join([f"{k}=?" for k in display_cols if k != "id"])
-                        params = vals + (int(vid),)
-                        # If updated_at exists, bump it
-                        if "updated_at" in cols:
-                            set_clause += ", updated_at=current_timestamp"
-                        cur.execute(f"update vendors set {set_clause} where id=?", params)
-                        updated += 1
-                conn.commit()
-                _c.success(f"Saved {saved} new, updated {updated} existing")
-            except Exception as se:
-                _c.error(f"Save failed: {se}")
-
-    with c2:
-        try:
-            if "id" in editor.columns:
-                all_ids = [int(x) for x in editor["id"].dropna().astype(int).tolist()]
-            else:
-                all_ids = []
-        except Exception:
-            all_ids = []
-        del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids")
-        if _c.button("Delete selected", key="vendors_del_btn"):
-            try:
-                if del_ids:
-                    cur = conn.cursor()
-                    for vid in del_ids:
-                        cur.execute("delete from vendors where id=?", (int(vid),))
-                    conn.commit()
-                    _c.success(f"Deleted {len(del_ids)} vendor(s)")
-            except Exception as de:
-                _c.error(f"Delete failed: {de}")
-
-    with c3:
-        _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
-# === End helper ===
-
 try:
     import pytesseract  # optional
     from pdf2image import convert_from_bytes
@@ -1709,8 +1546,6 @@ with legacy_tabs[1]:
     with colC:
         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
-
-    st.markdown('#### Saved vendors')
 
 with legacy_tabs[2]:
 
@@ -3550,7 +3385,6 @@ def render_proposal_builder():
             from docx.shared import Inches, Pt
             from docx.oxml.ns import qn
 
-
             parts = []
             for sec in order:
                 cur = conn.cursor()
@@ -3685,3 +3519,149 @@ with conn:
     )
     """)
 
+
+# === Saved vendors manager (auto-inserted) ===
+try:
+    conn = get_db()
+except Exception as _e_getdb:
+    st.error(f"Database connection error: {_e_getdb}")
+
+# REMOVED (kept only under Subcontractor Finder): def _render_saved_vendors_manager(_container=None):
+    import pandas as pd
+    _c = _container or st
+    _c.markdown("### Saved vendors")
+    try:
+        conn = get_db()
+    except Exception as e:
+        _c.error(f"DB error: {e}")
+        return
+    try:
+        _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
+    except Exception as e:
+        _c.warning("Vendors table missing. Creating it now...")
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+            create table if not exists vendors(
+                id integer primary key autoincrement,
+                company text,
+                naics text,
+                trades text,
+                phone text,
+                email text,
+                website text,
+                city text,
+                state text,
+                certifications text,
+                set_asides text,
+                notes text,
+                created_at timestamp default current_timestamp,
+                updated_at timestamp default current_timestamp
+            );
+            """)
+            conn.commit()
+            _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
+        except Exception as ce:
+            _c.error(f"Could not create/read vendors table: {ce}")
+            return
+
+    if _v.empty:
+        _c.info("No vendors saved yet. Use your import above or add one manually below.")
+        # Show empty editor with columns for manual add
+        _v = pd.DataFrame([{
+            "id": None, "company":"", "naics":"", "trades":"",
+            "phone":"", "email":"", "website":"", "city":"", "state":"",
+            "certifications":"", "set_asides":"", "notes":""
+        }])
+    else:
+        _v = _v.copy()
+
+    # Build a clickable link column
+    def _mk(u):
+        u = "" if u is None else str(u).strip()
+        if not u:
+            return ""
+        if not (u.startswith("http://") or u.startswith("https://")):
+            return "http://" + u
+        return u
+
+    _v["Link"] = _v.get("website", "").apply(_mk)
+
+    editor = _c.data_editor(
+        _v[[
+            "id","company","naics","trades","phone","email","website","city","state",
+            "certifications","set_asides","notes","Link"
+        ]],
+        column_config={
+            "Link": st.column_config.LinkColumn("Link", display_text="Open"),
+        },
+        use_container_width=True,
+        num_rows="dynamic",
+        key="vendors_grid"
+    )
+
+    c1, c2, c3 = _c.columns([1,1,2])
+    with c1:
+        if _c.button("Save changes", key="vendors_save_btn"):
+            try:
+                cur = conn.cursor()
+                try:
+                    editor = editor.where(editor.notnull(), None)
+                except Exception:
+                    pass
+                saved, updated = 0, 0
+                for _, r in editor.iterrows():
+                    vid = r.get("id")
+                    vals = (
+                        r.get("company","") or "",
+                        r.get("naics","") or "",
+                        r.get("trades","") or "",
+                        r.get("phone","") or "",
+                        r.get("email","") or "",
+                        r.get("website","") or "",
+                        r.get("city","") or "",
+                        r.get("state","") or "",
+                        r.get("certifications","") or "",
+                        r.get("set_asides","") or "",
+                        r.get("notes","") or "",
+                    )
+                    if vid is None or (isinstance(vid, float) and pd.isna(vid)) or str(vid).strip()=="" :
+                        cur.execute("""insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes)
+                                       values(?,?,?,?,?,?,?,?,?,?,?)""", vals)
+                        saved += 1
+                    else:
+                        cur.execute("""update vendors
+                                       set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, certifications=?, set_asides=?, notes=?, updated_at=current_timestamp
+                                       where id=?""", vals + (int(vid),))
+                        updated += 1
+                conn.commit()
+                _c.success(f"Saved {saved} new, updated {updated} existing")
+            except Exception as se:
+                _c.error(f"Save failed: {se}")
+
+    with c2:
+        try:
+            all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
+        except Exception:
+            all_ids = []
+        del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids")
+        if _c.button("Delete selected", key="vendors_del_btn"):
+            try:
+                if del_ids:
+                    cur = conn.cursor()
+                    for vid in del_ids:
+                        cur.execute("delete from vendors where id=?", (int(vid),))
+                    conn.commit()
+                    _c.success(f"Deleted {len(del_ids)} vendor(s)")
+            except Exception as de:
+                _c.error(f"Delete failed: {de}")
+
+    with c3:
+        _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
+# === End Saved vendors manager ===
+
+
+
+
+st.header("Vendors")
+# REMOVED (kept only under Subcontractor Finder): _render_saved_vendors_manager()
