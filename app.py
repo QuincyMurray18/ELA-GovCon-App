@@ -15,6 +15,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 
+
 # === Saved vendors manager helper ===
 def _render_saved_vendors_manager(_container=None):
     import pandas as pd
@@ -24,9 +25,16 @@ def _render_saved_vendors_manager(_container=None):
     except Exception as e:
         _c.error(f"DB error: {e}")
         return
+
+    # Ensure table exists only if missing
     try:
-        _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
-    except Exception:
+        t = pd.read_sql_query("select name from sqlite_master where type='table' and name='vendors'", conn)
+        table_exists = not t.empty
+    except Exception as e:
+        _c.error(f"DB introspection failed: {e}")
+        return
+
+    if not table_exists:
         try:
             cur = conn.cursor()
             cur.execute(
@@ -44,26 +52,49 @@ def _render_saved_vendors_manager(_container=None):
                     certifications text,
                     set_asides text,
                     notes text,
+                    source text,
                     created_at timestamp default current_timestamp,
                     updated_at timestamp default current_timestamp
                 );
                 """
             )
             conn.commit()
-            _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
         except Exception as ce:
-            _c.error(f"Could not create or read vendors table: {ce}")
+            _c.error(f"Could not create vendors table: {ce}")
             return
 
+    # Detect available columns
+    try:
+        cols_df = pd.read_sql_query("pragma table_info(vendors)", conn)
+        cols = cols_df["name"].tolist()
+    except Exception as e:
+        _c.error(f"Could not read vendors schema: {e}")
+        return
+
+    # Build a safe ORDER BY
+    order_cols = [c for c in ["updated_at", "company"] if c in cols]
+    order_by = " order by " + ", ".join(order_cols) if order_cols else ""
+
+    # Preferred display columns
+    preferred = ["id","company","naics","trades","phone","email","website","city","state","certifications","set_asides","notes","source"]
+    display_cols = [c for c in preferred if c in cols]
+
+    try:
+        _v = pd.read_sql_query(f"select * from vendors{order_by}", conn)
+    except Exception as e:
+        _c.error(f"Could not read vendors: {e}")
+        return
+
     if _v.empty:
-        _c.info("No vendors saved yet. Add one manually below.")
-        _v = pd.DataFrame([{
-            "id": None, "company":"", "naics":"", "trades":"",
-            "phone":"", "email":"", "website":"", "city":"", "state":"",
-            "certifications":"", "set_asides":"", "notes":""
-        }])
+        _c.info("No vendors saved yet. Add one manually below or use Google Places import above.")
+        # Seed with one blank row using known columns
+        blank = {c: "" for c in display_cols}
+        for k in ["id"]: 
+            if k in cols: blank[k] = None
+        _v = pd.DataFrame([blank])
     else:
-        _v = _v.copy()
+        # Only keep display columns if present
+        _v = _v[[c for c in display_cols if c in _v.columns] + ([] if "website" in display_cols else [])]
 
     def _mk(u):
         if not u:
@@ -73,14 +104,16 @@ def _render_saved_vendors_manager(_container=None):
             return "http://" + u
         return u
 
-    _v["Link"] = _v.get("website", "").fillna("").apply(_mk)
+    if "website" in _v.columns:
+        _v["Link"] = _v["website"].fillna("").apply(_mk)
+        link_cfg = {"Link": st.column_config.LinkColumn("Link", display_text="Open")}
+    else:
+        _v["Link"] = ""
+        link_cfg = {"Link": st.column_config.TextColumn("Link")}
 
     editor = _c.data_editor(
-        _v[[
-            "id","company","naics","trades","phone","email","website","city","state",
-            "certifications","set_asides","notes","Link"
-        ]],
-        column_config={"Link": st.column_config.LinkColumn("Link", display_text="Open")},
+        _v[[c for c in display_cols if c in _v.columns] + ["Link"]],
+        column_config=link_cfg,
         use_container_width=True,
         num_rows="dynamic",
         key="vendors_grid"
@@ -97,33 +130,20 @@ def _render_saved_vendors_manager(_container=None):
                     pass
                 saved, updated = 0, 0
                 for _, r in editor.iterrows():
-                    vid = r.get("id")
-                    vals = (
-                        r.get("company","") or "",
-                        r.get("naics","") or "",
-                        r.get("trades","") or "",
-                        r.get("phone","") or "",
-                        r.get("email","") or "",
-                        r.get("website","") or "",
-                        r.get("city","") or "",
-                        r.get("state","") or "",
-                        r.get("certifications","") or "",
-                        r.get("set_asides","") or "",
-                        r.get("notes","") or "",
-                    )
+                    vid = r.get("id") if "id" in editor.columns else None
+                    vals = tuple((r.get(k, "") or "") for k in display_cols if k != "id")
                     if not vid:
-                        cur.execute(
-                            "insert into vendors(company,naics,trades,phone,email,website,city,state,certifications,set_asides,notes) "
-                            "values(?,?,?,?,?,?,?,?,?,?,?)",
-                            vals
-                        )
+                        placeholders = ",".join(["?"] * len(vals))
+                        cols_insert = ",".join([k for k in display_cols if k != "id"])
+                        cur.execute(f"insert into vendors({cols_insert}) values({placeholders})", vals)
                         saved += 1
                     else:
-                        cur.execute(
-                            "update vendors set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, "
-                            "certifications=?, set_asides=?, notes=?, updated_at=current_timestamp where id=?",
-                            vals + (int(vid),)
-                        )
+                        set_clause = ",".join([f"{k}=?" for k in display_cols if k != "id"])
+                        params = vals + (int(vid),)
+                        # If updated_at exists, bump it
+                        if "updated_at" in cols:
+                            set_clause += ", updated_at=current_timestamp"
+                        cur.execute(f"update vendors set {set_clause} where id=?", params)
                         updated += 1
                 conn.commit()
                 _c.success(f"Saved {saved} new, updated {updated} existing")
@@ -132,24 +152,27 @@ def _render_saved_vendors_manager(_container=None):
 
     with c2:
         try:
-            all_ids = [int(x) for x in editor.get("id").dropna().astype(int).tolist()] if "id" in editor else []
+            if "id" in editor.columns:
+                all_ids = [int(x) for x in editor["id"].dropna().astype(int).tolist()]
+            else:
+                all_ids = []
         except Exception:
             all_ids = []
         del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids")
         if _c.button("Delete selected", key="vendors_del_btn"):
             try:
-                cur = conn.cursor()
-                for vid in del_ids:
-                    cur.execute("delete from vendors where id=?", (vid,))
-                conn.commit()
-                _c.success(f"Deleted {len(del_ids)} vendor(s)")
+                if del_ids:
+                    cur = conn.cursor()
+                    for vid in del_ids:
+                        cur.execute("delete from vendors where id=?", (int(vid),))
+                    conn.commit()
+                    _c.success(f"Deleted {len(del_ids)} vendor(s)")
             except Exception as de:
                 _c.error(f"Delete failed: {de}")
 
     with c3:
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 # === End helper ===
-
 
 try:
     import pytesseract  # optional
