@@ -93,64 +93,36 @@ _OPENAI_FALLBACK_MODELS = [
 ]
 
 
-def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
-                        smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str,
-                        reply_to: str | None = None) -> None:
-    """Top level SMTP sender. Keeps email helpers available across the app."""
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    msg = MIMEMultipart()
-    msg['From'] = from_addr
-    msg['To'] = to_addr
-    msg['Subject'] = subject
-    if reply_to:
-        msg['Reply-To'] = reply_to
-    msg.attach(MIMEText(body, 'plain'))
-    with smtplib.SMTP(smtp_server, smtp_port) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
-
-
-def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
-    """
-    Gmail sender using Streamlit secrets.
-    Falls back to Microsoft Graph if Gmail is not configured.
-    Returns "Sent" or "Preview" string to avoid crashes.
-    """
-    try:
-        smtp_user = st.secrets.get("smtp_user")
-        smtp_pass = st.secrets.get("smtp_pass")
-    except Exception:
-        smtp_user = smtp_pass = None
-
-    if smtp_user and smtp_pass:
-        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
-        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
+def _ensure_outreach_log(conn):
+    """Create outreach_log table if missing; add any missing columns safely."""
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS outreach_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vendor_id INTEGER,
+            contact_method TEXT,
+            to_addr TEXT,
+            subject TEXT,
+            body TEXT,
+            sent_at TEXT,
+            status TEXT
+        )
+    """)
+    # Ensure columns exist for legacy DBs
+    for col, ctype in [
+        ("vendor_id", "INTEGER"),
+        ("contact_method", "TEXT"),
+        ("to_addr", "TEXT"),
+        ("subject", "TEXT"),
+        ("body", "TEXT"),
+        ("sent_at", "TEXT"),
+        ("status", "TEXT"),
+    ]:
         try:
-            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
-            return "Sent"
-        except Exception as e:
-            try:
-                st.warning(f"Gmail SMTP send failed: {e}")
-            except Exception:
-                pass
-    # Fallback to Graph or preview
-    try:
-        sender_upn = get_setting("ms_sender_upn", "")
-    except Exception:
-        sender_upn = ""
-    try:
-        res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)
-        return res if isinstance(res, str) else "Sent"
-    except Exception:
-        try:
-            import streamlit as _st
-            _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
+            cur.execute(f"ALTER TABLE outreach_log ADD COLUMN {col} {ctype}")
         except Exception:
             pass
-        return "Preview"
+    conn.commit()
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
@@ -1843,7 +1815,7 @@ with legacy_tabs[3]:
                     status = send_via_graph(m["to"], m["subject"], m["body"])
                 else:
                     status = "Preview"
-                get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
+                _ensure_outreach_log(get_db()); get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                  values(?,?,?,?,?,?,?)""",
                                  (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 get_db().commit(); sent += 1
