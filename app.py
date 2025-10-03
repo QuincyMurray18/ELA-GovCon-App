@@ -1611,64 +1611,64 @@ with legacy_tabs[3]:
     # === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
 
     def _ensure_opportunity_columns():
-    conn = get_db(); cur = conn.cursor()
-    # Add columns if missing
-    try: cur.execute("alter table opportunities add column status text default 'New'")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column assignee text")
-    except Exception: pass
-    try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception: pass
-    conn.commit()
+        conn = get_db(); cur = conn.cursor()
+        # Add columns if missing
+        try: cur.execute("alter table opportunities add column status text default 'New'")
+        except Exception: pass
+        try: cur.execute("alter table opportunities add column assignee text")
+        except Exception: pass
+        try: cur.execute("alter table opportunities add column quick_note text")
+        except Exception: pass
+        conn.commit()
 
     def _get_table_cols(name):
-    conn = get_db(); cur = conn.cursor()
-    cur.execute(f"pragma table_info({name})")
-    return [r[1] for r in cur.fetchall()]
+        conn = get_db(); cur = conn.cursor()
+        cur.execute(f"pragma table_info({name})")
+        return [r[1] for r in cur.fetchall()]
 
     def _to_sqlite_value(v):
-    # Normalize pandas/NumPy/complex types to Python primitives or None
-    try:
-        import numpy as np
-        import pandas as pd
-        if v is None:
-            return None
-        # Pandas NA
+        # Normalize pandas/NumPy/complex types to Python primitives or None
         try:
-            if pd.isna(v):
+            import numpy as np
+            import pandas as pd
+            if v is None:
                 return None
+            # Pandas NA
+            try:
+                if pd.isna(v):
+                    return None
+            except Exception:
+                pass
+            # Numpy scalars
+            if isinstance(v, (np.generic,)):
+                return v.item()
+            # Lists/dicts -> JSON
+            if isinstance(v, (list, dict)):
+                return json.dumps(v)
+            # Bytes -> decode
+            if isinstance(v, (bytes, bytearray)):
+                try:
+                    return v.decode("utf-8", "ignore")
+                except Exception:
+                    return str(v)
+            # Other types: cast to str for safety
+            if not isinstance(v, (str, int, float)):
+                return str(v)
+            return v
+        except Exception:
+            # Fallback minimal handling
+            if isinstance(v, (list, dict)):
+                return json.dumps(v)
+            return v
+
+        def save_opportunities(df, default_assignee=None):
+        """Upsert into opportunities and handle legacy schemas gracefully."""
+        if df is None or getattr(df, "empty", True):
+            return 0, 0
+        try:
+            df = df.where(df.notnull(), None)
         except Exception:
             pass
-        # Numpy scalars
-        if isinstance(v, (np.generic,)):
-            return v.item()
-        # Lists/dicts -> JSON
-        if isinstance(v, (list, dict)):
-            return json.dumps(v)
-        # Bytes -> decode
-        if isinstance(v, (bytes, bytearray)):
-            try:
-                return v.decode("utf-8", "ignore")
-            except Exception:
-                return str(v)
-        # Other types: cast to str for safety
-        if not isinstance(v, (str, int, float)):
-            return str(v)
-        return v
-    except Exception:
-        # Fallback minimal handling
-        if isinstance(v, (list, dict)):
-            return json.dumps(v)
-        return v
-
-    def save_opportunities(df, default_assignee=None):
-    """Upsert into opportunities and handle legacy schemas gracefully."""
-    if df is None or getattr(df, "empty", True):
-        return 0, 0
-    try:
-        df = df.where(df.notnull(), None)
-    except Exception:
-        pass
 
     _ensure_opportunity_columns()
     cols = set(_get_table_cols("opportunities"))
