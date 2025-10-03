@@ -865,6 +865,22 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
 
 
+
+
+def _clean_placeholders(text: str) -> str:
+    if not text:
+        return text
+    # Common placeholder patterns
+    repls = [
+        ("[BRACKET]", ""), ("{PLACEHOLDER}", ""), ("<PLACEHOLDER>", ""),
+        ("INSERT", ""), ("TBD", ""), ("lorem ipsum", ""),
+        ("{INSERT}", ""), ("[INSERT]", ""), ("<INSERT>", ""),
+    ]
+    out = text
+    for old, new in repls:
+        out = out.replace(old, new)
+    return out
+
 def _proposal_context_for(conn, session_id: int, question_text: str):
     rows = pd.read_sql_query(
         "select filename, content_text from rfp_files where session_id=? and ifnull(content_text,'')<>''",
@@ -3319,6 +3335,12 @@ def render_proposal_builder():
                 if row and row[0]:
                     parts.append((sec, row[0].strip()))
             full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in parts)
+
+# Auto-clean placeholders before validation/export
+cleaned_parts = [(sec, _clean_placeholders(txt)) for sec, txt in parts]
+full_text = "\n\n".join(f"{sec}\n\n{txt}" for sec, txt in cleaned_parts)
+parts = cleaned_parts
+
 
             issues, _ = _validate_text_for_guardrails(
                 full_text,
