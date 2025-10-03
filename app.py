@@ -140,6 +140,88 @@ except NameError:
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
+
+
+# === Market pricing data helpers (robust) ===
+def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200, st_debug=None):
+    import requests, pandas as pd, json
+    url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    type_codes = ["A","B","C","D"]
+    def make_filters(n, p, k, start, end):
+        f = {"time_period": [{"start_date": start, "end_date": end}], "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
+        if n: f["naics_codes"] = [n]
+        if p: f["psc_codes"] = [p]
+        if k: f["keywords"] = [k]
+        return f
+    if not date_from or not date_to:
+        from datetime import datetime, timedelta
+        end = datetime.utcnow().date().strftime("%Y-%m-%d")
+        start = (datetime.utcnow().date() - timedelta(days=365*2)).strftime("%Y-%m-%d")
+        date_from, date_to = date_from or start, date_to or end
+    attempts = [("full", make_filters(naics, psc, keyword, date_from, date_to)),
+                ("no_psc", make_filters(naics, "", keyword, date_from, date_to)),
+                ("no_naics", make_filters("", psc, keyword, date_from, date_to)),
+                ("keyword_only", make_filters("", "", keyword or "", date_from, date_to)),
+                ("bare", make_filters("", "", "", date_from, date_to))]
+    last_detail = ""
+    for name, flt in attempts:
+        payload = {"filters": flt, "fields": ["Award ID","Recipient Name","Start Date","End Date","Award Amount","Awarding Agency","NAICS Code","PSC Code"],
+                   "page": 1, "limit": max(1, min(int(limit), 500)), "sort": "Award Amount", "order": "desc"}
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=30)
+            status = r.status_code
+            js = r.json() if status < 500 else {}
+            rows = js.get("results", []) or []
+            if rows:
+                data = [{"award_id": it.get("Award ID"),
+                         "recipient": it.get("Recipient Name"),
+                         "start": it.get("Start Date"),
+                         "end": it.get("End Date"),
+                         "amount": it.get("Award Amount"),
+                         "agency": it.get("Awarding Agency"),
+                         "naics": it.get("NAICS Code"),
+                         "psc": it.get("PSC Code")} for it in rows]
+                diag = f"Attempt {name}: HTTP {status}, rows={len(rows)}"
+                if st_debug is not None:
+                    st_debug.code(json.dumps(payload, indent=2))
+                    st_debug.caption(diag)
+                return pd.DataFrame(data), diag
+            else:
+                last_detail = f"Attempt {name}: HTTP {status}, empty; message: {js.get('detail') or js.get('messages') or ''}"
+        except Exception as e:
+            last_detail = f"Attempt {name}: exception {e}"
+    if st_debug is not None:
+        st_debug.caption(last_detail)
+    return pd.DataFrame(), last_detail
+
+def summarize_award_prices(df):
+    import numpy as np, pandas as pd
+    if df is None or df.empty or "amount" not in df.columns: return {}
+    vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
+    if vals.empty: return {}
+    return {"count": int(vals.size), "min": float(vals.min()), "p25": float(np.percentile(vals,25)),
+            "median": float(np.percentile(vals,50)), "p75": float(np.percentile(vals,75)),
+            "max": float(vals.max()), "mean": float(vals.mean())}
+
+def gsa_calc_rates(query: str, page: int = 1):
+    import requests, pandas as pd
+    url = "https://api.gsa.gov/technology/calc/search"
+    params = {"q": query, "page": page}
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        js = r.json()
+        items = js.get("results", []) or []
+        rows = [{"vendor": it.get("vendor_name"), "labor_category": it.get("labor_category"),
+                 "education": it.get("education_level"), "min_years_exp": it.get("min_years_experience"),
+                 "hourly_ceiling": it.get("current_price"), "schedule": it.get("schedule"), "sin": it.get("sin")} for it in items]
+        return pd.DataFrame(rows)
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
 def _coerce_dt(x):
     if isinstance(x, datetime):
         return x
