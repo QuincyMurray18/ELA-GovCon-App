@@ -140,88 +140,6 @@ except NameError:
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
-
-
-# === Market pricing data helpers (robust) ===
-def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200, st_debug=None):
-    import requests, pandas as pd, json
-    url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    type_codes = ["A","B","C","D"]
-    def make_filters(n, p, k, start, end):
-        f = {"time_period": [{"start_date": start, "end_date": end}], "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
-        if n: f["naics_codes"] = [n]
-        if p: f["psc_codes"] = [p]
-        if k: f["keywords"] = [k]
-        return f
-    if not date_from or not date_to:
-        from datetime import datetime, timedelta
-        end = datetime.utcnow().date().strftime("%Y-%m-%d")
-        start = (datetime.utcnow().date() - timedelta(days=365*2)).strftime("%Y-%m-%d")
-        date_from, date_to = date_from or start, date_to or end
-    attempts = [("full", make_filters(naics, psc, keyword, date_from, date_to)),
-                ("no_psc", make_filters(naics, "", keyword, date_from, date_to)),
-                ("no_naics", make_filters("", psc, keyword, date_from, date_to)),
-                ("keyword_only", make_filters("", "", keyword or "", date_from, date_to)),
-                ("bare", make_filters("", "", "", date_from, date_to))]
-    last_detail = ""
-    for name, flt in attempts:
-        payload = {"filters": flt, "fields": ["Award ID","Recipient Name","Start Date","End Date","Award Amount","Awarding Agency","NAICS Code","PSC Code"],
-                   "page": 1, "limit": max(1, min(int(limit), 500)), "sort": "Award Amount", "order": "desc"}
-        try:
-            r = requests.post(url, headers=headers, json=payload, timeout=30)
-            status = r.status_code
-            js = r.json() if status < 500 else {}
-            rows = js.get("results", []) or []
-            if rows:
-                data = [{"award_id": it.get("Award ID"),
-                         "recipient": it.get("Recipient Name"),
-                         "start": it.get("Start Date"),
-                         "end": it.get("End Date"),
-                         "amount": it.get("Award Amount"),
-                         "agency": it.get("Awarding Agency"),
-                         "naics": it.get("NAICS Code"),
-                         "psc": it.get("PSC Code")} for it in rows]
-                diag = f"Attempt {name}: HTTP {status}, rows={len(rows)}"
-                if st_debug is not None:
-                    st_debug.code(json.dumps(payload, indent=2))
-                    st_debug.caption(diag)
-                return pd.DataFrame(data), diag
-            else:
-                last_detail = f"Attempt {name}: HTTP {status}, empty; message: {js.get('detail') or js.get('messages') or ''}"
-        except Exception as e:
-            last_detail = f"Attempt {name}: exception {e}"
-    if st_debug is not None:
-        st_debug.caption(last_detail)
-    return pd.DataFrame(), last_detail
-
-def summarize_award_prices(df):
-    import numpy as np, pandas as pd
-    if df is None or df.empty or "amount" not in df.columns: return {}
-    vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
-    if vals.empty: return {}
-    return {"count": int(vals.size), "min": float(vals.min()), "p25": float(np.percentile(vals,25)),
-            "median": float(np.percentile(vals,50)), "p75": float(np.percentile(vals,75)),
-            "max": float(vals.max()), "mean": float(vals.mean())}
-
-def gsa_calc_rates(query: str, page: int = 1):
-    import requests, pandas as pd
-    url = "https://api.gsa.gov/technology/calc/search"
-    params = {"q": query, "page": page}
-    try:
-        r = requests.get(url, params=params, timeout=20)
-        r.raise_for_status()
-        js = r.json()
-        items = js.get("results", []) or []
-        rows = [{"vendor": it.get("vendor_name"), "labor_category": it.get("labor_category"),
-                 "education": it.get("education_level"), "min_years_exp": it.get("min_years_experience"),
-                 "hourly_ceiling": it.get("current_price"), "schedule": it.get("schedule"), "sin": it.get("sin")} for it in items]
-        return pd.DataFrame(rows)
-    except Exception:
-        import pandas as pd
-        return pd.DataFrame()
-
-
 def _coerce_dt(x):
     if isinstance(x, datetime):
         return x
@@ -2218,32 +2136,68 @@ with tabs[__tabs_base + 3]:
             if not df_awards.empty and "error" not in df_awards.columns:
                 st.caption(f"USAspending awards from {date_from} to {date_to}")
                 st.dataframe(df_awards.head(50), use_container_width=True)
-                stats = summarize_award_prices(df_awards)
-                if stats:
-                    st.markdown(
-                        f"**Award amount distribution**  "
-                        f"count {stats['count']}  "
-                        f"min ${stats['min']:,.0f}  "
-                        f"p25 ${stats['p25']:,.0f}  "
-                        f"median ${stats['median']:,.0f}  "
-                        f"p75 ${stats['p75']:,.0f}  "
-                        f"max ${stats['max']:,.0f}  "
-                        f"mean ${stats['mean']:,.0f}"
-                    )
-                    if st.button("Set base cost from market median", key="md_set_base"):
-                        st.session_state["pricing_base_cost"] = float(stats["median"])
-                        st.success(f"Base cost set to ${stats['median']:,.2f}. Recalculate above.")
+
+                # Diagnostic breakdown
+                import pandas as _pd
+                from datetime import datetime as _dt
+
+                def _months_between(s, e):
+                    try:
+                        sd = _dt.fromisoformat(str(s)[:10])
+                        ed = _dt.fromisoformat(str(e)[:10])
+                        days = max((ed - sd).days, 1)
+                        return max(round(days / 30.44, 2), 0.01)
+                    except Exception:
+                        return None
+
+                if "start" in df_awards.columns and "end" in df_awards.columns and "amount" in df_awards.columns:
+                    _df = df_awards.copy()
+                    _df["term_months"] = _df.apply(lambda r: _months_between(r["start"], r["end"]), axis=1)
+                    _df["monthly_spend"] = _df.apply(lambda r: (float(r["amount"]) / r["term_months"]) if r["term_months"] and r["term_months"] > 0 else None, axis=1)
+
+                    st.markdown("#### Diagnostics: term and monthly spend")
+                    st.dataframe(_df[["award_id","recipient","agency","start","end","amount","term_months","monthly_spend"]].head(50), use_container_width=True)
+
+                    with st.expander("Implied $/sqft/year calculator", expanded=False):
+                        sqft = st.number_input("Approx facility size (sqft)", min_value=0, step=1000, value=0, key="md_sqft")
+                        per_week = st.number_input("Service frequency (visits per week)", min_value=0, max_value=14, step=1, value=5, key="md_freq")
+                        if sqft and sqft > 0:
+                            _df2 = _df.copy()
+                            _df2["annualized_amount"] = _df2.apply(
+                                lambda r: (float(r["amount"]) * (12.0 / r["term_months"])) if r["term_months"] and r["term_months"] > 0 else float(r["amount"]),
+                                axis=1
+                            )
+                            _df2["dollars_per_sqft_year"] = _df2["annualized_amount"] / float(sqft)
+                            st.caption("Based on your sqft input, here are implied $/sqft/year figures:")
+                            st.dataframe(_df2[["award_id","agency","annualized_amount","dollars_per_sqft_year"]].head(50), use_container_width=True)
+
+                            _vals = _pd.to_numeric(_df2["dollars_per_sqft_year"], errors="coerce").dropna()
+                            if not _vals.empty:
+                                _med = float(_vals.median())
+                                st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
+                                if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
+                                    st.session_state["pricing_base_cost"] = _med * float(sqft)
+                                    st.success(f"Base cost set to ${st.session_state['pricing_base_cost']:,.2f} from implied $/sqft median. Recalculate above.")
+
+                if want_calc:
+                    df_rates = gsa_calc_rates(kw_q or naics_q or psc_q or "janitorial")
+                    if df_rates is not None and not df_rates.empty:
+                        st.caption("GSA CALC sample labor rates")
+                        st.dataframe(df_rates.head(50), use_container_width=True)
+                        import pandas as _pd, numpy as _np
+                        rate_series = _pd.to_numeric(df_rates["hourly_ceiling"], errors="coerce").dropna()
+                        if not rate_series.empty:
+                            with st.expander("Crew cost estimate (GSA CALC)", expanded=False):
+                                crew_size = st.number_input("Crew size (people)", min_value=1, max_value=50, value=3, step=1, key="md_crew")
+                                hrs_per_week = st.number_input("Hours per week (crew)", min_value=1, max_value=168, value=40, step=1, key="md_hours")
+                                rate_med = float(_np.median(rate_series))
+                                est_monthly = rate_med * float(crew_size) * float(hrs_per_week) * 4.33
+                                st.markdown(f"Estimated crew cost at CALC median rate: **${est_monthly:,.0f} / month**")
+                    else:
+                        st.info("No CALC rates returned. Try a simpler keyword.")
             else:
                 st.info("No award results returned. Try broadening filters or increasing look back.")
                 st.caption(diag)
-
-            if want_calc:
-                df_rates = gsa_calc_rates(kw_q or naics_q or psc_q or "janitorial")
-                if df_rates is not None and not df_rates.empty:
-                    st.caption("GSA CALC sample labor rates")
-                    st.dataframe(df_rates.head(50), use_container_width=True)
-                else:
-                    st.info("No CALC rates returned. Try a simpler keyword like janitor or grounds.")
 
 # ---------- Dates (US format for SAM) ----------
 def _us_date(d: datetime.date) -> str:
