@@ -92,6 +92,66 @@ _OPENAI_FALLBACK_MODELS = [
     "gpt-4o-mini","gpt-4o",
 ]
 
+
+def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
+                        smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str,
+                        reply_to: str | None = None) -> None:
+    """Top level SMTP sender. Keeps email helpers available across the app."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart()
+    msg['From'] = from_addr
+    msg['To'] = to_addr
+    msg['Subject'] = subject
+    if reply_to:
+        msg['Reply-To'] = reply_to
+    msg.attach(MIMEText(body, 'plain'))
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_addr, [to_addr], msg.as_string())
+
+
+def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
+    """
+    Gmail sender using Streamlit secrets.
+    Falls back to Microsoft Graph if Gmail is not configured.
+    Returns "Sent" or "Preview" string to avoid crashes.
+    """
+    try:
+        smtp_user = st.secrets.get("smtp_user")
+        smtp_pass = st.secrets.get("smtp_pass")
+    except Exception:
+        smtp_user = smtp_pass = None
+
+    if smtp_user and smtp_pass:
+        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
+        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
+        try:
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+            return "Sent"
+        except Exception as e:
+            try:
+                st.warning(f"Gmail SMTP send failed: {e}")
+            except Exception:
+                pass
+    # Fallback to Graph or preview
+    try:
+        sender_upn = get_setting("ms_sender_upn", "")
+    except Exception:
+        sender_upn = ""
+    try:
+        res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)
+        return res if isinstance(res, str) else "Sent"
+    except Exception:
+        try:
+            import streamlit as _st
+            _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
+        except Exception:
+            pass
+        return "Preview"
+
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
 # ---- Date helpers for SAM search ----
