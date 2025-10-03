@@ -865,12 +865,9 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
 
 
-
-
 def _clean_placeholders(text: str) -> str:
     if not text:
         return text
-    # Common placeholder patterns
     repls = [
         ("[BRACKET]", ""), ("{PLACEHOLDER}", ""), ("<PLACEHOLDER>", ""),
         ("INSERT", ""), ("TBD", ""), ("lorem ipsum", ""),
