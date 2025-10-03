@@ -1850,12 +1850,6 @@ with legacy_tabs[3]:
                 conn.commit()
                 sent += 1
             st.success(f"Processed {sent} messages")
-                    status = "Preview"
-                get_db().execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
-                                 values(?,?,?,?,?,?,?)""",
-                                 (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
-                get_db().commit(); sent += 1
-            st.success(f"Processed {sent} messages")
 
 
 
@@ -3769,6 +3763,5 @@ with conn:
         created_at text default current_timestamp
     )
     """)
-
 
 
