@@ -1814,17 +1814,26 @@ st.divider()
 picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
 scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
 due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
-if st.button("Generate emails"):
-        st.session_state["mail_bodies"] = []
-        for name in picks:
-            row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
-            to_addr = row.get("email","")
-            body_filled = body.format(company=name, scope=scope_hint, due=due)
-            st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
-        st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
 
-        # SMTP email sender helpers
-        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
+if st.button("Generate emails"):
+    st.session_state["mail_bodies"] = []
+    for name in picks:
+        row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
+        to_addr = row.get("email", "")
+        body_filled = body.format(company=name, scope=scope_hint, due=due)
+        st.session_state["mail_bodies"].append({
+            "to": to_addr,
+            "subject": subj,
+            "body": body_filled,
+            "vendor_id": int(row["id"])
+        })
+    st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
+
+if st.session_state.get("mail_bodies"):
+    st.subheader("Email drafts")
+    for m in st.session_state["mail_bodies"]:
+        st.text_area(f"To: {m['to']} | Subject: {m['subject']}", value=m["body"], height=180)
+def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
             import smtplib
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
