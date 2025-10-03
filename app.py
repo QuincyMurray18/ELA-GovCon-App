@@ -1548,7 +1548,7 @@ with legacy_tabs[1]:
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
     st.divider()
-# _render_saved_vendors_manager()  # disabled (was causing bleed-through)
+    _render_saved_vendors_manager()  # show manager only inside Subcontractor Finder
 with legacy_tabs[2]:
 
 
