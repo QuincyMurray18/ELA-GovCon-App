@@ -3,6 +3,45 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
+# ==== Early stub to prevent NameError for _send_via_gmail ====
+def _send_via_gmail(to_addr: str, subject: str, body: str, sender: str | None = None) -> str:
+    """
+    Early stub: tries Gmail SMTP using st.secrets; falls back to Graph; returns a status string.
+    """
+    try:
+        import streamlit as st  # for secrets and warnings
+    except Exception:
+        st = None
+    # Try Gmail SMTP if secrets are present
+    smtp_user = smtp_pass = None
+    if st and hasattr(st, "secrets"):
+        smtp_user = st.secrets.get("smtp_user")
+        smtp_pass = st.secrets.get("smtp_pass")
+    if smtp_user and smtp_pass:
+        from_addr = st.secrets.get("smtp_from", smtp_user) if st else (sender or "")
+        reply_to = st.secrets.get("smtp_reply_to") if st else None
+        try:
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+            return "Sent"
+        except Exception as e:
+            if st:
+                try: st.warning(f"Gmail SMTP send failed in early stub: {e}")
+                except Exception: pass
+    # Fallback to Graph or preview
+    try:
+        sender_upn = get_setting("ms_sender_upn", "")  # may be defined elsewhere
+    except Exception:
+        sender_upn = sender or ""
+    try:
+        res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)  # defined elsewhere in app
+        return res if isinstance(res, str) else "Sent"
+    except Exception:
+        if st:
+            try: st.warning("Email preview mode (early stub): configure SMTP or Graph.")
+            except Exception: pass
+        return "Preview"
+# ==== End early stub ====
+
 import pandas as pd
 import numpy as np
 import streamlit as st
