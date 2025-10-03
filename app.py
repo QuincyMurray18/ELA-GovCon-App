@@ -141,6 +141,106 @@ except NameError:
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
 
+def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None) -> str:
+    """
+    Send mail using Microsoft Graph with application permissions (client credentials).
+    Uses /users/{sender}/sendMail. Returns "Sent" on success or a short diagnostic string on error.
+    Env/settings used:
+      - MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET
+      - MS_SENDER_UPN or settings key ms_sender_upn
+    """
+    try:
+        import os, requests
+        from urllib.parse import quote_plus
+    except Exception as _e_imp:
+        return f"Graph send error: missing dependency ({_e_imp})"
+
+    # Load config: prefer env, then settings table if available
+    try:
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
+    except Exception:
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or ""
+
+    # MS_* may already be loaded at module level; fall back to env/settings if empty
+    try:
+        _tenant = os.getenv("MS_TENANT_ID") or get_setting("MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
+    except Exception:
+        _tenant = os.getenv("MS_TENANT_ID") or ""
+    try:
+        _client_id = os.getenv("MS_CLIENT_ID") or get_setting("MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
+    except Exception:
+        _client_id = os.getenv("MS_CLIENT_ID") or ""
+    try:
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting("MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
+    except Exception:
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or ""
+
+    if not to_addr:
+        return "Missing recipient email"
+    if not (_tenant and _client_id and _client_secret):
+        return "Graph not configured. Set MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET"
+    if not sender:
+        return "Missing sender mailbox. Set MS_SENDER_UPN or settings key ms_sender_upn"
+
+    # Acquire app-only token
+    try:
+        token_r = requests.post(
+            f"https://login.microsoftonline.com/{_tenant}/oauth2/v2.0/token",
+            data={
+                "client_id": _client_id,
+                "client_secret": _client_secret,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "client_credentials",
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        return f"Graph token exception: {e}"
+
+    if token_r.status_code != 200:
+        return f"Graph token error {token_r.status_code}: {token_r.text[:300]}"
+    try:
+        token = token_r.json().get("access_token")
+    except Exception:
+        token = None
+    if not token:
+        return f"Graph token error: {token_r.text[:300]}"
+
+    # Build payload
+    payload = {
+        "message": {
+            "subject": subject or "",
+            "body": {"contentType": "Text", "content": body or ""},
+            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+            "from": {"emailAddress": {"address": sender}},
+        },
+        "saveToSentItems": True,  # boolean must be used
+    }
+
+    send_url = f"https://graph.microsoft.com/v1.0/users/{quote_plus(sender)}/sendMail"
+    try:
+        r = requests.post(
+            send_url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+    except Exception as e:
+        return f"Graph send exception: {e}"
+
+    if r.status_code in (200, 202):
+        return "Sent"
+
+    # surface helpful diagnostics
+    try:
+        err_json = r.json()
+        err_txt = str(err_json)[:500]
+    except Exception:
+        err_txt = (r.text or "")[:500]
+    return f"Graph send error {r.status_code}: {err_txt}"
+
+
+
 
 # === Market pricing data helpers (robust) ===
 def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200, st_debug=None):
@@ -2462,32 +2562,6 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         return out, info
     except Exception as e:
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
-
-def send_via_graph(to_addr, subject, body):
-    if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
-        return "Graph not configured"
-    try:
-        token_r = requests.post(
-            f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token",
-            data={"client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
-                  "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"},
-            timeout=20,
-        )
-        token = token_r.json().get("access_token")
-        if not token: return f"Graph token error: {token_r.text[:200]}"
-        r = requests.post(
-            f"https://graph.microsoft.com/v1.0/users/me/sendMail",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"message": {"subject": subject, "body": {"contentType": "Text", "content": body},
-                              "toRecipients": [{"emailAddress": {"address": to_addr}}]}, "saveToSentItems": "true"},
-            timeout=20,
-        )
-        return "Sent" if r.status_code in (200, 202) else f"Graph send error {r.status_code}: {r.text[:200]}"
-    except Exception as e:
-        return f"Graph send exception: {e}"
-
-# ---------- Email Scraper (polite, small crawl) ----------
-EMAIL_REGEX = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 
 def _clean_url(url: str) -> str:
     if not url: return ""
