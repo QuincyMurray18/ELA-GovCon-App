@@ -4600,3 +4600,95 @@ with legacy_tabs[8]:
     st.subheader("Proposal export and drafts")
 
 
+# === Proposal Builder tab (save/load drafts + DOCX export) ===
+try:
+    with legacy_tabs[12]:
+        st.subheader("Proposal Builder")
+        st.caption("Write in Markdown. Save versions, switch drafts, and export to DOCX.")
+
+        # Load existing drafts
+        drafts = list_proposal_drafts()
+        draft_opts = ["➤ New draft"] + [d["name"] for d in drafts]
+        pick = st.selectbox("Drafts", options=draft_opts, key="proposal_pick")
+
+        # Determine selected path if any
+        sel_path = None
+        if pick != "➤ New draft":
+            try:
+                sel_path = next((d["path"] for d in drafts if d["name"] == pick), None)
+            except Exception:
+                sel_path = None
+
+        # Title + editor
+        default_title = (pick.replace(".md","").split("__",1)[-1] if sel_path else get_setting("company_name","ELA Management LLC") + " Proposal")
+        title = st.text_input("Proposal title", value=st.session_state.get("proposal_title", default_title))
+        if title != st.session_state.get("proposal_title"):
+            st.session_state["proposal_title"] = title
+
+        # Load content for selected draft into editor state once when selection changes
+        if sel_path and st.session_state.get("proposal_loaded_path") != sel_path:
+            try:
+                md = load_proposal_draft(sel_path)
+            except Exception:
+                md = ""
+            st.session_state["proposal_md"] = md
+            st.session_state["proposal_loaded_path"] = sel_path
+        elif "proposal_md" not in st.session_state:
+            st.session_state["proposal_md"] = ""
+
+        md_text = st.text_area("Markdown editor", value=st.session_state.get("proposal_md",""),
+                               height=420, key="proposal_md_editor")
+
+        # Keep session copy in sync
+        st.session_state["proposal_md"] = md_text
+
+        colA, colB, colC, colD = st.columns([1,1,1,1])
+        with colA:
+            if st.button("Save edited draft"):
+                # Always save as a new timestamped file (non-destructive versioning)
+                path = save_proposal_draft(title or "untitled", st.session_state.get("proposal_md",""))
+                st.success(f"Saved to {Path(path).name}")
+                st.session_state.pop("proposal_loaded_path", None)
+                st.rerun()
+        with colB:
+            if sel_path and st.button("Delete selected"):
+                if delete_proposal_draft(sel_path):
+                    st.warning("Draft deleted.")
+                    if st.session_state.get("proposal_loaded_path") == sel_path:
+                        st.session_state.pop("proposal_loaded_path", None)
+                        st.session_state["proposal_md"] = ""
+                    st.rerun()
+                else:
+                    st.error("Delete failed.")
+        with colC:
+            if st.button("Start new draft"):
+                st.session_state.pop("proposal_loaded_path", None)
+                st.session_state["proposal_md"] = ""
+                st.session_state["proposal_title"] = get_setting("company_name","ELA Management LLC") + " Proposal"
+                st.info("New draft started. Enter a title and begin writing.")
+        with colD:
+            logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="proposal_logo")
+            _logo_bytes = logo_file.read() if logo_file else None
+
+        # Preview + export
+        st.markdown("#### Live preview")
+        st.markdown(_normalize_markdown_sections(st.session_state.get("proposal_md","")))
+
+        issues, est_pages = _validate_text_for_guardrails(st.session_state.get("proposal_md",""),
+                                                          page_limit=None, require_font="Times New Roman",
+                                                          require_size_pt=11, margins_in=1.0, line_spacing=1.0,
+                                                          filename_pattern="{company}_{section}_{date}")
+        if issues:
+            st.caption("Checks: " + "; ".join(issues))
+
+        docx_bytes = md_to_docx_bytes_rich(st.session_state.get("proposal_md",""),
+                                           title=_docx_title_if_needed(st.session_state.get("proposal_md",""), title),
+                                           base_font="Times New Roman", base_size_pt=11, margins_in=1.0,
+                                           logo_bytes=_logo_bytes)
+        st.download_button("Export Proposal (DOCX)", data=docx_bytes, file_name="Proposal.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+except Exception as _e_prop:
+    try:
+        st.caption(f"[Proposal Builder tab note: {_e_prop}]")
+    except Exception:
+        pass
