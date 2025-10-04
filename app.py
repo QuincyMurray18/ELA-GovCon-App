@@ -976,12 +976,34 @@ def to_xlsx_bytes(df_dict):
     return bio.getvalue()
 
 
+
 def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
                                   margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
+    """
+    Lightweight validator used across export flows.
+    Returns a tuple: (issues: list[str], estimated_pages: int)
+    Heuristics only — cannot actually inspect fonts from Markdown.
+    """
+    import math, re as _re
+    text = (md_text or "").strip()
     issues = []
-    warnings = []
-    body = (md_text or "").strip()
 
+    # Basic placeholder checks
+    if _re.search(r'\bINSERT\b', text, flags=_re.IGNORECASE):
+        issues.append("Placeholder text 'INSERT' detected. Remove before export.")
+    if _re.search(r'\bTBD\b|\bTODO\b', text, flags=_re.IGNORECASE):
+        issues.append("Unresolved 'TBD/TODO' placeholders present.")
+    if "<>" in text or "[ ]" in text:
+        issues.append("Bracket placeholders found. Replace with final content.")
+
+    # Page length heuristic: ~450 words per page at 11pt single-space
+    words = _re.findall(r'\w+', text)
+    est_pages = max(1, math.ceil(len(words) / 450)) if words else 1
+
+    if page_limit and est_pages > page_limit:
+        issues.append(f"Estimated length is {est_pages} pages which exceeds the {page_limit}-page limit.")
+
+    return issues, est_pages
 
 def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                       margins_in: float = 1.0) -> bytes:
@@ -2244,6 +2266,7 @@ with legacy_tabs[4]:
 
 # (moved) RFP Analyzer call will be added after definition
 
+
 with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
@@ -2265,8 +2288,7 @@ Diff {diff}
 Past performance {past_perf}
 Contact {contact}
 NAICS {", ".join(sorted(set(NAICS_SEEDS)))}
-Certifications Small Business
-Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
+Certifications Small Business"""
             cap_md = llm(system, prompt, max_tokens=900)
             st.session_state["capability_md"] = cap_md
 
@@ -2274,21 +2296,20 @@ Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
         if st.button("Clear draft", key="btn_cap_clear_capability_builder"):
             st.session_state.pop("capability_md", None)
 
-    # Preview + export
     cap_md = st.session_state.get("capability_md", "")
     if cap_md:
         st.markdown("#### Preview")
         st.markdown(cap_md)
-
-        # Guardrails & export
         issues, est_pages = _validate_text_for_guardrails(cap_md, page_limit=2, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
             st.warning("Before export, fix these items: " + "; ".join(issues))
-        docx_bytes = _md_to_docx_bytes(cap_md, title=f"{company} Capability Statement", base_font="Times New Roman", base_size_pt=11, margins_in=1.0)
-        st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
+        _logo = logo_file.read() if logo_file else None
+        docx_bytes = md_to_docx_bytes(cap_md, title=f"{company} Capability Statement", base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
-        st.info("Click **Generate one page** to draft, then export to DOCX.")
+        st.info("Click Generate one page to draft, then export to DOCX.")
+
 
 with legacy_tabs[7]:
     st.subheader("White paper builder")
@@ -2314,13 +2335,13 @@ with legacy_tabs[7]:
         issues, est_pages = _validate_text_for_guardrails(wp_md, page_limit=4, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
             st.warning("Before export, fix these items: " + "; ".join(issues))
-        wp_bytes = _md_to_docx_bytes(wp_md, title=title, base_font="Times New Roman", base_size_pt=11, margins_in=1.0)
-        st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
+        _wp_logo = wp_logo_file.read() if wp_logo_file else None
+        wp_bytes = md_to_docx_bytes(wp_md, title=title, base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
+        st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
-        st.info("Click **Draft white paper** to create a draft, then export to DOCX.")
+        st.info("Click Draft white paper to create a draft, then export to DOCX.")
 
-    
 with legacy_tabs[8]:
     st.subheader("Export to Excel workbook")
     conn = get_db()
@@ -3980,41 +4001,127 @@ with conn:
 
 
 # --- SAFE REDEFINITION: guardrails validator ---
-def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
-                                  margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
+
+
+
+def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                     margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     """
-    Lightweight validator used across export flows.
-    Returns a tuple: (issues: list[str], estimated_pages: int)
-    Heuristics only — we cannot actually inspect fonts from Markdown.
+    Backward compatible wrapper that supports an optional logo header.
+    Signature matches earlier calls that used logo_bytes.
     """
-    text = (md_text or "").strip()
-    issues = []
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import re as _re, io
 
-    # Basic placeholder checks
-    if re.search(r'\bINSERT\b', text, flags=re.IGNORECASE):
-        issues.append("Placeholder text 'INSERT' detected. Remove before export.")
-    if re.search(r'\bTBD\b|\bTODO\b', text, flags=re.IGNORECASE):
-        issues.append("Unresolved 'TBD/TODO' placeholders present.")
-    if "<>" in text or "[ ]" in text:
-        issues.append("Bracket placeholders found. Replace with final content.")
+    # Build a fresh document so we can place a logo at the top if provided
+    doc = Document()
 
-    # Page length heuristic: ~450 words per page at 11pt single-space
-    words = re.findall(r'\w+', text)
-    est_pages = max(1, math.ceil(len(words) / 450)) if words else 1
-
-    if page_limit and est_pages > page_limit:
-        issues.append(f"Estimated length is {est_pages} pages which exceeds the {page_limit}-page limit.")
-
-    # Font/size checks are advisory — cannot assert from Markdown
-    if require_font:
-        pass
-    if require_size_pt:
-        pass
-    if margins_in:
-        pass
-    if line_spacing:
-        pass
-    if filename_pattern:
+    # Margins
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
         pass
 
-    return issues, est_pages
+    # Base style
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+
+    # Optional logo header
+    if logo_bytes:
+        p_center = doc.add_paragraph()
+        p_center.paragraph_format.alignment = 1  # center
+        run = p_center.add_run()
+        try:
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+        except Exception:
+            pass
+
+    # Optional document title
+    if title:
+        h = doc.add_heading(title, level=1)
+        try:
+            h.style = doc.styles["Heading 1"]
+        except Exception:
+            pass
+
+    # Reuse the simple markdown-ish renderer by saving into a temp docx and appending
+    # For simplicity, we reimplement the same minimal renderer here:
+    lines = (md_text or "").splitlines()
+    bullet_buf = []
+    num_buf = []
+
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            p = doc.add_paragraph(item)
+            try:
+                p.style = doc.styles["List Bullet"]
+            except Exception:
+                pass
+        bullet_buf = []
+
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            p = doc.add_paragraph(item)
+            try:
+                p.style = doc.styles["List Number"]
+            except Exception:
+                pass
+        num_buf = []
+
+    for raw in lines:
+        line = raw.rstrip()
+
+        if not line.strip():
+            flush_bullets(); flush_numbers()
+            doc.add_paragraph("")
+            continue
+
+        if line.startswith("### "):
+            flush_bullets(); flush_numbers()
+            doc.add_heading(line[4:].strip(), level=3)
+            continue
+        if line.startswith("## "):
+            flush_bullets(); flush_numbers()
+            doc.add_heading(line[3:].strip(), level=2)
+            continue
+        if line.startswith("# "):
+            flush_bullets(); flush_numbers()
+            doc.add_heading(line[2:].strip(), level=1)
+            continue
+
+        if _re.match(r"^(\-|\*|•)\s+", line):
+            flush_numbers()
+            bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1))
+            continue
+
+        if _re.match(r"^\d+\.\s+", line):
+            flush_bullets()
+            num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1))
+            continue
+
+        flush_bullets(); flush_numbers()
+        doc.add_paragraph(line)
+
+    flush_bullets(); flush_numbers()
+
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.getvalue()
