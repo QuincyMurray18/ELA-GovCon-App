@@ -1769,61 +1769,76 @@ with legacy_tabs[3]:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
+
+
+    # --- Template manager ---
+    t = pd.read_sql_query("select * from email_templates order by name", get_db())
+    names = t["name"].tolist() if not t.empty else ["RFQ Request"]
+    pick_t = st.selectbox("Template", options=names, key="tpl_pick_name")
+    tpl = pd.read_sql_query("select subject, body from email_templates where name=?", get_db(), params=(pick_t,))
+    subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
+    body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
+
     
-# --- Template manager (robust create/select/delete) ---
-t = pd.read_sql_query("select name, subject, body, updated_at from email_templates order by name", conn)
-names = t["name"].tolist() if not t.empty else []
-default_name = names[0] if names else "RFQ Request"
-pick_t = st.selectbox("Template", options=(names or [default_name]), key="tpl_pick_name")
-tpl = pd.read_sql_query("select subject, body from email_templates where name=?", conn, params=(pick_t,))
-subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
-body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
-
-subj = st.text_input("Subject", value=subj_default, key="tpl_subject")
-body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key="tpl_body")
-
+    # Use per-template state keys so switching templates doesn't carry over values
+    subject_key = f"tpl_subject::{pick_t}"
+    body_key = f"tpl_body::{pick_t}"
+    subj = st.text_input("Subject", value=subj_default, key=subject_key)
+    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key=body_key)
 colA, colB, colC, colD = st.columns([1,1,1,2])
-with colA:
-    if st.button("Update selected", key="tpl_btn_update"):
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO email_templates(name, subject, body) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, body=excluded.body, updated_at=CURRENT_TIMESTAMP",
-            (pick_t, subj, body),
-        )
-        conn.commit()
-        st.success(f"Updated '{pick_t}'")
-        st.rerun()
 
-with colB:
-    new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
-    if st.button("Save as new", key="tpl_btn_save_new"):
-        nn = new_name.strip()
-        if not nn:
-            st.error("Enter a new name first")
-        else:
-            c = conn.cursor()
-            try:
-                c.execute("INSERT INTO email_templates(name, subject, body) VALUES(?,?,?)", (nn, subj, body))
-                conn.commit()
-                st.success(f"Saved as '{nn}'")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Could not save new template: {e}")
+    with colA:
+        if st.button("Update selected", key="tpl_btn_update"):
+            _conn = get_db()
+            _conn.execute(
+                """
+                INSERT INTO email_templates(name, subject, body)
+                VALUES(?,?,?)
+                ON CONFLICT(name) DO UPDATE SET
+                    subject=excluded.subject,
+                    body=excluded.body,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (pick_t, subj, body),
+            )
+            _conn.commit()
+            st.success(f"Updated '{pick_t}'")
+            st.rerun()
 
-with colC:
-    confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
-    if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
-        conn.execute("DELETE FROM email_templates WHERE name=?", (pick_t,))
-        conn.commit()
-        st.warning(f"Deleted '{pick_t}'")
-        st.rerun()
-    
+    with colB:
+        new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
+        if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
+            _conn = get_db()
+            _conn.execute(
+                """
+                INSERT INTO email_templates(name, subject, body)
+                VALUES(?,?,?)
+                ON CONFLICT(name) DO UPDATE SET
+                    subject=excluded.subject,
+                    body=excluded.body,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (new_name.strip(), subj, body),
+            )
+            _conn.commit()
+            st.success(f"Saved as '{new_name.strip()}'")
+            st.rerun()
+
+    with colC:
+        confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
+        if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
+            _conn = get_db()
+            _conn.execute("DELETE FROM email_templates WHERE name=?", (pick_t,))
+            _conn.commit()
+            st.warning(f"Deleted '{pick_t}'")
+            st.rerun()
+
     with colD:
         st.caption("Tips: Use placeholders like {company}, {scope}, {due}.")
-    picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10], key="tpl_vendor_picks")
-    scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""), key="tpl_scope_hint")
-    due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"), key="tpl_due")
-    if st.button("Generate emails", key="tpl_generate_emails"):
+    picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
+    scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
+    due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
+    if st.button("Generate emails"):
         st.session_state["mail_bodies"] = []
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
@@ -1832,35 +1847,6 @@ with colC:
             st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
         st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
 
-        # SMTP email sender helpers
-        def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart()
-            msg['From'] = from_addr
-            msg['To'] = to_addr
-            msg['Subject'] = subject
-            if reply_to:
-                msg['Reply-To'] = reply_to
-            msg.attach(MIMEText(body, 'plain'))
-            with smtplib.SMTP(smtp_server, int(smtp_port)) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, to_addr, msg.as_string())
-
-
-    scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""), key="tpl_scope_hint")
-    due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"), key="tpl_due")
-    if st.button("Generate emails", key="tpl_generate_emails"):
-        st.session_state["mail_bodies"] = []
-        for name in picks:
-            row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
-            to_addr = row.get("email","")
-            body_filled = body.format(company=name, scope=scope_hint, due=due)
-            st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
-        st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
-    
         # SMTP email sender helpers
         def _send_via_smtp_host(to_addr, subject, body, from_addr, smtp_server, smtp_port, smtp_user, smtp_pass, reply_to=None):
             import smtplib
@@ -3831,3 +3817,5 @@ with conn:
         created_at text default current_timestamp
     )
     """)
+
+
