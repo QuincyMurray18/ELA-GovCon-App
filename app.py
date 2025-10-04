@@ -2320,15 +2320,7 @@ with legacy_tabs[7]:
     else:
         st.info("Click **Draft white paper** to create a draft, then export to DOCX.")
 
-    st.subheader("White paper builder")
-    title = st.text_input("Title", key="wp_title_input_whitepaper_builder", value="Improving Facility Readiness with Outcome based Service Contracts")
-    thesis = st.text_area("Thesis", key="wp_thesis_textarea_whitepaper_builder", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
-    audience = st.text_input("Audience", key="wp_audience_input_whitepaper_builder", value="Facility Managers • Contracting Officers • Program Managers")
-    if st.button("Draft white paper", key="btn_wp_draft_whitepaper_builder"):
-        system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
-        prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
-        st.markdown(llm(system, prompt, max_tokens=1400))
-
+    
 with legacy_tabs[8]:
     st.subheader("Export to Excel workbook")
     conn = get_db()
