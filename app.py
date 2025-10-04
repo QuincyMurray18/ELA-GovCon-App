@@ -3,55 +3,6 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
-
-# ===== Proposal drafts utilities =====
-from datetime import datetime
-import os, io
-
-def _ensure_drafts_dir():
-    base = os.path.join(os.getcwd(), "drafts", "proposals")
-    os.makedirs(base, exist_ok=True)
-    return base
-
-def save_proposal_draft(title: str, content_md: str) -> str:
-    base = _ensure_drafts_dir()
-    safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', title.strip() or "untitled")
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"{ts}__{safe}.md"
-    path = os.path.join(base, fname)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content_md or "")
-    return path
-
-def list_proposal_drafts():
-    base = _ensure_drafts_dir()
-    items = []
-    for f in sorted(os.listdir(base)):
-        if f.lower().endswith(".md"):
-            full = os.path.join(base, f)
-            try:
-                size = os.path.getsize(full)
-            except Exception:
-                size = 0
-            items.append({"name": f, "path": full, "size": size})
-    return list(reversed(items))  # newest first
-
-def load_proposal_draft(path: str) -> str:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception:
-        return ""
-
-def delete_proposal_draft(path: str) -> bool:
-    try:
-        os.remove(path)
-        return True
-    except Exception:
-        return False
-# ===== end Proposal drafts utilities =====
-
-
 def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                      margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     from docx import Document
@@ -4593,10 +4544,3 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     doc.save(out)
     out.seek(0)
     return out.getvalue()
-
-
-
-with legacy_tabs[8]:
-    st.subheader("Proposal export and drafts")
-
-
