@@ -2247,16 +2247,16 @@ with legacy_tabs[4]:
 with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
-    tagline = st.text_input("Tagline", value="Responsive project management for federal facilities and services")
-    core = st.text_area("Core competencies", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
-    diff = st.text_area("Differentiators", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
-    past_perf = st.text_area("Representative experience", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
-    contact = st.text_area("Contact info", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
+    tagline = st.text_input("Tagline", key="cap_tagline", value="Responsive project management for federal facilities and services")
+    core = st.text_area("Core competencies", key="cap_core", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
+    diff = st.text_area("Differentiators", key="cap_diff", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
+    past_perf = st.text_area("Representative experience", key="cap_past", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
+    contact = st.text_area("Contact info", key="cap_contact", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
 
     c1, c2, c3 = st.columns([1,1,2])
 
     with c1:
-        if st.button("Generate one page"):
+        if st.button("Generate one page", key="btn_cap_generate"):
             system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
             prompt = f"""Company {company}
 Tagline {tagline}
@@ -2271,7 +2271,7 @@ Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
             st.session_state["capability_md"] = cap_md
 
     with c2:
-        if st.button("Clear draft"):
+        if st.button("Clear draft", key="btn_cap_clear"):
             st.session_state.pop("capability_md", None)
 
     # Preview + export
@@ -2292,19 +2292,19 @@ Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
 
 with legacy_tabs[7]:
     st.subheader("White paper builder")
-    title = st.text_input("Title", value="Improving Facility Readiness with Outcome based Service Contracts")
-    thesis = st.text_area("Thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
-    audience = st.text_input("Audience", value="Facility Managers • Contracting Officers • Program Managers")
+    title = st.text_input("Title", key="wp_title", value="Improving Facility Readiness with Outcome based Service Contracts")
+    thesis = st.text_area("Thesis", key="wp_thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
+    audience = st.text_input("Audience", key="wp_audience", value="Facility Managers • Contracting Officers • Program Managers")
 
     col_w1, col_w2, col_w3 = st.columns([1,1,2])
     with col_w1:
-        if st.button("Draft white paper"):
+        if st.button("Draft white paper", key="btn_wp_draft"):
             system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
             prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
             wp_md = llm(system, prompt, max_tokens=1400)
             st.session_state["whitepaper_md"] = wp_md
     with col_w2:
-        if st.button("Clear white paper draft"):
+        if st.button("Clear white paper draft", key="btn_wp_clear"):
             st.session_state.pop("whitepaper_md", None)
 
     wp_md = st.session_state.get("whitepaper_md", "")
@@ -2321,10 +2321,10 @@ with legacy_tabs[7]:
         st.info("Click **Draft white paper** to create a draft, then export to DOCX.")
 
     st.subheader("White paper builder")
-    title = st.text_input("Title", value="Improving Facility Readiness with Outcome based Service Contracts")
-    thesis = st.text_area("Thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
-    audience = st.text_input("Audience", value="Facility Managers • Contracting Officers • Program Managers")
-    if st.button("Draft white paper"):
+    title = st.text_input("Title", key="wp_title", value="Improving Facility Readiness with Outcome based Service Contracts")
+    thesis = st.text_area("Thesis", key="wp_thesis", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
+    audience = st.text_input("Audience", key="wp_audience", value="Facility Managers • Contracting Officers • Program Managers")
+    if st.button("Draft white paper", key="btn_wp_draft"):
         system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
         st.markdown(llm(system, prompt, max_tokens=1400))
