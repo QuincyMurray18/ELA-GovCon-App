@@ -976,6 +976,185 @@ def to_xlsx_bytes(df_dict):
     return bio.getvalue()
 
 
+# === Simple Markdown -> DOCX/PDF helpers (capability statement & white paper exports) ===
+try:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+except Exception:
+    Document = None
+
+try:
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.pdfgen import canvas as _pdf_canvas
+    from reportlab.lib.units import inch
+    _HAVE_REPORTLAB = True
+except Exception:
+    _HAVE_REPORTLAB = False
+
+def _md_iter_lines(md_text: str):
+    for raw in (md_text or "").splitlines():
+        yield raw.rstrip()
+
+def _add_paragraph(doc, text, bold=False, italic=False, lvl=None, font_name="Times New Roman", size_pt=11):
+    if lvl in (1,2,3):
+        p = doc.add_heading(text.strip(), level=int(lvl))
+    else:
+        p = doc.add_paragraph(text.strip())
+    if p.runs:
+        r = p.runs[0]
+        r.bold = bool(bold)
+        r.italic = bool(italic)
+    else:
+        r = p.add_run("")
+    for run in p.runs:
+        run.font.name = font_name
+        run.font.size = Pt(size_pt)
+    return p
+
+def md_to_docx_bytes(md_text: str, title: str = "", filename: str = "export.docx",
+                     font_name="Times New Roman", size_pt=11, margins_in=1.0) -> bytes:
+    # Very light markdown mapper: supports #/##/### headings and -/*/• bullets.
+    if Document is None:
+        raise RuntimeError("python-docx is not available in this environment.")
+    doc = Document()
+    # Add centered logo at the top if provided
+    try:
+        if logo_bytes:
+            from docx.shared import Inches
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from PIL import Image
+            import tempfile
+            # Ensure it is a real image file on disk for python-docx
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+                tmp.write(logo_bytes)
+                tmp.flush()
+                p = doc.add_paragraph()
+                run = p.add_run()
+                run.add_picture(tmp.name, width=Inches(1.5))
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    except Exception:
+        pass
+    try:
+        for section in doc.sections:
+            section.top_margin = Inches(margins_in)
+            section.bottom_margin = Inches(margins_in)
+            section.left_margin = Inches(margins_in)
+            section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    if title:
+        _add_paragraph(doc, title, lvl=1, font_name=font_name, size_pt=size_pt+1)
+    in_list = False
+    for line in _md_iter_lines(md_text):
+        if not line.strip():
+            doc.add_paragraph("")
+            in_list = False
+            continue
+        if line.startswith("### "):
+            _add_paragraph(doc, line[4:], lvl=3, font_name=font_name, size_pt=size_pt)
+            in_list = False
+            continue
+        if line.startswith("## "):
+            _add_paragraph(doc, line[3:], lvl=2, font_name=font_name, size_pt=size_pt)
+            in_list = False
+            continue
+        if line.startswith("# "):
+            _add_paragraph(doc, line[2:], lvl=1, font_name=font_name, size_pt=size_pt+1)
+            in_list = False
+            continue
+        if re.match(r'^\s*([-*]|•)\s+', line):
+            p = doc.add_paragraph()
+            try:
+                p.style = 'List Bullet'
+            except Exception:
+                pass
+            run = p.add_run(re.sub(r'^\s*([-*]|•)\s+', '', line).strip())
+            run.font.name = font_name
+            run.font.size = Pt(size_pt)
+            in_list = True
+            continue
+        _add_paragraph(doc, line, font_name=font_name, size_pt=size_pt)
+        in_list = False
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+def md_to_pdf_bytes(md_text: str, title: str = "", filename: str = "export.pdf",
+                    font_name="Times-Roman", font_size=11, margins_in=1.0) -> bytes:
+    # Very light markdown-to-PDF using reportlab if available.
+    if not _HAVE_REPORTLAB:
+        raise RuntimeError("PDF export requires ReportLab; library not available.")
+    bio = io.BytesIO()
+    c = _pdf_canvas.Canvas(bio, pagesize=LETTER)
+    width, height = LETTER
+    left = margins_in * inch
+    right = width - margins_in * inch
+    top = height - margins_in * inch
+    y = top
+    line_height = font_size * 1.4
+
+    def draw_line(txt, style="body"):
+        nonlocal y
+        if y < (margins_in * inch + line_height):
+            c.showPage()
+            y = top
+        if style == "h1":
+            c.setFont("Helvetica-Bold", font_size + 5)
+        elif style == "h2":
+            c.setFont("Helvetica-Bold", font_size + 3)
+        elif style == "h3":
+            c.setFont("Helvetica-Bold", font_size + 2)
+        else:
+            c.setFont(font_name, font_size)
+        # simple wrap heuristic
+        max_chars = max(20, int((right - left) / (font_size * 0.5)))
+        for wrapped in textwrap.wrap(txt, width=max_chars) or [""]:
+            c.drawString(left, y, wrapped)
+            y -= line_height
+
+    if logo_bytes and _HAVE_REPORTLAB:
+        try:
+            from reportlab.lib.utils import ImageReader
+            img = ImageReader(io.BytesIO(logo_bytes))
+            iw, ih = img.getSize()
+            maxw = 1.5*inch
+            scale = min(1.0, maxw/iw)
+            draw_h = ih*scale
+            draw_w = iw*scale
+            x = left + ((right-left) - draw_w)/2
+            c.drawImage(img, x, top - draw_h, width=draw_w, height=draw_h, preserveAspectRatio=True, mask='auto')
+            # move cursor below image
+            y = top - draw_h - (font_size*1.2)
+        except Exception:
+            pass
+    if title:
+        draw_line(title, "h1")
+        y -= line_height/2
+
+    for raw in _md_iter_lines(md_text):
+        line = raw.rstrip()
+        if not line:
+            y -= line_height/2
+            continue
+        if line.startswith("### "):
+            draw_line(line[4:], "h3"); continue
+        if line.startswith("## "):
+            draw_line(line[3:], "h2"); continue
+        if line.startswith("# "):
+            draw_line(line[2:], "h1"); continue
+        if re.match(r'^\s*([-*]|•)\s+', line):
+            draw_line("• " + re.sub(r'^\s*([-*]|•)\s+', '', line).strip(), "body"); continue
+        draw_line(line, "body")
+
+    c.save()
+    bio.seek(0)
+    return bio.getvalue()
+
+
+
+
 def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
                                   margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
     issues = []
@@ -2132,6 +2311,7 @@ with legacy_tabs[4]:
 # Removed RFP mini-analyzer from SAM Watch
 
 # (moved) RFP Analyzer call will be added after definition
+
 with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
@@ -2151,7 +2331,34 @@ Contact {contact}
 NAICS {", ".join(sorted(set(NAICS_SEEDS)))}
 Certifications Small Business
 Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
-        st.markdown(llm(system, prompt, max_tokens=900))
+        _md = llm(system, prompt, max_tokens=900)
+        st.session_state["capability_md"] = _md
+        st.markdown(_md)
+
+    cap_md = st.session_state.get("capability_md", "")
+    if cap_md:
+        st.divider()
+        st.caption("Export")
+        col1, col2 = st.columns(2)
+        # Optional logo
+        logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg","bmp","gif"], key="logo_up_6")
+        logo_bytes = logo_file.read() if logo_file is not None else None
+        
+        with col1:
+            try:
+                docx_bytes = md_to_docx_bytes(cap_md, title=f"{company} Capability Statement", logo_bytes=logo_bytes)
+                st.download_button("Download DOCX", data=docx_bytes, file_name="Capability_Statement.docx",
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", key="cap_docx_dl")
+            except Exception as e:
+                st.error(f"DOCX export unavailable: {e}")
+        with col2:
+            try:
+                pdf_bytes = md_to_pdf_bytes(cap_md, title=f"{company} Capability Statement", logo_bytes=logo_bytes)
+                st.download_button("Download PDF", data=pdf_bytes, file_name="Capability_Statement.pdf",
+                                   mime="application/pdf", key="cap_pdf_dl")
+            except Exception as e:
+                st.info(f"PDF export not available here ({e}). Install reportlab to enable.")
+
 
 with legacy_tabs[7]:
     st.subheader("White paper builder")
@@ -2161,7 +2368,33 @@ with legacy_tabs[7]:
     if st.button("Draft white paper"):
         system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
-        st.markdown(llm(system, prompt, max_tokens=1400))
+        _md = llm(system, prompt, max_tokens=1400)
+        st.session_state["whitepaper_md"] = _md
+        st.markdown(_md)
+
+    wp_md = st.session_state.get("whitepaper_md", "")
+    if wp_md:
+        st.divider()
+        st.caption("Export")
+        col1, col2 = st.columns(2)
+        # Optional logo
+        logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg","bmp","gif"], key="logo_up_7")
+        logo_bytes = logo_file.read() if logo_file is not None else None
+        
+        with col1:
+            try:
+                docx_bytes = md_to_docx_bytes(wp_md, title=title or "White Paper", logo_bytes=logo_bytes)
+                st.download_button("Download DOCX", data=docx_bytes, file_name="White_Paper.docx",
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", key="wp_docx_dl")
+            except Exception as e:
+                st.error(f"DOCX export unavailable: {e}")
+        with col2:
+            try:
+                pdf_bytes = md_to_pdf_bytes(wp_md, title=title or "White Paper", logo_bytes=logo_bytes)
+                st.download_button("Download PDF", data=pdf_bytes, file_name="White_Paper.pdf",
+                                   mime="application/pdf", key="wp_pdf_dl")
+            except Exception as e:
+                st.info(f"PDF export not available here ({e}). Install reportlab to enable.")
 
 with legacy_tabs[8]:
     st.subheader("Export to Excel workbook")
