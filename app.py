@@ -3,6 +3,246 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
+def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                     margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if logo_bytes:
+        p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
+        run = p_center.add_run()
+        try:
+            from docx.shared import Inches as _Inches
+            run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
+        except Exception:
+            pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+    _render_markdown_to_docx(doc, md_text)
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+
+
+def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                      margins_in: float = 1.0) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+    _render_markdown_to_docx(doc, md_text)
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+
+
+# ===== Improved Markdown rendering helpers =====
+def _add_hr_paragraph(doc):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    p = doc.add_paragraph()
+    pPr = p._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '6')
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), 'auto')
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+    return p
+
+def _add_paragraph_with_inlines(doc, text, style=None):
+    # Supports **bold**, *italic* inline
+    import re as _re
+    p = doc.add_paragraph()
+    if style:
+        try:
+            p.style = doc.styles[style]
+        except Exception:
+            pass
+
+    # Tokenize **bold** and *italic*
+    tokens = []
+    parts = _re.split(r'(\*\*[^\*]+\*\*)', text or '')
+    for part in parts:
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            tokens.append(('bold', part[2:-2]))
+        else:
+            subparts = _re.split(r'(\*[^\*]+\*)', part)
+            for sp in subparts:
+                if sp.startswith('*') and sp.endswith('*') and len(sp) >= 2:
+                    tokens.append(('italic', sp[1:-1]))
+                else:
+                    tokens.append(('text', sp))
+
+    for kind, chunk in tokens:
+        if not chunk:
+            continue
+        run = p.add_run(chunk)
+        if kind == 'bold':
+            run.bold = True
+        elif kind == 'italic':
+            run.italic = True
+    return p
+
+def _render_markdown_to_docx(doc, md_text):
+    import re as _re
+    lines = (md_text or '').splitlines()
+    bullet_buf, num_buf = [], []
+
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            _add_paragraph_with_inlines(doc, item, style="List Bullet")
+        bullet_buf = []
+
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            _add_paragraph_with_inlines(doc, item, style="List Number")
+        num_buf = []
+
+    for raw in lines:
+        line = (raw or '').rstrip()
+
+        # Horizontal rule ---
+        if _re.match(r'^\s*-{3,}\s*$', line):
+            flush_bullets(); flush_numbers()
+            _add_hr_paragraph(doc)
+            continue
+
+        # Blank -> flush lists and add spacer
+        if not line.strip():
+            flush_bullets(); flush_numbers()
+            doc.add_paragraph("")
+            continue
+
+        # Headings (tolerate up to 3 leading spaces)
+        m = _re.match(r'^\s{0,3}(#{1,6})\s+(.*)$', line)
+        if m:
+            flush_bullets(); flush_numbers()
+            hashes, text = m.group(1), m.group(2).strip()
+            level = min(len(hashes), 6)
+            try:
+                doc.add_heading(text, level=level)
+            except Exception:
+                _add_paragraph_with_inlines(doc, text)
+            continue
+
+        # Bullets: -, *, •
+        if _re.match(r'^\s*(\-|\*|•)\s+', line):
+            flush_numbers()
+            bullet_buf.append(_re.sub(r'^\s*(\-|\*|•)\s+', '', line, count=1))
+            continue
+
+        # Numbered: 1. text
+        if _re.match(r'^\s*\d+\.\s+', line):
+            flush_bullets()
+            num_buf.append(_re.sub(r'^\s*\d+\.\s+', '', line, count=1))
+            continue
+
+        # Normal paragraph with inline formatting
+        flush_bullets(); flush_numbers()
+        _add_paragraph_with_inlines(doc, line)
+
+    flush_bullets(); flush_numbers()
+
+
+def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                          margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
+    """
+    Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+    """
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if logo_bytes:
+        p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
+        run = p_center.add_run()
+        try:
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+        except Exception:
+            pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+
+    _render_markdown_to_docx(doc, md_text)
+
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+# ===== end Improved Markdown rendering helpers =====
+
+
 # ===== DOCX helpers (loaded early so they're available to all tabs) =====
 def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                       margins_in: float = 1.0) -> bytes:
@@ -2483,7 +2723,7 @@ Certifications Small Business"""
             st.warning("Before export, fix these items: " + "; ".join(issues))
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
         _logo = logo_file.read() if logo_file else None
-        docx_bytes = md_to_docx_bytes(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        docx_bytes = md_to_docx_bytes_rich(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
         st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Generate one page to draft, then export to DOCX.")
@@ -2516,7 +2756,7 @@ with legacy_tabs[7]:
             st.warning("Before export, fix these items: " + "; ".join(issues))
         wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
         _wp_logo = wp_logo_file.read() if wp_logo_file else None
-        wp_bytes = md_to_docx_bytes(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
+        wp_bytes = md_to_docx_bytes_rich(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Draft white paper to create a draft, then export to DOCX.")
