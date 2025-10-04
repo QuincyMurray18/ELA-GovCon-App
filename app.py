@@ -4671,10 +4671,81 @@ try:
             _logo_bytes = logo_file.read() if logo_file else None
 
         # Preview + export
-        st.markdown("#### Live preview")
-        st.markdown(_normalize_markdown_sections(st.session_state.get("proposal_md","")))
+        \1
 
-        issues, est_pages = _validate_text_for_guardrails(st.session_state.get("proposal_md",""),
+st.divider()
+st.markdown("### Assemble full proposal")
+st.caption("Combine multiple saved drafts and/or the current editor content into a single DOCX.")
+
+# Multi-select drafts to assemble
+assemble_names = st.multiselect(
+    "Choose drafts to include (top-to-bottom order)",
+    options=[d["name"] for d in drafts],
+    default=[d["name"] for d in drafts],
+    key="assemble_pick_names"
+)
+include_current = st.checkbox("Include current editor content first", value=True, key="assemble_include_current")
+
+# Assemble button -> produce DOCX directly
+if st.button("Assemble full proposal (DOCX)"):
+    parts_md = []
+    if include_current and st.session_state.get("proposal_md"):
+        parts_md.append(f"# {title}
+
+" + st.session_state.get("proposal_md",""))
+
+    # Append selected drafts in list order
+    for d in drafts:
+        if d["name"] in assemble_names:
+            try:
+                _md = load_proposal_draft(d["path"])
+            except Exception:
+                _md = ""
+            hdr = f"
+
+---
+
+# {d['name'].replace('.md','')}
+
+"
+            parts_md.append(hdr + _md)
+
+    combined_md = "
+
+".join(parts_md) if parts_md else st.session_state.get("proposal_md","")
+
+    # Build DOCX; fall back gracefully if rich function is unavailable
+    _logo_bytes2 = _logo_bytes if '_logo_bytes' in locals() else None
+    try:
+        _docx = md_to_docx_bytes_rich(
+            combined_md,
+            title=_docx_title_if_needed(combined_md, title or "Proposal"),
+            base_font="Times New Roman",
+            base_size_pt=11,
+            margins_in=1.0,
+            logo_bytes=_logo_bytes2
+        )
+    except Exception as _err_rich:
+        try:
+            _docx = md_to_docx_bytes(
+                combined_md,
+                title=_docx_title_if_needed(combined_md, title or "Proposal"),
+                base_font="Times New Roman",
+                base_size_pt=11,
+                margins_in=1.0
+            )
+        except Exception as _err_basic:
+            st.error(f"DOCX export unavailable: {str(_err_basic)}")
+            _docx = None
+
+    if _docx:
+        st.download_button(
+            "Download Assembled Proposal (DOCX)",
+            data=_docx,
+            file_name=f"{(title or 'Proposal').strip().replace(' ','_')}_assembled.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+issues, est_pages = _validate_text_for_guardrails(st.session_state.get("proposal_md",""),
                                                           page_limit=None, require_font="Times New Roman",
                                                           require_size_pt=11, margins_in=1.0, line_spacing=1.0,
                                                           filename_pattern="{company}_{section}_{date}")
