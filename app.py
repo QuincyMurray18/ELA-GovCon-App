@@ -1143,6 +1143,45 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
     return issues, est_pages
 
+
+
+def _normalize_markdown_sections(md_text: str) -> str:
+    """
+    Clean common generation artifacts:
+      • Collapse immediately repeated headings with the same text
+      • Trim double spaces after heading text
+    """
+    if not md_text:
+        return md_text
+    lines = md_text.splitlines()
+    out = []
+    prev_heading = None
+    for ln in lines:
+        m = re.match(r'^(#{1,6})\s+(.*)$', ln)
+        if m:
+            hashes, text = m.group(1), m.group(2).rstrip()
+            # Remove any trailing two-space soft break at end of headings
+            text = re.sub(r'\s{2,}$', '', text)
+            curr = (hashes, text.strip().lower())
+            if prev_heading and curr == prev_heading:
+                # skip duplicate consecutive heading
+                continue
+            out.append(f"{hashes} {text}")
+            prev_heading = curr
+        else:
+            out.append(ln)
+            # reset prev heading tracking once non-heading encountered
+            prev_heading = None
+    return "\n".join(out)
+
+def _docx_title_if_needed(md_text: str, proposed_title: str) -> str:
+    """Return empty string if md already starts with an H1, else the proposed title."""
+    if not md_text:
+        return proposed_title or ""
+    first = md_text.lstrip().splitlines()[0] if md_text.strip() else ""
+    return "" if re.match(r'^#\s+.+', first) else (proposed_title or "")
+
+
 def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                       margins_in: float = 1.0) -> bytes:
     """
@@ -2435,6 +2474,7 @@ Certifications Small Business"""
             st.session_state.pop("capability_md", None)
 
     cap_md = st.session_state.get("capability_md", "")
+    cap_md = _normalize_markdown_sections(cap_md)
     if cap_md:
         st.markdown("#### Preview")
         st.markdown(cap_md)
@@ -2443,7 +2483,7 @@ Certifications Small Business"""
             st.warning("Before export, fix these items: " + "; ".join(issues))
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
         _logo = logo_file.read() if logo_file else None
-        docx_bytes = md_to_docx_bytes(cap_md, title=f"{company} Capability Statement", base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        docx_bytes = md_to_docx_bytes(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
         st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Generate one page to draft, then export to DOCX.")
@@ -2467,6 +2507,7 @@ with legacy_tabs[7]:
             st.session_state.pop("whitepaper_md", None)
 
     wp_md = st.session_state.get("whitepaper_md", "")
+    wp_md = _normalize_markdown_sections(wp_md)
     if wp_md:
         st.markdown("#### Preview")
         st.markdown(wp_md)
@@ -2475,7 +2516,7 @@ with legacy_tabs[7]:
             st.warning("Before export, fix these items: " + "; ".join(issues))
         wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
         _wp_logo = wp_logo_file.read() if wp_logo_file else None
-        wp_bytes = md_to_docx_bytes(wp_md, title=title, base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
+        wp_bytes = md_to_docx_bytes(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Draft white paper to create a draft, then export to DOCX.")
