@@ -3977,3 +3977,44 @@ with conn:
     )
     """)
 
+
+
+# --- SAFE REDEFINITION: guardrails validator ---
+def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
+                                  margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
+    """
+    Lightweight validator used across export flows.
+    Returns a tuple: (issues: list[str], estimated_pages: int)
+    Heuristics only — we cannot actually inspect fonts from Markdown.
+    """
+    text = (md_text or "").strip()
+    issues = []
+
+    # Basic placeholder checks
+    if re.search(r'\bINSERT\b', text, flags=re.IGNORECASE):
+        issues.append("Placeholder text 'INSERT' detected. Remove before export.")
+    if re.search(r'\bTBD\b|\bTODO\b', text, flags=re.IGNORECASE):
+        issues.append("Unresolved 'TBD/TODO' placeholders present.")
+    if "<>" in text or "[ ]" in text:
+        issues.append("Bracket placeholders found. Replace with final content.")
+
+    # Page length heuristic: ~450 words per page at 11pt single-space
+    words = re.findall(r'\w+', text)
+    est_pages = max(1, math.ceil(len(words) / 450)) if words else 1
+
+    if page_limit and est_pages > page_limit:
+        issues.append(f"Estimated length is {est_pages} pages which exceeds the {page_limit}-page limit.")
+
+    # Font/size checks are advisory — cannot assert from Markdown
+    if require_font:
+        pass
+    if require_size_pt:
+        pass
+    if margins_in:
+        pass
+    if line_spacing:
+        pass
+    if filename_pattern:
+        pass
+
+    return issues, est_pages
