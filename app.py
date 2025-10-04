@@ -992,6 +992,15 @@ try:
 except Exception:
     _HAVE_REPORTLAB = False
 
+def _pdf_install_hint(st):
+    try:
+        import streamlit as _st
+    except Exception:
+        return
+    if not globals().get('_HAVE_REPORTLAB', False):
+        _st.warning('PDF export needs ReportLab. Run:  pip install reportlab')
+
+
 def _md_iter_lines(md_text: str):
     for raw in (md_text or "").splitlines():
         yield raw.rstrip()
@@ -2338,7 +2347,7 @@ Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
     cap_md = st.session_state.get("capability_md", "")
     if cap_md:
         st.divider()
-        st.caption("Export")
+        st.caption("Export"); _pdf_install_hint(st)
         col1, col2 = st.columns(2)
         # Optional logo
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg","bmp","gif"], key="logo_up_6")
@@ -2375,7 +2384,7 @@ with legacy_tabs[7]:
     wp_md = st.session_state.get("whitepaper_md", "")
     if wp_md:
         st.divider()
-        st.caption("Export")
+        st.caption("Export"); _pdf_install_hint(st)
         col1, col2 = st.columns(2)
         # Optional logo
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg","bmp","gif"], key="logo_up_7")
