@@ -6,3 +6,5 @@ xlsxwriter>=3.2.0
 pandas>=2.2
 requests>=2.31
 scikit-learn>=1.5
+reportlab
+
