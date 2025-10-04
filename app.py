@@ -2809,9 +2809,7 @@ with legacy_tabs[7]:
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Draft white paper to create a draft, then export to DOCX.")
-
-with legacy_tabs[8]:
-    st.subheader("Export to Excel workbook")
+st.subheader("Export to Excel workbook")
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
@@ -4593,12 +4591,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     doc.save(out)
     out.seek(0)
     return out.getvalue()
-
-
-
 with legacy_tabs[8]:
-
-with legacy_tabs[13]:
     st.subheader("Proposal Builder")
     # Draft name and controls
     colA, colB, colC = st.columns([2,1,1])
