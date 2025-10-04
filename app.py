@@ -1786,53 +1786,53 @@ with legacy_tabs[3]:
     subj = st.text_input("Subject", value=subj_default, key=subject_key)
     body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key=body_key)
 colA, colB, colC, colD = st.columns([1,1,1,2])
-    
-    with colA:
-    if st.button("Update selected", key="tpl_btn_update"):
-    _conn = get_db()
-    _conn.execute(
-    """
-    INSERT INTO email_templates(name, subject, body)
-    VALUES(?,?,?)
-    ON CONFLICT(name) DO UPDATE SET
-    subject=excluded.subject,
-    body=excluded.body,
-    updated_at=CURRENT_TIMESTAMP
-    """,
-    (pick_t, subj, body),
-    )
-    _conn.commit()
-    st.success(f"Updated '{pick_t}'")
-    st.rerun()
-    
-    with colB:
-    new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
-    if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
-    _conn = get_db()
-    _conn.execute(
-    """
-    INSERT INTO email_templates(name, subject, body)
-    VALUES(?,?,?)
-    ON CONFLICT(name) DO UPDATE SET
-    subject=excluded.subject,
-    body=excluded.body,
-    updated_at=CURRENT_TIMESTAMP
-    """,
-    (new_name.strip(), subj, body),
-    )
-    _conn.commit()
-    st.success(f"Saved as '{new_name.strip()}'")
-    st.rerun()
-    
-    with colC:
-    confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
-    if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
-    _conn = get_db()
-    _conn.execute("DELETE FROM email_templates WHERE name=?", (pick_t,))
-    _conn.commit()
-    st.warning(f"Deleted '{pick_t}'")
-    st.rerun()
-    
+        
+        with colA:
+        if st.button("Update selected", key="tpl_btn_update"):
+        _conn = get_db()
+        _conn.execute(
+        """
+        INSERT INTO email_templates(name, subject, body)
+        VALUES(?,?,?)
+        ON CONFLICT(name) DO UPDATE SET
+        subject=excluded.subject,
+        body=excluded.body,
+        updated_at=CURRENT_TIMESTAMP
+        """,
+        (pick_t, subj, body),
+        )
+        _conn.commit()
+        st.success(f"Updated '{pick_t}'")
+        st.rerun()
+        
+        with colB:
+        new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
+        if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
+        _conn = get_db()
+        _conn.execute(
+        """
+        INSERT INTO email_templates(name, subject, body)
+        VALUES(?,?,?)
+        ON CONFLICT(name) DO UPDATE SET
+        subject=excluded.subject,
+        body=excluded.body,
+        updated_at=CURRENT_TIMESTAMP
+        """,
+        (new_name.strip(), subj, body),
+        )
+        _conn.commit()
+        st.success(f"Saved as '{new_name.strip()}'")
+        st.rerun()
+        
+        with colC:
+        confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
+        if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
+        _conn = get_db()
+        _conn.execute("DELETE FROM email_templates WHERE name=?", (pick_t,))
+        _conn.commit()
+        st.warning(f"Deleted '{pick_t}'")
+        st.rerun()
+        
     with colD:
         st.caption("Tips: Use placeholders like {company}, {scope}, {due}.")
     picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
