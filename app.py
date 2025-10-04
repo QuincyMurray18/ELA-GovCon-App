@@ -188,7 +188,7 @@ try:
     _ = _us_date
 except NameError:
     from datetime import datetime
-def _us_date(dt):
+    def _us_date(dt):
         try:
             return dt.strftime("%m/%d/%Y")
         except Exception:
@@ -3168,6 +3168,10 @@ with st.sidebar:
     st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
     if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
+    
+    # Company identifiers (ELA Management LLC)
+    st.subheader("Company identifiers")
+    st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
 
     if st.button("Test SAM key"):
         try:
@@ -3814,5 +3818,4 @@ with conn:
         created_at text default current_timestamp
     )
     """)
-
 
