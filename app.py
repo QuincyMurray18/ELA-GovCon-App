@@ -3,6 +3,144 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
+# ===== DOCX helpers (loaded early so they're available to all tabs) =====
+def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                      margins_in: float = 1.0) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import re as _re, io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try:
+            h.style = doc.styles["Heading 1"]
+        except Exception:
+            pass
+    lines = (md_text or "").splitlines()
+    bullet_buf, num_buf = [], []
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Bullet"]
+            except Exception: pass
+        bullet_buf = []
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Number"]
+            except Exception: pass
+        num_buf = []
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            flush_bullets(); flush_numbers(); doc.add_paragraph(""); continue
+        if line.startswith("### "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[4:].strip(), level=3); continue
+        if line.startswith("## "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[3:].strip(), level=2); continue
+        if line.startswith("# "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
+        if _re.match(r"^(\-|\*|•)\s+", line):
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+        if _re.match(r"^\d+\.\s+", line):
+            flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
+        flush_bullets(); flush_numbers(); doc.add_paragraph(line)
+    flush_bullets(); flush_numbers()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+
+def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                     margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import re as _re, io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if logo_bytes:
+        p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
+        run = p_center.add_run()
+        try: run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+        except Exception: pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+    lines = (md_text or "").splitlines()
+    bullet_buf, num_buf = [], []
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Bullet"]
+            except Exception: pass
+        bullet_buf = []
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Number"]
+            except Exception: pass
+        num_buf = []
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            flush_bullets(); flush_numbers(); doc.add_paragraph(""); continue
+        if line.startswith("### "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[4:].strip(), level=3); continue
+        if line.startswith("## "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[3:].strip(), level=2); continue
+        if line.startswith("# "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
+        if _re.match(r"^(\-|\*|•)\s+", line):
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+        if _re.match(r"^\d+\.\s+", line):
+            flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
+        flush_bullets(); flush_numbers(); doc.add_paragraph(line)
+    flush_bullets(); flush_numbers()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+# ===== end DOCX helpers =====
+
+
 import pandas as pd
 import numpy as np
 import streamlit as st
