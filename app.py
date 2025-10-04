@@ -4671,7 +4671,6 @@ try:
             _logo_bytes = logo_file.read() if logo_file else None
 
         # Preview + export
-        \1
 
 st.divider()
 st.markdown("### Assemble full proposal")
