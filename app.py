@@ -3,6 +3,55 @@ import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
+
+# ===== Proposal drafts utilities =====
+from datetime import datetime
+import os, io
+
+def _ensure_drafts_dir():
+    base = os.path.join(os.getcwd(), "drafts", "proposals")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+def save_proposal_draft(title: str, content_md: str) -> str:
+    base = _ensure_drafts_dir()
+    safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', title.strip() or "untitled")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"{ts}__{safe}.md"
+    path = os.path.join(base, fname)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content_md or "")
+    return path
+
+def list_proposal_drafts():
+    base = _ensure_drafts_dir()
+    items = []
+    for f in sorted(os.listdir(base)):
+        if f.lower().endswith(".md"):
+            full = os.path.join(base, f)
+            try:
+                size = os.path.getsize(full)
+            except Exception:
+                size = 0
+            items.append({"name": f, "path": full, "size": size})
+    return list(reversed(items))  # newest first
+
+def load_proposal_draft(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+def delete_proposal_draft(path: str) -> bool:
+    try:
+        os.remove(path)
+        return True
+    except Exception:
+        return False
+# ===== end Proposal drafts utilities =====
+
+
 def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                      margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     from docx import Document
@@ -4544,3 +4593,74 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     doc.save(out)
     out.seek(0)
     return out.getvalue()
+
+
+
+with legacy_tabs[8]:
+    st.subheader("Proposal export and drafts")
+
+
+st.markdown("### Export and Saved Drafts")
+# Compose source: use session_state["proposal_full_md"] if present, else show text area for manual paste
+proposal_md = st.session_state.get("proposal_full_md", "")
+proposal_md = _normalize_markdown_sections(proposal_md) if " _normalize_markdown_sections" in globals() else proposal_md
+proposal_md = st.text_area("Full Proposal Markdown", value=proposal_md, key="proposal_full_md_editor", height=260, help="Paste or review the assembled proposal here before export.")
+
+cE1, cE2, cE3, cE4 = st.columns([1,1,1,1])
+with cE1:
+    if st.button("Save draft", key="btn_save_proposal_draft"):
+        title_guess = st.text_input if False else ""  # placeholder to keep syntax
+        title = st.session_state.get("proposal_title", "") or st.session_state.get("rfq_title", "") or "Proposal"
+        path = save_proposal_draft(title, st.session_state.get("proposal_full_md_editor", ""))
+        st.success(f"Saved draft: {os.path.basename(path)}")
+
+with cE2:
+    if st.button("Export proposal DOCX", key="btn_export_proposal_docx"):
+        title = st.session_state.get("proposal_title", "") or st.session_state.get("rfq_title", "") or "Proposal"
+        logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="proposal_logo_upload")
+        _logo = logo_file.read() if logo_file else None
+        # Use rich converter if available
+        try:
+            data = md_to_docx_bytes_rich(st.session_state.get("proposal_full_md_editor", ""), title=_docx_title_if_needed(st.session_state.get("proposal_full_md_editor", ""), title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        except Exception:
+            data = md_to_docx_bytes(st.session_state.get("proposal_full_md_editor", ""), title=_docx_title_if_needed(st.session_state.get("proposal_full_md_editor", ""), title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        st.download_button("Download DOCX", data=data, file_name=f"{title.replace(' ', '_')}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+with cE3:
+    if st.button("Refresh drafts", key="btn_refresh_proposal_drafts"):
+        st.session_state["_refresh_drafts"] = True
+
+with cE4:
+    st.write("")
+
+# Saved drafts list
+drafts = list_proposal_drafts()
+if drafts:
+    st.markdown("#### Saved drafts")
+    names = [it["name"] for it in drafts]
+    sel = st.selectbox("Select a draft", names, key="sel_proposal_draft")
+    idx = names.index(sel)
+    chosen = drafts[idx]
+    cD1, cD2, cD3 = st.columns([1,1,1])
+    with cD1:
+        if st.button("Load", key="btn_load_proposal_draft"):
+            st.session_state["proposal_full_md"] = load_proposal_draft(chosen["path"])
+            st.success("Draft loaded into editor above")
+    with cD2:
+        if st.button("Delete", key="btn_delete_proposal_draft"):
+            if delete_proposal_draft(chosen["path"]):
+                st.success("Draft deleted. Click Refresh drafts to update the list.")
+            else:
+                st.error("Could not delete draft")
+    with cD3:
+        if st.button("Export selected as DOCX", key="btn_export_selected_docx"):
+            content = load_proposal_draft(chosen["path"])
+            title = chosen["name"].rsplit('.',1)[0]
+            try:
+                data2 = md_to_docx_bytes_rich(content, title=_docx_title_if_needed(content, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0)
+            except Exception:
+                data2 = md_to_docx_bytes(content, title=_docx_title_if_needed(content, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0)
+            st.download_button("Download selected DOCX", data=data2, file_name=f"{title}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+else:
+    st.info("No saved drafts yet. Use Save draft after composing your proposal above.")
+
