@@ -188,8 +188,7 @@ try:
     _ = _us_date
 except NameError:
     from datetime import datetime
-import io
-    def _us_date(dt):
+def _us_date(dt):
         try:
             return dt.strftime("%m/%d/%Y")
         except Exception:
@@ -2140,7 +2139,7 @@ with legacy_tabs[6]:
     core = st.text_area("Core competencies", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
     diff = st.text_area("Differentiators", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
     past_perf = st.text_area("Representative experience", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
-    contact = st.text_area("Contact info", value="ELA Management LLC • info@elamanagement.com • (555) 555-5555 • DUNS 14-483-4790 • CAGE 14ZP6 • UEI U32LBVK3DDF7")
+    contact = st.text_area("Contact info", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
     if st.button("Generate one page"):
         system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
         prompt = f"""Company {company}
@@ -2152,21 +2151,7 @@ Contact {contact}
 NAICS {", ".join(sorted(set(NAICS_SEEDS)))}
 Certifications Small Business
 Goals 156 bids and 600000 revenue this year. Submitted 1 to date."""
-        _md = llm(system, prompt, max_tokens=900)
-        st.markdown(_md)
-        try:
-            from docx import Document
-            bio = io.BytesIO()
-            doc = Document()
-            doc.add_heading(f"{company} – Capability Statement", level=0)
-            doc.add_paragraph("DUNS: 14-483-4790  •  CAGE: 14ZP6  •  UEI: U32LBVK3DDF7")
-            for para in _md.split("\n\n"):
-                doc.add_paragraph(para)
-            doc.save(bio)
-            bio.seek(0)
-            st.download_button("Download Capability Statement (DOCX)", data=bio.getvalue(), file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        except Exception as e:
-            st.caption(f"Docx export unavailable: {e}")
+        st.markdown(llm(system, prompt, max_tokens=900))
 
 with legacy_tabs[7]:
     st.subheader("White paper builder")
@@ -2176,22 +2161,7 @@ with legacy_tabs[7]:
     if st.button("Draft white paper"):
         system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
-        _wp = llm(system, prompt, max_tokens=1400)
-        st.markdown(_wp)
-        try:
-            from docx import Document
-            bio = io.BytesIO()
-            doc = Document()
-            doc.add_heading(title, level=0)
-            doc.add_paragraph(f"Audience: {audience}")
-            doc.add_paragraph("DUNS: 14-483-4790  •  CAGE: 14ZP6  •  UEI: U32LBVK3DDF7")
-            for para in _wp.split("\n\n"):
-                doc.add_paragraph(para)
-            doc.save(bio)
-            bio.seek(0)
-            st.download_button("Download White Paper (DOCX)", data=bio.getvalue(), file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        except Exception as e:
-            st.caption(f"Docx export unavailable: {e}")
+        st.markdown(llm(system, prompt, max_tokens=1400))
 
 with legacy_tabs[8]:
     st.subheader("Export to Excel workbook")
@@ -3198,10 +3168,6 @@ with st.sidebar:
     st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
     if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
-    
-    # Company identifiers (ELA Management LLC)
-    st.subheader("Company identifiers")
-    st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
 
     if st.button("Test SAM key"):
         try:
@@ -3848,3 +3814,5 @@ with conn:
         created_at text default current_timestamp
     )
     """)
+
+
