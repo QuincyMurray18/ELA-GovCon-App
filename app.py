@@ -2809,7 +2809,9 @@ with legacy_tabs[7]:
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Draft white paper to create a draft, then export to DOCX.")
-st.subheader("Export to Excel workbook")
+
+with legacy_tabs[8]:
+    st.subheader("Export to Excel workbook")
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
@@ -4591,61 +4593,10 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     doc.save(out)
     out.seek(0)
     return out.getvalue()
+
+
+
 with legacy_tabs[8]:
-    st.subheader("Proposal Builder")
-    # Draft name and controls
-    colA, colB, colC = st.columns([2,1,1])
-    with colA:
-        st.session_state.setdefault("proposal_draft_name", "Proposal")
-        draft_name = st.text_input("Draft name", key="proposal_draft_name")
-    with colB:
-        if st.button("New draft", key="btn_pb_new"):
-            st.session_state["proposal_full_md_editor"] = ""
-            st.session_state["proposal_draft_name"] = "Proposal"
-            st.success("Started a new blank draft.")
-    with colC:
-        if st.button("Save edited draft", key="btn_pb_save"):
-            content = st.session_state.get("proposal_full_md_editor","")
-            path = save_proposal_draft(st.session_state.get("proposal_draft_name","Proposal"), content)
-            st.success(f"Saved: {path.split('/')[-1]}")
-
-    # Editor
-    st.markdown("#### Draft content")
-    st.session_state.setdefault("proposal_full_md_editor", "")
-    st.session_state["proposal_full_md_editor"] = st.text_area("Proposal (Markdown)", value=st.session_state.get("proposal_full_md_editor",""), key="proposal_full_md_editor", height=360)
-
-    # Existing drafts
-    drafts = list_proposal_drafts()
-    if drafts:
-        st.markdown("#### Saved drafts")
-        names = [d["name"] for d in drafts]
-        sel = st.selectbox("Pick a draft", names, key="pb_sel_draft")
-        chosen = next(d for d in drafts if d["name"] == sel)
-        c1,c2,c3 = st.columns([1,1,1])
-        with c1:
-            if st.button("Load selected", key="btn_pb_load_sel"):
-                st.session_state["proposal_full_md_editor"] = load_proposal_draft(chosen["path"])
-                st.session_state["proposal_draft_name"] = sel.rsplit(".",1)[0]
-                st.success("Loaded into editor.")
-        with c2:
-            if st.button("Delete selected", key="btn_pb_delete_sel"):
-                if delete_proposal_draft(chosen["path"]):
-                    st.success("Deleted. Reopen tab to refresh list.")
-                else:
-                    st.error("Delete failed.")
-        with c3:
-            # Export DOCX for selected or current
-            if st.button("Export DOCX", key="btn_pb_export_docx"):
-                md_text = st.session_state.get("proposal_full_md_editor","")
-                title = st.session_state.get("proposal_draft_name","Proposal")
-                try:
-                    data = md_to_docx_bytes_rich(md_text, title=_docx_title_if_needed(md_text, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0)
-                except Exception:
-                    data = md_to_docx_bytes(md_text, title=_docx_title_if_needed(md_text, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0)
-                st.download_button("Download DOCX", data=data, file_name=f"{title}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-    else:
-        st.info("No saved drafts yet. Use Save edited draft after writing your content above.")
-
     st.subheader("Proposal export and drafts")
 
 
