@@ -1778,15 +1778,12 @@ with legacy_tabs[3]:
     tpl = pd.read_sql_query("select subject, body from email_templates where name=?", get_db(), params=(pick_t,))
     subj_default = tpl.iloc[0]["subject"] if not tpl.empty else get_setting("outreach_subject", "")
     body_default = tpl.iloc[0]["body"] if not tpl.empty else get_setting("outreach_scope", "")
-    
-    # Use per-template state keys so switching templates doesn't carry over values
-    subject_key = f"tpl_subject::{pick_t}"
-    body_key = f"tpl_body::{pick_t}"
-    subj = st.text_input("Subject", value=subj_default, key=subject_key)
-    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key=body_key)
-    
+
+    subj = st.text_input("Subject", value=subj_default, key="tpl_subject")
+    body = st.text_area("Body with placeholders {company} {scope} {due}", value=body_default, height=220, key="tpl_body")
+
     colA, colB, colC, colD = st.columns([1,1,1,2])
-    
+
     with colA:
         if st.button("Update selected", key="tpl_btn_update"):
             _conn = get_db()
@@ -1804,7 +1801,7 @@ with legacy_tabs[3]:
             _conn.commit()
             st.success(f"Updated '{pick_t}'")
             st.rerun()
-    
+
     with colB:
         new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
         if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
@@ -1823,7 +1820,7 @@ with legacy_tabs[3]:
             _conn.commit()
             st.success(f"Saved as '{new_name.strip()}'")
             st.rerun()
-    
+
     with colC:
         confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
         if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
@@ -2142,7 +2139,7 @@ with legacy_tabs[6]:
     core = st.text_area("Core competencies", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
     diff = st.text_area("Differentiators", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
     past_perf = st.text_area("Representative experience", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
-    contact = st.text_area("Contact info", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
+    contact = st.text_area("Contact info", value="ELA Management LLC • info@elamanagement.com • (555) 555-5555 • DUNS 14-483-4790 • CAGE 14ZP6 • UEI U32LBVK3DDF7")
     if st.button("Generate one page"):
         system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
         prompt = f"""Company {company}
@@ -2164,7 +2161,22 @@ with legacy_tabs[7]:
     if st.button("Draft white paper"):
         system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
         prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
-        st.markdown(llm(system, prompt, max_tokens=1400))
+        _wp = llm(system, prompt, max_tokens=1400)
+        st.markdown(_wp)
+        try:
+            from docx import Document
+            bio = io.BytesIO()
+            doc = Document()
+            doc.add_heading(title, level=0)
+            doc.add_paragraph(f"Audience: {audience}")
+            doc.add_paragraph(f"DUNS: 14-483-4790  •  CAGE: 14ZP6  •  UEI: U32LBVK3DDF7")
+            for para in _wp.split("\n\n"):
+                doc.add_paragraph(para)
+            doc.save(bio)
+            bio.seek(0)
+            st.download_button("Download White Paper (DOCX)", data=bio.getvalue(), file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.caption(f"Docx export unavailable: {e}")
 
 with legacy_tabs[8]:
     st.subheader("Export to Excel workbook")
@@ -3170,6 +3182,10 @@ with st.sidebar:
     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
     st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
     if st.button("Test model"):
+
+    st.subheader("Company identifiers")
+    st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
+
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
 
     if st.button("Test SAM key"):
@@ -3721,6 +3737,8 @@ def render_proposal_builder():
             style._element.rPr.rFonts.set(qn("w:eastAsia"), req_font)
             style.font.size = Pt(pb_font_size or 12)
 
+            doc.add_paragraph(get_setting("company_name","ELA Management LLC"))
+            doc.add_paragraph("DUNS: 14-483-4790  •  CAGE: 14ZP6  •  UEI: U32LBVK3DDF7")
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
                 for para in txt.split("\n\n"):
