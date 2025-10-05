@@ -4600,3 +4600,252 @@ with legacy_tabs[8]:
     st.subheader("Proposal export and drafts")
 
 
+
+
+
+# === Deals (CRM pipeline) helpers ===
+DEAL_STAGES = [
+    "No Contact Made",
+    "CO Contacted",
+    "Quote",
+    "Multiple Quotes",
+    "Proposal Started",
+    "Proposal Finished",
+    "Proposal Submitted",
+    "Awarded",
+    "Proposal Lost",
+]
+
+def ensure_deals_table(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        create table if not exists deals (
+            id integer primary key autoincrement,
+            title text not null,
+            stage text not null default 'No Contact Made',
+            owner text,
+            amount numeric,
+            notes text,
+            agency text,
+            due_date text,
+            created_at text default (datetime('now')),
+            updated_at text default (datetime('now'))
+        )
+    """)
+    cur.execute("create index if not exists deals_stage_idx on deals(stage)")
+    cur.execute("create index if not exists deals_updated_idx on deals(updated_at)")
+    conn.commit()
+
+def list_deals(stage: str | None = None, q: str | None = None):
+    conn = get_db()
+    ensure_deals_table(conn)
+    cur = conn.cursor()
+    sql = "select id, title, stage, owner, amount, notes, agency, due_date, created_at, updated_at from deals"
+    params = []
+    where = []
+    if stage and stage != "All":
+        where.append("stage = ?")
+        params.append(stage)
+    if q:
+        where.append("(title like ? or notes like ? or agency like ?)")
+        params += [f"%{q}%", f"%{q}%", f"%{q}%"]
+    if where:
+        sql += " where " + " and ".join(where)
+    sql += " order by updated_at desc, id desc"
+    rows = cur.execute(sql, params).fetchall()
+    cols = ["id","title","stage","owner","amount","notes","agency","due_date","created_at","updated_at"]
+    import pandas as pd
+    return pd.DataFrame(rows, columns=cols)
+
+def create_deal(title: str, stage: str, owner: str | None, amount: float | None, notes: str | None, agency: str | None, due_date: str | None):
+    conn = get_db()
+    ensure_deals_table(conn)
+    cur = conn.cursor()
+    cur.execute("""
+        insert into deals (title, stage, owner, amount, notes, agency, due_date)
+        values (?,?,?,?,?,?,?)
+    """, (title, stage, owner, amount, notes, agency, due_date))
+    conn.commit()
+    return cur.lastrowid
+
+def update_deal(id_: int, **fields):
+    if not fields: return False
+    conn = get_db()
+    ensure_deals_table(conn)
+    cur = conn.cursor()
+    sets = []
+    vals = []
+    for k,v in fields.items():
+        if k not in {"title","stage","owner","amount","notes","agency","due_date"}: 
+            continue
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets: return False
+    sets.append("updated_at = datetime('now')")
+    sql = "update deals set " + ", ".join(sets) + " where id = ?"
+    vals.append(id_)
+    cur.execute(sql, vals)
+    conn.commit()
+    return cur.rowcount > 0
+
+def delete_deal(id_: int):
+    conn = get_db()
+    ensure_deals_table(conn)
+    cur = conn.cursor()
+    cur.execute("delete from deals where id = ?", (id_,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+
+# === Deals (CRM Pipeline) tab ===
+try:
+    with legacy_tabs[13]:
+        st.subheader("Deals Pipeline")
+        st.caption("Track opportunities by stage, assign owners, and record contract amounts.")
+
+        c1,c2,c3 = st.columns([1,1,2])
+        with c1:
+            stage_filter = st.selectbox("Stage", options=["All"] + DEAL_STAGES, index=0, key="deals_stage_filter")
+        with c2:
+            q = st.text_input("Search", key="deals_search")
+        with c3:
+            st.markdown(" ")
+
+        df = list_deals(stage_filter, q)
+
+        st.markdown("#### Add a new deal")
+        with st.form("new_deal_form", clear_on_submit=True):
+            nc1,nc2,nc3,nc4 = st.columns([2,1,1,1])
+            with nc1:
+                new_title = st.text_input("Opportunity title*", placeholder="e.g., USDA Athens Roof Repair RFQ")
+            with nc2:
+                new_stage = st.selectbox("Stage*", options=DEAL_STAGES, index=0)
+            with nc3:
+                new_owner = st.text_input("Owner", placeholder="e.g., Latrice")
+            with nc4:
+                new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f")
+            nc5,nc6 = st.columns([1,1])
+            with nc5:
+                new_agency = st.text_input("Agency", placeholder="e.g., USDA ARS")
+            with nc6:
+                new_due = st.text_input("Due date (YYYY-MM-DD)", placeholder="2025-11-01")
+            new_notes = st.text_area("Notes", height=80, placeholder="Key details, next actions...")
+            submitted = st.form_submit_button("Create deal")
+            if submitted:
+                if not new_title.strip():
+                    st.warning("Please enter a title.")
+                else:
+                    create_deal(new_title.strip(), new_stage, new_owner.strip() or None, float(new_amount) if new_amount else None, new_notes.strip() or None, new_agency.strip() or None, new_due.strip() or None)
+                    st.success("Deal created.")
+                    st.rerun()
+
+        
+st.markdown("#### Totals by stage")
+import pandas as pd as _pd
+_stage_totals_df = (_pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+                    .groupby(df["stage"]).sum())
+_stage_totals_df = _stage_totals_df.reindex(DEAL_STAGES).fillna(0)
+_gcols = st.columns(len(DEAL_STAGES))
+for _i, _stg in enumerate(DEAL_STAGES):
+    with _gcols[_i]:
+        st.metric(_stg, f"${float(_stage_totals_df.get(_stg, 0.0)):,.2f}")
+st.markdown("#### Pipeline editor")
+
+        if df.empty:
+            st.info("No deals yet. Add your first deal above.")
+        else:
+            edited = st.data_editor(
+                df[["id","title","stage","owner","amount","agency","due_date","notes"]],
+                key="deals_editor",
+                num_rows="dynamic",
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True),
+                    "stage": st.column_config.SelectboxColumn("Stage", options=DEAL_STAGES),
+                    "amount": st.column_config.NumberColumn("Amount", step=100.0, format="%.2f"),
+                    "notes": st.column_config.TextColumn("Notes", width="medium"),
+                    "title": st.column_config.TextColumn("Title", width="medium"),
+                    "agency": st.column_config.TextColumn("Agency"),
+                    "owner": st.column_config.TextColumn("Owner"),
+                    "due_date": st.column_config.TextColumn("Due date"),
+                },
+                hide_index=True
+            )
+            import pandas as pd
+            changes = []
+            for _, row in edited.iterrows():
+                orig = df.loc[df["id"]==row["id"]].iloc[0]
+                updates = {}
+                for col in ["title","stage","owner","amount","notes","agency","due_date"]:
+                    if pd.isna(row[col]) and pd.isna(orig[col]):
+                        continue
+                    if (row[col] != orig[col]) and not (pd.isna(row[col]) and orig[col] in ("", None)):
+                        updates[col] = None if (isinstance(row[col], float) and pd.isna(row[col])) else row[col]
+                if updates:
+                    ok = update_deal(int(row["id"]), **updates)
+                    if ok:
+                        changes.append((int(row["id"]), updates))
+            if changes:
+                st.success(f"Saved {len(changes)} change(s).")
+
+        with st.expander("Danger zone: delete a deal"):
+            del_id = st.number_input("Deal ID to delete", min_value=1, step=1, value=1)
+            if st.button("Delete deal"):
+                if delete_deal(int(del_id)):
+                    st.warning(f"Deleted deal {int(del_id)}.")
+                    st.rerun()
+                else:
+                    st.error("Delete failed or ID not found.")
+
+
+st.divider()
+\1
+                # Quick add in this stage
+                with st.container(border=True):
+                    _new_title = st.text_input("New deal title", key=f"quick_new_title_{i}")
+                    qa1, qa2 = st.columns([1,1])
+                    with qa1:
+                        _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
+                    with qa2:
+                        _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
+                    if st.button("New in this stage", key=f"quick_new_btn_{i}"):
+                        if _new_title.strip():
+                            create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
+                            st.success("Deal created")
+                            st.rerun()
+                        else:
+                            st.warning("Enter a title first")
+                for _, row in stage_rows.iterrows():
+            with st.container(border=True):
+                st.markdown(f"**{row['title']}**")
+                st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
+                kc1, kc2 = st.columns([1,1])
+                with kc1:
+                    new_owner = st.text_input("Owner", value=row["owner"] or "", key=f"owner_{row['id']}")
+                with kc2:
+                    new_amt = st.number_input("Amount", value=float(row["amount"] or 0.0), step=100.0, format="%.2f", key=f"amt_{row['id']}")
+                km1, km2 = st.columns([2,1])
+                with km1:
+                    new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
+                with km2:
+                    if st.button("Save", key=f"save_{row['id']}"):
+                        changes = {}
+                        if new_owner != (row["owner"] or ""):
+                            changes["owner"] = new_owner or None
+                        if float(new_amt) != float(row["amount"] or 0.0):
+                            changes["amount"] = float(new_amt)
+                        if new_stage != row["stage"]:
+                            changes["stage"] = new_stage
+                        if changes:
+                            ok = update_deal(int(row["id"]), **changes)
+                            if ok:
+                                st.success("Updated")
+                                st.rerun()
+                            else:
+                                st.error("No changes saved")
+
+except Exception as _e_deals:
+    try:
+        st.caption(f"[Deals tab note: {_e_deals}]")
+    except Exception:
+        pass
