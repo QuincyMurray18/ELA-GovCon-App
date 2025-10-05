@@ -4740,18 +4740,7 @@ try:
                     st.success("Deal created.")
                     st.rerun()
 
-        
-st.markdown("#### Totals by stage")
-import pandas as pd as _pd
-_stage_totals_df = (_pd.to_numeric(df["amount"], errors="coerce").fillna(0)
-                    .groupby(df["stage"]).sum())
-_stage_totals_df = _stage_totals_df.reindex(DEAL_STAGES).fillna(0)
-_gcols = st.columns(len(DEAL_STAGES))
-for _i, _stg in enumerate(DEAL_STAGES):
-    with _gcols[_i]:
-        st.metric(_stg, f"${float(_stage_totals_df.get(_stg, 0.0)):,.2f}")
-st.markdown("#### Pipeline editor")
-
+        st.markdown("#### Pipeline editor")
         if df.empty:
             st.info("No deals yet. Add your first deal above.")
         else:
@@ -4799,23 +4788,26 @@ st.markdown("#### Pipeline editor")
 
 
 st.divider()
-\1
-                # Quick add in this stage
-                with st.container(border=True):
-                    _new_title = st.text_input("New deal title", key=f"quick_new_title_{i}")
-                    qa1, qa2 = st.columns([1,1])
-                    with qa1:
-                        _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
-                    with qa2:
-                        _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
-                    if st.button("New in this stage", key=f"quick_new_btn_{i}"):
-                        if _new_title.strip():
-                            create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
-                            st.success("Deal created")
-                            st.rerun()
-                        else:
-                            st.warning("Enter a title first")
-                for _, row in stage_rows.iterrows():
+st.markdown("### Board view")
+st.caption("Column per stage with quick move and inline edits.")
+
+# Pull fresh data for board
+df_board = list_deals(stage=None, q=q)
+
+# Totals row
+import pandas as pd
+totals = df_board.groupby("stage", dropna=False)["amount"].sum(numeric_only=True).reindex(DEAL_STAGES).fillna(0.0)
+counts = df_board.groupby("stage", dropna=False)["id"].count().reindex(DEAL_STAGES).fillna(0)
+grand_total = float(pd.to_numeric(df_board["amount"], errors="coerce").fillna(0).sum())
+st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
+
+cols = st.columns(len(DEAL_STAGES))
+for i, stage_name in enumerate(DEAL_STAGES):
+    with cols[i]:
+        st.markdown(f"#### {stage_name}")
+        st.caption(f"{int(counts.get(stage_name, 0))} deals • ${float(totals.get(stage_name, 0.0)):,.2f}")
+        stage_rows = df_board[df_board["stage"] == stage_name]
+        for _, row in stage_rows.iterrows():
             with st.container(border=True):
                 st.markdown(f"**{row['title']}**")
                 st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
