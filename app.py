@@ -4716,7 +4716,7 @@ try:
 
         # Totals by stage (above grid)
         st.markdown("#### Totals by stage")
-        import pandas as pd as _pd
+        import pandas as _pd
         _stage_amounts = _pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         _stage_totals = _stage_amounts.groupby(df["stage"]).sum() if not df.empty else _pd.Series(dtype=float)
         _stage_totals = _stage_totals.reindex(DEAL_STAGES).fillna(0)
@@ -4804,7 +4804,7 @@ try:
         st.caption("Column per stage with quick add, inline edits, and move.")
 
         df_board = list_deals(stage=None, q=q)
-        import pandas as pd as _pd2
+        import pandas as _pd2
         _counts = df_board.groupby("stage")["id"].count() if not df_board.empty else _pd2.Series(dtype=int)
         _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
         _totals = _amounts.groupby(df_board["stage"]).sum() if not df_board.empty else _pd2.Series(dtype=float)
