@@ -1,379 +1,252 @@
 # ===== app.py =====
 import os, re, io, json, sqlite3, time
+
+
+
+# --- RAG_HELPERS_INJECTED ---
+
+
+# --- AUTO_DRAFT_PIPELINE_INJECTED ---
+
+
+# --- PROPOSAL_AUTODRAFT_UI_INJECTED ---
+def render_autodraft_ui(llm_client, conn, default_outline=None):
+    """Drop-in UI for 'Auto-Draft All' inside Proposal Builder."""
+    import streamlit as st
+    ensure_rag_tables(conn)
+
+    st.subheader("Auto-Draft All")
+    with st.expander("Context & Settings", expanded=False):
+        c1, c2 = st.columns(2)
+        agency = c1.text_input("Agency", st.session_state.get("pb_agency",""))
+        rfp_no = c2.text_input("RFP / RFQ No.", st.session_state.get("pb_rfp_no",""))
+        ptype = c1.selectbox("Procurement Type", ["Q", "P", "B"], index=0, help="Q=RFQ, P=RFP, B=IFB/ITB")
+        naics = c2.text_input("NAICS", st.session_state.get("pb_naics",""))
+        themes = st.tags_input("Win Themes", st.session_state.get("pb_themes", [])) if hasattr(st, "tags_input") else st.text_input("Win Themes (comma-separated)", "")
+        past_perf = st.text_area("Past Performance snippets (one per line)", value=st.session_state.get("pb_pp",""))
+        sow_bullets = st.text_area("Key SOW bullets to cover (one per line)", value=st.session_state.get("pb_sow",""))
+        search_query = st.text_input("Evidence search query", value=st.session_state.get("pb_query",""))
+        page_limit = st.number_input("Page limit (optional)", min_value=0, value=0, step=1)
+
+    outline_default = default_outline or ["Executive Summary","Technical Approach","Management Plan","Quality Assurance","Past Performance","Pricing"]
+    outline = st.text_area("Outline (one section per line)", value="\n".join(outline_default)).splitlines()
+    outline = [o.strip() for o in outline if o.strip()]
+
+    go = st.button("Auto-Draft All", type="primary", use_container_width=True)
+    if go:
+        ctx = {
+            "agency": agency, "rfp_no": rfp_no, "ptype": ptype, "naics": naics,
+            "themes": themes if isinstance(themes, list) else [t.strip() for t in str(themes).split(",") if t.strip()],
+            "past_perf": [p.strip() for p in str(past_perf).splitlines() if p.strip()],
+            "sow_bullets": [b.strip() for b in str(sow_bullets).splitlines() if b.strip()],
+            "search_query": search_query, "req_bullets": [b.strip() for b in str(sow_bullets).splitlines() if b.strip()],
+            "page_limit": int(page_limit or 0), "temperature": 0.3
+        }
+        try:
+            doc = autodraft_all(llm_client, conn, outline, ctx)
+            st.session_state["pb_autodraft"] = doc
+            st.success("Draft complete.")
+        except Exception as e:
+            st.error(f"Auto-draft failed: {e}")
+
+    doc = st.session_state.get("pb_autodraft")
+    if doc:
+        comp = doc.get("compliance",{})
+        st.markdown(f"**Compliance OK:** {'✅' if comp.get('ok') else '❌'}")
+        if comp.get("missing"):
+            st.warning("Missing SOW coverage:\n- " + "\n- ".join(comp["missing"]))
+        if comp.get("placeholders"):
+            st.error("Placeholders detected in sections: " + ", ".join(comp["placeholders"]))
+
+        md = assemble_markdown(doc)
+        st.divider()
+        st.markdown("### Preview (Markdown)")
+        st.text_area("Draft (read-only)", value=md, height=280)
+
+        # Use fast exporter if available
+        try:
+            export_docx_button_auto("Download Proposal DOCX", md, filename="ELA_Proposal.docx", title="ELA Management LLC – Proposal")
+        except Exception:
+            try:
+                export_docx_button("Download Proposal DOCX", md, filename="ELA_Proposal.docx", title="ELA Management LLC – Proposal")
+            except Exception:
+                st.download_button("Download Markdown (fallback)", data=md, file_name="proposal.md")
+# --- END PROPOSAL_AUTODRAFT_UI_INJECTED ---
+
+
+
+from datetime import datetime as _dt
+
+SECTION_TEMPLATE = """You are a proposal writer for federal bids.
+Audience Contracting Officer and Technical Evaluators.
+Role Senior capture + writer.
+Constraints Cite evidence as [DOC:SECTION:PAGE] when used. No placeholders.
+Style Clear, compliant, persuasive, active voice, government tone.
+
+Task Write the {section_name} for {agency} RF{ptype} {rfp_no} NAICS {naics}.
+Win themes {themes}
+Past performance snippets {pp_snippets}
+Key SOW bullets to cover
+{bullets}
+
+Evidence pool
+{evidence}
+
+Output JSON with fields
+heading str
+subheadings list[str]
+paragraphs list[str]
+bullets list[str]
+tables list[{{title:str, headers:list[str], rows:list[list[str]]}}]
+references list[str]
+"""
+
+def _build_section_prompt(conn, section_name, ctx):
+    ev = rag_search(conn, ctx.get("search_query",""), k=int(ctx.get("k",12) or 12))
+    evidence = "\n\n".join([f"[{e['doc']}:{e['section']}:{e['page']}] {e['text']}" for e in ev]) or "No evidence"
+    prompt = SECTION_TEMPLATE.format(
+        section_name=section_name,
+        agency=ctx.get("agency",""),
+        ptype=ctx.get("ptype","Q"),
+        rfp_no=ctx.get("rfp_no",""),
+        naics=ctx.get("naics",""),
+        themes="; ".join(ctx.get("themes",[])),
+        pp_snippets="\n".join(ctx.get("past_perf",[])),
+        bullets="\n".join("• " + b for b in ctx.get("sow_bullets",[])),
+        evidence=evidence
+    )
+    return prompt
+
+def build_section_json(llm_client, conn, section_name, ctx):
+    """
+    llm_client must expose prompt_json(prompt, temperature=0.3).
+    Returns a dict with required fields.
+    """
+    prompt = _build_section_prompt(conn, section_name, ctx)
+    # Temperature lower for compliance by default
+    temp = float(ctx.get("temperature", 0.3))
+    result = llm_client.prompt_json(prompt, temperature=temp)
+    if not isinstance(result, dict):
+        result = {"heading": section_name, "paragraphs": [str(result)], "subheadings": [], "bullets": [], "tables": [], "references": []}
+    result["generated_at"] = _dt.utcnow().isoformat()
+    result["section_name"] = section_name
+    return result
+
+def consistency_pass(sections_json):
+    glossary = set()
+    for s in sections_json:
+        for p in s.get("paragraphs",[]):
+            for token in str(p).split():
+                if token.isupper() and len(token)>2:
+                    glossary.add(token.strip(",.;:()"))
+    return {"glossary": sorted(glossary)}
+
+def compliance_pass(sections_json, required_bullets=None, page_limit=None):
+    required_bullets = required_bullets or []
+    covered = set()
+    for s in sections_json:
+        txt = " ".join(s.get("paragraphs",[]) + s.get("bullets",[]))
+        for b in required_bullets:
+            if str(b).lower() in txt.lower():
+                covered.add(b)
+    missing = [b for b in required_bullets if b not in covered]
+    placeholders = []
+    for s in sections_json:
+        blob = json.dumps(s, ensure_ascii=False)
+        if "INSERT" in blob or "TBD" in blob or "[[" in blob:
+            placeholders.append(s.get("section_name", s.get("heading","")))
+    ok = (not missing) and (not placeholders)
+    return {"ok": ok, "missing": missing, "placeholders": placeholders, "page_limit": page_limit}
+
+def autodraft_all(llm_client, conn, outline, ctx):
+    results = []
+    for sec in outline:
+        results.append(build_section_json(llm_client, conn, sec, ctx))
+    consistency = consistency_pass(results)
+    compliance = compliance_pass(results, ctx.get("req_bullets",[]), page_limit=ctx.get("page_limit"))
+    return {"sections": results, "consistency": consistency, "compliance": compliance}
+
+def assemble_markdown(doc):
+    parts = []
+    for s in doc.get("sections", []):
+        parts.append(f"# {s.get('heading', s.get('section_name','Section'))}")
+        for p in s.get("paragraphs", []):
+            parts.append(str(p))
+        if s.get("bullets"):
+            parts += [f"- {b}" for b in s["bullets"]]
+        for t in s.get("tables", []):
+            try:
+                parts.append(f"\n**{t['title']}**")
+                hdr = " | ".join(t["headers"])
+                sep = " | ".join(["---"]*len(t["headers"]))
+                rows = [" | ".join(r) for r in t["rows"]]
+                parts += [hdr, sep] + rows
+            except Exception:
+                pass
+    return "\n\n".join(parts)
+# --- END AUTO_DRAFT_PIPELINE_INJECTED ---
+
+
+
+import sqlite3, hashlib as _hashlib
+
+def ensure_rag_tables(conn):
+    """Create lightweight RAG tables with FTS5 if missing."""
+    try:
+        conn.execute("""create table if not exists rag_chunks(
+            id integer primary key,
+            doc_name text,
+            section_label text,
+            page int,
+            naics text,
+            text text,
+            sha text unique
+        )""")
+        conn.execute("""create virtual table if not exists rag_chunks_fts 
+            using fts5(text, content='rag_chunks', content_rowid='id')""")
+        conn.execute("""create trigger if not exists rag_chunks_ai after insert on rag_chunks begin
+            insert into rag_chunks_fts(rowid, text) values (new.id, new.text);
+        end;""")
+        conn.commit()
+    except Exception:
+        pass
+
+def upsert_chunks(conn, doc_name, chunks):
+    """chunks: list of dicts with keys text, optional section, page, naics"""
+    for c in chunks or []:
+        sha = _hashlib.sha256((str(doc_name) + str(c.get("text",""))).encode("utf-8")).hexdigest()
+        try:
+            conn.execute(
+                "insert into rag_chunks(doc_name, section_label, page, naics, text, sha) values (?,?,?,?,?,?)",
+                (doc_name, c.get("section",""), int(c.get("page",0) or 0), c.get("naics",""), c.get("text",""), sha)
+            )
+        except sqlite3.IntegrityError:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+def rag_search(conn, query, k=12):
+    try:
+        rows = conn.execute(
+            """select r.doc_name, r.section_label, r.page, r.text 
+               from rag_chunks_fts f join rag_chunks r on f.rowid=r.id 
+               where rag_chunks_fts match ? limit ?""", (query, int(k))
+        ).fetchall()
+    except Exception:
+        return []
+    return [{"doc":d, "section":s, "page":p, "text":t} for d,s,p,t in rows]
+# --- END RAG_HELPERS_INJECTED ---
+
+
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
-
-
-from io import BytesIO
-def md_to_docx_bytes(markdown_text, logo_bytes=None, title=None):
-    """
-    Convert a subset of Markdown to a clean DOCX using python-docx.
-    Supports: headings (#..######), bold **, italic *, inline code ``, horizontal rule ---,
-    bullet/numbered lists, paragraphs, simple tables (| a | b |), and links [text](url) as plain text.
-    Accepts optional logo_bytes for compatibility; if provided, it will be added to the header.
-    """
-    try:
-        from docx import Document
-        from docx.shared import Inches, Pt
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.oxml.shared import OxmlElement, qn
-    except Exception as e:
-        bio = BytesIO()
-        bio.write(markdown_text.encode("utf-8"))
-        bio.seek(0)
-        return bio.getvalue()
-
-    import re
-
-    def add_header_logo(document, logo_bytes):
-        if not logo_bytes:
-            return
-        section = document.sections[0]
-        header = section.header
-        paragraph = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
-        run = paragraph.add_run()
-        try:
-            run.add_picture(BytesIO(logo_bytes), width=Inches(1.5))
-        except Exception:
-            pass
-
-    def apply_inline_runs(paragraph, text):
-        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1', text)
-        tokens = []
-        patterns = [
-            (r'\*\*([^\*]+)\*\*', 'bold'),
-            (r'(?<!\*)\*([^*]+)\*(?!\*)', 'italic'),
-            (r'`([^`]+)`', 'code'),
-        ]
-        while True:
-            match_positions = []
-            for pat, kind in patterns:
-                m = re.search(pat, text)
-                if m:
-                    match_positions.append((m.start(), m.end(), kind, m.group(1)))
-            if not match_positions:
-                break
-            match_positions.sort(key=lambda x: x[0])
-            s,e,kind,content = match_positions[0]
-            if s > 0:
-                tokens.append(("text", text[:s]))
-            tokens.append((kind, content))
-            text = text[e:]
-        if text:
-            tokens.append(("text", text))
-
-        for kind, content in tokens:
-            run = paragraph.add_run(content)
-            if kind == "bold":
-                run.bold = True
-            elif kind == "italic":
-                run.italic = True
-            elif kind == "code":
-                run.font.name = "Courier New"
-                run.font.size = Pt(10)
-
-    def add_hr(par):
-        p = par._p
-        pPr = p.get_or_add_pPr()
-        pBdr = OxmlElement('w:pBdr')
-        bottom = OxmlElement('w:bottom')
-        bottom.set(qn('w:val'), 'single')
-        bottom.set(qn('w:sz'), '6')
-        bottom.set(qn('w:space'), '1')
-        bottom.set(qn('w:color'), 'auto')
-        pBdr.append(bottom)
-        pPr.append(pBdr)
-
-    document = Document()
-
-    if logo_bytes:
-        add_header_logo(document, logo_bytes)
-
-    if title:
-        h = document.add_heading(title, level=0)
-        h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    lines = markdown_text.splitlines()
-    i = 0
-    in_codeblock = False
-    table_buffer = []
-
-    def flush_table():
-        nonlocal table_buffer
-        if not table_buffer:
-            return
-        rows = []
-        for row in table_buffer:
-            row = row.strip().strip('|')
-            cells = [c.strip() for c in row.split('|')]
-            rows.append(cells)
-        if len(rows) >= 2 and all(set(c) <= set('-:') for c in ''.join(rows[1])):
-            rows.pop(1)
-        table = document.add_table(rows=len(rows), cols=max(len(r) for r in rows))
-        try:
-            table.style = 'Light List Accent 1'
-        except Exception:
-            pass
-        for r_i, r in enumerate(rows):
-            for c_i, c in enumerate(r):
-                table.cell(r_i, c_i).text = re.sub(r'\|+', ' ', c)
-        document.add_paragraph()
-        table_buffer = []
-
-    while i < len(lines):
-        line = lines[i]
-
-        if re.match(r'^\s*```', line):
-            in_codeblock = not in_codeblock
-            if not in_codeblock:
-                document.add_paragraph()
-            i += 1
-            continue
-
-        if in_codeblock:
-            p = document.add_paragraph()
-            run = p.add_run(line)
-            run.font.name = "Courier New"
-            i += 1
-            continue
-
-        if '|' in line and re.match(r'^\s*\|?.+\|.+\|?\s*$', line):
-            table_buffer.append(line)
-            i += 1
-            if i == len(lines) or not ('|' in lines[i] and re.match(r'^\s*\|?.+\|.+\|?\s*$', lines[i])):
-                flush_table()
-            continue
-
-        if re.match(r'^\s*-{3,}\s*$', line):
-            par = document.add_paragraph()
-            add_hr(par)
-            i += 1
-            continue
-
-        m = re.match(r'^\s*(#{1,6})\s+(.*)$', line)
-        if m:
-            level = len(m.group(1))
-            text = m.group(2).strip()
-            document.add_heading(text, level=level)
-            i += 1
-            continue
-
-        if re.match(r'^\s*[\-\*\+]\s+', line):
-            text = re.sub(r'^\s*[\-\*\+]\s+', '', line).strip()
-            par = document.add_paragraph(style='List Bullet')
-            apply_inline_runs(par, text)
-            i += 1
-            while i < len(lines) and re.match(r'^\s*[\-\*\+]\s+', lines[i]):
-                text = re.sub(r'^\s*[\-\*\+]\s+', '', lines[i]).strip()
-                par = document.add_paragraph(style='List Bullet')
-                apply_inline_runs(par, text)
-                i += 1
-            continue
-
-        if re.match(r'^\s*\d+\.\s+', line):
-            text = re.sub(r'^\s*\d+\.\s+', '', line).strip()
-            par = document.add_paragraph(style='List Number')
-            apply_inline_runs(par, text)
-            i += 1
-            while i < len(lines) and re.match(r'^\s*\d+\.\s+', lines[i]):
-                text = re.sub(r'^\s*\d+\.\s+', '', lines[i]).strip()
-                par = document.add_paragraph(style='List Number')
-                apply_inline_runs(par, text)
-                i += 1
-            continue
-
-        if not line.strip():
-            document.add_paragraph()
-            i += 1
-            continue
-
-        par = document.add_paragraph()
-        apply_inline_runs(par, line.strip())
-        i += 1
-
-    bio = BytesIO()
-    document.save(bio)
-    bio.seek(0)
-    return bio.getvalue()
-
 
 
 # ===== Proposal drafts utilities =====
 from datetime import datetime
 import os, io
-
-
-
-
-# --- DOCX_EXPORT_HELPERS_INJECTED ---
-def _docx_export_ready():
-    """Return (ok, msg). ok=False if python-docx missing."""
-    try:
-        import docx  # noqa: F401
-        return True, ""
-    except Exception as e:
-        return False, "Missing dependency: python-docx. Add 'python-docx' to requirements.txt and restart app."
-
-def export_docx_button(label, markdown_text, filename="proposal.docx", logo_bytes=None, title=None, key=None):
-    """
-    Streamlit-friendly helper to export Markdown as a clean DOCX.
-    Shows a warning if python-docx is not installed.
-    """
-    import streamlit as st
-    ok, msg = _docx_export_ready()
-    if not ok:
-        st.error(msg)
-        # Still allow fallback TXT so user gets something, but labeled clearly.
-        st.download_button(
-            label=f"Download TXT (DOCX deps missing)",
-            data=md_to_docx_bytes(markdown_text),
-            file_name=(filename.rsplit(".",1)[0] + ".txt"),
-            mime="text/plain",
-            key=key if key else (label + "_txt_fallback")
-        )
-        return
-
-    try:
-        data_bytes = md_to_docx_bytes(markdown_text, logo_bytes=logo_bytes, title=title)
-    except Exception as e:
-        import traceback
-        st.error("DOCX export failed: " + str(e))
-        st.caption(traceback.format_exc())
-        return
-
-    st.download_button(
-        label=label,
-        data=data_bytes,
-        file_name=filename if filename.lower().endswith(".docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document") else (filename + ".docx"),
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        key=key if key else (label + "_docx")
-    )
-# --- END DOCX_EXPORT_HELPERS_INJECTED ---
-
-
-# --- FAST_DOCX_EXPORT_INJECTED ---
-def _hash_bytes(obj) -> str:
-    import json, hashlib
-    try:
-        payload = json.dumps(obj, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    except Exception:
-        payload = str(obj).encode("utf-8", errors="ignore")
-    return hashlib.sha256(payload).hexdigest()
-
-def _ensure_docx_available():
-    try:
-        import docx  # noqa: F401
-        return True, ""
-    except Exception as e:
-        return False, "Missing dependency: python-docx. Add to requirements.txt and restart."
-
-def fast_docx_from_sections(sections, title=None, logo_bytes=None):
-    """
-    Efficiently build a DOCX directly from structured sections: [(heading, body_text), ...].
-    Body text can contain newlines; bullets indicated by leading '- ' lines are rendered as bullets.
-    Returns raw DOCX bytes.
-    """
-    from io import BytesIO
-    from docx import Document
-    from docx.shared import Inches, Pt
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.section import WD_ORIENTATION
-    from docx.oxml.shared import OxmlElement, qn
-
-    doc = Document()
-
-    # Header logo if provided
-    if logo_bytes:
-        hdr = doc.sections[0].header
-        p = hdr.paragraphs[0] if hdr.paragraphs else hdr.add_paragraph()
-        r = p.add_run()
-        try:
-            r.add_picture(BytesIO(logo_bytes), width=Inches(1.4))
-        except Exception:
-            pass
-
-    # Title page
-    if title:
-        tp = doc.add_paragraph()
-        tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        rt = tp.add_run(title)
-        rt.bold = True
-        rt.font.size = Pt(20)
-        doc.add_paragraph()  # spacing
-        # horizontal line
-        p = doc.add_paragraph()
-        pPr = p._p.get_or_add_pPr()
-        pBdr = OxmlElement('w:pBdr')
-        bottom = OxmlElement('w:bottom')
-        bottom.set(qn('w:val'), 'single')
-        bottom.set(qn('w:sz'), '12')
-        bottom.set(qn('w:space'), '1')
-        bottom.set(qn('w:color'), 'auto')
-        pBdr.append(bottom)
-        pPr.append(pBdr)
-
-    # Sections
-    for (heading, body) in sections:
-        if heading:
-            doc.add_heading(str(heading), level=1)
-        # Split into paragraphs or bullets
-        for line in str(body).splitlines():
-            if not line.strip():
-                doc.add_paragraph()
-                continue
-            if line.lstrip().startswith("- "):
-                doc.add_paragraph(line.lstrip()[2:], style="List Bullet")
-            else:
-                doc.add_paragraph(line)
-
-    bio = BytesIO()
-    doc.save(bio)
-    bio.seek(0)
-    return bio.getvalue()
-
-def export_docx_button_auto(label, content, filename="proposal.docx", title=None, logo_bytes=None, key=None):
-    """
-    Smart exporter for Streamlit:
-      - If 'content' is a string, uses md_to_docx_bytes for compatibility.
-      - If 'content' is a list of (heading, body) tuples, uses fast_docx_from_sections.
-      - Caches the output by content hash for speed.
-    """
-    import streamlit as st
-    ok, msg = _ensure_docx_available()
-    if not ok:
-        st.error(msg)
-        st.download_button(label=f"Download TXT (DOCX deps missing)", data=str(content), file_name="proposal.txt", mime="text/plain", key=(key or label+"_txt"))
-        return
-
-    @st.cache_data(show_spinner=False)
-    def _build_docx_cached(kind, payload_hash, payload, title, logo_bytes):
-        if kind == "markdown":
-            return md_to_docx_bytes(payload, logo_bytes=logo_bytes, title=title)
-        else:
-            return fast_docx_from_sections(payload, title=title, logo_bytes=logo_bytes)
-
-    if isinstance(content, str):
-        kind = "markdown"
-        payload = content
-    else:
-        kind = "sections"
-        payload = content
-
-    payload_hash = _hash_bytes(payload)
-    data_bytes = _build_docx_cached(kind, payload_hash, payload, title, logo_bytes)
-
-    st.download_button(
-        label=label,
-        data=data_bytes,
-        file_name=filename if filename.lower().endswith(".docx") else (filename + ".docx"),
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        key=key or (label+"_docx")
-    )
-# --- END FAST_DOCX_EXPORT_INJECTED ---
-
-
-
-
 
 def _ensure_drafts_dir():
     base = os.path.join(os.getcwd(), "drafts", "proposals")
@@ -608,7 +481,7 @@ def _render_markdown_to_docx(doc, md_text):
     flush_bullets(); flush_numbers()
 
 
-def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                           margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     """
     Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
@@ -3177,7 +3050,7 @@ Certifications Small Business"""
             st.warning("Before export, fix these items: " + "; ".join(issues))
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
         _logo = logo_file.read() if logo_file else None
-        docx_bytes = md_to_docx_bytes(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        docx_bytes = md_to_docx_bytes_rich(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
         st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Generate one page to draft, then export to DOCX.")
@@ -3210,7 +3083,7 @@ with legacy_tabs[7]:
             st.warning("Before export, fix these items: " + "; ".join(issues))
         wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
         _wp_logo = wp_logo_file.read() if wp_logo_file else None
-        wp_bytes = md_to_docx_bytes(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
+        wp_bytes = md_to_docx_bytes_rich(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Draft white paper to create a draft, then export to DOCX.")
