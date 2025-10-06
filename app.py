@@ -159,13 +159,13 @@ def _safe_json(o):
 
 def _compose_context(company: Dict[str, Any], rfp: Dict[str, Any], blocks: List[Dict[str, Any]]) -> str:
     parts = [
-        f\"Company: {company.get('name','ELA Management LLC')}\",
-        f\"Capabilities: {company.get('capabilities','')}\",
-        f\"NAICS: {company.get('naics','')}\",
-        f\"Past Performance: {company.get('past_performance','')}\",
-        f\"RFP Summary: {rfp.get('summary','')}\",
-        f\"Evaluation Factors: {', '.join(rfp.get('factors', []))}\",
-        \"Reusable Blocks:\\n\" + \"\\n\\n\".join([f\"- {b.get('tag')}: {b.get('text')}\" for b in blocks])
+        f"Company: {company.get('name','ELA Management LLC')}\",
+        f"Capabilities: {company.get('capabilities','')}\",
+        f"NAICS: {company.get('naics','')}\",
+        f"Past Performance: {company.get('past_performance','')}\",
+        f"RFP Summary: {rfp.get('summary','')}\",
+        f"Evaluation Factors: {', '.join(rfp.get('factors', []))}\",
+        \"Reusable Blocks:\\n\" + \"\\n\\n\".join([f"- {b.get('tag')}: {b.get('text')}\" for b in blocks])
     ]
     return \"\\n\".join(parts)
 
@@ -180,8 +180,8 @@ SECTION_PROMPTS = {
 
 def _build_writer_prompt(style: str, section: str, context: str, factors: List[str]) -> str:
     style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES[\"Formal concise\"])
-    factors_text = \"\\n\".join([f\"- {f}\" for f in factors]) if factors else \"None provided\"
-    return f\"\"\"You are a compliance-first federal proposal writer. You never invent facts.
+    factors_text = \"\\n\".join([f"- {f}\" for f in factors]) if factors else \"None provided\"
+    return f"\"\"You are a compliance-first federal proposal writer. You never invent facts.
 You must cover every Evaluation Factor at least once. If a detail is missing, write [MISSING: …] rather than guessing.
 
 Style: {style_text}
@@ -199,7 +199,7 @@ def _llm_generate(llm_client, prompt: str) -> str:
     try:
         return llm_client(prompt)
     except Exception as e:
-        return f\"[GENERATION_UNAVAILABLE]\\n{prompt[-800:]}\"
+        return f"[GENERATION_UNAVAILABLE]\\n{prompt[-800:]}\"
 
 def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool, List[str]]:
     issues = []
@@ -210,7 +210,7 @@ def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool
         issues.append(\"Missing tags present; complete required details.\")
     for f in required_factors or []:
         if f and (f not in text) and (f not in text.replace(\"[EF: \", \"\").replace(\"]\", \"\")):
-            issues.append(f\"Required factor not referenced: {f}\")
+            issues.append(f"Required factor not referenced: {f}\")
     ok = len(issues) == 0
     return ok, issues
 
@@ -229,7 +229,7 @@ def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str,
 
     results = {}
     for section in outline:
-        base = SECTION_PROMPTS.get(section, f\"Write the {section} for this federal proposal.\")
+        base = SECTION_PROMPTS.get(section, f"Write the {section} for this federal proposal.\")
         prompt = _build_writer_prompt(style, section, context, rfp.get(\"factors\", []) or required_factors)
         prompt = prompt + \"\\n\\nAdditional guidance:\\n\" + base
         draft = _llm_generate(llm_client, prompt)
@@ -276,7 +276,7 @@ def render_autodraft_ui(llm_client, conn, default_outline=None):
             \"past_performance\": past_perf,
         }
         rfp = {
-            \"summary\": \"\n\".join([f\"- {b}\" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
+            \"summary\": \"\n\".join([f"- {b}\" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
             \"factors\": [f.strip() for f in st.session_state.get(\"eval_factors\",\"\").split(\",\") if f.strip()],
             \"rfp_no\": rfp_no,
             \"ptype\": ptype,
@@ -291,12 +291,12 @@ def render_autodraft_ui(llm_client, conn, default_outline=None):
 
         any_fail = False
         for sec, obj in res[\"sections\"].items():
-            st.markdown(f\"### {sec}\")
+            st.markdown(f"### {sec}\")
             if obj[\"issues\"]:
                 any_fail = True
                 st.error(\"Issues: \" + \"; \".join(obj[\"issues\"])),
-            st.text_area(f\"{sec} – Raw\", value=obj[\"raw\"], height=200, key=f\"raw_{sec}\")
-            st.text_area(f\"{sec} – Clean (ready to export)\", value=obj[\"clean\"], height=200, key=f\"clean_{sec}\")
+            st.text_area(f"{sec} – Raw\", value=obj[\"raw\"], height=200, key=f"raw_{sec}\")
+            st.text_area(f"{sec} – Clean (ready to export)\", value=obj[\"clean\"], height=200, key=f"clean_{sec}\")
 
         if any_fail:
             st.warning(\"Some sections have issues. Resolve before export.\")
