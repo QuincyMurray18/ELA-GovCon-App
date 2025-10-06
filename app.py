@@ -251,6 +251,130 @@ def export_docx_button(label, markdown_text, filename="proposal.docx", logo_byte
 # --- END DOCX_EXPORT_HELPERS_INJECTED ---
 
 
+# --- FAST_DOCX_EXPORT_INJECTED ---
+def _hash_bytes(obj) -> str:
+    import json, hashlib
+    try:
+        payload = json.dumps(obj, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        payload = str(obj).encode("utf-8", errors="ignore")
+    return hashlib.sha256(payload).hexdigest()
+
+def _ensure_docx_available():
+    try:
+        import docx  # noqa: F401
+        return True, ""
+    except Exception as e:
+        return False, "Missing dependency: python-docx. Add to requirements.txt and restart."
+
+def fast_docx_from_sections(sections, title=None, logo_bytes=None):
+    """
+    Efficiently build a DOCX directly from structured sections: [(heading, body_text), ...].
+    Body text can contain newlines; bullets indicated by leading '- ' lines are rendered as bullets.
+    Returns raw DOCX bytes.
+    """
+    from io import BytesIO
+    from docx import Document
+    from docx.shared import Inches, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.section import WD_ORIENTATION
+    from docx.oxml.shared import OxmlElement, qn
+
+    doc = Document()
+
+    # Header logo if provided
+    if logo_bytes:
+        hdr = doc.sections[0].header
+        p = hdr.paragraphs[0] if hdr.paragraphs else hdr.add_paragraph()
+        r = p.add_run()
+        try:
+            r.add_picture(BytesIO(logo_bytes), width=Inches(1.4))
+        except Exception:
+            pass
+
+    # Title page
+    if title:
+        tp = doc.add_paragraph()
+        tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        rt = tp.add_run(title)
+        rt.bold = True
+        rt.font.size = Pt(20)
+        doc.add_paragraph()  # spacing
+        # horizontal line
+        p = doc.add_paragraph()
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), '12')
+        bottom.set(qn('w:space'), '1')
+        bottom.set(qn('w:color'), 'auto')
+        pBdr.append(bottom)
+        pPr.append(pBdr)
+
+    # Sections
+    for (heading, body) in sections:
+        if heading:
+            doc.add_heading(str(heading), level=1)
+        # Split into paragraphs or bullets
+        for line in str(body).splitlines():
+            if not line.strip():
+                doc.add_paragraph()
+                continue
+            if line.lstrip().startswith("- "):
+                doc.add_paragraph(line.lstrip()[2:], style="List Bullet")
+            else:
+                doc.add_paragraph(line)
+
+    bio = BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+def export_docx_button_auto(label, content, filename="proposal.docx", title=None, logo_bytes=None, key=None):
+    """
+    Smart exporter for Streamlit:
+      - If 'content' is a string, uses md_to_docx_bytes for compatibility.
+      - If 'content' is a list of (heading, body) tuples, uses fast_docx_from_sections.
+      - Caches the output by content hash for speed.
+    """
+    import streamlit as st
+    ok, msg = _ensure_docx_available()
+    if not ok:
+        st.error(msg)
+        st.download_button(label=f"Download TXT (DOCX deps missing)", data=str(content), file_name="proposal.txt", mime="text/plain", key=(key or label+"_txt"))
+        return
+
+    @st.cache_data(show_spinner=False)
+    def _build_docx_cached(kind, payload_hash, payload, title, logo_bytes):
+        if kind == "markdown":
+            return md_to_docx_bytes(payload, logo_bytes=logo_bytes, title=title)
+        else:
+            return fast_docx_from_sections(payload, title=title, logo_bytes=logo_bytes)
+
+    if isinstance(content, str):
+        kind = "markdown"
+        payload = content
+    else:
+        kind = "sections"
+        payload = content
+
+    payload_hash = _hash_bytes(payload)
+    data_bytes = _build_docx_cached(kind, payload_hash, payload, title, logo_bytes)
+
+    st.download_button(
+        label=label,
+        data=data_bytes,
+        file_name=filename if filename.lower().endswith(".docx") else (filename + ".docx"),
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key=key or (label+"_docx")
+    )
+# --- END FAST_DOCX_EXPORT_INJECTED ---
+
+
+
+
+
 def _ensure_drafts_dir():
     base = os.path.join(os.getcwd(), "drafts", "proposals")
     os.makedirs(base, exist_ok=True)
