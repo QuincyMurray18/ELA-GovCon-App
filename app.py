@@ -5,72 +5,339 @@ import os, re, io, json, sqlite3, time
 
 # --- RAG_HELPERS_INJECTED ---
 
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
+
+def _dict_hash(d: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
+
+def get_db(db_path: str = "ela.db"):
+    return sqlite3.connect(db_path)
+
+def ensure_rag_tables(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute("""create table if not exists templates(
+        id integer primary key,
+        agency text,
+        naics text,
+        name text,
+        body_md text,
+        required_factors_json text,
+        unique(agency, naics, name) on conflict ignore
+    )""")
+    cur.execute("""create table if not exists building_blocks(
+        id integer primary key,
+        tag text,
+        naics text,
+        agency text,
+        text blob,
+        quality_score real default 0.0
+    )""")
+    cur.execute("""create table if not exists proposal_drafts(
+        id integer primary key,
+        session_id text,
+        template_id integer,
+        section text,
+        text blob,
+        created_at timestamp default current_timestamp,
+        version integer default 1
+    )""")
+    cur.execute("""create table if not exists edits_log(
+        id integer primary key,
+        draft_id integer,
+        section text,
+        before_text blob,
+        after_text blob,
+        accepted_at timestamp default current_timestamp
+    )""")
+    conn.commit()
+
+GEN_STYLE_PROFILES = {
+    "Formal concise": "Write in a formal, concise, and compliant tone suitable for federal proposals.",
+    "Technical persuasive": "Write in a technical yet persuasive tone. Prioritize clarity, benefits, and proof.",
+    "Executive tone": "Write for an executive reader. Lead with outcomes, minimize jargon."
+}
+
+DEFAULT_TEMPLATE_MD = """# {title}
+
+## Executive Summary
+{{EXECUTIVE_SUMMARY}}
+
+## Technical Approach
+{{TECHNICAL_APPROACH}}
+
+## Management Plan
+{{MANAGEMENT_PLAN}}
+
+## Quality Assurance
+{{QUALITY_ASSURANCE}}
+
+## Past Performance
+{{PAST_PERFORMANCE}}
+
+## Pricing Narrative
+{{PRICING}}
+"""
+
+def rag_upsert_template(conn, agency: str, naics: str, name: str, body_md: str, required_factors: List[str]) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into templates(agency, naics, name, body_md, required_factors_json) values (?,?,?,?,?)",
+                (agency or "", naics or "", name, body_md, json.dumps(required_factors or [])))
+    conn.commit()
+    tid = cur.lastrowid
+    if not tid:
+        cur.execute("select id from templates where agency=? and naics=? and name=?", (agency or "", naics or "", name))
+        row = cur.fetchone()
+        tid = row[0] if row else 0
+    return tid
+
+def rag_get_template(conn, agency: str, naics: str) -> Tuple[int, str, List[str]]:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("select id, body_md, required_factors_json from templates where agency=? and naics=? order by id desc limit 1",
+                (agency or "", naics or ""))
+    row = cur.fetchone()
+    if row:
+        return row[0], row[1], json.loads(row[2] or "[]")
+    return 0, DEFAULT_TEMPLATE_MD, []
+
+def rag_save_block(conn, tag: str, text: str, naics: str = "", agency: str = "", quality_score: float = 0.0) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into building_blocks(tag, naics, agency, text, quality_score) values (?,?,?,?,?)",
+                (tag, naics, agency, text, quality_score))
+    conn.commit()
+    return cur.lastrowid
+
+def rag_get_best_blocks(conn, keywords: List[str], naics: str = "", agency: str = "", top_k: int = 5) -> List[Dict[str, Any]]:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("select id, tag, naics, agency, text, quality_score from building_blocks where (naics=? or ?='') and (agency=? or ?='')",
+                (naics, naics, agency, agency))
+    rows = cur.fetchall()
+    scored = []
+    for rid, tag, rnaics, ragency, text, q in rows:
+        score = float(q)
+        tlow = (text or "").lower()
+        for kw in keywords or []:
+            if kw.lower() in tlow:
+                score += 1.0
+        scored.append((score, {"id": rid, "tag": tag, "text": text}))
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [x[1] for x in scored[:top_k]]
+
+def save_draft(conn, session_id: str, template_id: int, section: str, text: str) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into proposal_drafts(session_id, template_id, section, text) values (?,?,?,?)",
+                (session_id or "", int(template_id or 0), section, text))
+    conn.commit()
+    return cur.lastrowid
+
+def log_edit(conn, draft_id: int, section: str, before_text: str, after_text: str) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into edits_log(draft_id, section, before_text, after_text) values (?,?,?,?)",
+                (draft_id, section, before_text, after_text))
+    conn.commit()
+    return cur.lastrowid
+
+
 
 # --- AUTO_DRAFT_PIPELINE_INJECTED ---
 
+# ========== AUTO DRAFT PIPELINE ==========
+
+from typing import Dict, Any, List, Tuple
+
+def _safe_json(o):
+    try:
+        return json.dumps(o, indent=2)[:4000]
+    except Exception:
+        return str(o)[:4000]
+
+def _compose_context(company: Dict[str, Any], rfp: Dict[str, Any], blocks: List[Dict[str, Any]]) -> str:
+    parts = [
+        f\"Company: {company.get('name','ELA Management LLC')}\",
+        f\"Capabilities: {company.get('capabilities','')}\",
+        f\"NAICS: {company.get('naics','')}\",
+        f\"Past Performance: {company.get('past_performance','')}\",
+        f\"RFP Summary: {rfp.get('summary','')}\",
+        f\"Evaluation Factors: {', '.join(rfp.get('factors', []))}\",
+        \"Reusable Blocks:\\n\" + \"\\n\\n\".join([f\"- {b.get('tag')}: {b.get('text')}\" for b in blocks])
+    ]
+    return \"\\n\".join(parts)
+
+SECTION_PROMPTS = {
+    \"Executive Summary\": \"Write a concise executive summary that addresses each evaluation factor at a glance.\",
+    \"Technical Approach\": \"Write a technical approach mapping our methods to the SOW bullets. Do not invent capabilities.\",
+    \"Management Plan\": \"Describe staffing, org structure, schedule control, and risk mitigation relevant to the SOW.\",
+    \"Quality Assurance\": \"Describe QA methods aligned to federal service quality principles. Reference SOPs if provided.\",
+    \"Past Performance\": \"Summarize 2-3 relevant past projects with measurable outcomes. If none provided, write [MISSING: Past Performance examples needed].\",
+    \"Pricing\": \"Explain pricing rationale and value. Do not include numeric figures unless included in Context.\"
+}
+
+def _build_writer_prompt(style: str, section: str, context: str, factors: List[str]) -> str:
+    style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES[\"Formal concise\"])
+    factors_text = \"\\n\".join([f\"- {f}\" for f in factors]) if factors else \"None provided\"
+    return f\"\"\"You are a compliance-first federal proposal writer. You never invent facts.
+You must cover every Evaluation Factor at least once. If a detail is missing, write [MISSING: …] rather than guessing.
+
+Style: {style_text}
+
+Evaluation Factors:
+{factors_text}
+
+Context:
+{context}
+
+Task: Write the {section} in 2-5 paragraphs. Reference each factor once inside [EF: Factor Name] tags that will be removed later. Do not add headings.
+\"\"\"
+
+def _llm_generate(llm_client, prompt: str) -> str:
+    try:
+        return llm_client(prompt)
+    except Exception as e:
+        return f\"[GENERATION_UNAVAILABLE]\\n{prompt[-800:]}\"
+
+def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool, List[str]]:
+    issues = []
+    if any(ph in text for ph in [\"INSERT\", \"TBD\", \"lorem\"]):
+        issues.append(\"Placeholder text detected (INSERT/TBD/lorem).\"
+        )
+    if \"[MISSING:\" in text:
+        issues.append(\"Missing tags present; complete required details.\")
+    for f in required_factors or []:
+        if f and (f not in text) and (f not in text.replace(\"[EF: \", \"\").replace(\"]\", \"\")):
+            issues.append(f\"Required factor not referenced: {f}\")
+    ok = len(issues) == 0
+    return ok, issues
+
+def sanitize_for_export(text: str) -> str:
+    text = re.sub(r\"\\[EF:.*?\\]\\s*\", \"\", text)
+    text = text.replace(\"[MISSING:\", \"MISSING:\").replace(\"]\", \"\")
+    return text
+
+def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str, Any], rfp: Dict[str, Any], style: str = \"Formal concise\",
+                           outline: List[str] = None, keywords: List[str] = None, naics: str = \"\", agency: str = \"\") -> Dict[str, Any]:
+    ensure_rag_tables(conn)
+    template_id, body_md, required_factors = rag_get_template(conn, agency, naics)
+    blocks = rag_get_best_blocks(conn, keywords or [], naics=naics, agency=agency, top_k=6)
+    context = _compose_context(company, rfp, blocks)
+    outline = outline or list(SECTION_PROMPTS.keys())
+
+    results = {}
+    for section in outline:
+        base = SECTION_PROMPTS.get(section, f\"Write the {section} for this federal proposal.\")
+        prompt = _build_writer_prompt(style, section, context, rfp.get(\"factors\", []) or required_factors)
+        prompt = prompt + \"\\n\\nAdditional guidance:\\n\" + base
+        draft = _llm_generate(llm_client, prompt)
+        ok, issues = validate_proposal_text(draft, rfp.get(\"factors\", []) or required_factors)
+        results[section] = {\"ok\": ok, \"issues\": issues, \"raw\": draft, \"clean\": sanitize_for_export(draft)}
+        save_draft(conn, session_id=session_id, template_id=template_id, section=section, text=draft)
+    return {\"template_id\": template_id, \"outline\": outline, \"sections\": results, \"required_factors\": required_factors}
+
+
 
 # --- PROPOSAL_AUTODRAFT_UI_INJECTED ---
+
 def render_autodraft_ui(llm_client, conn, default_outline=None):
-    """Drop-in UI for 'Auto-Draft All' inside Proposal Builder."""
+    \"\"\"Drop-in UI for 'Auto-Draft All' inside Proposal Builder.\"\"\"
     import streamlit as st
     ensure_rag_tables(conn)
+    st.subheader(\"Auto-Draft All\")
 
-    st.subheader("Auto-Draft All")
-    with st.expander("Context & Settings", expanded=False):
+    with st.expander(\"Context\", expanded=True):
         c1, c2 = st.columns(2)
-        agency = c1.text_input("Agency", st.session_state.get("pb_agency",""))
-        rfp_no = c2.text_input("RFP / RFQ No.", st.session_state.get("pb_rfp_no",""))
-        ptype = c1.selectbox("Procurement Type", ["Q", "P", "B"], index=0, help="Q=RFQ, P=RFP, B=IFB/ITB")
-        naics = c2.text_input("NAICS", st.session_state.get("pb_naics",""))
-        themes = st.tags_input("Win Themes", st.session_state.get("pb_themes", [])) if hasattr(st, "tags_input") else st.text_input("Win Themes (comma-separated)", "")
-        past_perf = st.text_area("Past Performance snippets (one per line)", value=st.session_state.get("pb_pp",""))
-        sow_bullets = st.text_area("Key SOW bullets to cover (one per line)", value=st.session_state.get("pb_sow",""))
-        search_query = st.text_input("Evidence search query", value=st.session_state.get("pb_query",""))
-        page_limit = st.number_input("Page limit (optional)", min_value=0, value=0, step=1)
+        with c1:
+            agency = st.text_input(\"Agency\", value=st.session_state.get(\"pb_agency\",\"\"))
+            rfp_no = st.text_input(\"Solicitation / RFQ #\", value=st.session_state.get(\"pb_rfp\",\"\"))
+            ptype = st.selectbox(\"Procurement Type\", [\"RFQ\",\"RFP\",\"IFB\",\"Sources Sought\"], index=st.session_state.get(\"pb_ptype_idx\",0))
+            naics = st.text_input(\"NAICS\", value=st.session_state.get(\"pb_naics\",\"\"))
+        with c2:
+            style = st.selectbox(\"Style\", list(GEN_STYLE_PROFILES.keys()), index=0)
+            themes = st.text_input(\"Win Themes (comma-separated)\", value=st.session_state.get(\"pb_themes\",\"\"))
+            past_perf = st.text_area(\"Past Performance snippets (one per line)\", value=st.session_state.get(\"pb_pp\",\"\"))
+            sow_bullets = st.text_area(\"Key SOW bullets (one per line)\", value=st.session_state.get(\"pb_sow\",\"\"))
+            search_query = st.text_input(\"Evidence keywords (comma-separated)\", value=st.session_state.get(\"pb_query\",\"\"))
+            page_limit = st.number_input(\"Max pages per section (optional)\", min_value=0, value=0, step=1)
 
-    outline_default = default_outline or ["Executive Summary","Technical Approach","Management Plan","Quality Assurance","Past Performance","Pricing"]
-    outline = st.text_area("Outline (one section per line)", value="\n".join(outline_default)).splitlines()
+    outline_default = default_outline or [\"Executive Summary\",\"Technical Approach\",\"Management Plan\",\"Quality Assurance\",\"Past Performance\",\"Pricing\"]
+    outline = st.text_area(\"Outline (one section per line)\", value=\"\n\".join(outline_default)).splitlines()
     outline = [o.strip() for o in outline if o.strip()]
 
-    go = st.button("Auto-Draft All", type="primary", use_container_width=True)
+    go = st.button(\"Auto-Draft All\", type=\"primary\", use_container_width=True)
     if go:
-        ctx = {
-            "agency": agency, "rfp_no": rfp_no, "ptype": ptype, "naics": naics,
-            "themes": themes if isinstance(themes, list) else [t.strip() for t in str(themes).split(",") if t.strip()],
-            "past_perf": [p.strip() for p in str(past_perf).splitlines() if p.strip()],
-            "sow_bullets": [b.strip() for b in str(sow_bullets).splitlines() if b.strip()],
-            "search_query": search_query, "req_bullets": [b.strip() for b in str(sow_bullets).splitlines() if b.strip()],
-            "page_limit": int(page_limit or 0), "temperature": 0.3
+        company = {
+            \"name\": st.session_state.get(\"company_name\",\"ELA Management LLC\"),
+            \"capabilities\": st.session_state.get(\"company_caps\",\"Janitorial, Landscaping, HVAC, Facilities Support\"),
+            \"naics\": naics,
+            \"past_performance\": past_perf,
         }
-        try:
-            doc = autodraft_all(llm_client, conn, outline, ctx)
-            st.session_state["pb_autodraft"] = doc
-            st.success("Draft complete.")
-        except Exception as e:
-            st.error(f"Auto-draft failed: {e}")
+        rfp = {
+            \"summary\": \"\n\".join([f\"- {b}\" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
+            \"factors\": [f.strip() for f in st.session_state.get(\"eval_factors\",\"\").split(\",\") if f.strip()],
+            \"rfp_no\": rfp_no,
+            \"ptype\": ptype,
+            \"agency\": agency
+        }
+        keywords = [k.strip() for k in (search_query.split(\",\") if search_query else []) if k.strip()]
+        res = autodraft_all_sections(
+            llm_client, conn, session_id=st.session_state.get(\"session_id\",\"default\"),
+            company=company, rfp=rfp, style=style, outline=outline, keywords=keywords, naics=naics, agency=agency
+        )
+        st.success(\"Draft complete. Review sections below, fix any issues flagged, then export.\")
 
-    doc = st.session_state.get("pb_autodraft")
-    if doc:
-        comp = doc.get("compliance",{})
-        st.markdown(f"**Compliance OK:** {'✅' if comp.get('ok') else '❌'}")
-        if comp.get("missing"):
-            st.warning("Missing SOW coverage:\n- " + "\n- ".join(comp["missing"]))
-        if comp.get("placeholders"):
-            st.error("Placeholders detected in sections: " + ", ".join(comp["placeholders"]))
+        any_fail = False
+        for sec, obj in res[\"sections\"].items():
+            st.markdown(f\"### {sec}\")
+            if obj[\"issues\"]:
+                any_fail = True
+                st.error(\"Issues: \" + \"; \".join(obj[\"issues\"])),
+            st.text_area(f\"{sec} – Raw\", value=obj[\"raw\"], height=200, key=f\"raw_{sec}\")
+            st.text_area(f\"{sec} – Clean (ready to export)\", value=obj[\"clean\"], height=200, key=f\"clean_{sec}\")
 
-        md = assemble_markdown(doc)
-        st.divider()
-        st.markdown("### Preview (Markdown)")
-        st.text_area("Draft (read-only)", value=md, height=280)
+        if any_fail:
+            st.warning(\"Some sections have issues. Resolve before export.\")
+        else:
+            st.info(\"All sections passed validation. You can export now.\")
 
-        # Use fast exporter if available
-        try:
-            export_docx_button_auto("Download Proposal DOCX", md, filename="ELA_Proposal.docx", title="ELA Management LLC – Proposal")
-        except Exception:
-            try:
-                export_docx_button("Download Proposal DOCX", md, filename="ELA_Proposal.docx", title="ELA Management LLC – Proposal")
-            except Exception:
-                st.download_button("Download Markdown (fallback)", data=md, file_name="proposal.md")
+def md_to_docx_bytes(markdown_text: str, margins_in: float = 1.0, **kwargs) -> bytes:
+    try:
+        from docx import Document
+        from docx.shared import Inches
+    except Exception:
+        return markdown_text.encode(\"utf-8\")
+
+    import re as _re, io
+
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+
+    lines = (markdown_text or \"\").splitlines()
+    for ln in lines:
+        if _re.match(r\"^\s*#\s+\", ln):
+            doc.add_heading(_re.sub(r\"^\s*#\s+\", \"\", ln), level=1)
+        elif _re.match(r\"^\s*##\s+\", ln):
+            doc.add_heading(_re.sub(r\"^\s*##\s+\", \"\", ln), level=2)
+        elif ln.strip() == \"---\":
+            doc.add_page_break()
+        else:
+            doc.add_paragraph(ln)
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+
 # --- END PROPOSAL_AUTODRAFT_UI_INJECTED ---
 
 
