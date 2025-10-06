@@ -440,7 +440,7 @@ def assemble_markdown(doc):
         for p in s.get("paragraphs", []):
             parts.append(str(p))
         if s.get("bullets"):
-            parts += [f"- {b} for b in s["bullets"]]
+            parts += [f"- {b}" for b in s["bullets"]]
         for t in s.get("tables", []):
             try:
                 parts.append(f"\n**{t['title']}**")
