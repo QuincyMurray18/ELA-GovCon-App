@@ -1089,7 +1089,7 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     except Exception as e:
         import streamlit as st
         st.error(f"Unhandled error: {e}")
-            return f"Graph token exception: {e}"
+        return f"Graph token exception: {e}"
 
     if token_r.status_code != 200:
         return f"Graph token error {token_r.status_code}: {token_r.text[:300]}"
