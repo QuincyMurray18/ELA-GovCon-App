@@ -4551,9 +4551,9 @@ with st.sidebar:
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
             # (removed stray except without try)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
+            except Exception as e:
+                import streamlit as st
+                st.error(f"Unhandled error: {e}")
         # (removed stray except without try)
     if st.button("Test Google Places key"):
         vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
