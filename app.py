@@ -202,6 +202,55 @@ def md_to_docx_bytes(markdown_text, logo_bytes=None, title=None):
 from datetime import datetime
 import os, io
 
+
+
+
+# --- DOCX_EXPORT_HELPERS_INJECTED ---
+def _docx_export_ready():
+    """Return (ok, msg). ok=False if python-docx missing."""
+    try:
+        import docx  # noqa: F401
+        return True, ""
+    except Exception as e:
+        return False, "Missing dependency: python-docx. Add 'python-docx' to requirements.txt and restart app."
+
+def export_docx_button(label, markdown_text, filename="proposal.docx", logo_bytes=None, title=None, key=None):
+    """
+    Streamlit-friendly helper to export Markdown as a clean DOCX.
+    Shows a warning if python-docx is not installed.
+    """
+    import streamlit as st
+    ok, msg = _docx_export_ready()
+    if not ok:
+        st.error(msg)
+        # Still allow fallback TXT so user gets something, but labeled clearly.
+        st.download_button(
+            label=f"Download TXT (DOCX deps missing)",
+            data=md_to_docx_bytes(markdown_text),
+            file_name=(filename.rsplit(".",1)[0] + ".txt"),
+            mime="text/plain",
+            key=key if key else (label + "_txt_fallback")
+        )
+        return
+
+    try:
+        data_bytes = md_to_docx_bytes(markdown_text, logo_bytes=logo_bytes, title=title)
+    except Exception as e:
+        import traceback
+        st.error("DOCX export failed: " + str(e))
+        st.caption(traceback.format_exc())
+        return
+
+    st.download_button(
+        label=label,
+        data=data_bytes,
+        file_name=filename if filename.lower().endswith(".docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document") else (filename + ".docx"),
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key=key if key else (label + "_docx")
+    )
+# --- END DOCX_EXPORT_HELPERS_INJECTED ---
+
+
 def _ensure_drafts_dir():
     base = os.path.join(os.getcwd(), "drafts", "proposals")
     os.makedirs(base, exist_ok=True)
