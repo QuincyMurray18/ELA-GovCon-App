@@ -159,12 +159,12 @@ def _safe_json(o):
 
 def _compose_context(company: Dict[str, Any], rfp: Dict[str, Any], blocks: List[Dict[str, Any]]) -> str:
     parts = [
-        f"Company: {company.get('name','ELA Management LLC')}\",
-        f"Capabilities: {company.get('capabilities','')}\",
-        f"NAICS: {company.get('naics','')}\",
-        f"Past Performance: {company.get('past_performance','')}\",
-        f"RFP Summary: {rfp.get('summary','')}\",
-        f"Evaluation Factors: {', '.join(rfp.get('factors', []))}\",
+        f"Company: {company.get('name','ELA Management LLC')}",
+        f"Capabilities: {company.get('capabilities','')}",
+        f"NAICS: {company.get('naics','')}",
+        f"Past Performance: {company.get('past_performance','')}",
+        f"RFP Summary: {rfp.get('summary','')}",
+        f"Evaluation Factors: {', '.join(rfp.get('factors', []))}",
         \"Reusable Blocks:\\n\" + \"\\n\\n\".join([f"- {b.get('tag')}: {b.get('text')}\" for b in blocks])
     ]
     return \"\\n\".join(parts)
@@ -295,8 +295,8 @@ def render_autodraft_ui(llm_client, conn, default_outline=None):
             if obj[\"issues\"]:
                 any_fail = True
                 st.error(\"Issues: \" + \"; \".join(obj[\"issues\"])),
-            st.text_area(f"{sec} – Raw\", value=obj[\"raw\"], height=200, key=f"raw_{sec}\")
-            st.text_area(f"{sec} – Clean (ready to export)\", value=obj[\"clean\"], height=200, key=f"clean_{sec}\")
+            st.text_area(f"{sec} – Raw", value=obj[\"raw\"], height=200, key=f"raw_{sec}\")
+            st.text_area(f"{sec} – Clean (ready to export)", value=obj[\"clean\"], height=200, key=f"clean_{sec}\")
 
         if any_fail:
             st.warning(\"Some sections have issues. Resolve before export.\")
