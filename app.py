@@ -4710,14 +4710,14 @@ def render_proposal_builder():
 try:
     with legacy_tabs[5]:
         
-    # === Auto-Draft UI (injected) ===
-    try:
-        llm_client = globals().get("llm_client") or globals().get("LLM_CLIENT") or globals().get("client")
-        conn = get_db() if 'get_db' in globals() else sqlite3.connect("ela.db", check_same_thread=False)
-        render_autodraft_ui(llm_client, conn)
-    except Exception as _e:
-        import streamlit as st
-        st.info("Auto-Draft UI available. Bind your model client as llm_client.prompt_json().")
+            # === Auto-Draft UI (injected) ===
+            try:
+                llm_client = globals().get("llm_client") or globals().get("LLM_CLIENT") or globals().get("client")
+                conn = get_db() if 'get_db' in globals() else sqlite3.connect("ela.db", check_same_thread=False)
+                render_autodraft_ui(llm_client, conn)
+            except Exception as _e:
+                import streamlit as st
+                st.info("Auto-Draft UI available. Bind your model client as llm_client.prompt_json().")
 render_rfp_analyzer()
 except Exception as e:
     st.caption(f"[RFP Analyzer tab note: {e}]")
