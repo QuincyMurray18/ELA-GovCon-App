@@ -1239,6 +1239,44 @@ def parse_pick_id(pick):
     except Exception:
         return None
 
+
+
+def _ensure_outreach_log_columns(conn):
+    cur = conn.cursor()
+    try: cur.execute("alter table outreach_log add column error_text text")
+    except Exception: pass
+    try: cur.execute("alter table outreach_log add column try_count integer default 0")
+    except Exception: pass
+    conn.commit()
+
+
+def normalize_vendor_website(website: str, display_link: str = None):
+    if not website:
+        return None
+    w = website.strip().lower()
+    bad_hosts = {"google.com", "www.google.com"}
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(w if w.startswith("http") else "http://" + w)
+        host = u.netloc.split(":")[0]
+        if host in bad_hosts:
+            return None
+        return (u.scheme + "://" + u.netloc + u.path).rstrip("/")
+    except Exception:
+        return w
+
+def ensure_indexes(conn):
+    cur = conn.cursor()
+    try: cur.execute("create index if not exists idx_opp_notice on opportunities(sam_notice_id)")
+    except Exception: pass
+    try: cur.execute("create index if not exists idx_outreach_vendor on outreach_log(vendor_id)")
+    except Exception: pass
+    try: cur.execute("create index if not exists idx_rfq_vendor on rfq_outbox(vendor_id)")
+    except Exception: pass
+    try: cur.execute("create index if not exists idx_tasks_opp on tasks(opp_id)")
+    except Exception: pass
+    conn.commit()
+
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
