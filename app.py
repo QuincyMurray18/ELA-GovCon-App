@@ -4642,7 +4642,27 @@ def render_rfp_analyzer():
 def render_proposal_builder():
     try:
         st.subheader("Proposal Builder")
-        st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
+        
+
+# === Auto-Draft Panel (Hybrid Template + RAG) ===
+try:
+    _ = generate_text  # probe existence
+    def llm_client(prompt: str) -> str:
+        return generate_text(prompt)
+except NameError:
+    def llm_client(prompt: str) -> str:
+        # safe fallback: echo last 600 chars of prompt if no generator wired yet
+        return "[GENERATOR NOT CONFIGURED]\n" + prompt[-600:]
+
+try:
+    conn = get_db()
+except Exception:
+    conn = sqlite3.connect("ela.db")
+
+render_autodraft_ui(llm_client, conn)
+# === End Auto-Draft Panel ===
+
+st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
 
         conn = get_db()
         sessions = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
