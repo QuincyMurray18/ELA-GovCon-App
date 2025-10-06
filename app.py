@@ -921,7 +921,7 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
             },
             timeout=20,
         )
-    except Exception as e:
+    # (removed stray except without try)
         return f"Graph token exception: {e}"
 
     if token_r.status_code != 200:
@@ -1016,7 +1016,7 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
                 return pd.DataFrame(data), diag
             else:
                 last_detail = f"Attempt {name}: HTTP {status}, empty; message: {js.get('detail') or js.get('messages') or ''}"
-        except Exception as e:
+        # (removed stray except without try)
             last_detail = f"Attempt {name}: exception {e}"
     if st_debug is not None:
         st_debug.caption(last_detail)
@@ -1201,7 +1201,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
                 "raw_preview": (rs.text or "")[:800]}
         return out, info
-    except Exception as e:
+    # (removed stray except without try)
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def linkedin_company_search(keyword: str) -> str:
@@ -3781,7 +3781,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
                 "raw_preview": (rs.text or "")[:800]}
         return out, info
-    except Exception as e:
+    # (removed stray except without try)
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def _clean_url(url: str) -> str:
@@ -3868,7 +3868,7 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
                     continue
                 if nxt not in seen and len(queue) < (max_pages*3):
                     queue.append(nxt)
-        except Exception as e:
+        # (removed stray except without try)
             errors.append(str(e))
         time.sleep(delay_s)
     return {"emails": emails, "visited": visited, "errors": errors}
@@ -4118,11 +4118,8 @@ with st.sidebar:
                     st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
-            except Exception as e:
-                st.error(f"JSON parse error: {e}"); st.code(text_preview)
-        except Exception as e:
-            st.error(f"Request failed: {e}")
-
+            # (removed stray except without try)
+        # (removed stray except without try)
     if st.button("Test Google Places key"):
         vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
         st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
@@ -4370,9 +4367,7 @@ def render_rfp_analyzer():
 
             st.chat_message("user").markdown(pending_prompt)
             st.chat_message("assistant").markdown(assistant_out)
-    except Exception as e:
-        st.error(f"RFP Analyzer error: {e}")
-
+    # (removed stray except without try)
 def render_proposal_builder():
     try:
         st.subheader("Proposal Builder")
@@ -4700,9 +4695,7 @@ def render_proposal_builder():
             st.success("Drafts saved.")
 
         
-    except Exception as e:
-        st.error(f"Proposal Builder error: {e}")
-
+    # (removed stray except without try)
 # === End new features ===
 
 
@@ -4722,9 +4715,7 @@ except Exception as e:
     st.caption(f"[RFP Analyzer tab note: {e}]")
     with legacy_tabs[12]:
         render_proposal_builder()
-except Exception as e:
-    st.caption(f"[Proposal Builder tab note: {e}]")
-
+# (removed stray except without try)
 with conn:
     conn.execute("""
     create table if not exists pricing_benchmarks(
