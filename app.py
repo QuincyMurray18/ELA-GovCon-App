@@ -4278,8 +4278,8 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
         except Exception as e:
             import streamlit as st
             st.error(f"Unhandled error: {e}")
-                    errors.append(str(e))
-        time.sleep(delay_s)
+            errors.append(str(e))
+            time.sleep(delay_s)
     return {"emails": emails, "visited": visited, "errors": errors}
 
 # ---------- SAM search ----------
