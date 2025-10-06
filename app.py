@@ -181,7 +181,7 @@ SECTION_PROMPTS = {
 def _build_writer_prompt(style: str, section: str, context: str, factors: List[str]) -> str:
     style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES["Formal concise"])
     factors_text = "\n".join([f"- {f}" for f in factors]) if factors else "None provided"
-    return f"""You are a compliance-first federal proposal writer. You never invent facts.
+    return f"""You are a compliance-first federal proposal writer. You never invent facts."
 You must cover every Evaluation Factor at least once. If a detail is missing, write [MISSING: …] rather than guessing.
 
 Style: {style_text}
@@ -200,7 +200,7 @@ def _llm_generate(llm_client, prompt: str) -> str:
         return llm_client(prompt)
     except Exception as e:
         return f"[GENERATION_UNAVAILABLE]\n{prompt[-800:]}"
-
+        # ---
 def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool, List[str]]:
     issues = []
     if any(ph in text for ph in ["INSERT", "TBD", "lorem"]):
@@ -1472,8 +1472,8 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def linkedin_company_search(keyword: str) -> str:
-    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
-
+    """Return a LinkedIn companies search URL for the keyword."""
+    return f"https://www.linkedin.com/search/results/companies/?keywords={keyword}"
 def build_context(max_rows=6):
     conn = get_db()
     g = pd.read_sql_query("select * from goals limit 1", conn)
@@ -3208,7 +3208,7 @@ with legacy_tabs[4]:
                 st.code((info or {}).get("raw_preview","") or "", language="json")
 
     # Show results from session (if any)
-    df = st.session_state.get("sam_results_df")"
+    df = st.session_state.get("sam_results_df")
 
     info = st.session_state.get("sam_results_info", {}) or {}
     if info and not info.get("ok", True):
@@ -3282,7 +3282,7 @@ with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", key="cap_tagline_input_capability_builder", value="Responsive project management for federal facilities and services")
-    core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")"
+    core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
 
     diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
     past_perf = st.text_area("Representative experience", key="cap_past_textarea_capability_builder", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
@@ -3293,7 +3293,7 @@ with legacy_tabs[6]:
     with c1:
         if st.button("Generate one page", key="btn_cap_generate_capability_builder"):
             system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
-            prompt = f"""Company {company}
+            prompt = f"""Company {company}"
 Tagline {tagline}
 Core {core}
 Diff {diff}
@@ -3406,7 +3406,7 @@ with legacy_tabs[11]:
     # Create new session
     if pick == "➤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
- new_title = st.text_input("New chat title", value=default_title)
+        new_title = st.text_input("New chat title", value=default_title)
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
@@ -3506,7 +3506,7 @@ with legacy_tabs[11]:
 
                 system_text = "\n\n".join(filter(None, [
                     "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
-                    f"Context snapshot (keep answers consistent with this):\n{context_snap} if context_snap else "",
+                    (f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else ""),
                     doc_snips
                 ]))
 
@@ -3990,13 +3990,14 @@ def build_context(max_rows=6):
 
 # ---------- External integrations ----------
 def linkedin_company_search(keyword: str) -> str:
-    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)} def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
+    """Return a LinkedIn companies search URL for the keyword."""
+    return f"https://www.linkedin.com/search/results/companies/?keywords={keyword}"
+
+def google_places_search(query: str, location: str, radius_m: int = 80000, strict: bool = True):
     """
     Google Places Text Search + Details (phone + website).
     Returns (list_of_vendors, info). Emails are NOT provided by Places.
     """
-    if not GOOGLE_PLACES_KEY:
-        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
     try:
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
@@ -4476,7 +4477,8 @@ def render_rfp_analyzer():
         pick = st.selectbox("RFP session", options=session_titles, index=0)
 
         if pick == "➤ New RFP thread":
-            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')} new_title = st.text_input("Thread title", value=default_title)
+            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
+            new_title = st.text_input("Thread title", value=default_title)
             if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
@@ -4602,7 +4604,7 @@ def render_rfp_analyzer():
                 context_snap = ""
             doc_snips = _rfp_context_for(pending_prompt)
 
-            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
+            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable."
     Context snapshot:
     {context_snap}
     {doc_snips if doc_snips else ""}"""
@@ -4814,9 +4816,9 @@ def render_proposal_builder():
                 doc_snips = _pb_doc_snips(sec)
                 system_text = "\n\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    f"Company snapshot:\n{context_snap} if context_snap else "",
+                    (f"Company snapshot:\n{context_snap}" if context_snap else ""),
                     doc_snips,
-                    f"Past Performance selections:\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                    (f"Past Performance selections:\n{pp_text}" if sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan') else "")
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
@@ -5420,4 +5422,3 @@ except Exception as _e_deals:
         st.caption(f"[Deals tab note: {_e_deals}]")
     except Exception:
         pass
-
