@@ -165,23 +165,23 @@ def _compose_context(company: Dict[str, Any], rfp: Dict[str, Any], blocks: List[
         f"Past Performance: {company.get('past_performance','')}",
         f"RFP Summary: {rfp.get('summary','')}",
         f"Evaluation Factors: {', '.join(rfp.get('factors', []))}",
-        \"Reusable Blocks:\\n\" + \"\\n\\n\".join([f"- {b.get('tag')}: {b.get('text')}\" for b in blocks])
+        "Reusable Blocks:\n" + "\n\n".join([f"- {b.get('tag')}: {b.get('text')}" for b in blocks])
     ]
-    return \"\\n\".join(parts)
+    return "\n".join(parts)
 
 SECTION_PROMPTS = {
-    \"Executive Summary\": \"Write a concise executive summary that addresses each evaluation factor at a glance.\",
-    \"Technical Approach\": \"Write a technical approach mapping our methods to the SOW bullets. Do not invent capabilities.\",
-    \"Management Plan\": \"Describe staffing, org structure, schedule control, and risk mitigation relevant to the SOW.\",
-    \"Quality Assurance\": \"Describe QA methods aligned to federal service quality principles. Reference SOPs if provided.\",
-    \"Past Performance\": \"Summarize 2-3 relevant past projects with measurable outcomes. If none provided, write [MISSING: Past Performance examples needed].\",
-    \"Pricing\": \"Explain pricing rationale and value. Do not include numeric figures unless included in Context.\"
+    "Executive Summary": "Write a concise executive summary that addresses each evaluation factor at a glance.",
+    "Technical Approach": "Write a technical approach mapping our methods to the SOW bullets. Do not invent capabilities.",
+    "Management Plan": "Describe staffing, org structure, schedule control, and risk mitigation relevant to the SOW.",
+    "Quality Assurance": "Describe QA methods aligned to federal service quality principles. Reference SOPs if provided.",
+    "Past Performance": "Summarize 2-3 relevant past projects with measurable outcomes. If none provided, write [MISSING: Past Performance examples needed].",
+    "Pricing": "Explain pricing rationale and value. Do not include numeric figures unless included in Context."
 }
 
 def _build_writer_prompt(style: str, section: str, context: str, factors: List[str]) -> str:
-    style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES[\"Formal concise\"])
-    factors_text = \"\\n\".join([f"- {f}\" for f in factors]) if factors else \"None provided\"
-    return f"\"\"You are a compliance-first federal proposal writer. You never invent facts.
+    style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES["Formal concise"])
+    factors_text = "\n".join([f"- {f}" for f in factors]) if factors else "None provided"
+    return f"""You are a compliance-first federal proposal writer. You never invent facts.
 You must cover every Evaluation Factor at least once. If a detail is missing, write [MISSING: …] rather than guessing.
 
 Style: {style_text}
@@ -193,34 +193,34 @@ Context:
 {context}
 
 Task: Write the {section} in 2-5 paragraphs. Reference each factor once inside [EF: Factor Name] tags that will be removed later. Do not add headings.
-\"\"\"
+"""
 
 def _llm_generate(llm_client, prompt: str) -> str:
     try:
         return llm_client(prompt)
     except Exception as e:
-        return f"[GENERATION_UNAVAILABLE]\\n{prompt[-800:]}\"
+        return f"[GENERATION_UNAVAILABLE]\n{prompt[-800:]}"
 
 def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool, List[str]]:
     issues = []
-    if any(ph in text for ph in [\"INSERT\", \"TBD\", \"lorem\"]):
-        issues.append(\"Placeholder text detected (INSERT/TBD/lorem).\"
+    if any(ph in text for ph in ["INSERT", "TBD", "lorem"]):
+        issues.append("Placeholder text detected (INSERT/TBD/lorem)."
         )
-    if \"[MISSING:\" in text:
-        issues.append(\"Missing tags present; complete required details.\")
+    if "[MISSING:" in text:
+        issues.append("Missing tags present; complete required details.")
     for f in required_factors or []:
-        if f and (f not in text) and (f not in text.replace(\"[EF: \", \"\").replace(\"]\", \"\")):
-            issues.append(f"Required factor not referenced: {f}\")
+        if f and (f not in text) and (f not in text.replace("[EF: ", "").replace("]", "")):
+            issues.append(f"Required factor not referenced: {f}")
     ok = len(issues) == 0
     return ok, issues
 
 def sanitize_for_export(text: str) -> str:
-    text = re.sub(r\"\\[EF:.*?\\]\\s*\", \"\", text)
-    text = text.replace(\"[MISSING:\", \"MISSING:\").replace(\"]\", \"\")
+    text = re.sub(r"\\[EF:.*?\\]\\s*", "", text)
+    text = text.replace("[MISSING:", "MISSING:").replace("]", "")
     return text
 
-def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str, Any], rfp: Dict[str, Any], style: str = \"Formal concise\",
-                           outline: List[str] = None, keywords: List[str] = None, naics: str = \"\", agency: str = \"\") -> Dict[str, Any]:
+def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str, Any], rfp: Dict[str, Any], style: str = "Formal concise",
+                           outline: List[str] = None, keywords: List[str] = None, naics: str = "", agency: str = "") -> Dict[str, Any]:
     ensure_rag_tables(conn)
     template_id, body_md, required_factors = rag_get_template(conn, agency, naics)
     blocks = rag_get_best_blocks(conn, keywords or [], naics=naics, agency=agency, top_k=6)
@@ -229,86 +229,86 @@ def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str,
 
     results = {}
     for section in outline:
-        base = SECTION_PROMPTS.get(section, f"Write the {section} for this federal proposal.\")
-        prompt = _build_writer_prompt(style, section, context, rfp.get(\"factors\", []) or required_factors)
-        prompt = prompt + \"\\n\\nAdditional guidance:\\n\" + base
+        base = SECTION_PROMPTS.get(section, f"Write the {section} for this federal proposal.")
+        prompt = _build_writer_prompt(style, section, context, rfp.get("factors", []) or required_factors)
+        prompt = prompt + "\n\nAdditional guidance:\n" + base
         draft = _llm_generate(llm_client, prompt)
-        ok, issues = validate_proposal_text(draft, rfp.get(\"factors\", []) or required_factors)
-        results[section] = {\"ok\": ok, \"issues\": issues, \"raw\": draft, \"clean\": sanitize_for_export(draft)}
+        ok, issues = validate_proposal_text(draft, rfp.get("factors", []) or required_factors)
+        results[section] = {"ok": ok, "issues": issues, "raw": draft, "clean": sanitize_for_export(draft)}
         save_draft(conn, session_id=session_id, template_id=template_id, section=section, text=draft)
-    return {\"template_id\": template_id, \"outline\": outline, \"sections\": results, \"required_factors\": required_factors}
+    return {"template_id": template_id, "outline": outline, "sections": results, "required_factors": required_factors}
 
 
 
 # --- PROPOSAL_AUTODRAFT_UI_INJECTED ---
 
 def render_autodraft_ui(llm_client, conn, default_outline=None):
-    \"\"\"Drop-in UI for 'Auto-Draft All' inside Proposal Builder.\"\"\"
+    """Drop-in UI for 'Auto-Draft All' inside Proposal Builder."""
     import streamlit as st
     ensure_rag_tables(conn)
-    st.subheader(\"Auto-Draft All\")
+    st.subheader("Auto-Draft All")
 
-    with st.expander(\"Context\", expanded=True):
+    with st.expander("Context", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
-            agency = st.text_input(\"Agency\", value=st.session_state.get(\"pb_agency\",\"\"))
-            rfp_no = st.text_input(\"Solicitation / RFQ #\", value=st.session_state.get(\"pb_rfp\",\"\"))
-            ptype = st.selectbox(\"Procurement Type\", [\"RFQ\",\"RFP\",\"IFB\",\"Sources Sought\"], index=st.session_state.get(\"pb_ptype_idx\",0))
-            naics = st.text_input(\"NAICS\", value=st.session_state.get(\"pb_naics\",\"\"))
+            agency = st.text_input("Agency", value=st.session_state.get("pb_agency",""))
+            rfp_no = st.text_input("Solicitation / RFQ #", value=st.session_state.get("pb_rfp",""))
+            ptype = st.selectbox("Procurement Type", ["RFQ","RFP","IFB","Sources Sought"], index=st.session_state.get("pb_ptype_idx",0))
+            naics = st.text_input("NAICS", value=st.session_state.get("pb_naics",""))
         with c2:
-            style = st.selectbox(\"Style\", list(GEN_STYLE_PROFILES.keys()), index=0)
-            themes = st.text_input(\"Win Themes (comma-separated)\", value=st.session_state.get(\"pb_themes\",\"\"))
-            past_perf = st.text_area(\"Past Performance snippets (one per line)\", value=st.session_state.get(\"pb_pp\",\"\"))
-            sow_bullets = st.text_area(\"Key SOW bullets (one per line)\", value=st.session_state.get(\"pb_sow\",\"\"))
-            search_query = st.text_input(\"Evidence keywords (comma-separated)\", value=st.session_state.get(\"pb_query\",\"\"))
-            page_limit = st.number_input(\"Max pages per section (optional)\", min_value=0, value=0, step=1)
+            style = st.selectbox("Style", list(GEN_STYLE_PROFILES.keys()), index=0)
+            themes = st.text_input("Win Themes (comma-separated)", value=st.session_state.get("pb_themes",""))
+            past_perf = st.text_area("Past Performance snippets (one per line)", value=st.session_state.get("pb_pp",""))
+            sow_bullets = st.text_area("Key SOW bullets (one per line)", value=st.session_state.get("pb_sow",""))
+            search_query = st.text_input("Evidence keywords (comma-separated)", value=st.session_state.get("pb_query",""))
+            page_limit = st.number_input("Max pages per section (optional)", min_value=0, value=0, step=1)
 
-    outline_default = default_outline or [\"Executive Summary\",\"Technical Approach\",\"Management Plan\",\"Quality Assurance\",\"Past Performance\",\"Pricing\"]
-    outline = st.text_area(\"Outline (one section per line)\", value=\"\n\".join(outline_default)).splitlines()
+    outline_default = default_outline or ["Executive Summary","Technical Approach","Management Plan","Quality Assurance","Past Performance","Pricing"]
+    outline = st.text_area("Outline (one section per line)", value="\n".join(outline_default)).splitlines()
     outline = [o.strip() for o in outline if o.strip()]
 
-    go = st.button(\"Auto-Draft All\", type=\"primary\", use_container_width=True)
+    go = st.button("Auto-Draft All", type="primary", use_container_width=True)
     if go:
         company = {
-            \"name\": st.session_state.get(\"company_name\",\"ELA Management LLC\"),
-            \"capabilities\": st.session_state.get(\"company_caps\",\"Janitorial, Landscaping, HVAC, Facilities Support\"),
-            \"naics\": naics,
-            \"past_performance\": past_perf,
+            "name": st.session_state.get("company_name","ELA Management LLC"),
+            "capabilities": st.session_state.get("company_caps","Janitorial, Landscaping, HVAC, Facilities Support"),
+            "naics": naics,
+            "past_performance": past_perf,
         }
         rfp = {
-            \"summary\": \"\n\".join([f"- {b}\" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
-            \"factors\": [f.strip() for f in st.session_state.get(\"eval_factors\",\"\").split(\",\") if f.strip()],
-            \"rfp_no\": rfp_no,
-            \"ptype\": ptype,
-            \"agency\": agency
+            "summary": "\n".join([f"- {b}" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
+            "factors": [f.strip() for f in st.session_state.get("eval_factors","").split(",") if f.strip()],
+            "rfp_no": rfp_no,
+            "ptype": ptype,
+            "agency": agency
         }
-        keywords = [k.strip() for k in (search_query.split(\",\") if search_query else []) if k.strip()]
+        keywords = [k.strip() for k in (search_query.split(",") if search_query else []) if k.strip()]
         res = autodraft_all_sections(
-            llm_client, conn, session_id=st.session_state.get(\"session_id\",\"default\"),
+            llm_client, conn, session_id=st.session_state.get("session_id","default"),
             company=company, rfp=rfp, style=style, outline=outline, keywords=keywords, naics=naics, agency=agency
         )
-        st.success(\"Draft complete. Review sections below, fix any issues flagged, then export.\")
+        st.success("Draft complete. Review sections below, fix any issues flagged, then export.")
 
         any_fail = False
-        for sec, obj in res[\"sections\"].items():
-            st.markdown(f"### {sec}\")
-            if obj[\"issues\"]:
+        for sec, obj in res["sections"].items():
+            st.markdown(f"### {sec}")
+            if obj["issues"]:
                 any_fail = True
-                st.error(\"Issues: \" + \"; \".join(obj[\"issues\"])),
-            st.text_area(f"{sec} – Raw", value=obj[\"raw\"], height=200, key=f"raw_{sec}\")
-            st.text_area(f"{sec} – Clean (ready to export)", value=obj[\"clean\"], height=200, key=f"clean_{sec}\")
+                st.error("Issues: " + "; ".join(obj["issues"])),
+            st.text_area(f"{sec} – Raw", value=obj["raw"], height=200, key=f"raw_{sec}")
+            st.text_area(f"{sec} – Clean (ready to export)", value=obj["clean"], height=200, key=f"clean_{sec}")
 
         if any_fail:
-            st.warning(\"Some sections have issues. Resolve before export.\")
+            st.warning("Some sections have issues. Resolve before export.")
         else:
-            st.info(\"All sections passed validation. You can export now.\")
+            st.info("All sections passed validation. You can export now.")
 
 def md_to_docx_bytes(markdown_text: str, margins_in: float = 1.0, **kwargs) -> bytes:
     try:
         from docx import Document
         from docx.shared import Inches
     except Exception:
-        return markdown_text.encode(\"utf-8\")
+        return markdown_text.encode("utf-8")
 
     import re as _re, io
 
@@ -322,13 +322,13 @@ def md_to_docx_bytes(markdown_text: str, margins_in: float = 1.0, **kwargs) -> b
     except Exception:
         pass
 
-    lines = (markdown_text or \"\").splitlines()
+    lines = (markdown_text or "").splitlines()
     for ln in lines:
-        if _re.match(r\"^\s*#\s+\", ln):
-            doc.add_heading(_re.sub(r\"^\s*#\s+\", \"\", ln), level=1)
-        elif _re.match(r\"^\s*##\s+\", ln):
-            doc.add_heading(_re.sub(r\"^\s*##\s+\", \"\", ln), level=2)
-        elif ln.strip() == \"---\":
+        if _re.match(r"^\s*#\s+", ln):
+            doc.add_heading(_re.sub(r"^\s*#\s+", "", ln), level=1)
+        elif _re.match(r"^\s*##\s+", ln):
+            doc.add_heading(_re.sub(r"^\s*##\s+", "", ln), level=2)
+        elif ln.strip() == "---":
             doc.add_page_break()
         else:
             doc.add_paragraph(ln)
@@ -2152,7 +2152,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
     # Margins/spacing advisory
     if margins_in is not None and (margins_in < 0.5 or margins_in > 1.5):
-        warnings.append(f"Margin {margins_in}\" may violate standard 1\" requirement.")
+        warnings.append(f"Margin {margins_in}" may violate standard 1" requirement.")
 
     if line_spacing is not None and (line_spacing < 1.0 or line_spacing > 2.0):
         warnings.append(f"Line spacing {line_spacing} looks unusual.")
@@ -3710,7 +3710,7 @@ with legacy_tabs[__tabs_base + 2]:
             doc = Document()
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
-            for para in row[2].split("\\n\\n"):
+            for para in row[2].split("\n\n"):
                 doc.add_paragraph(para)
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
@@ -4792,8 +4792,8 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -4815,11 +4815,11 @@ def render_proposal_builder():
                     continue
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
-                system_text = "\\n\\n".join(filter(None, [
+                system_text = "\n\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
+                    f"Company snapshot:\n{context_snap}" if context_snap else "",
                     doc_snips,
-                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                    f"Past Performance selections:\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
