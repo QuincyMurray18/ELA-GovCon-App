@@ -4,6 +4,200 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
 
+from io import BytesIO
+def md_to_docx_bytes(markdown_text, logo_bytes=None, title=None):
+    """
+    Convert a subset of Markdown to a clean DOCX using python-docx.
+    Supports: headings (#..######), bold **, italic *, inline code ``, horizontal rule ---,
+    bullet/numbered lists, paragraphs, simple tables (| a | b |), and links [text](url) as plain text.
+    Accepts optional logo_bytes for compatibility; if provided, it will be added to the header.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.shared import OxmlElement, qn
+    except Exception as e:
+        bio = BytesIO()
+        bio.write(markdown_text.encode("utf-8"))
+        bio.seek(0)
+        return bio.getvalue()
+
+    import re
+
+    def add_header_logo(document, logo_bytes):
+        if not logo_bytes:
+            return
+        section = document.sections[0]
+        header = section.header
+        paragraph = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        run = paragraph.add_run()
+        try:
+            run.add_picture(BytesIO(logo_bytes), width=Inches(1.5))
+        except Exception:
+            pass
+
+    def apply_inline_runs(paragraph, text):
+        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1', text)
+        tokens = []
+        patterns = [
+            (r'\*\*([^\*]+)\*\*', 'bold'),
+            (r'(?<!\*)\*([^*]+)\*(?!\*)', 'italic'),
+            (r'`([^`]+)`', 'code'),
+        ]
+        while True:
+            match_positions = []
+            for pat, kind in patterns:
+                m = re.search(pat, text)
+                if m:
+                    match_positions.append((m.start(), m.end(), kind, m.group(1)))
+            if not match_positions:
+                break
+            match_positions.sort(key=lambda x: x[0])
+            s,e,kind,content = match_positions[0]
+            if s > 0:
+                tokens.append(("text", text[:s]))
+            tokens.append((kind, content))
+            text = text[e:]
+        if text:
+            tokens.append(("text", text))
+
+        for kind, content in tokens:
+            run = paragraph.add_run(content)
+            if kind == "bold":
+                run.bold = True
+            elif kind == "italic":
+                run.italic = True
+            elif kind == "code":
+                run.font.name = "Courier New"
+                run.font.size = Pt(10)
+
+    def add_hr(par):
+        p = par._p
+        pPr = p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), '6')
+        bottom.set(qn('w:space'), '1')
+        bottom.set(qn('w:color'), 'auto')
+        pBdr.append(bottom)
+        pPr.append(pBdr)
+
+    document = Document()
+
+    if logo_bytes:
+        add_header_logo(document, logo_bytes)
+
+    if title:
+        h = document.add_heading(title, level=0)
+        h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    lines = markdown_text.splitlines()
+    i = 0
+    in_codeblock = False
+    table_buffer = []
+
+    def flush_table():
+        nonlocal table_buffer
+        if not table_buffer:
+            return
+        rows = []
+        for row in table_buffer:
+            row = row.strip().strip('|')
+            cells = [c.strip() for c in row.split('|')]
+            rows.append(cells)
+        if len(rows) >= 2 and all(set(c) <= set('-:') for c in ''.join(rows[1])):
+            rows.pop(1)
+        table = document.add_table(rows=len(rows), cols=max(len(r) for r in rows))
+        try:
+            table.style = 'Light List Accent 1'
+        except Exception:
+            pass
+        for r_i, r in enumerate(rows):
+            for c_i, c in enumerate(r):
+                table.cell(r_i, c_i).text = re.sub(r'\|+', ' ', c)
+        document.add_paragraph()
+        table_buffer = []
+
+    while i < len(lines):
+        line = lines[i]
+
+        if re.match(r'^\s*```', line):
+            in_codeblock = not in_codeblock
+            if not in_codeblock:
+                document.add_paragraph()
+            i += 1
+            continue
+
+        if in_codeblock:
+            p = document.add_paragraph()
+            run = p.add_run(line)
+            run.font.name = "Courier New"
+            i += 1
+            continue
+
+        if '|' in line and re.match(r'^\s*\|?.+\|.+\|?\s*$', line):
+            table_buffer.append(line)
+            i += 1
+            if i == len(lines) or not ('|' in lines[i] and re.match(r'^\s*\|?.+\|.+\|?\s*$', lines[i])):
+                flush_table()
+            continue
+
+        if re.match(r'^\s*-{3,}\s*$', line):
+            par = document.add_paragraph()
+            add_hr(par)
+            i += 1
+            continue
+
+        m = re.match(r'^\s*(#{1,6})\s+(.*)$', line)
+        if m:
+            level = len(m.group(1))
+            text = m.group(2).strip()
+            document.add_heading(text, level=level)
+            i += 1
+            continue
+
+        if re.match(r'^\s*[\-\*\+]\s+', line):
+            text = re.sub(r'^\s*[\-\*\+]\s+', '', line).strip()
+            par = document.add_paragraph(style='List Bullet')
+            apply_inline_runs(par, text)
+            i += 1
+            while i < len(lines) and re.match(r'^\s*[\-\*\+]\s+', lines[i]):
+                text = re.sub(r'^\s*[\-\*\+]\s+', '', lines[i]).strip()
+                par = document.add_paragraph(style='List Bullet')
+                apply_inline_runs(par, text)
+                i += 1
+            continue
+
+        if re.match(r'^\s*\d+\.\s+', line):
+            text = re.sub(r'^\s*\d+\.\s+', '', line).strip()
+            par = document.add_paragraph(style='List Number')
+            apply_inline_runs(par, text)
+            i += 1
+            while i < len(lines) and re.match(r'^\s*\d+\.\s+', lines[i]):
+                text = re.sub(r'^\s*\d+\.\s+', '', lines[i]).strip()
+                par = document.add_paragraph(style='List Number')
+                apply_inline_runs(par, text)
+                i += 1
+            continue
+
+        if not line.strip():
+            document.add_paragraph()
+            i += 1
+            continue
+
+        par = document.add_paragraph()
+        apply_inline_runs(par, line.strip())
+        i += 1
+
+    bio = BytesIO()
+    document.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+
 # ===== Proposal drafts utilities =====
 from datetime import datetime
 import os, io
@@ -241,7 +435,7 @@ def _render_markdown_to_docx(doc, md_text):
     flush_bullets(); flush_numbers()
 
 
-def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                           margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     """
     Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
@@ -2810,7 +3004,7 @@ Certifications Small Business"""
             st.warning("Before export, fix these items: " + "; ".join(issues))
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
         _logo = logo_file.read() if logo_file else None
-        docx_bytes = md_to_docx_bytes_rich(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
+        docx_bytes = md_to_docx_bytes(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
         st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Generate one page to draft, then export to DOCX.")
@@ -2843,7 +3037,7 @@ with legacy_tabs[7]:
             st.warning("Before export, fix these items: " + "; ".join(issues))
         wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
         _wp_logo = wp_logo_file.read() if wp_logo_file else None
-        wp_bytes = md_to_docx_bytes_rich(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
+        wp_bytes = md_to_docx_bytes(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Click Draft white paper to create a draft, then export to DOCX.")
