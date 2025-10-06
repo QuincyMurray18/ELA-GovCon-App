@@ -4549,8 +4549,8 @@ with st.sidebar:
                 import streamlit as st
                 st.error(f"Unhandled error: {e}")
             if st.button("Test Google Places key"):
-        vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
-        st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
+                vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
+                st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
 
     st.subheader("Watch list NAICS")
     conn = get_db()
