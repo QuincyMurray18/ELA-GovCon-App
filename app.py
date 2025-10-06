@@ -1089,8 +1089,7 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     except Exception as e:
         import streamlit as st
         st.error(f"Unhandled error: {e}")
-    # (removed stray except without try)
-        return f"Graph token exception: {e}"
+            return f"Graph token exception: {e}"
 
     if token_r.status_code != 200:
         return f"Graph token error {token_r.status_code}: {token_r.text[:300]}"
@@ -1196,8 +1195,7 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
         except Exception as e:
             import streamlit as st
             st.error(f"Unhandled error: {e}")
-        # (removed stray except without try)
-            last_detail = f"Attempt {name}: exception {e}"
+                    last_detail = f"Attempt {name}: exception {e}"
     if st_debug is not None:
         st_debug.caption(last_detail)
     return pd.DataFrame(), last_detail
@@ -1393,8 +1391,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
     except Exception as e:
         import streamlit as st
         st.error(f"Unhandled error: {e}")
-    # (removed stray except without try)
-        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
+            return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def linkedin_company_search(keyword: str) -> str:
     return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
@@ -4180,8 +4177,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
     except Exception as e:
         import streamlit as st
         st.error(f"Unhandled error: {e}")
-    # (removed stray except without try)
-        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
+            return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def _clean_url(url: str) -> str:
     if not url: return ""
@@ -4282,8 +4278,7 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
         except Exception as e:
             import streamlit as st
             st.error(f"Unhandled error: {e}")
-        # (removed stray except without try)
-            errors.append(str(e))
+                    errors.append(str(e))
         time.sleep(delay_s)
     return {"emails": emails, "visited": visited, "errors": errors}
 
@@ -4550,12 +4545,10 @@ with st.sidebar:
                     st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
-            # (removed stray except without try)
-            except Exception as e:
+                        except Exception as e:
                 import streamlit as st
                 st.error(f"Unhandled error: {e}")
-        # (removed stray except without try)
-    if st.button("Test Google Places key"):
+            if st.button("Test Google Places key"):
         vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
         st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
 
@@ -4805,8 +4798,7 @@ def render_rfp_analyzer():
 
             st.chat_message("user").markdown(pending_prompt)
             st.chat_message("assistant").markdown(assistant_out)
-    # (removed stray except without try)
-def render_proposal_builder():
+    def render_proposal_builder():
     try:
         st.subheader("Proposal Builder")
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
@@ -5136,8 +5128,7 @@ def render_proposal_builder():
     except Exception as e:
         import streamlit as st
         st.error(f"Unhandled error: {e}")
-    # (removed stray except without try)
-# === End new features ===
+    # === End new features ===
 
 
 # ---- Attach feature tabs now that functions are defined ----
@@ -5159,7 +5150,6 @@ except Exception as e:
     st.caption(f"[RFP Analyzer tab note: {e}]")
     with legacy_tabs[12]:
         render_proposal_builder()
-# (removed stray except without try)
 with conn:
     conn.execute("""
     create table if not exists pricing_benchmarks(
