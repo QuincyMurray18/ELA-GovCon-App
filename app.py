@@ -4177,7 +4177,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
     except Exception as e:
         import streamlit as st
         st.error(f"Unhandled error: {e}")
-            return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
+        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def _clean_url(url: str) -> str:
     if not url: return ""
