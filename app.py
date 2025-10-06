@@ -4552,6 +4552,9 @@ with st.sidebar:
                 vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
                 st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
 
+        except Exception as e:
+            import streamlit as st
+            st.error(f"SAM key test failed: {e}")
     st.subheader("Watch list NAICS")
     conn = get_db()
     df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
