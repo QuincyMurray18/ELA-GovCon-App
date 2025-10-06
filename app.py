@@ -3208,7 +3208,8 @@ with legacy_tabs[4]:
                 st.code((info or {}).get("raw_preview","") or "", language="json")
 
     # Show results from session (if any)
-    df = st.session_state.get("sam_results_df")
+    df = st.session_state.get("sam_results_df")"
+
     info = st.session_state.get("sam_results_info", {}) or {}
     if info and not info.get("ok", True):
         st.error(f"SAM API error: {info}")
@@ -3281,7 +3282,8 @@ with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", key="cap_tagline_input_capability_builder", value="Responsive project management for federal facilities and services")
-    core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
+    core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")"
+
     diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
     past_perf = st.text_area("Representative experience", key="cap_past_textarea_capability_builder", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
     contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
@@ -3403,7 +3405,8 @@ with legacy_tabs[11]:
 
     # Create new session
     if pick == "➤ New chat":
-        default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')} new_title = st.text_input("New chat title", value=default_title)
+        default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
+ new_title = st.text_input("New chat title", value=default_title)
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
