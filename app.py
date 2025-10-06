@@ -4545,7 +4545,7 @@ with st.sidebar:
                     st.success("SAM key appears valid (200 with JSON)."); st.code(text_preview)
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
-                        except Exception as e:
+            except Exception as e:
                 import streamlit as st
                 st.error(f"Unhandled error: {e}")
             if st.button("Test Google Places key"):
