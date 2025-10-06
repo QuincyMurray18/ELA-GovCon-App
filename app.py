@@ -440,7 +440,7 @@ def assemble_markdown(doc):
         for p in s.get("paragraphs", []):
             parts.append(str(p))
         if s.get("bullets"):
-            parts += [f"- {b}" for b in s["bullets"]]
+            parts += [f"- {b} for b in s["bullets"]]
         for t in s.get("tables", []):
             try:
                 parts.append(f"\n**{t['title']}**")
@@ -1480,8 +1480,7 @@ def build_context(max_rows=6):
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])};  f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -2152,7 +2151,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
     # Margins/spacing advisory
     if margins_in is not None and (margins_in < 0.5 or margins_in > 1.5):
-        warnings.append(f"Margin {margins_in}" may violate standard 1" requirement.")
+        warnings.append(f"Margin {margins_in} may violate standard 1\ requirement.")
 
     if line_spacing is not None and (line_spacing < 1.0 or line_spacing > 2.0):
         warnings.append(f"Line spacing {line_spacing} looks unusual.")
@@ -3404,8 +3403,7 @@ with legacy_tabs[11]:
 
     # Create new session
     if pick == "➤ New chat":
-        default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
-        new_title = st.text_input("New chat title", value=default_title)
+        default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')} new_title = st.text_input("New chat title", value=default_title)
         if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
@@ -3505,7 +3503,7 @@ with legacy_tabs[11]:
 
                 system_text = "\n\n".join(filter(None, [
                     "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
-                    f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
+                    f"Context snapshot (keep answers consistent with this):\n{context_snap} if context_snap else "",
                     doc_snips
                 ]))
 
@@ -3958,8 +3956,7 @@ def build_context(max_rows=6):
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])};  f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -3990,9 +3987,7 @@ def build_context(max_rows=6):
 
 # ---------- External integrations ----------
 def linkedin_company_search(keyword: str) -> str:
-    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
-
-def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
+    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)} def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
     """
     Google Places Text Search + Details (phone + website).
     Returns (list_of_vendors, info). Emails are NOT provided by Places.
@@ -4478,8 +4473,7 @@ def render_rfp_analyzer():
         pick = st.selectbox("RFP session", options=session_titles, index=0)
 
         if pick == "➤ New RFP thread":
-            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
-            new_title = st.text_input("Thread title", value=default_title)
+            default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')} new_title = st.text_input("Thread title", value=default_title)
             if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
@@ -4817,7 +4811,7 @@ def render_proposal_builder():
                 doc_snips = _pb_doc_snips(sec)
                 system_text = "\n\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    f"Company snapshot:\n{context_snap}" if context_snap else "",
+                    f"Company snapshot:\n{context_snap} if context_snap else "",
                     doc_snips,
                     f"Past Performance selections:\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
