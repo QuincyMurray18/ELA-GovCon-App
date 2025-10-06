@@ -1195,7 +1195,7 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
         except Exception as e:
             import streamlit as st
             st.error(f"Unhandled error: {e}")
-                    last_detail = f"Attempt {name}: exception {e}"
+        last_detail = f"Attempt {name}: exception {e}"
     if st_debug is not None:
         st_debug.caption(last_detail)
     return pd.DataFrame(), last_detail
