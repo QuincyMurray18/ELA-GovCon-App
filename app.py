@@ -1480,7 +1480,7 @@ def build_context(max_rows=6):
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])};  f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; " f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -3956,7 +3956,7 @@ def build_context(max_rows=6):
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])};  f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; " f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
