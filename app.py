@@ -4707,7 +4707,6 @@ def render_proposal_builder():
 
 
 # ---- Attach feature tabs now that functions are defined ----
-try:
     with legacy_tabs[5]:
         
             # === Auto-Draft UI (injected) ===
@@ -4721,8 +4720,6 @@ try:
 render_rfp_analyzer()
 except Exception as e:
     st.caption(f"[RFP Analyzer tab note: {e}]")
-
-try:
     with legacy_tabs[12]:
         render_proposal_builder()
 except Exception as e:
@@ -4984,7 +4981,6 @@ def delete_deal(id_: int):
 
 
 # === Deals (CRM Pipeline) tab ===
-try:
     with legacy_tabs[13]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
