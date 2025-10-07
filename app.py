@@ -1,512 +1,5 @@
 # ===== app.py =====
 import os, re, io, json, sqlite3, time
-
-
-
-# --- RAG_HELPERS_INJECTED ---
-
-import hashlib
-from typing import List, Dict, Any, Optional, Tuple
-
-def _dict_hash(d: Dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
-
-def get_db(db_path: str = "ela.db"):
-    return sqlite3.connect(db_path)
-
-def ensure_rag_tables(conn: sqlite3.Connection) -> None:
-    cur = conn.cursor()
-    cur.execute("""create table if not exists templates(
-        id integer primary key,
-        agency text,
-        naics text,
-        name text,
-        body_md text,
-        required_factors_json text,
-        unique(agency, naics, name) on conflict ignore
-    )""")
-    cur.execute("""create table if not exists building_blocks(
-        id integer primary key,
-        tag text,
-        naics text,
-        agency text,
-        text blob,
-        quality_score real default 0.0
-    )""")
-    cur.execute("""create table if not exists proposal_drafts(
-        id integer primary key,
-        session_id text,
-        template_id integer,
-        section text,
-        text blob,
-        created_at timestamp default current_timestamp,
-        version integer default 1
-    )""")
-    cur.execute("""create table if not exists edits_log(
-        id integer primary key,
-        draft_id integer,
-        section text,
-        before_text blob,
-        after_text blob,
-        accepted_at timestamp default current_timestamp
-    )""")
-    conn.commit()
-
-GEN_STYLE_PROFILES = {
-    "Formal concise": "Write in a formal, concise, and compliant tone suitable for federal proposals.",
-    "Technical persuasive": "Write in a technical yet persuasive tone. Prioritize clarity, benefits, and proof.",
-    "Executive tone": "Write for an executive reader. Lead with outcomes, minimize jargon."
-}
-
-DEFAULT_TEMPLATE_MD = """# {title}
-
-## Executive Summary
-{{EXECUTIVE_SUMMARY}}
-
-## Technical Approach
-{{TECHNICAL_APPROACH}}
-
-## Management Plan
-{{MANAGEMENT_PLAN}}
-
-## Quality Assurance
-{{QUALITY_ASSURANCE}}
-
-## Past Performance
-{{PAST_PERFORMANCE}}
-
-## Pricing Narrative
-{{PRICING}}
-"""
-
-def rag_upsert_template(conn, agency: str, naics: str, name: str, body_md: str, required_factors: List[str]) -> int:
-    ensure_rag_tables(conn)
-    cur = conn.cursor()
-    cur.execute("insert into templates(agency, naics, name, body_md, required_factors_json) values (?,?,?,?,?)",
-                (agency or "", naics or "", name, body_md, json.dumps(required_factors or [])))
-    conn.commit()
-    tid = cur.lastrowid
-    if not tid:
-        cur.execute("select id from templates where agency=? and naics=? and name=?", (agency or "", naics or "", name))
-        row = cur.fetchone()
-        tid = row[0] if row else 0
-    return tid
-
-def rag_get_template(conn, agency: str, naics: str) -> Tuple[int, str, List[str]]:
-    ensure_rag_tables(conn)
-    cur = conn.cursor()
-    cur.execute("select id, body_md, required_factors_json from templates where agency=? and naics=? order by id desc limit 1",
-                (agency or "", naics or ""))
-    row = cur.fetchone()
-    if row:
-        return row[0], row[1], json.loads(row[2] or "[]")
-    return 0, DEFAULT_TEMPLATE_MD, []
-
-def rag_save_block(conn, tag: str, text: str, naics: str = "", agency: str = "", quality_score: float = 0.0) -> int:
-    ensure_rag_tables(conn)
-    cur = conn.cursor()
-    cur.execute("insert into building_blocks(tag, naics, agency, text, quality_score) values (?,?,?,?,?)",
-                (tag, naics, agency, text, quality_score))
-    conn.commit()
-    return cur.lastrowid
-
-def rag_get_best_blocks(conn, keywords: List[str], naics: str = "", agency: str = "", top_k: int = 5) -> List[Dict[str, Any]]:
-    ensure_rag_tables(conn)
-    cur = conn.cursor()
-    cur.execute("select id, tag, naics, agency, text, quality_score from building_blocks where (naics=? or ?='') and (agency=? or ?='')",
-                (naics, naics, agency, agency))
-    rows = cur.fetchall()
-    scored = []
-    for rid, tag, rnaics, ragency, text, q in rows:
-        score = float(q)
-        tlow = (text or "").lower()
-        for kw in keywords or []:
-            if kw.lower() in tlow:
-                score += 1.0
-        scored.append((score, {"id": rid, "tag": tag, "text": text}))
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return [x[1] for x in scored[:top_k]]
-
-def save_draft(conn, session_id: str, template_id: int, section: str, text: str) -> int:
-    ensure_rag_tables(conn)
-    cur = conn.cursor()
-    cur.execute("insert into proposal_drafts(session_id, template_id, section, text) values (?,?,?,?)",
-                (session_id or "", int(template_id or 0), section, text))
-    conn.commit()
-    return cur.lastrowid
-
-def log_edit(conn, draft_id: int, section: str, before_text: str, after_text: str) -> int:
-    ensure_rag_tables(conn)
-    cur = conn.cursor()
-    cur.execute("insert into edits_log(draft_id, section, before_text, after_text) values (?,?,?,?)",
-                (draft_id, section, before_text, after_text))
-    conn.commit()
-    return cur.lastrowid
-
-
-
-# --- AUTO_DRAFT_PIPELINE_INJECTED ---
-
-# ========== AUTO DRAFT PIPELINE ==========
-
-from typing import Dict, Any, List, Tuple
-
-def _safe_json(o):
-    try:
-        return json.dumps(o, indent=2)[:4000]
-    except Exception:
-        return str(o)[:4000]
-
-def _compose_context(company: Dict[str, Any], rfp: Dict[str, Any], blocks: List[Dict[str, Any]]) -> str:
-    parts = [
-        f"Company: {company.get('name','ELA Management LLC')}",
-        f"Capabilities: {company.get('capabilities','')}",
-        f"NAICS: {company.get('naics','')}",
-        f"Past Performance: {company.get('past_performance','')}",
-        f"RFP Summary: {rfp.get('summary','')}",
-        f"Evaluation Factors: {', '.join(rfp.get('factors', []))}",
-        "Reusable Blocks:\n" + "\n\n".join([f"- {b.get('tag')}: {b.get('text')}" for b in blocks])
-    ]
-    return "\n".join(parts)
-
-SECTION_PROMPTS = {
-    "Executive Summary": "Write a concise executive summary that addresses each evaluation factor at a glance.",
-    "Technical Approach": "Write a technical approach mapping our methods to the SOW bullets. Do not invent capabilities.",
-    "Management Plan": "Describe staffing, org structure, schedule control, and risk mitigation relevant to the SOW.",
-    "Quality Assurance": "Describe QA methods aligned to federal service quality principles. Reference SOPs if provided.",
-    "Past Performance": "Summarize 2-3 relevant past projects with measurable outcomes. If none provided, write [MISSING: Past Performance examples needed].",
-    "Pricing": "Explain pricing rationale and value. Do not include numeric figures unless included in Context."
-}
-
-def _build_writer_prompt(style: str, section: str, context: str, factors: List[str]) -> str:
-    style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES["Formal concise"])
-    factors_text = "\n".join([f"- {f}" for f in factors]) if factors else "None provided"
-    return f"""You are a compliance-first federal proposal writer. You never invent facts."
-You must cover every Evaluation Factor at least once. If a detail is missing, write [MISSING: …] rather than guessing.
-
-Style: {style_text}
-
-Evaluation Factors:
-{factors_text}
-
-Context:
-{context}
-
-Task: Write the {section} in 2-5 paragraphs. Reference each factor once inside [EF: Factor Name] tags that will be removed later. Do not add headings.
-"""
-
-def _llm_generate(llm_client, prompt: str) -> str:
-    try:
-        return llm_client(prompt)
-    except Exception as e:
-        return f"[GENERATION_UNAVAILABLE]\n{prompt[-800:]}"
-        # ---
-def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool, List[str]]:
-    issues = []
-    if any(ph in text for ph in ["INSERT", "TBD", "lorem"]):
-        issues.append("Placeholder text detected (INSERT/TBD/lorem)."
-        )
-    if "[MISSING:" in text:
-        issues.append("Missing tags present; complete required details.")
-    for f in required_factors or []:
-        if f and (f not in text) and (f not in text.replace("[EF: ", "").replace("]", "")):
-            issues.append(f"Required factor not referenced: {f}")
-    ok = len(issues) == 0
-    return ok, issues
-
-def sanitize_for_export(text: str) -> str:
-    text = re.sub(r"\\[EF:.*?\\]\\s*", "", text)
-    text = text.replace("[MISSING:", "MISSING:").replace("]", "")
-    return text
-
-def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str, Any], rfp: Dict[str, Any], style: str = "Formal concise",
-                           outline: List[str] = None, keywords: List[str] = None, naics: str = "", agency: str = "") -> Dict[str, Any]:
-    ensure_rag_tables(conn)
-    template_id, body_md, required_factors = rag_get_template(conn, agency, naics)
-    blocks = rag_get_best_blocks(conn, keywords or [], naics=naics, agency=agency, top_k=6)
-    context = _compose_context(company, rfp, blocks)
-    outline = outline or list(SECTION_PROMPTS.keys())
-
-    results = {}
-    for section in outline:
-        base = SECTION_PROMPTS.get(section, f"Write the {section} for this federal proposal.")
-        prompt = _build_writer_prompt(style, section, context, rfp.get("factors", []) or required_factors)
-        prompt = prompt + "\n\nAdditional guidance:\n" + base
-        draft = _llm_generate(llm_client, prompt)
-        ok, issues = validate_proposal_text(draft, rfp.get("factors", []) or required_factors)
-        results[section] = {"ok": ok, "issues": issues, "raw": draft, "clean": sanitize_for_export(draft)}
-        save_draft(conn, session_id=session_id, template_id=template_id, section=section, text=draft)
-    return {"template_id": template_id, "outline": outline, "sections": results, "required_factors": required_factors}
-
-
-
-# --- PROPOSAL_AUTODRAFT_UI_INJECTED ---
-
-def render_autodraft_ui(llm_client, conn, default_outline=None):
-    """Drop-in UI for 'Auto-Draft All' inside Proposal Builder."""
-    import streamlit as st
-    ensure_rag_tables(conn)
-    st.subheader("Auto-Draft All")
-
-    with st.expander("Context", expanded=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            agency = st.text_input("Agency", value=st.session_state.get("pb_agency",""))
-            rfp_no = st.text_input("Solicitation / RFQ #", value=st.session_state.get("pb_rfp",""))
-            ptype = st.selectbox("Procurement Type", ["RFQ","RFP","IFB","Sources Sought"], index=st.session_state.get("pb_ptype_idx",0))
-            naics = st.text_input("NAICS", value=st.session_state.get("pb_naics",""))
-        with c2:
-            style = st.selectbox("Style", list(GEN_STYLE_PROFILES.keys()), index=0)
-            themes = st.text_input("Win Themes (comma-separated)", value=st.session_state.get("pb_themes",""))
-            past_perf = st.text_area("Past Performance snippets (one per line)", value=st.session_state.get("pb_pp",""))
-            sow_bullets = st.text_area("Key SOW bullets (one per line)", value=st.session_state.get("pb_sow",""))
-            search_query = st.text_input("Evidence keywords (comma-separated)", value=st.session_state.get("pb_query",""))
-            page_limit = st.number_input("Max pages per section (optional)", min_value=0, value=0, step=1)
-
-    outline_default = default_outline or ["Executive Summary","Technical Approach","Management Plan","Quality Assurance","Past Performance","Pricing"]
-    outline = st.text_area("Outline (one section per line)", value="\n".join(outline_default)).splitlines()
-    outline = [o.strip() for o in outline if o.strip()]
-
-    go = st.button("Auto-Draft All", type="primary", use_container_width=True)
-    if go:
-        company = {
-            "name": st.session_state.get("company_name","ELA Management LLC"),
-            "capabilities": st.session_state.get("company_caps","Janitorial, Landscaping, HVAC, Facilities Support"),
-            "naics": naics,
-            "past_performance": past_perf,
-        }
-        rfp = {
-            "summary": "\n".join([f"- {b}" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
-            "factors": [f.strip() for f in st.session_state.get("eval_factors","").split(",") if f.strip()],
-            "rfp_no": rfp_no,
-            "ptype": ptype,
-            "agency": agency
-        }
-        keywords = [k.strip() for k in (search_query.split(",") if search_query else []) if k.strip()]
-        res = autodraft_all_sections(
-            llm_client, conn, session_id=st.session_state.get("session_id","default"),
-            company=company, rfp=rfp, style=style, outline=outline, keywords=keywords, naics=naics, agency=agency
-        )
-        st.success("Draft complete. Review sections below, fix any issues flagged, then export.")
-
-        any_fail = False
-        for sec, obj in res["sections"].items():
-            st.markdown(f"### {sec}")
-            if obj["issues"]:
-                any_fail = True
-                st.error("Issues: " + "; ".join(obj["issues"])),
-            st.text_area(f"{sec} – Raw", value=obj["raw"], height=200, key=f"raw_{sec}")
-            st.text_area(f"{sec} – Clean (ready to export)", value=obj["clean"], height=200, key=f"clean_{sec}")
-
-        if any_fail:
-            st.warning("Some sections have issues. Resolve before export.")
-        else:
-            st.info("All sections passed validation. You can export now.")
-
-def md_to_docx_bytes(markdown_text: str, margins_in: float = 1.0, **kwargs) -> bytes:
-    try:
-        from docx import Document
-        from docx.shared import Inches
-    except Exception:
-        return markdown_text.encode("utf-8")
-
-    import re as _re, io
-
-    doc = Document()
-    try:
-        section = doc.sections[0]
-        section.top_margin = Inches(margins_in)
-        section.bottom_margin = Inches(margins_in)
-        section.left_margin = Inches(margins_in)
-        section.right_margin = Inches(margins_in)
-    except Exception:
-        pass
-
-    lines = (markdown_text or "").splitlines()
-    for ln in lines:
-        if _re.match(r"^\s*#\s+", ln):
-            doc.add_heading(_re.sub(r"^\s*#\s+", "", ln), level=1)
-        elif _re.match(r"^\s*##\s+", ln):
-            doc.add_heading(_re.sub(r"^\s*##\s+", "", ln), level=2)
-        elif ln.strip() == "---":
-            doc.add_page_break()
-        else:
-            doc.add_paragraph(ln)
-
-    bio = io.BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
-
-
-# --- END PROPOSAL_AUTODRAFT_UI_INJECTED ---
-
-
-
-from datetime import datetime as _dt
-
-SECTION_TEMPLATE = """You are a proposal writer for federal bids.
-Audience Contracting Officer and Technical Evaluators.
-Role Senior capture + writer.
-Constraints Cite evidence as [DOC:SECTION:PAGE] when used. No placeholders.
-Style Clear, compliant, persuasive, active voice, government tone.
-
-Task Write the {section_name} for {agency} RF{ptype} {rfp_no} NAICS {naics}.
-Win themes {themes}
-Past performance snippets {pp_snippets}
-Key SOW bullets to cover
-{bullets}
-
-Evidence pool
-{evidence}
-
-Output JSON with fields
-heading str
-subheadings list[str]
-paragraphs list[str]
-bullets list[str]
-tables list[{{title:str, headers:list[str], rows:list[list[str]]}}]
-references list[str]
-"""
-
-def _build_section_prompt(conn, section_name, ctx):
-    ev = rag_search(conn, ctx.get("search_query",""), k=int(ctx.get("k",12) or 12))
-    evidence = "\n\n".join([f"[{e['doc']}:{e['section']}:{e['page']}] {e['text']}" for e in ev]) or "No evidence"
-    prompt = SECTION_TEMPLATE.format(
-        section_name=section_name,
-        agency=ctx.get("agency",""),
-        ptype=ctx.get("ptype","Q"),
-        rfp_no=ctx.get("rfp_no",""),
-        naics=ctx.get("naics",""),
-        themes="; ".join(ctx.get("themes",[])),
-        pp_snippets="\n".join(ctx.get("past_perf",[])),
-        bullets="\n".join("• " + b for b in ctx.get("sow_bullets",[])),
-        evidence=evidence
-    )
-    return prompt
-
-def build_section_json(llm_client, conn, section_name, ctx):
-    """
-    llm_client must expose prompt_json(prompt, temperature=0.3).
-    Returns a dict with required fields.
-    """
-    prompt = _build_section_prompt(conn, section_name, ctx)
-    # Temperature lower for compliance by default
-    temp = float(ctx.get("temperature", 0.3))
-    result = llm_client.prompt_json(prompt, temperature=temp)
-    if not isinstance(result, dict):
-        result = {"heading": section_name, "paragraphs": [str(result)], "subheadings": [], "bullets": [], "tables": [], "references": []}
-    result["generated_at"] = _dt.utcnow().isoformat()
-    result["section_name"] = section_name
-    return result
-
-def consistency_pass(sections_json):
-    glossary = set()
-    for s in sections_json:
-        for p in s.get("paragraphs",[]):
-            for token in str(p).split():
-                if token.isupper() and len(token)>2:
-                    glossary.add(token.strip(",.;:()"))
-    return {"glossary": sorted(glossary)}
-
-def compliance_pass(sections_json, required_bullets=None, page_limit=None):
-    required_bullets = required_bullets or []
-    covered = set()
-    for s in sections_json:
-        txt = " ".join(s.get("paragraphs",[]) + s.get("bullets",[]))
-        for b in required_bullets:
-            if str(b).lower() in txt.lower():
-                covered.add(b)
-    missing = [b for b in required_bullets if b not in covered]
-    placeholders = []
-    for s in sections_json:
-        blob = json.dumps(s, ensure_ascii=False)
-        if "INSERT" in blob or "TBD" in blob or "[[" in blob:
-            placeholders.append(s.get("section_name", s.get("heading","")))
-    ok = (not missing) and (not placeholders)
-    return {"ok": ok, "missing": missing, "placeholders": placeholders, "page_limit": page_limit}
-
-def autodraft_all(llm_client, conn, outline, ctx):
-    results = []
-    for sec in outline:
-        results.append(build_section_json(llm_client, conn, sec, ctx))
-    consistency = consistency_pass(results)
-    compliance = compliance_pass(results, ctx.get("req_bullets",[]), page_limit=ctx.get("page_limit"))
-    return {"sections": results, "consistency": consistency, "compliance": compliance}
-
-def assemble_markdown(doc):
-    parts = []
-    for s in doc.get("sections", []):
-        parts.append(f"# {s.get('heading', s.get('section_name','Section'))}")
-        for p in s.get("paragraphs", []):
-            parts.append(str(p))
-        if s.get("bullets"):
-            parts += [f"- {b}" for b in s["bullets"]]
-        for t in s.get("tables", []):
-            try:
-                parts.append(f"\n**{t['title']}**")
-                hdr = " | ".join(t["headers"])
-                sep = " | ".join(["---"]*len(t["headers"]))
-                rows = [" | ".join(r) for r in t["rows"]]
-                parts += [hdr, sep] + rows
-            except Exception:
-                pass
-    return "\n\n".join(parts)
-# --- END AUTO_DRAFT_PIPELINE_INJECTED ---
-
-
-
-import sqlite3, hashlib as _hashlib
-
-def ensure_rag_tables(conn):
-    """Create lightweight RAG tables with FTS5 if missing."""
-    try:
-        conn.execute("""create table if not exists rag_chunks(
-            id integer primary key,
-            doc_name text,
-            section_label text,
-            page int,
-            naics text,
-            text text,
-            sha text unique
-        )""")
-        conn.execute("""create virtual table if not exists rag_chunks_fts 
-            using fts5(text, content='rag_chunks', content_rowid='id')""")
-        conn.execute("""create trigger if not exists rag_chunks_ai after insert on rag_chunks begin
-            insert into rag_chunks_fts(rowid, text) values (new.id, new.text);
-        end;""")
-        conn.commit()
-    except Exception:
-        pass
-
-def upsert_chunks(conn, doc_name, chunks):
-    """chunks: list of dicts with keys text, optional section, page, naics"""
-    for c in chunks or []:
-        sha = _hashlib.sha256((str(doc_name) + str(c.get("text",""))).encode("utf-8")).hexdigest()
-        try:
-            conn.execute(
-                "insert into rag_chunks(doc_name, section_label, page, naics, text, sha) values (?,?,?,?,?,?)",
-                (doc_name, c.get("section",""), int(c.get("page",0) or 0), c.get("naics",""), c.get("text",""), sha)
-            )
-        except sqlite3.IntegrityError:
-            pass
-    try:
-        conn.commit()
-    except Exception:
-        pass
-
-def rag_search(conn, query, k=12):
-    try:
-        rows = conn.execute(
-            """select r.doc_name, r.section_label, r.page, r.text 
-               from rag_chunks_fts f join rag_chunks r on f.rowid=r.id 
-               where rag_chunks_fts match ? limit ?""", (query, int(k))
-        ).fetchall()
-    except Exception:
-        return []
-    return [{"doc":d, "section":s, "page":p, "text":t} for d,s,p,t in rows]
-# --- END RAG_HELPERS_INJECTED ---
-
-
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
@@ -1086,7 +579,58 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
             pass
         return "Preview"
 
-st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
+st.set_page_config(page_title="GovCon Copilot Pro", page_icon="🧭", layout="wide")
+
+
+# === Authentication (streamlit-authenticator; soft optional) ===
+try:
+    import streamlit_authenticator as stauth  # pip install streamlit-authenticator
+    _AUTH_ENABLED = bool(st.secrets.get("auth_users", {}))
+except Exception:
+    stauth = None
+    _AUTH_ENABLED = False
+
+def _do_auth():
+    if not _AUTH_ENABLED or stauth is None:
+        return {"name": "Guest", "username": "guest", "auth": True}
+    creds = st.secrets.get("auth_users", {})
+    # Expected structure in .streamlit/secrets.toml:
+    # [auth_users]
+    # usernames.quincy.password = "hashed_pw"
+    # usernames.quincy.name = "Quincy"
+    # usernames.charles.password = "hashed_pw"
+    # usernames.charles.name = "Charles"
+    # usernames.collin.password = "hashed_pw"
+    names = {}
+    usernames = []
+    passwords = []
+    # Back-compat for simple dict {"quincy":"$hash",...}
+    if "usernames" in creds:
+        for uname, meta in creds["usernames"].items():
+            usernames.append(uname)
+            names[uname] = meta.get("name", uname.title())
+            passwords.append(meta.get("password",""))
+    else:
+        for uname, hashed in creds.items():
+            usernames.append(uname)
+            names[uname] = uname.title()
+            passwords.append(hashed)
+    authenticator = stauth.Authenticate(
+        {"usernames": {u: {"name": names.get(u,u), "password": p} for u,p in zip(usernames,passwords)}},
+        "ela_cookie", "ela_key", cookie_expiry_days=7
+    )
+    name, auth_status, username = authenticator.login("Login", "sidebar")
+    if auth_status:
+        st.session_state["active_profile"] = name
+        authenticator.logout("Logout", "sidebar")
+        return {"name": name, "username": username, "auth": True}
+    elif auth_status is False:
+        st.sidebar.error("Invalid credentials")
+        return {"auth": False}
+    else:
+        st.stop()
+        return {"auth": False}
+
 
 # ---- Date helpers for SAM search ----
 
@@ -1472,15 +1016,16 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def linkedin_company_search(keyword: str) -> str:
-    """Return a LinkedIn companies search URL for the keyword."""
-    return f"https://www.linkedin.com/search/results/companies/?keywords={keyword}"
+    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
+
 def build_context(max_rows=6):
     conn = get_db()
     g = pd.read_sql_query("select * from goals limit 1", conn)
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; " f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
+                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -1547,6 +1092,20 @@ except NameError:
         return ""
 
 st.title("GovCon Copilot Pro")
+
+# === Branding & Theme ===
+_brand_logo_url = get_setting("brand_logo_url", "")
+st.sidebar.markdown("## ELA Management")
+if _brand_logo_url:
+    try:
+        st.sidebar.image(_brand_logo_url, use_column_width=True)
+    except Exception:
+        pass
+st.markdown(
+    "<style> .ela-kpi .stMetric {background: #f7fbff; border:1px solid #e1efff; padding:10px; border-radius:16px;} </style>",
+    unsafe_allow_html=True
+)
+
 st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
 
 DB_PATH = "govcon.db"
@@ -1854,6 +1413,27 @@ ELA Management LLC
 
 ensure_schema()
 
+
+SCHEMA.update({
+    "audit_log": """
+    create table if not exists audit_log (
+        id integer primary key,
+        actor text,
+        action text,
+        target text,
+        created_at text default current_timestamp
+    );
+    """
+})
+def audit(actor, action, target):
+    try:
+        conn = get_db()
+        conn.execute("insert into audit_log(actor, action, target) values(?,?,?)",
+                     (actor or st.session_state.get("active_profile",""), action, target))
+        conn.commit()
+    except Exception:
+        pass
+
 run_migrations()
 # ---------- Utilities ----------
 def get_setting(key, default=""):
@@ -2151,7 +1731,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
     # Margins/spacing advisory
     if margins_in is not None and (margins_in < 0.5 or margins_in > 1.5):
-        warnings.append(f"Margin {margins_in} may violate standard 1\ requirement.")
+        warnings.append(f"Margin {margins_in}\" may violate standard 1\" requirement.")
 
     if line_spacing is not None and (line_spacing < 1.0 or line_spacing > 2.0):
         warnings.append(f"Line spacing {line_spacing} looks unusual.")
@@ -2331,16 +1911,75 @@ def _render_saved_vendors_manager(_container=None):
     with c3:
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 
-TAB_LABELS = [
-    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
-]
+TAB_LABELS = ["Control Center", "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"]
 tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
-LEGACY_ORDER = [
-    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
-]
+LEGACY_ORDER = ["Control Center", "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"]
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
+
+with legacy_tabs[0]:
+    st.subheader("Control Center")
+    # Quick auth info
+    try:
+        _auth = _do_auth()
+    except Exception:
+        _auth = {"name": st.session_state.get("active_profile", "Guest"), "auth": True}
+    c1, c2, c3, c4 = st.columns(4)
+    conn = get_db()
+    try:
+        tot_bids = conn.execute("select count(*) from opportunities").fetchone()[0]
+    except Exception:
+        tot_bids = 0
+    try:
+        # proxy for wins: opportunities with status Submitted (could be extended)
+        submitted = conn.execute("select count(*) from opportunities where status='Submitted'").fetchone()[0]
+    except Exception:
+        submitted = 0
+    try:
+        # win rate proxy if we had a 'Won' status; fall back to 0
+        won = conn.execute("select count(*) from opportunities where status='Won'").fetchone()[0]
+    except Exception:
+        won = 0
+    win_rate = (won / submitted * 100.0) if submitted else 0.0
+
+    with c1:
+        st.metric("Total bids", f"{tot_bids}")
+    with c2:
+        st.metric("Submitted", f"{submitted}")
+    with c3:
+        st.metric("Wins", f"{won}")
+    with c4:
+        st.metric("Win rate", f"{win_rate:.1f}%")
+
+    # Recent pipeline snapshot
+    try:
+        df_recent = __import__("pandas").read_sql_query(
+            "select id, title, agency, status, response_due from opportunities order by posted desc limit 12",
+            conn
+        )
+        st.markdown("### Recent opportunities")
+        st.dataframe(df_recent, use_container_width=True)
+    except Exception as e:
+        st.caption(f"[Control Center note: {e}]")
+
+    # Notifications (simple in-app toasts if new SAM results exist in session)
+    if st.session_state.get("sam_results_df") is not None:
+        try:
+            cnt = len(st.session_state.get("sam_results_df") or [])
+            if cnt:
+                st.toast(f"New SAM results loaded: {cnt}", icon="🔔")
+        except Exception:
+            pass
+
+    # Quick links
+    st.markdown("#### Quick links")
+    cols = st.columns(4)
+    with cols[0]: st.link_button("SAM Watch", "#")
+    with cols[1]: st.link_button("Proposal Builder", "#")
+    with cols[2]: st.link_button("Subcontractor Finder", "#")
+    with cols[3]: st.link_button("Pricing Calculator", "#")
+
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
     try:
@@ -2676,7 +2315,7 @@ with legacy_tabs[0]:
 
         conn.commit()
         __ctx_pipeline = True
-        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s)."); audit(st.session_state.get("active_profile",""), "save_pipeline", f"updated={updated},deleted={deleted}")
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
@@ -2868,7 +2507,7 @@ with legacy_tabs[1]:
                         )
                     saved += 1
                 conn.commit()
-                st.success(f"Saved {saved} vendor(s).")
+                st.success(f"Saved {saved} vendor(s)."); audit(st.session_state.get("active_profile",""), "save_vendors", f"saved={saved}")
         else:
             msg = "No results"
             if info and not info.get("ok", True):
@@ -3043,7 +2682,7 @@ with legacy_tabs[3]:
                              (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 conn.commit()
                 sent += 1
-            st.success(f"Processed {sent} messages")
+            st.success(f"Processed {sent} messages"); audit(st.session_state.get("active_profile",""), "send_emails", f"count={sent}")
 
 
 
@@ -3209,7 +2848,6 @@ with legacy_tabs[4]:
 
     # Show results from session (if any)
     df = st.session_state.get("sam_results_df")
-
     info = st.session_state.get("sam_results_info", {}) or {}
     if info and not info.get("ok", True):
         st.error(f"SAM API error: {info}")
@@ -3283,7 +2921,6 @@ with legacy_tabs[6]:
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", key="cap_tagline_input_capability_builder", value="Responsive project management for federal facilities and services")
     core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
-
     diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
     past_perf = st.text_area("Representative experience", key="cap_past_textarea_capability_builder", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
     contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
@@ -3293,7 +2930,7 @@ with legacy_tabs[6]:
     with c1:
         if st.button("Generate one page", key="btn_cap_generate_capability_builder"):
             system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
-            prompt = f"""Company {company}"
+            prompt = f"""Company {company}
 Tagline {tagline}
 Core {core}
 Diff {diff}
@@ -3506,7 +3143,7 @@ with legacy_tabs[11]:
 
                 system_text = "\n\n".join(filter(None, [
                     "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
-                    (f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else ""),
+                    f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
                     doc_snips
                 ]))
 
@@ -3711,7 +3348,7 @@ with legacy_tabs[__tabs_base + 2]:
             doc = Document()
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
-            for para in row[2].split("\n\n"):
+            for para in row[2].split("\\n\\n"):
                 doc.add_paragraph(para)
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
@@ -3959,7 +3596,8 @@ def build_context(max_rows=6):
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; " f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
+                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -3990,14 +3628,15 @@ def build_context(max_rows=6):
 
 # ---------- External integrations ----------
 def linkedin_company_search(keyword: str) -> str:
-    """Return a LinkedIn companies search URL for the keyword."""
-    return f"https://www.linkedin.com/search/results/companies/?keywords={keyword}"
+    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
 
-def google_places_search(query: str, location: str, radius_m: int = 80000, strict: bool = True):
+def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
     """
     Google Places Text Search + Details (phone + website).
     Returns (list_of_vendors, info). Emails are NOT provided by Places.
     """
+    if not GOOGLE_PLACES_KEY:
+        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
     try:
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
@@ -4604,7 +4243,7 @@ def render_rfp_analyzer():
                 context_snap = ""
             doc_snips = _rfp_context_for(pending_prompt)
 
-            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable."
+            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
     Context snapshot:
     {context_snap}
     {doc_snips if doc_snips else ""}"""
@@ -4791,8 +4430,8 @@ def render_proposal_builder():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -4814,11 +4453,11 @@ def render_proposal_builder():
                     continue
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
-                system_text = "\n\n".join(filter(None, [
+                system_text = "\\n\\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    (f"Company snapshot:\n{context_snap}" if context_snap else ""),
+                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
                     doc_snips,
-                    (f"Past Performance selections:\n{pp_text}" if sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan') else "")
+                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
@@ -5422,3 +5061,36 @@ except Exception as _e_deals:
         st.caption(f"[Deals tab note: {_e_deals}]")
     except Exception:
         pass
+
+
+
+
+# === Competitor Intelligence (new tab) ===
+try:
+    # Add a tab dynamically if not present in TAB_LABELS order (safe append visual only)
+    if "Competitor Intel" not in TAB_LABELS:
+        TAB_LABELS.append("Competitor Intel")
+        tabs.append(st.tabs(["Competitor Intel"])[0])  # visual fallback
+
+    # Render after existing tabs using a container
+    st.markdown("## Competitor Intelligence")
+    st.caption("Identify frequent awardees by NAICS using USAspending snapshot")
+    colx, coly = st.columns(2)
+    with colx:
+        naics_q = st.text_input("NAICS", value="561720", help="6-digit NAICS")
+        lookback = st.number_input("Look back (months)", min_value=1, value=24, step=1)
+        limit_rows = st.number_input("Max awards", min_value=10, value=200, step=10)
+    with coly:
+        kw = st.text_input("Optional keyword filter", value="")
+        run_comp = st.button("Run competitor scan")
+    if run_comp:
+        df, diag = usaspending_search_awards(naics=naics_q.strip(), date_from="", date_to="", keyword=kw.strip(), limit=int(limit_rows))
+        if df is not None and not df.empty and "recipient" in df.columns:
+            import pandas as _pd
+            top = df.groupby("recipient").size().sort_values(ascending=False).reset_index(name="awards")
+            st.dataframe(top.head(25), use_container_width=True)
+        else:
+            st.info("No data returned. Try broadening filters.")
+except Exception as _e_comp:
+    st.caption(f"[Competitor tab note: {_e_comp}]")
+
