@@ -4917,3 +4917,493 @@ except Exception as _e_deals:
     except Exception:
         pass
 
+
+
+
+# === RFQ Generator & Outreach 10/10 ===
+def ensure_rfq_schema():
+    try:
+        conn = get_db()
+        conn.execute("""
+        create table if not exists rfq_templates (
+            id integer primary key,
+            name text,
+            header text,
+            footer text,
+            default_terms text
+        )""")
+        conn.execute("""
+        create table if not exists rfq_campaigns (
+            id integer primary key,
+            rfq_no text,
+            title text,
+            naics text,
+            due_date text,
+            buyer_name text,
+            buyer_email text,
+            scope text,
+            terms text,
+            file_path text,
+            created_at text default current_timestamp
+        )""")
+
+conn.execute("""
+create table if not exists rfq_attachments (
+    id integer primary key,
+    campaign_id integer,
+    file_path text,
+    filename text,
+    created_at text default current_timestamp
+)""")
+        conn.execute("""
+        create table if not exists rfq_recipients (
+            id integer primary key,
+            campaign_id integer,
+            vendor_name text,
+            email text,
+            status text,
+            quoted_amount real,
+            notes text,
+            sent_at text,
+            responded_at text
+        )""")
+        conn.commit()
+    except Exception as e:
+        st.caption(f"[RFQ schema note: {e}]")
+
+def _export_rfq_docx(meta, items, header, footer, terms):
+    try:
+        import docx
+    except Exception:
+        st.warning("Install python-docx to export RFQ: pip install python-docx")
+        return None
+    doc = docx.Document()
+    doc.add_heading(meta.get("title","Request for Quotation"), 0)
+    h = header or ""
+    if h: doc.add_paragraph(h)
+    doc.add_paragraph(f"RFQ No.: {meta.get('rfq_no','')}")
+    doc.add_paragraph(f"NAICS: {meta.get('naics','')}")
+    doc.add_paragraph(f"Due Date: {meta.get('due_date','')}")
+    doc.add_paragraph(f"Buyer: {meta.get('buyer_name','')} <{meta.get('buyer_email','')}>")
+    doc.add_heading("Scope", level=1)
+    doc.add_paragraph(meta.get("scope",""))
+    if items is not None and len(items):
+        doc.add_heading("Line Items", level=1)
+        table = doc.add_table(rows=1, cols=4)
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = "Item"
+        hdr_cells[1].text = "Qty"
+        hdr_cells[2].text = "Unit"
+        hdr_cells[3].text = "Notes"
+        for it in items:
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(it.get("item",""))
+            row_cells[1].text = str(it.get("qty",""))
+            row_cells[2].text = str(it.get("unit",""))
+            row_cells[3].text = str(it.get("notes",""))
+    if terms:
+        doc.add_heading("Terms & Conditions", level=1)
+        doc.add_paragraph(terms)
+    if footer:
+        doc.add_paragraph(footer)
+    safe_name = (meta.get("rfq_no") or meta.get("title","RFQ")).replace(" ","_")
+    out = f"/mnt/data/RFQ_{safe_name}.docx"
+    doc.save(out)
+    return out
+
+def _send_email_with_optional_attachment(to_emails, subject, body, attachment_path=None):
+    smtp_cfg = getattr(st, "secrets", {}).get("smtp", {})
+    try:
+        if smtp_cfg and smtp_cfg.get("host") and smtp_cfg.get("from"):
+            import smtplib, ssl, os
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email import encoders
+            if isinstance(to_emails, (list, tuple)):
+                recipients = [e for e in to_emails if e]
+            else:
+                recipients = [x.strip() for x in str(to_emails or "").split(",") if x and x.strip()]
+            if not recipients:
+                st.warning("No recipient emails provided.")
+                return False
+            msg = MIMEMultipart()
+            msg["Subject"] = subject
+            msg["From"] = smtp_cfg["from"]
+            msg["To"] = ", ".join(recipients)
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+            if attachment_path and Path(attachment_path).exists():
+                with open(attachment_path, "rb") as f:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{Path(attachment_path).name}"')
+                msg.attach(part)
+            context = ssl.create_default_context()
+            with smtplib.SMTP(smtp_cfg.get("host"), int(smtp_cfg.get("port",587))) as server:
+                server.starttls(context=context)
+                if smtp_cfg.get("username") and smtp_cfg.get("password"):
+                    server.login(smtp_cfg["username"], smtp_cfg["password"])
+                server.sendmail(msg["From"], recipients, msg.as_string())
+            try:
+                audit(st.session_state.get("active_profile",""), "rfq_email_smtp", f"to={recipients}|subj={subject}|att={'yes' if attachment_path else 'no'}")
+            except Exception:
+                pass
+            return True
+    except Exception as e:
+        st.warning(f"SMTP attachment send failed: {e}")
+    try:
+        return _send_email(to_emails, subject, body)
+    except Exception:
+        return False
+
+def render_rfq_generator_outreach():
+    st.title("RFQ Generator & Outreach")
+    ensure_rfq_schema()
+    ensure_vendors_schema()
+
+    tabs = st.tabs(["Build RFQ", "Select Vendors & Send", "Responses & Analytics"])
+
+    with tabs[0]:
+        st.subheader("RFQ Metadata")
+        rfq_no = st.text_input("RFQ No.", value=st.session_state.get("rfq_no",""))
+        title = st.text_input("Title", value="Request for Quotation")
+        naics = st.text_input("NAICS", value=st.session_state.get("rfp_naics",""))
+        due_date = st.text_input("Due Date", value="")
+        buyer_name = st.text_input("Buyer Name", value=st.session_state.get("active_profile","ELA Team"))
+        buyer_email = st.text_input("Buyer Email", value=get_setting("contact_email","") if 'get_setting' in globals() else "")
+        scope = st.text_area("Scope / Description", value="", height=160)
+
+        st.subheader("Line Items")
+        import pandas as _pd
+        default_items = _pd.DataFrame([{"item":"", "qty":1, "unit":"EA", "notes":""}])
+        items_df = st.data_editor(st.session_state.get("rfq_items_df", default_items), num_rows="dynamic", use_container_width=True, key="rfq_items_editor")
+        st.session_state["rfq_items_df"] = items_df
+
+        st.subheader("Template & Terms")
+        conn = get_db()
+        try:
+            tdf = _pd.read_sql_query("select id, name from rfq_templates order by name", conn)
+        except Exception:
+            tdf = _pd.DataFrame()
+        sel_template = st.selectbox("Template", ["(Blank)"] + (tdf["name"].tolist() if not tdf.empty else []))
+        header = st.text_area("Header", value="ELA Management LLC – Request for Quotation")
+        terms = st.text_area("Terms & Conditions", value="Net 30. Delivery FOB Destination. Quotes valid for 60 days.")
+        footer = st.text_area("Footer", value="Thank you for your timely response.")
+
+        if st.button("Export RFQ (DOCX)"):
+            meta = {"rfq_no": rfq_no, "title": title, "naics": naics, "due_date": due_date, "buyer_name": buyer_name, "buyer_email": buyer_email, "scope": scope}
+            items = items_df.to_dict(orient="records")
+            path = _export_rfq_docx(meta, items, header, footer, terms)
+            if path:
+                st.success(f"RFQ exported: {path}")
+                with open(path, "rb") as f:
+                    st.download_button("Download RFQ DOCX", data=f.read(), file_name=Path(path).name)
+                try:
+                    conn.execute("""insert into rfq_campaigns (rfq_no,title,naics,due_date,buyer_name,buyer_email,scope,terms,file_path)
+                                    values (?,?,?,?,?,?,?,?,?)""", (rfq_no,title,naics,due_date,buyer_name,buyer_email,scope,terms,path))
+                    conn.commit()
+                except Exception as e:
+                    st.caption(f"[RFQ campaign save note: {e}]")
+                st.session_state["rfq_current_meta"] = meta
+
+    with tabs[1]:
+        st.subheader("Recipient Selection")
+        import pandas as _pd
+        try:
+            vdf = _pd.read_sql_query("select id, name, email, socio, naics, city, state, rating from vendors", get_db())
+        except Exception:
+            vdf = _pd.DataFrame(columns=["name","email","naics","state"])
+        filt_naics = st.text_input("Filter by NAICS", value=naics if "naics" in locals() else "")
+        filt_state = st.text_input("Filter by State", value="")
+        if not vdf.empty:
+            m = _pd.Series([True]*len(vdf))
+            if filt_naics:
+                m &= vdf["naics"].fillna("").str.contains(filt_naics, case=False, na=False)
+            if filt_state:
+                m &= vdf["state"].fillna("").str.contains(filt_state, case=False, na=False)
+            vdf = vdf[m]
+        st.dataframe(vdf, use_container_width=True, height=240)
+
+        custom_csv = st.file_uploader("Or upload a CSV with columns name,email", type=["csv"])
+        custom_list = []
+        if custom_csv is not None:
+            try:
+                cdf = _pd.read_csv(custom_csv)
+                st.dataframe(cdf.head(20), use_container_width=True)
+                custom_list = cdf[["name","email"]].to_dict(orient="records")
+            except Exception as e:
+                st.error(f"CSV read failed: {e}")
+
+
+with st.expander("Additional attachments", expanded=False):
+    st.caption("Upload any extra files (PDF, DOCX, XLSX, ZIP, etc.) to include with outreach emails.")
+    extra_files = st.file_uploader("Upload files", type=None, accept_multiple_files=True, key="rfq_extra_files")
+    saved_paths = []
+    # Ensure campaign exists so we know where to save
+    _meta = st.session_state.get("rfq_current_meta") or {"rfq_no": st.session_state.get("rfp_no","")}
+    _campaign_id = None
+    try:
+        conn = get_db()
+        row = conn.execute("select id from rfq_campaigns where rfq_no=? order by created_at desc limit 1", (_meta.get("rfq_no",""),)).fetchone()
+        if row: _campaign_id = row[0]
+    except Exception as _e:
+        st.caption(f"[Attachment panel note: {_e}]")
+    if extra_files and _campaign_id:
+        base_dir = Path("/mnt/data/rfq_attachments") / str(_campaign_id)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        for upf in extra_files:
+            dest = base_dir / upf.name
+            try:
+                with open(dest, "wb") as fh:
+                    fh.write(upf.read())
+                conn.execute("insert into rfq_attachments (campaign_id, file_path, filename) values (?,?,?)", (_campaign_id, str(dest), upf.name))
+                conn.commit()
+                saved_paths.append(str(dest))
+            except Exception as _e2:
+                st.warning(f"Save failed for {upf.name}: {_e2}")
+        if saved_paths:
+            st.success(f"Saved {len(saved_paths)} attachment(s).")
+    # Show existing attachments for this campaign
+    try:
+        if _campaign_id:
+            rows = conn.execute("select filename, file_path from rfq_attachments where campaign_id=?", (_campaign_id,)).fetchall()
+            if rows:
+                st.write("Current attachments:")
+                for fn, fp in rows:
+                    st.caption(f"• {fn}")
+    except Exception:
+        pass
+
+        st.subheader("Compose Outreach")
+        subj = st.text_input("Subject", value="RFQ: {{title}} (Due {{due_date}}) – ELA Management")
+        body = st.text_area("Message", value="Hello {{name}},\n\nELA Management requests a quotation for {{title}} under NAICS {{naics}}. Please reply with pricing and availability by {{due_date}}.\n\nScope: {{scope}}\n\nThank you,\n{{buyer_name}}\n{{buyer_email}}", height=160)
+        attach_rfq = st.checkbox("Attach exported RFQ DOCX via SMTP", value=True)
+
+        recipients = []
+        if not vdf.empty:
+            pick = st.multiselect("Pick vendors from list", vdf["name"].tolist())
+            for nm in pick:
+                row = vdf[vdf["name"]==nm].iloc[0].to_dict()
+                if row.get("email"):
+                    recipients.append({"name": row.get("name"), "email": row.get("email")})
+        if custom_list:
+            recipients.extend(custom_list)
+
+        st.caption(f"Selected recipients: {len(recipients)}")
+
+        if st.button("Send RFQs"):
+            meta = st.session_state.get("rfq_current_meta") or {
+                "rfq_no": st.session_state.get("rfp_no",""),
+                "title": st.session_state.get("rfp_no","RFQ"),
+                "naics": st.session_state.get("rfp_naics",""),
+                "due_date": "",
+                "buyer_name": st.session_state.get("active_profile","ELA Team"),
+                "buyer_email": get_setting("contact_email","") if 'get_setting' in globals() else "",
+                "scope": ""
+            }
+            file_path = None
+            try:
+                conn = get_db()
+                row = conn.execute("select file_path, id from rfq_campaigns where rfq_no=? order by created_at desc limit 1", (meta["rfq_no"],)).fetchone()
+                if row:
+                    file_path = row[0]; campaign_id = row[1]
+                else:
+                    conn.execute("""insert into rfq_campaigns (rfq_no,title,naics,due_date,buyer_name,buyer_email,scope,terms,file_path)
+                                    values (?,?,?,?,?,?,?,?,?)""", (meta["rfq_no"], meta["title"], meta["naics"], meta["due_date"], meta["buyer_name"], meta["buyer_email"], meta["scope"], "", None))
+                    conn.commit()
+                    campaign_id = conn.execute("select id from rfq_campaigns where rfq_no=? order by created_at desc limit 1", (meta["rfq_no"],)).fetchone()[0]
+            except Exception as e:
+                st.caption(f"[RFQ campaign read note: {e}]")
+                campaign_id = None
+
+            sent_ok = 0
+            for rec in recipients:
+                merged_subj = subj.replace("{{title}}", meta.get("title","")).replace("{{due_date}}", meta.get("due_date","")).replace("{{naics}}", meta.get("naics",""))
+                merged_body = (body.replace("{{name}}", rec.get("name",""))
+                                     .replace("{{title}}", meta.get("title",""))
+                                     .replace("{{due_date}}", meta.get("due_date",""))
+                                     .replace("{{naics}}", meta.get("naics",""))
+                                     .replace("{{scope}}", meta.get("scope",""))
+                                     .replace("{{buyer_name}}", meta.get("buyer_name",""))
+                                     .replace("{{buyer_email}}", meta.get("buyer_email","")))
+
+# Gather attachments: exported RFQ (optional) + extras for this campaign
+attach_list = []
+if attach_rfq and file_path:
+    attach_list.append(file_path)
+try:
+    rows_att = conn.execute("select file_path from rfq_attachments where campaign_id=?", (campaign_id,)).fetchall()
+    for r in rows_att or []:
+        if r and r[0]:
+            attach_list.append(r[0])
+except Exception:
+    pass
+ok = _send_email_with_attachments(rec.get("email",""), merged_subj, merged_body, attachment_paths=attach_list)
+
+                if ok:
+                    sent_ok += 1
+                    try:
+                        conn.execute("""insert into rfq_recipients (campaign_id, vendor_name, email, status, sent_at)
+                                        values (?,?,?,?,datetime('now'))""", (campaign_id, rec.get("name"), rec.get("email"), "Sent"))
+                        conn.commit()
+                    except Exception:
+                        pass
+            st.success(f"Sent {sent_ok} RFQ emails")
+
+    with tabs[2]:
+        st.subheader("Track Responses")
+        import pandas as _pd
+        try:
+            df = _pd.read_sql_query("""
+                select c.rfq_no, c.title, r.vendor_name, r.email, r.status, r.quoted_amount, r.notes, r.sent_at, r.responded_at
+                from rfq_recipients r join rfq_campaigns c on r.campaign_id=c.id
+                order by r.sent_at desc
+            """, get_db())
+            st.dataframe(df, use_container_width=True)
+        except Exception as e:
+            st.caption(f"[RFQ responses note: {e}]")
+
+        st.subheader("Update Response")
+        vendor_email = st.text_input("Vendor email")
+        quoted_amount = st.number_input("Quoted amount", min_value=0.0, value=0.0, step=100.0)
+        status = st.selectbox("Status", ["Responded","Declined","Pending"], index=0)
+        notes = st.text_area("Notes", value="")
+        if st.button("Save Response"):
+            try:
+                conn = get_db()
+                conn.execute("""update rfq_recipients set quoted_amount=?, status=?, notes=?, responded_at=datetime('now') where email=?""",
+                             (quoted_amount, status, notes, vendor_email))
+                conn.commit()
+                st.success("Response updated")
+            except Exception as e:
+                st.error(f"Update failed: {e}")
+
+        st.subheader("Analytics")
+        try:
+            adf = df.copy() if 'df' in locals() else _pd.DataFrame()
+            if not adf.empty:
+                resp_rate = (adf["status"].fillna("").str.contains("Responded")).mean()*100
+                st.metric("Response Rate", f"{resp_rate:.0f}%")
+                avg_quote = adf["quoted_amount"].fillna(0).replace(0, float("nan")).mean()
+                st.metric("Average Quote", f"${avg_quote:,.0f}" if not _pd.isna(avg_quote) else "—")
+        except Exception:
+            pass
+
+try:
+    st.markdown("---")
+    st.header("RFQ Engine")
+    render_rfq_generator_outreach()
+except Exception as _e_rfq_out:
+    st.caption(f"[RFQ module note: {_e_rfq_out}]")
+
+
+
+
+def _send_email_with_attachments(to_emails, subject, body, attachment_paths=None):
+    attachment_paths = attachment_paths or []
+    smtp_cfg = getattr(st, "secrets", {}).get("smtp", {})
+    # Try SMTP with multiple attachments
+    try:
+        if smtp_cfg and smtp_cfg.get("host") and smtp_cfg.get("from"):
+            import smtplib, ssl
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email import encoders
+            if isinstance(to_emails, (list, tuple)):
+                recipients = [e for e in to_emails if e]
+            else:
+                recipients = [x.strip() for x in str(to_emails or "").split(",") if x and x.strip()]
+            if not recipients:
+                st.warning("No recipient emails provided.")
+                return False
+            msg = MIMEMultipart()
+            msg["Subject"] = subject
+            msg["From"] = smtp_cfg["from"]
+            msg["To"] = ", ".join(recipients)
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+            for apath in attachment_paths:
+                try:
+                    p = Path(apath)
+                    if not p.exists():
+                        continue
+                    part = MIMEBase("application", "octet-stream")
+                    with open(p, "rb") as f:
+                        part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", f'attachment; filename="{p.name}"')
+                    msg.attach(part)
+                except Exception:
+                    pass
+            context = ssl.create_default_context()
+            with smtplib.SMTP(smtp_cfg.get("host"), int(smtp_cfg.get("port",587))) as server:
+                server.starttls(context=context)
+                if smtp_cfg.get("username") and smtp_cfg.get("password"):
+                    server.login(smtp_cfg["username"], smtp_cfg["password"])
+                server.sendmail(msg["From"], recipients, msg.as_string())
+            try:
+                audit(st.session_state.get("active_profile",""), "rfq_email_smtp_multi", f"to={recipients}|subj={subject}|att_count={len(attachment_paths)}")
+            except Exception:
+                pass
+            return True
+    except Exception as e:
+        st.warning(f"SMTP multi-attach send failed: {e}")
+
+    # SendGrid fallback, with attachments if possible
+    try:
+        sg_key = getattr(st, "secrets", {}).get("sendgrid_api_key")
+        from_addr = smtp_cfg.get("from") or getattr(st, "secrets", {}).get("from_email")
+        if sg_key and from_addr:
+            import requests, mimetypes, json
+            to_list = []
+            if isinstance(to_emails, (list, tuple)):
+                to_list = [e for e in to_emails if e]
+            else:
+                to_list = [x.strip() for x in str(to_emails or "").split(",") if x and x.strip()]
+            if not to_list:
+                st.warning("No recipient emails provided.")
+                return False
+            atts = []
+            for apath in attachment_paths:
+                try:
+                    p = Path(apath)
+                    if not p.exists():
+                        continue
+                    ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+                    with open(p, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                    atts.append({"content": b64, "type": ctype, "filename": p.name})
+                except Exception:
+                    pass
+            payload = {
+                "personalizations": [{"to": [{"email": e} for e in to_list]}],
+                "from": {"email": from_addr},
+                "subject": subject,
+                "content": [{"type": "text/plain", "value": body}],
+            }
+            if atts:
+                payload["attachments"] = atts
+            resp = requests.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {sg_key}", "Content-Type": "application/json"},
+                json=payload, timeout=20
+            )
+            if 200 <= resp.status_code < 300:
+                try:
+                    audit(st.session_state.get("active_profile",""), "rfq_email_sendgrid_multi", f"to={to_list}|subj={subject}|att_count={len(atts)}")
+                except Exception:
+                    pass
+                return True
+            else:
+                st.warning(f"SendGrid send failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        st.warning(f"SendGrid error: {e}")
+
+    # Fallback to no-attachment sender
+    st.info("No mail service with attachments available — sending without attachments.")
+    try:
+        return _send_email(to_emails, subject, body)
+    except Exception:
+        return False
+
