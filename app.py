@@ -579,7 +579,58 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
             pass
         return "Preview"
 
-st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
+st.set_page_config(page_title="GovCon Copilot Pro", page_icon="🧭", layout="wide")
+
+
+# === Authentication (streamlit-authenticator; soft optional) ===
+try:
+    import streamlit_authenticator as stauth  # pip install streamlit-authenticator
+    _AUTH_ENABLED = bool(st.secrets.get("auth_users", {}))
+except Exception:
+    stauth = None
+    _AUTH_ENABLED = False
+
+def _do_auth():
+    if not _AUTH_ENABLED or stauth is None:
+        return {"name": "Guest", "username": "guest", "auth": True}
+    creds = st.secrets.get("auth_users", {})
+    # Expected structure in .streamlit/secrets.toml:
+    # [auth_users]
+    # usernames.quincy.password = "hashed_pw"
+    # usernames.quincy.name = "Quincy"
+    # usernames.charles.password = "hashed_pw"
+    # usernames.charles.name = "Charles"
+    # usernames.collin.password = "hashed_pw"
+    names = {}
+    usernames = []
+    passwords = []
+    # Back-compat for simple dict {"quincy":"$hash",...}
+    if "usernames" in creds:
+        for uname, meta in creds["usernames"].items():
+            usernames.append(uname)
+            names[uname] = meta.get("name", uname.title())
+            passwords.append(meta.get("password",""))
+    else:
+        for uname, hashed in creds.items():
+            usernames.append(uname)
+            names[uname] = uname.title()
+            passwords.append(hashed)
+    authenticator = stauth.Authenticate(
+        {"usernames": {u: {"name": names.get(u,u), "password": p} for u,p in zip(usernames,passwords)}},
+        "ela_cookie", "ela_key", cookie_expiry_days=7
+    )
+    name, auth_status, username = authenticator.login("Login", "sidebar")
+    if auth_status:
+        st.session_state["active_profile"] = name
+        authenticator.logout("Logout", "sidebar")
+        return {"name": name, "username": username, "auth": True}
+    elif auth_status is False:
+        st.sidebar.error("Invalid credentials")
+        return {"auth": False}
+    else:
+        st.stop()
+        return {"auth": False}
+
 
 # ---- Date helpers for SAM search ----
 
@@ -1041,6 +1092,20 @@ except NameError:
         return ""
 
 st.title("GovCon Copilot Pro")
+
+# === Branding & Theme ===
+_brand_logo_url = get_setting("brand_logo_url", "")
+st.sidebar.markdown("## ELA Management")
+if _brand_logo_url:
+    try:
+        st.sidebar.image(_brand_logo_url, use_column_width=True)
+    except Exception:
+        pass
+st.markdown(
+    "<style> .ela-kpi .stMetric {background: #f7fbff; border:1px solid #e1efff; padding:10px; border-radius:16px;} </style>",
+    unsafe_allow_html=True
+)
+
 st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
 
 DB_PATH = "govcon.db"
@@ -1347,6 +1412,27 @@ ELA Management LLC
     conn.commit()
 
 ensure_schema()
+
+
+SCHEMA.update({
+    "audit_log": """
+    create table if not exists audit_log (
+        id integer primary key,
+        actor text,
+        action text,
+        target text,
+        created_at text default current_timestamp
+    );
+    """
+})
+def audit(actor, action, target):
+    try:
+        conn = get_db()
+        conn.execute("insert into audit_log(actor, action, target) values(?,?,?)",
+                     (actor or st.session_state.get("active_profile",""), action, target))
+        conn.commit()
+    except Exception:
+        pass
 
 run_migrations()
 # ---------- Utilities ----------
@@ -1825,16 +1911,75 @@ def _render_saved_vendors_manager(_container=None):
     with c3:
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 
-TAB_LABELS = [
-    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
-]
+TAB_LABELS = ["Control Center", "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"]
 tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
-LEGACY_ORDER = [
-    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
-]
+LEGACY_ORDER = ["Control Center", "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"]
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
+
+with legacy_tabs[0]:
+    st.subheader("Control Center")
+    # Quick auth info
+    try:
+        _auth = _do_auth()
+    except Exception:
+        _auth = {"name": st.session_state.get("active_profile", "Guest"), "auth": True}
+    c1, c2, c3, c4 = st.columns(4)
+    conn = get_db()
+    try:
+        tot_bids = conn.execute("select count(*) from opportunities").fetchone()[0]
+    except Exception:
+        tot_bids = 0
+    try:
+        # proxy for wins: opportunities with status Submitted (could be extended)
+        submitted = conn.execute("select count(*) from opportunities where status='Submitted'").fetchone()[0]
+    except Exception:
+        submitted = 0
+    try:
+        # win rate proxy if we had a 'Won' status; fall back to 0
+        won = conn.execute("select count(*) from opportunities where status='Won'").fetchone()[0]
+    except Exception:
+        won = 0
+    win_rate = (won / submitted * 100.0) if submitted else 0.0
+
+    with c1:
+        st.metric("Total bids", f"{tot_bids}")
+    with c2:
+        st.metric("Submitted", f"{submitted}")
+    with c3:
+        st.metric("Wins", f"{won}")
+    with c4:
+        st.metric("Win rate", f"{win_rate:.1f}%")
+
+    # Recent pipeline snapshot
+    try:
+        df_recent = __import__("pandas").read_sql_query(
+            "select id, title, agency, status, response_due from opportunities order by posted desc limit 12",
+            conn
+        )
+        st.markdown("### Recent opportunities")
+        st.dataframe(df_recent, use_container_width=True)
+    except Exception as e:
+        st.caption(f"[Control Center note: {e}]")
+
+    # Notifications (simple in-app toasts if new SAM results exist in session)
+    if st.session_state.get("sam_results_df") is not None:
+        try:
+            cnt = len(st.session_state.get("sam_results_df") or [])
+            if cnt:
+                st.toast(f"New SAM results loaded: {cnt}", icon="🔔")
+        except Exception:
+            pass
+
+    # Quick links
+    st.markdown("#### Quick links")
+    cols = st.columns(4)
+    with cols[0]: st.link_button("SAM Watch", "#")
+    with cols[1]: st.link_button("Proposal Builder", "#")
+    with cols[2]: st.link_button("Subcontractor Finder", "#")
+    with cols[3]: st.link_button("Pricing Calculator", "#")
+
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
     try:
@@ -2170,7 +2315,7 @@ with legacy_tabs[0]:
 
         conn.commit()
         __ctx_pipeline = True
-        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s)."); audit(st.session_state.get("active_profile",""), "save_pipeline", f"updated={updated},deleted={deleted}")
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
@@ -2362,7 +2507,7 @@ with legacy_tabs[1]:
                         )
                     saved += 1
                 conn.commit()
-                st.success(f"Saved {saved} vendor(s).")
+                st.success(f"Saved {saved} vendor(s)."); audit(st.session_state.get("active_profile",""), "save_vendors", f"saved={saved}")
         else:
             msg = "No results"
             if info and not info.get("ok", True):
@@ -2537,7 +2682,7 @@ with legacy_tabs[3]:
                              (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
                 conn.commit()
                 sent += 1
-            st.success(f"Processed {sent} messages")
+            st.success(f"Processed {sent} messages"); audit(st.session_state.get("active_profile",""), "send_emails", f"count={sent}")
 
 
 
@@ -4916,4 +5061,36 @@ except Exception as _e_deals:
         st.caption(f"[Deals tab note: {_e_deals}]")
     except Exception:
         pass
+
+
+
+
+# === Competitor Intelligence (new tab) ===
+try:
+    # Add a tab dynamically if not present in TAB_LABELS order (safe append visual only)
+    if "Competitor Intel" not in TAB_LABELS:
+        TAB_LABELS.append("Competitor Intel")
+        tabs.append(st.tabs(["Competitor Intel"])[0])  # visual fallback
+
+    # Render after existing tabs using a container
+    st.markdown("## Competitor Intelligence")
+    st.caption("Identify frequent awardees by NAICS using USAspending snapshot")
+    colx, coly = st.columns(2)
+    with colx:
+        naics_q = st.text_input("NAICS", value="561720", help="6-digit NAICS")
+        lookback = st.number_input("Look back (months)", min_value=1, value=24, step=1)
+        limit_rows = st.number_input("Max awards", min_value=10, value=200, step=10)
+    with coly:
+        kw = st.text_input("Optional keyword filter", value="")
+        run_comp = st.button("Run competitor scan")
+    if run_comp:
+        df, diag = usaspending_search_awards(naics=naics_q.strip(), date_from="", date_to="", keyword=kw.strip(), limit=int(limit_rows))
+        if df is not None and not df.empty and "recipient" in df.columns:
+            import pandas as _pd
+            top = df.groupby("recipient").size().sort_values(ascending=False).reset_index(name="awards")
+            st.dataframe(top.head(25), use_container_width=True)
+        else:
+            st.info("No data returned. Try broadening filters.")
+except Exception as _e_comp:
+    st.caption(f"[Competitor tab note: {_e_comp}]")
 
