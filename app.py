@@ -4917,3 +4917,241 @@ except Exception as _e_deals:
     except Exception:
         pass
 
+
+
+
+# === Proposal Export Utilities ===
+def _safe_import_python_docx():
+    try:
+        import docx
+        return docx
+    except Exception as e:
+        st.warning("DOCX export requires python-docx. Install with: pip install python-docx")
+        return None
+
+def _safe_import_reportlab():
+    try:
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.units import inch
+        return LETTER, canvas, inch
+    except Exception as e:
+        st.warning("PDF export requires reportlab. Install with: pip install reportlab")
+        return None, None, None
+
+def export_proposal_docx(filename, meta, sections, logo_url=None):
+    docx = _safe_import_python_docx()
+    if docx is None: 
+        return None
+    doc = docx.Document()
+    try:
+        if logo_url:
+            doc.add_picture(logo_url, width=docx.shared.Inches(1.2))
+    except Exception:
+        pass
+    doc.add_heading(meta.get("title","Proposal"), 0)
+    t = doc.add_paragraph()
+    t.add_run(meta.get("agency","")).bold = True
+    t.add_run("  RFQ/RFP: " + meta.get("rfp_no",""))
+    doc.add_paragraph("Prepared by: " + meta.get("offeror","ELA Management LLC"))
+    doc.add_paragraph("Due date: " + (meta.get("due_date","")))
+    doc.add_page_break()
+    doc.add_heading("Table of Contents", level=1)
+    for name, _ in sections:
+        doc.add_paragraph(name, style="List Number")
+    doc.add_page_break()
+    for name, text in sections:
+        doc.add_heading(name, level=1)
+        for para in (text or "").split("\n\n"):
+            doc.add_paragraph(para)
+        doc.add_page_break()
+    out_path = f"/mnt/data/{filename}"
+    doc.save(out_path)
+    return out_path
+
+def export_proposal_pdf(filename, meta, sections):
+    LETTER, canvas, inch = _safe_import_reportlab()
+    if canvas is None:
+        return None
+    out_path = f"/mnt/data/{filename}"
+    c = canvas.Canvas(out_path, pagesize=LETTER)
+    width, height = LETTER
+    c.setFont("Times-Bold", 16)
+    c.drawString(1*inch, height-1*inch, meta.get("title","Proposal"))
+    c.setFont("Times-Roman", 10)
+    c.drawString(1*inch, height-1.2*inch, f"Agency: {meta.get('agency','')}   RFQ/RFP: {meta.get('rfp_no','')}   Due: {meta.get('due_date','')}")
+    c.showPage()
+    for name, text in sections:
+        c.setFont("Times-Bold", 14)
+        c.drawString(1*inch, height-1*inch, name)
+        c.setFont("Times-Roman", 11)
+        y = height-1.3*inch
+        for line in (text or "").split("\n"):
+            if y < 1*inch:
+                c.showPage()
+                y = height-1*inch
+                c.setFont("Times-Roman", 11)
+            c.drawString(1*inch, y, line[:110])
+            y -= 14
+        c.showPage()
+    c.save()
+    return out_path
+
+
+
+
+# === Compliance Checker ===
+def analyze_compliance(section_L_text, section_M_text, sections_dict, limits):
+    import re
+    result = {"required": [], "flags": [], "limits": []}
+    req = []
+    if section_L_text:
+        for kw in ["Executive Summary", "Technical Approach", "Past Performance", "Management Plan", "Pricing Narrative"]:
+            if kw.lower() in section_L_text.lower():
+                req.append(kw)
+    for r in req:
+        if not sections_dict.get(r,"").strip():
+            result["required"].append(f"Missing section: {r}")
+    words_per_page = limits.get("words_per_page", 500)
+    for name, txt in sections_dict.items():
+        wc = len(txt.split())
+        max_pages = limits.get("per_section_pages", {}).get(name)
+        if max_pages:
+            max_words = max_pages * words_per_page
+            if wc > max_words:
+                result["limits"].append(f"{name} exceeds limit. Words {wc} > allowed {max_words}")
+    if section_M_text:
+        for factor in ["Technical", "Past Performance", "Price", "Management"]:
+            if factor.lower() in section_M_text.lower():
+                found = any(factor.lower() in (sections_dict.get(n,"").lower()) for n in sections_dict.keys())
+                if not found:
+                    result["flags"].append(f"Section M factor not addressed: {factor}")
+    return result
+
+
+
+
+# === AI Assist Stubs ===
+def ai_enhance_section(section_name, base_text, rfp_context):
+    intro = f"{section_name}"
+    enhanced = base_text.strip()
+    if not enhanced:
+        enhanced = f"{intro}: ELA Management LLC proposes a compliant and risk aware approach aligned to Section L instructions and Section M evaluation criteria."
+    if rfp_context.get("agency"):
+        enhanced += f" This response is tailored to {rfp_context['agency']} requirements."
+    enhanced = enhanced.replace("•", "-")
+    return enhanced
+
+def ai_summarize_for_exec(text):
+    if not text:
+        return "ELA Management LLC will execute this requirement with proven processes, experienced personnel, and measurable performance outcomes that reduce risk and deliver value."
+    if len(text.split()) > 160:
+        parts = text.split()
+        return " ".join(parts[:160]) + " ..."
+    return text
+
+
+
+
+# === Proposal Builder 2.0 ===
+def render_proposal_builder_v2():
+    st.subheader("Proposal Builder 2.0")
+    with st.sidebar:
+        st.subheader("Proposal metadata")
+        rfp_no = st.text_input("RFQ or RFP number", value=st.session_state.get("rfp_no",""))
+        agency = st.text_input("Agency", value=st.session_state.get("rfp_agency",""))
+        naics = st.text_input("NAICS", value=st.session_state.get("rfp_naics",""))
+        co_name = st.text_input("Contracting Officer name", value=st.session_state.get("rfp_co",""))
+        due_date = st.text_input("Due date", value=st.session_state.get("rfp_due",""))
+        title = st.text_input("Proposal title", value=st.session_state.get("rfp_title","Technical and Price Proposal"))
+        offeror = st.text_input("Offeror", value="ELA Management LLC")
+        template = st.selectbox("Template", ["Standard Technical", "Janitorial Service", "HVAC Maintenance", "Meat Supply"])
+        st.divider()
+        st.subheader("Compliance controls")
+        words_per_page = st.number_input("Words per page assumption", min_value=300, max_value=700, value=500, step=10)
+        per_section_pages = {
+            "Executive Summary": st.number_input("Executive Summary max pages", 0, 20, 1),
+            "Technical Approach": st.number_input("Technical Approach max pages", 0, 50, 5),
+            "Past Performance": st.number_input("Past Performance max pages", 0, 50, 3),
+            "Management Plan": st.number_input("Management Plan max pages", 0, 50, 3),
+            "Pricing Narrative": st.number_input("Pricing Narrative max pages", 0, 50, 2),
+        }
+        limits = {"words_per_page": words_per_page, "per_section_pages": per_section_pages}
+        st.session_state["pb2_meta"] = dict(rfp_no=rfp_no, agency=agency, naics=naics, co_name=co_name, due_date=due_date, title=title, offeror=offeror, template=template)
+    c_editor, c_ai, c_check = st.columns([2,1,1])
+    with c_editor:
+        st.subheader("Editor and preview")
+        tabs = st.tabs(["Executive Summary", "Technical Approach", "Past Performance", "Management Plan", "Pricing Narrative"])
+        section_keys = ["Executive Summary","Technical Approach","Past Performance","Management Plan","Pricing Narrative"]
+        contents = {}
+        for i, key in enumerate(section_keys):
+            with tabs[i]:
+                txt = st.text_area(f"{key} text", value=st.session_state.get(f"pb2_{key}",""), height=280, key=f"pb2_input_{i}")
+                st.markdown("Preview")
+                st.markdown(txt or "_No content yet_")
+                contents[key] = txt
+    with c_ai:
+        st.subheader("AI assistant")
+        st.caption("These helpers improve clarity and reference Section L and M when available.")
+        section_L = st.text_area("Section L text", value=st.session_state.get("pb2_secL",""), height=120)
+        section_M = st.text_area("Section M text", value=st.session_state.get("pb2_secM",""), height=120)
+        target_section = st.selectbox("Target section", ["Executive Summary","Technical Approach","Past Performance","Management Plan","Pricing Narrative"])
+        if st.button("Enhance selected section"):
+            meta = st.session_state.get("pb2_meta", {})
+            base = contents.get(target_section,"")
+            enhanced = ai_enhance_section(target_section, base, {"agency": meta.get("agency","")})
+            st.session_state[f"pb2_{target_section}"] = enhanced
+            st.success("Section enhanced")
+        if st.button("Create executive summary from content"):
+            combined = " ".join([contents.get(k,"") for k in section_keys])
+            st.session_state["pb2_Executive Summary"] = ai_summarize_for_exec(combined)
+            st.success("Executive Summary drafted")
+    with c_check:
+        st.subheader("Compliance")
+        check = analyze_compliance(section_L, section_M, contents, limits)
+        if not check["required"] and not check["limits"] and not check["flags"]:
+            st.success("All checks passed")
+        else:
+            if check["required"]:
+                st.error("\n".join(check["required"]))
+            if check["limits"]:
+                st.warning("\n".join(check["limits"]))
+            if check["flags"]:
+                st.info("\n".join(check["flags"]))
+        st.divider()
+        st.subheader("Export")
+        logo_url = get_setting("brand_logo_url","")
+        meta = st.session_state.get("pb2_meta", {})
+        sections_list = [(k, contents.get(k,"")) for k in section_keys]
+        if st.button("Download DOCX"):
+            path = export_proposal_docx("proposal_v2.docx", meta, sections_list, logo_url=logo_url)
+            if path:
+                st.success(f"DOCX ready: {path}")
+                with open(path, "rb") as f:
+                    st.download_button("Download proposal_v2.docx", data=f.read(), file_name="proposal_v2.docx")
+        if st.button("Download PDF"):
+            path = export_proposal_pdf("proposal_v2.pdf", meta, sections_list)
+            if path:
+                st.success(f"PDF ready: {path}")
+                with open(path, "rb") as f:
+                    st.download_button("Download proposal_v2.pdf", data=f.read(), file_name="proposal_v2.pdf")
+        st.divider()
+        st.subheader("Optional intel")
+        try:
+            if st.button("Scan USAspending recent awards for NAICS"):
+                df_awards, diag = usaspending_search_awards(naics=meta.get("naics",""), limit=200)
+                if df_awards is not None and not df_awards.empty:
+                    st.dataframe(df_awards.head(50), use_container_width=True)
+                else:
+                    st.caption("No data found for that NAICS")
+        except Exception as e:
+            st.caption(f"Intel note: {e}")
+
+# Render at end of app
+try:
+    st.markdown("---")
+    st.header("Advanced Proposals")
+    render_proposal_builder_v2()
+except Exception as _e_pb2:
+    st.caption(f"[Proposal Builder 2.0 note: {_e_pb2}]")
+
