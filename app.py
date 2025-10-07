@@ -4920,238 +4920,340 @@ except Exception as _e_deals:
 
 
 
-# === Proposal Export Utilities ===
-def _safe_import_python_docx():
-    try:
-        import docx
-        return docx
-    except Exception as e:
-        st.warning("DOCX export requires python-docx. Install with: pip install python-docx")
-        return None
+# ===== Proposal Builder V2 with Six Add Ons =====
+# This module adds a modern, tabbed Proposal Builder with QA checks, compliance sync,
+# RFP keyword extraction, pricing integration, outreach and teaming hooks, and a
+# polished exported DOCX. It is additive and does not remove the legacy builder.
 
-def _safe_import_reportlab():
-    try:
-        from reportlab.lib.pagesizes import LETTER
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.units import inch
-        return LETTER, canvas, inch
-    except Exception as e:
-        st.warning("PDF export requires reportlab. Install with: pip install reportlab")
-        return None, None, None
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional
+import re, io, json
+from datetime import datetime
+import pandas as pd
 
-def export_proposal_docx(filename, meta, sections, logo_url=None):
-    docx = _safe_import_python_docx()
-    if docx is None: 
-        return None
-    doc = docx.Document()
-    try:
-        if logo_url:
-            doc.add_picture(logo_url, width=docx.shared.Inches(1.2))
-    except Exception:
-        pass
-    doc.add_heading(meta.get("title","Proposal"), 0)
-    t = doc.add_paragraph()
-    t.add_run(meta.get("agency","")).bold = True
-    t.add_run("  RFQ/RFP: " + meta.get("rfp_no",""))
-    doc.add_paragraph("Prepared by: " + meta.get("offeror","ELA Management LLC"))
-    doc.add_paragraph("Due date: " + (meta.get("due_date","")))
-    doc.add_page_break()
-    doc.add_heading("Table of Contents", level=1)
-    for name, _ in sections:
-        doc.add_paragraph(name, style="List Number")
-    doc.add_page_break()
-    for name, text in sections:
-        doc.add_heading(name, level=1)
-        for para in (text or "").split("\n\n"):
-            doc.add_paragraph(para)
-        doc.add_page_break()
-    out_path = f"/mnt/data/{filename}"
-    doc.save(out_path)
-    return out_path
-
-def export_proposal_pdf(filename, meta, sections):
-    LETTER, canvas, inch = _safe_import_reportlab()
-    if canvas is None:
-        return None
-    out_path = f"/mnt/data/{filename}"
-    c = canvas.Canvas(out_path, pagesize=LETTER)
-    width, height = LETTER
-    c.setFont("Times-Bold", 16)
-    c.drawString(1*inch, height-1*inch, meta.get("title","Proposal"))
-    c.setFont("Times-Roman", 10)
-    c.drawString(1*inch, height-1.2*inch, f"Agency: {meta.get('agency','')}   RFQ/RFP: {meta.get('rfp_no','')}   Due: {meta.get('due_date','')}")
-    c.showPage()
-    for name, text in sections:
-        c.setFont("Times-Bold", 14)
-        c.drawString(1*inch, height-1*inch, name)
-        c.setFont("Times-Roman", 11)
-        y = height-1.3*inch
-        for line in (text or "").split("\n"):
-            if y < 1*inch:
-                c.showPage()
-                y = height-1*inch
-                c.setFont("Times-Roman", 11)
-            c.drawString(1*inch, y, line[:110])
-            y -= 14
-        c.showPage()
-    c.save()
-    return out_path
-
-
-
-
-# === Compliance Checker ===
-def analyze_compliance(section_L_text, section_M_text, sections_dict, limits):
-    import re
-    result = {"required": [], "flags": [], "limits": []}
-    req = []
-    if section_L_text:
-        for kw in ["Executive Summary", "Technical Approach", "Past Performance", "Management Plan", "Pricing Narrative"]:
-            if kw.lower() in section_L_text.lower():
-                req.append(kw)
-    for r in req:
-        if not sections_dict.get(r,"").strip():
-            result["required"].append(f"Missing section: {r}")
-    words_per_page = limits.get("words_per_page", 500)
-    for name, txt in sections_dict.items():
-        wc = len(txt.split())
-        max_pages = limits.get("per_section_pages", {}).get(name)
-        if max_pages:
-            max_words = max_pages * words_per_page
-            if wc > max_words:
-                result["limits"].append(f"{name} exceeds limit. Words {wc} > allowed {max_words}")
-    if section_M_text:
-        for factor in ["Technical", "Past Performance", "Price", "Management"]:
-            if factor.lower() in section_M_text.lower():
-                found = any(factor.lower() in (sections_dict.get(n,"").lower()) for n in sections_dict.keys())
-                if not found:
-                    result["flags"].append(f"Section M factor not addressed: {factor}")
-    return result
-
-
-
-
-# === AI Assist Stubs ===
-def ai_enhance_section(section_name, base_text, rfp_context):
-    intro = f"{section_name}"
-    enhanced = base_text.strip()
-    if not enhanced:
-        enhanced = f"{intro}: ELA Management LLC proposes a compliant and risk aware approach aligned to Section L instructions and Section M evaluation criteria."
-    if rfp_context.get("agency"):
-        enhanced += f" This response is tailored to {rfp_context['agency']} requirements."
-    enhanced = enhanced.replace("•", "-")
-    return enhanced
-
-def ai_summarize_for_exec(text):
-    if not text:
-        return "ELA Management LLC will execute this requirement with proven processes, experienced personnel, and measurable performance outcomes that reduce risk and deliver value."
-    if len(text.split()) > 160:
-        parts = text.split()
-        return " ".join(parts[:160]) + " ..."
-    return text
-
-
-
-
-# === Proposal Builder 2.0 ===
-def render_proposal_builder_v2():
-    st.subheader("Proposal Builder 2.0")
-    with st.sidebar:
-        st.subheader("Proposal metadata")
-        rfp_no = st.text_input("RFQ or RFP number", value=st.session_state.get("rfp_no",""))
-        agency = st.text_input("Agency", value=st.session_state.get("rfp_agency",""))
-        naics = st.text_input("NAICS", value=st.session_state.get("rfp_naics",""))
-        co_name = st.text_input("Contracting Officer name", value=st.session_state.get("rfp_co",""))
-        due_date = st.text_input("Due date", value=st.session_state.get("rfp_due",""))
-        title = st.text_input("Proposal title", value=st.session_state.get("rfp_title","Technical and Price Proposal"))
-        offeror = st.text_input("Offeror", value="ELA Management LLC")
-        template = st.selectbox("Template", ["Standard Technical", "Janitorial Service", "HVAC Maintenance", "Meat Supply"])
-        st.divider()
-        st.subheader("Compliance controls")
-        words_per_page = st.number_input("Words per page assumption", min_value=300, max_value=700, value=500, step=10)
-        per_section_pages = {
-            "Executive Summary": st.number_input("Executive Summary max pages", 0, 20, 1),
-            "Technical Approach": st.number_input("Technical Approach max pages", 0, 50, 5),
-            "Past Performance": st.number_input("Past Performance max pages", 0, 50, 3),
-            "Management Plan": st.number_input("Management Plan max pages", 0, 50, 3),
-            "Pricing Narrative": st.number_input("Pricing Narrative max pages", 0, 50, 2),
-        }
-        limits = {"words_per_page": words_per_page, "per_section_pages": per_section_pages}
-        st.session_state["pb2_meta"] = dict(rfp_no=rfp_no, agency=agency, naics=naics, co_name=co_name, due_date=due_date, title=title, offeror=offeror, template=template)
-    c_editor, c_ai, c_check = st.columns([2,1,1])
-    with c_editor:
-        st.subheader("Editor and preview")
-        tabs = st.tabs(["Executive Summary", "Technical Approach", "Past Performance", "Management Plan", "Pricing Narrative"])
-        section_keys = ["Executive Summary","Technical Approach","Past Performance","Management Plan","Pricing Narrative"]
-        contents = {}
-        for i, key in enumerate(section_keys):
-            with tabs[i]:
-                txt = st.text_area(f"{key} text", value=st.session_state.get(f"pb2_{key}",""), height=280, key=f"pb2_input_{i}")
-                st.markdown("Preview")
-                st.markdown(txt or "_No content yet_")
-                contents[key] = txt
-    with c_ai:
-        st.subheader("AI assistant")
-        st.caption("These helpers improve clarity and reference Section L and M when available.")
-        section_L = st.text_area("Section L text", value=st.session_state.get("pb2_secL",""), height=120)
-        section_M = st.text_area("Section M text", value=st.session_state.get("pb2_secM",""), height=120)
-        target_section = st.selectbox("Target section", ["Executive Summary","Technical Approach","Past Performance","Management Plan","Pricing Narrative"])
-        if st.button("Enhance selected section"):
-            meta = st.session_state.get("pb2_meta", {})
-            base = contents.get(target_section,"")
-            enhanced = ai_enhance_section(target_section, base, {"agency": meta.get("agency","")})
-            st.session_state[f"pb2_{target_section}"] = enhanced
-            st.success("Section enhanced")
-        if st.button("Create executive summary from content"):
-            combined = " ".join([contents.get(k,"") for k in section_keys])
-            st.session_state["pb2_Executive Summary"] = ai_summarize_for_exec(combined)
-            st.success("Executive Summary drafted")
-    with c_check:
-        st.subheader("Compliance")
-        check = analyze_compliance(section_L, section_M, contents, limits)
-        if not check["required"] and not check["limits"] and not check["flags"]:
-            st.success("All checks passed")
-        else:
-            if check["required"]:
-                st.error("\n".join(check["required"]))
-            if check["limits"]:
-                st.warning("\n".join(check["limits"]))
-            if check["flags"]:
-                st.info("\n".join(check["flags"]))
-        st.divider()
-        st.subheader("Export")
-        logo_url = get_setting("brand_logo_url","")
-        meta = st.session_state.get("pb2_meta", {})
-        sections_list = [(k, contents.get(k,"")) for k in section_keys]
-        if st.button("Download DOCX"):
-            path = export_proposal_docx("proposal_v2.docx", meta, sections_list, logo_url=logo_url)
-            if path:
-                st.success(f"DOCX ready: {path}")
-                with open(path, "rb") as f:
-                    st.download_button("Download proposal_v2.docx", data=f.read(), file_name="proposal_v2.docx")
-        if st.button("Download PDF"):
-            path = export_proposal_pdf("proposal_v2.pdf", meta, sections_list)
-            if path:
-                st.success(f"PDF ready: {path}")
-                with open(path, "rb") as f:
-                    st.download_button("Download proposal_v2.pdf", data=f.read(), file_name="proposal_v2.pdf")
-        st.divider()
-        st.subheader("Optional intel")
-        try:
-            if st.button("Scan USAspending recent awards for NAICS"):
-                df_awards, diag = usaspending_search_awards(naics=meta.get("naics",""), limit=200)
-                if df_awards is not None and not df_awards.empty:
-                    st.dataframe(df_awards.head(50), use_container_width=True)
-                else:
-                    st.caption("No data found for that NAICS")
-        except Exception as e:
-            st.caption(f"Intel note: {e}")
-
-# Render at end of app
 try:
-    st.markdown("---")
-    st.header("Advanced Proposals")
-    render_proposal_builder_v2()
-except Exception as _e_pb2:
-    st.caption(f"[Proposal Builder 2.0 note: {_e_pb2}]")
+    import streamlit as st
+except Exception:
+    # Streamlit may not be present in offline analysis environments
+    class _Shim:
+        def __getattr__(self, k): 
+            def _f(*a, **kw): return None
+            return _f
+    st = _Shim()
 
+try:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+except Exception:
+    Document = None
+
+INSERT_REGEX = re.compile(r"\bINSERT\b|\[TBD\]|<TBD>|<INSERT>|\{\{.*?\}\}", re.IGNORECASE)
+
+@dataclass
+class QAResult:
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    info: List[str] = field(default_factory=list)
+
+    def ok(self) -> bool:
+        return not self.errors
+
+@dataclass
+class ProposalData:
+    # Core metadata
+    company_name: str = "ELA Management LLC"
+    point_of_contact: str = ""
+    email: str = ""
+    phone: str = ""
+    duns: str = ""
+    uei: str = ""
+    cage: str = ""
+    solicitation_number: str = ""
+    agency: str = ""
+    title: str = ""
+    due_date: str = ""
+    submission_instructions: str = ""
+
+    # Sections
+    executive_summary: str = ""
+    technical_approach: str = ""
+    management_plan: str = ""
+    quality_assurance: str = ""
+    past_performance: str = ""
+
+    # Pricing data
+    pricing_table: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["CLIN","Description","Qty","Unit","Unit Price","Total"]))
+
+    # Compliance and attachments
+    required_forms: List[str] = field(default_factory=list)
+    attachments: List[str] = field(default_factory=list)
+    amendments: List[str] = field(default_factory=list)
+
+    # Teaming
+    team: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["Role","Company","POC","Email","Capabilities","Past Performance Ref"]))
+
+
+def _init_session():
+    if 'pb2' not in st.session_state:
+        st.session_state.pb2 = ProposalData()
+    if 'pb2_qc' not in st.session_state:
+        st.session_state.pb2_qc = QAResult()
+
+def _money(x) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return 0.0
+
+def _recalc_totals(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty: 
+        return df
+    df = df.copy()
+    df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(0)
+    df['Unit Price'] = pd.to_numeric(df['Unit Price'], errors='coerce').fillna(0.0)
+    df['Total'] = (df['Qty'] * df['Unit Price']).round(2)
+    return df
+
+def _extract_keywords(text: str) -> Dict[str, List[str]]:
+    # simple RFP term extraction heuristic
+    keys = {
+        'forms': re.findall(r"SF\s*\d+|OF\s*\d+|Attachment\s*\d+", text, flags=re.IGNORECASE),
+        'deliverables': re.findall(r"Deliverable[s]?:\s*(.+)", text, flags=re.IGNORECASE),
+        'volumes': re.findall(r"Volume\s+[I,VX]+\s*[:\-]\s*(.+)", text, flags=re.IGNORECASE),
+        'evaluation': re.findall(r"Evaluation\s+Criteria\s*[:\-]?\s*(.+)", text, flags=re.IGNORECASE),
+        'amendments': re.findall(r"Amendment\s*(\d+)", text, flags=re.IGNORECASE),
+    }
+    # dedupe
+    for k,v in keys.items():
+        keys[k] = list(dict.fromkeys([s.strip() for s in v if s and len(s.strip())>0]))
+    return keys
+
+def _qc_check(p: ProposalData) -> QAResult:
+    qc = QAResult()
+    required = {
+        'Company Name': p.company_name,
+        'POC': p.point_of_contact,
+        'Email': p.email,
+        'Phone': p.phone,
+        'UEI': p.uei,
+        'CAGE': p.cage,
+        'Solicitation Number': p.solicitation_number,
+        'Agency': p.agency,
+        'Title': p.title,
+    }
+    for label, val in required.items():
+        if not str(val).strip():
+            qc.errors.append(f"Missing {label}")
+    # placeholder detection across sections
+    for section_name in ['executive_summary','technical_approach','management_plan','quality_assurance','past_performance']:
+        txt = getattr(p, section_name, '') or ''
+        if INSERT_REGEX.search(txt):
+            qc.errors.append(f"Placeholder text found in {section_name.replace('_',' ').title()}")
+    # pricing sanity
+    if p.pricing_table is None or p.pricing_table.empty:
+        qc.warnings.append("Pricing table is empty")
+    else:
+        if (p.pricing_table['Total']<=0).any():
+            qc.warnings.append("One or more CLIN totals are zero or negative")
+    return qc
+
+def _export_docx(p: ProposalData) -> Optional[bytes]:
+    if Document is None:
+        return None
+    doc = Document()
+
+    # cover page
+    title = doc.add_paragraph()
+    run = title.add_run(p.title or "Proposal Submission")
+    run.font.size = Pt(22)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    meta = doc.add_paragraph()
+    meta.add_run(f"Solicitation: {p.solicitation_number}\n")
+    meta.add_run(f"Agency: {p.agency}\n")
+    meta.add_run(f"Company: {p.company_name}\n")
+    meta.add_run(f"UEI: {p.uei}  CAGE: {p.cage}\n")
+    meta.add_run(f"POC: {p.point_of_contact}  Email: {p.email}  Phone: {p.phone}\n")
+    meta.add_run(f"Submission Date: {datetime.now().strftime('%Y-%m-%d')}\n")
+
+    doc.add_page_break()
+
+    def add_heading(text):
+        h = doc.add_paragraph()
+        r = h.add_run(text)
+        r.font.size = Pt(16)
+        return h
+
+    add_heading("Executive Summary")
+    doc.add_paragraph(p.executive_summary or "")
+
+    add_heading("Technical Approach")
+    doc.add_paragraph(p.technical_approach or "")
+
+    add_heading("Management Plan")
+    doc.add_paragraph(p.management_plan or "")
+
+    add_heading("Quality Assurance")
+    doc.add_paragraph(p.quality_assurance or "")
+
+    add_heading("Past Performance")
+    doc.add_paragraph(p.past_performance or "")
+
+    add_heading("Pricing")
+    if p.pricing_table is not None and not p.pricing_table.empty:
+        t = doc.add_table(rows=1, cols=len(p.pricing_table.columns))
+        hdr = t.rows[0].cells
+        for j, col in enumerate(p.pricing_table.columns):
+            hdr[j].text = str(col)
+        for _, row in p.pricing_table.iterrows():
+            cells = t.add_row().cells
+            for j, col in enumerate(p.pricing_table.columns):
+                cells[j].text = str(row[col])
+    else:
+        doc.add_paragraph("Pricing will be provided upon request.")
+
+    add_heading("Attachments and Forms")
+    if p.required_forms:
+        doc.add_paragraph("Required Forms:")
+        for f in p.required_forms:
+            doc.add_paragraph(f"• {f}")
+    if p.attachments:
+        doc.add_paragraph("Attachments:")
+        for a in p.attachments:
+            doc.add_paragraph(f"• {a}")
+    if p.amendments:
+        doc.add_paragraph("Amendments:")
+        for a in p.amendments:
+            doc.add_paragraph(f"• {a}")
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+def render_proposal_builder_v2():
+    _init_session()
+    p: ProposalData = st.session_state.pb2
+
+    st.title("Proposal Builder V2")    
+    st.caption("Award focused workflow with compliance sync, QA, pricing, and polished export.")
+
+    tabs = st.tabs(["Opportunity Details","Pricing","Compliance","Teaming","Review","Generate"])
+
+    with tabs[0]:
+        st.subheader("Opportunity Details")
+        cols = st.columns(3)
+        with cols[0]:
+            p.company_name = st.text_input("Company Name", p.company_name)
+            p.point_of_contact = st.text_input("Point of Contact", p.point_of_contact)
+            p.email = st.text_input("Email", p.email)
+            p.phone = st.text_input("Phone", p.phone)
+        with cols[1]:
+            p.uei = st.text_input("UEI", p.uei)
+            p.cage = st.text_input("CAGE", p.cage)
+            p.duns = st.text_input("DUNS (optional)", p.duns)
+        with cols[2]:
+            p.solicitation_number = st.text_input("Solicitation Number", p.solicitation_number)
+            p.agency = st.text_input("Agency", p.agency)
+            p.title = st.text_input("Proposal Title", p.title)
+            p.due_date = st.text_input("Due Date", p.due_date)
+        st.text_area("Submission Instructions", p.submission_instructions, key="pb2_subm_instr", height=120)
+        p.submission_instructions = st.session_state.get("pb2_subm_instr", p.submission_instructions)
+
+        st.markdown("---")
+        st.subheader("Narrative Sections")
+        p.executive_summary = st.text_area("Executive Summary", p.executive_summary, height=150)
+        p.technical_approach = st.text_area("Technical Approach", p.technical_approach, height=200)
+        p.management_plan = st.text_area("Management Plan", p.management_plan, height=150)
+        p.quality_assurance = st.text_area("Quality Assurance", p.quality_assurance, height=150)
+        p.past_performance = st.text_area("Past Performance", p.past_performance, height=150)
+
+    with tabs[1]:
+        st.subheader("Pricing")
+        if p.pricing_table is None or p.pricing_table.empty:
+            p.pricing_table = pd.DataFrame([
+                {"CLIN":"0001","Description":"Base Item","Qty":1,"Unit":"EA","Unit Price":0.0,"Total":0.0}
+            ], columns=["CLIN","Description","Qty","Unit","Unit Price","Total"])
+        edited = st.data_editor(p.pricing_table, num_rows="dynamic", use_container_width=True)
+        edited = _recalc_totals(edited)
+        st.write("Subtotal:", round(float(edited["Total"].sum()),2))
+        p.pricing_table = edited
+
+    with tabs[2]:
+        st.subheader("Compliance and RFP Sync")
+        rfptxt = st.text_area("Paste key RFP text or requirements here", height=180, key="rfp_text_v2")
+        if rfptxt:
+            keys = _extract_keywords(rfptxt)
+            if keys.get('forms'):
+                p.required_forms = list(sorted(set(p.required_forms + keys['forms'])))
+            if keys.get('amendments'):
+                p.amendments = list(sorted(set(p.amendments + keys['amendments'])))
+            st.success("Extracted terms from RFP text. You can adjust below.")
+        st.text_input("Add Required Form", key="pb2_add_form")
+        if st.session_state.get("pb2_add_form"):
+            p.required_forms.append(st.session_state["pb2_add_form"])
+            st.session_state["pb2_add_form"] = ""
+        st.text_input("Add Attachment", key="pb2_add_att")
+        if st.session_state.get("pb2_add_att"):
+            p.attachments.append(st.session_state["pb2_add_att"])
+            st.session_state["pb2_add_att"] = ""
+        st.text_input("Add Amendment", key="pb2_add_amd")
+        if st.session_state.get("pb2_add_amd"):
+            p.amendments.append(st.session_state["pb2_add_amd"])
+            st.session_state["pb2_add_amd"] = ""
+
+        colA, colB, colC = st.columns(3)
+        with colA:
+            st.write("Required Forms")
+            st.write(p.required_forms or "None")
+        with colB:
+            st.write("Attachments")
+            st.write(p.attachments or "None")
+        with colC:
+            st.write("Amendments")
+            st.write(p.amendments or "None")
+
+    with tabs[3]:
+        st.subheader("Teaming and Partners")
+        if p.team is None or p.team.empty:
+            p.team = pd.DataFrame([
+                {"Role":"Prime","Company":p.company_name,"POC":p.point_of_contact,"Email":p.email,"Capabilities":"","Past Performance Ref":""}
+            ], columns=["Role","Company","POC","Email","Capabilities","Past Performance Ref"])
+        p.team = st.data_editor(p.team, num_rows="dynamic", use_container_width=True)
+
+    with tabs[4]:
+        st.subheader("Review and QA Panel")
+        qc = _qc_check(p)
+        st.session_state.pb2_qc = qc
+        if qc.errors:
+            st.error("Blocking Issues:")
+            for e in qc.errors:
+                st.write("• ", e)
+        else:
+            st.success("No blocking issues found")
+        if qc.warnings:
+            st.warning("Warnings:")
+            for w in qc.warnings:
+                st.write("• ", w)
+        else:
+            st.info("No warnings")
+
+        st.caption("Green means good to go. Errors must be resolved before export.")
+
+    with tabs[5]:
+        st.subheader("Generate and Export")
+        qc = st.session_state.pb2_qc
+        disabled = bool(qc.errors)
+        st.write("You must resolve blocking issues before export.")
+        if st.button("Preview Pricing Summary"):
+            if p.pricing_table is not None and not p.pricing_table.empty:
+                st.dataframe(p.pricing_table)
+                st.write("Total:", round(float(p.pricing_table['Total'].sum()),2))
+        if st.button("Export DOCX", disabled=disabled):
+            data = _export_docx(p)
+            if data:
+                st.download_button("Download Proposal.docx", data=data, file_name=f"Proposal_{p.solicitation_number or 'draft'}.docx")
+            else:
+                st.error("python-docx is required to export DOCX")
+
+# End of Proposal Builder V2
