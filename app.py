@@ -5,28 +5,263 @@ import os, re, io, json, sqlite3, time
 
 # --- RAG_HELPERS_INJECTED ---
 
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
+
+def _dict_hash(d: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
+
+def get_db(db_path: str = "ela.db"):
+    return sqlite3.connect(db_path)
+
+def ensure_rag_tables(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute("""create table if not exists templates(
+        id integer primary key,
+        agency text,
+        naics text,
+        name text,
+        body_md text,
+        required_factors_json text,
+        unique(agency, naics, name) on conflict ignore
+    )""")
+    cur.execute("""create table if not exists building_blocks(
+        id integer primary key,
+        tag text,
+        naics text,
+        agency text,
+        text blob,
+        quality_score real default 0.0
+    )""")
+    cur.execute("""create table if not exists proposal_drafts(
+        id integer primary key,
+        session_id text,
+        template_id integer,
+        section text,
+        text blob,
+        created_at timestamp default current_timestamp,
+        version integer default 1
+    )""")
+    cur.execute("""create table if not exists edits_log(
+        id integer primary key,
+        draft_id integer,
+        section text,
+        before_text blob,
+        after_text blob,
+        accepted_at timestamp default current_timestamp
+    )""")
+    conn.commit()
+
+GEN_STYLE_PROFILES = {
+    "Formal concise": "Write in a formal, concise, and compliant tone suitable for federal proposals.",
+    "Technical persuasive": "Write in a technical yet persuasive tone. Prioritize clarity, benefits, and proof.",
+    "Executive tone": "Write for an executive reader. Lead with outcomes, minimize jargon."
+}
+
+DEFAULT_TEMPLATE_MD = """# {title}
+
+## Executive Summary
+{{EXECUTIVE_SUMMARY}}
+
+## Technical Approach
+{{TECHNICAL_APPROACH}}
+
+## Management Plan
+{{MANAGEMENT_PLAN}}
+
+## Quality Assurance
+{{QUALITY_ASSURANCE}}
+
+## Past Performance
+{{PAST_PERFORMANCE}}
+
+## Pricing Narrative
+{{PRICING}}
+"""
+
+def rag_upsert_template(conn, agency: str, naics: str, name: str, body_md: str, required_factors: List[str]) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into templates(agency, naics, name, body_md, required_factors_json) values (?,?,?,?,?)",
+                (agency or "", naics or "", name, body_md, json.dumps(required_factors or [])))
+    conn.commit()
+    tid = cur.lastrowid
+    if not tid:
+        cur.execute("select id from templates where agency=? and naics=? and name=?", (agency or "", naics or "", name))
+        row = cur.fetchone()
+        tid = row[0] if row else 0
+    return tid
+
+def rag_get_template(conn, agency: str, naics: str) -> Tuple[int, str, List[str]]:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("select id, body_md, required_factors_json from templates where agency=? and naics=? order by id desc limit 1",
+                (agency or "", naics or ""))
+    row = cur.fetchone()
+    if row:
+        return row[0], row[1], json.loads(row[2] or "[]")
+    return 0, DEFAULT_TEMPLATE_MD, []
+
+def rag_save_block(conn, tag: str, text: str, naics: str = "", agency: str = "", quality_score: float = 0.0) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into building_blocks(tag, naics, agency, text, quality_score) values (?,?,?,?,?)",
+                (tag, naics, agency, text, quality_score))
+    conn.commit()
+    return cur.lastrowid
+
+def rag_get_best_blocks(conn, keywords: List[str], naics: str = "", agency: str = "", top_k: int = 5) -> List[Dict[str, Any]]:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("select id, tag, naics, agency, text, quality_score from building_blocks where (naics=? or ?='') and (agency=? or ?='')",
+                (naics, naics, agency, agency))
+    rows = cur.fetchall()
+    scored = []
+    for rid, tag, rnaics, ragency, text, q in rows:
+        score = float(q)
+        tlow = (text or "").lower()
+        for kw in keywords or []:
+            if kw.lower() in tlow:
+                score += 1.0
+        scored.append((score, {"id": rid, "tag": tag, "text": text}))
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [x[1] for x in scored[:top_k]]
+
+def save_draft(conn, session_id: str, template_id: int, section: str, text: str) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into proposal_drafts(session_id, template_id, section, text) values (?,?,?,?)",
+                (session_id or "", int(template_id or 0), section, text))
+    conn.commit()
+    return cur.lastrowid
+
+def log_edit(conn, draft_id: int, section: str, before_text: str, after_text: str) -> int:
+    ensure_rag_tables(conn)
+    cur = conn.cursor()
+    cur.execute("insert into edits_log(draft_id, section, before_text, after_text) values (?,?,?,?)",
+                (draft_id, section, before_text, after_text))
+    conn.commit()
+    return cur.lastrowid
+
+
 
 # --- AUTO_DRAFT_PIPELINE_INJECTED ---
 
+# ========== AUTO DRAFT PIPELINE ==========
+
+from typing import Dict, Any, List, Tuple
+
+def _safe_json(o):
+    try:
+        return json.dumps(o, indent=2)[:4000]
+    except Exception:
+        return str(o)[:4000]
+
+def _compose_context(company: Dict[str, Any], rfp: Dict[str, Any], blocks: List[Dict[str, Any]]) -> str:
+    parts = [
+        f"Company: {company.get('name','ELA Management LLC')}",
+        f"Capabilities: {company.get('capabilities','')}",
+        f"NAICS: {company.get('naics','')}",
+        f"Past Performance: {company.get('past_performance','')}",
+        f"RFP Summary: {rfp.get('summary','')}",
+        f"Evaluation Factors: {', '.join(rfp.get('factors', []))}",
+        "Reusable Blocks:\n" + "\n\n".join([f"- {b.get('tag')}: {b.get('text')}" for b in blocks])
+    ]
+    return "\n".join(parts)
+
+SECTION_PROMPTS = {
+    "Executive Summary": "Write a concise executive summary that addresses each evaluation factor at a glance.",
+    "Technical Approach": "Write a technical approach mapping our methods to the SOW bullets. Do not invent capabilities.",
+    "Management Plan": "Describe staffing, org structure, schedule control, and risk mitigation relevant to the SOW.",
+    "Quality Assurance": "Describe QA methods aligned to federal service quality principles. Reference SOPs if provided.",
+    "Past Performance": "Summarize 2-3 relevant past projects with measurable outcomes. If none provided, write [MISSING: Past Performance examples needed].",
+    "Pricing": "Explain pricing rationale and value. Do not include numeric figures unless included in Context."
+}
+
+def _build_writer_prompt(style: str, section: str, context: str, factors: List[str]) -> str:
+    style_text = GEN_STYLE_PROFILES.get(style, GEN_STYLE_PROFILES["Formal concise"])
+    factors_text = "\n".join([f"- {f}" for f in factors]) if factors else "None provided"
+    return f"""You are a compliance-first federal proposal writer. You never invent facts."
+You must cover every Evaluation Factor at least once. If a detail is missing, write [MISSING: …] rather than guessing.
+
+Style: {style_text}
+
+Evaluation Factors:
+{factors_text}
+
+Context:
+{context}
+
+Task: Write the {section} in 2-5 paragraphs. Reference each factor once inside [EF: Factor Name] tags that will be removed later. Do not add headings.
+"""
+
+def _llm_generate(llm_client, prompt: str) -> str:
+    try:
+        return llm_client(prompt)
+    except Exception as e:
+        return f"[GENERATION_UNAVAILABLE]\n{prompt[-800:]}"
+        # ---
+def validate_proposal_text(text: str, required_factors: List[str]) -> Tuple[bool, List[str]]:
+    issues = []
+    if any(ph in text for ph in ["INSERT", "TBD", "lorem"]):
+        issues.append("Placeholder text detected (INSERT/TBD/lorem)."
+        )
+    if "[MISSING:" in text:
+        issues.append("Missing tags present; complete required details.")
+    for f in required_factors or []:
+        if f and (f not in text) and (f not in text.replace("[EF: ", "").replace("]", "")):
+            issues.append(f"Required factor not referenced: {f}")
+    ok = len(issues) == 0
+    return ok, issues
+
+def sanitize_for_export(text: str) -> str:
+    text = re.sub(r"\\[EF:.*?\\]\\s*", "", text)
+    text = text.replace("[MISSING:", "MISSING:").replace("]", "")
+    return text
+
+def autodraft_all_sections(llm_client, conn, session_id: str, company: Dict[str, Any], rfp: Dict[str, Any], style: str = "Formal concise",
+                           outline: List[str] = None, keywords: List[str] = None, naics: str = "", agency: str = "") -> Dict[str, Any]:
+    ensure_rag_tables(conn)
+    template_id, body_md, required_factors = rag_get_template(conn, agency, naics)
+    blocks = rag_get_best_blocks(conn, keywords or [], naics=naics, agency=agency, top_k=6)
+    context = _compose_context(company, rfp, blocks)
+    outline = outline or list(SECTION_PROMPTS.keys())
+
+    results = {}
+    for section in outline:
+        base = SECTION_PROMPTS.get(section, f"Write the {section} for this federal proposal.")
+        prompt = _build_writer_prompt(style, section, context, rfp.get("factors", []) or required_factors)
+        prompt = prompt + "\n\nAdditional guidance:\n" + base
+        draft = _llm_generate(llm_client, prompt)
+        ok, issues = validate_proposal_text(draft, rfp.get("factors", []) or required_factors)
+        results[section] = {"ok": ok, "issues": issues, "raw": draft, "clean": sanitize_for_export(draft)}
+        save_draft(conn, session_id=session_id, template_id=template_id, section=section, text=draft)
+    return {"template_id": template_id, "outline": outline, "sections": results, "required_factors": required_factors}
+
+
 
 # --- PROPOSAL_AUTODRAFT_UI_INJECTED ---
+
 def render_autodraft_ui(llm_client, conn, default_outline=None):
     """Drop-in UI for 'Auto-Draft All' inside Proposal Builder."""
     import streamlit as st
     ensure_rag_tables(conn)
-
     st.subheader("Auto-Draft All")
-    with st.expander("Context & Settings", expanded=False):
+
+    with st.expander("Context", expanded=True):
         c1, c2 = st.columns(2)
-        agency = c1.text_input("Agency", st.session_state.get("pb_agency",""))
-        rfp_no = c2.text_input("RFP / RFQ No.", st.session_state.get("pb_rfp_no",""))
-        ptype = c1.selectbox("Procurement Type", ["Q", "P", "B"], index=0, help="Q=RFQ, P=RFP, B=IFB/ITB")
-        naics = c2.text_input("NAICS", st.session_state.get("pb_naics",""))
-        themes = st.tags_input("Win Themes", st.session_state.get("pb_themes", [])) if hasattr(st, "tags_input") else st.text_input("Win Themes (comma-separated)", "")
-        past_perf = st.text_area("Past Performance snippets (one per line)", value=st.session_state.get("pb_pp",""))
-        sow_bullets = st.text_area("Key SOW bullets to cover (one per line)", value=st.session_state.get("pb_sow",""))
-        search_query = st.text_input("Evidence search query", value=st.session_state.get("pb_query",""))
-        page_limit = st.number_input("Page limit (optional)", min_value=0, value=0, step=1)
+        with c1:
+            agency = st.text_input("Agency", value=st.session_state.get("pb_agency",""))
+            rfp_no = st.text_input("Solicitation / RFQ #", value=st.session_state.get("pb_rfp",""))
+            ptype = st.selectbox("Procurement Type", ["RFQ","RFP","IFB","Sources Sought"], index=st.session_state.get("pb_ptype_idx",0))
+            naics = st.text_input("NAICS", value=st.session_state.get("pb_naics",""))
+        with c2:
+            style = st.selectbox("Style", list(GEN_STYLE_PROFILES.keys()), index=0)
+            themes = st.text_input("Win Themes (comma-separated)", value=st.session_state.get("pb_themes",""))
+            past_perf = st.text_area("Past Performance snippets (one per line)", value=st.session_state.get("pb_pp",""))
+            sow_bullets = st.text_area("Key SOW bullets (one per line)", value=st.session_state.get("pb_sow",""))
+            search_query = st.text_input("Evidence keywords (comma-separated)", value=st.session_state.get("pb_query",""))
+            page_limit = st.number_input("Max pages per section (optional)", min_value=0, value=0, step=1)
 
     outline_default = default_outline or ["Executive Summary","Technical Approach","Management Plan","Quality Assurance","Past Performance","Pricing"]
     outline = st.text_area("Outline (one section per line)", value="\n".join(outline_default)).splitlines()
@@ -34,52 +269,75 @@ def render_autodraft_ui(llm_client, conn, default_outline=None):
 
     go = st.button("Auto-Draft All", type="primary", use_container_width=True)
     if go:
-        ctx = {
-            "agency": agency, "rfp_no": rfp_no, "ptype": ptype, "naics": naics,
-            "themes": themes if isinstance(themes, list) else [t.strip() for t in str(themes).split(",") if t.strip()],
-            "past_perf": [p.strip() for p in str(past_perf).splitlines() if p.strip()],
-            "sow_bullets": [b.strip() for b in str(sow_bullets).splitlines() if b.strip()],
-            "search_query": search_query, "req_bullets": [b.strip() for b in str(sow_bullets).splitlines() if b.strip()],
-            "page_limit": int(page_limit or 0), "temperature": 0.3
+        company = {
+            "name": st.session_state.get("company_name","ELA Management LLC"),
+            "capabilities": st.session_state.get("company_caps","Janitorial, Landscaping, HVAC, Facilities Support"),
+            "naics": naics,
+            "past_performance": past_perf,
         }
-        try:
-            doc = autodraft_all(llm_client, conn, outline, ctx)
-            st.session_state["pb_autodraft"] = doc
-            st.success("Draft complete.")
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
-        except Exception as e:
-            st.error(f"Auto-draft failed: {e}")
+        rfp = {
+            "summary": "\n".join([f"- {b}" for b in (sow_bullets.splitlines() if sow_bullets else [])]),
+            "factors": [f.strip() for f in st.session_state.get("eval_factors","").split(",") if f.strip()],
+            "rfp_no": rfp_no,
+            "ptype": ptype,
+            "agency": agency
+        }
+        keywords = [k.strip() for k in (search_query.split(",") if search_query else []) if k.strip()]
+        res = autodraft_all_sections(
+            llm_client, conn, session_id=st.session_state.get("session_id","default"),
+            company=company, rfp=rfp, style=style, outline=outline, keywords=keywords, naics=naics, agency=agency
+        )
+        st.success("Draft complete. Review sections below, fix any issues flagged, then export.")
 
-    doc = st.session_state.get("pb_autodraft")
-    if doc:
-        comp = doc.get("compliance",{})
-        st.markdown(f"**Compliance OK:** {'✅' if comp.get('ok') else '❌'}")
-        if comp.get("missing"):
-            st.warning("Missing SOW coverage:\n- " + "\n- ".join(comp["missing"]))
-        if comp.get("placeholders"):
-            st.error("Placeholders detected in sections: " + ", ".join(comp["placeholders"]))
+        any_fail = False
+        for sec, obj in res["sections"].items():
+            st.markdown(f"### {sec}")
+            if obj["issues"]:
+                any_fail = True
+                st.error("Issues: " + "; ".join(obj["issues"])),
+            st.text_area(f"{sec} – Raw", value=obj["raw"], height=200, key=f"raw_{sec}")
+            st.text_area(f"{sec} – Clean (ready to export)", value=obj["clean"], height=200, key=f"clean_{sec}")
 
-        md = assemble_markdown(doc)
-        st.divider()
-        st.markdown("### Preview (Markdown)")
-        st.text_area("Draft (read-only)", value=md, height=280)
+        if any_fail:
+            st.warning("Some sections have issues. Resolve before export.")
+        else:
+            st.info("All sections passed validation. You can export now.")
 
-        # Use fast exporter if available
-        try:
-            export_docx_button_auto("Download Proposal DOCX", md, filename="ELA_Proposal.docx", title="ELA Management LLC – Proposal")
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
-        except Exception:
-            try:
-                export_docx_button("Download Proposal DOCX", md, filename="ELA_Proposal.docx", title="ELA Management LLC – Proposal")
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
-            except Exception:
-                st.download_button("Download Markdown (fallback)", data=md, file_name="proposal.md")
+def md_to_docx_bytes(markdown_text: str, margins_in: float = 1.0, **kwargs) -> bytes:
+    try:
+        from docx import Document
+        from docx.shared import Inches
+    except Exception:
+        return markdown_text.encode("utf-8")
+
+    import re as _re, io
+
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+
+    lines = (markdown_text or "").splitlines()
+    for ln in lines:
+        if _re.match(r"^\s*#\s+", ln):
+            doc.add_heading(_re.sub(r"^\s*#\s+", "", ln), level=1)
+        elif _re.match(r"^\s*##\s+", ln):
+            doc.add_heading(_re.sub(r"^\s*##\s+", "", ln), level=2)
+        elif ln.strip() == "---":
+            doc.add_page_break()
+        else:
+            doc.add_paragraph(ln)
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+
 # --- END PROPOSAL_AUTODRAFT_UI_INJECTED ---
 
 
@@ -190,9 +448,6 @@ def assemble_markdown(doc):
                 sep = " | ".join(["---"]*len(t["headers"]))
                 rows = [" | ".join(r) for r in t["rows"]]
                 parts += [hdr, sep] + rows
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 pass
     return "\n\n".join(parts)
@@ -220,9 +475,6 @@ def ensure_rag_tables(conn):
             insert into rag_chunks_fts(rowid, text) values (new.id, new.text);
         end;""")
         conn.commit()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -235,16 +487,10 @@ def upsert_chunks(conn, doc_name, chunks):
                 "insert into rag_chunks(doc_name, section_label, page, naics, text, sha) values (?,?,?,?,?,?)",
                 (doc_name, c.get("section",""), int(c.get("page",0) or 0), c.get("naics",""), c.get("text",""), sha)
             )
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except sqlite3.IntegrityError:
             pass
     try:
         conn.commit()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -255,9 +501,6 @@ def rag_search(conn, query, k=12):
                from rag_chunks_fts f join rag_chunks r on f.rowid=r.id 
                where rag_chunks_fts match ? limit ?""", (query, int(k))
         ).fetchall()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return []
     return [{"doc":d, "section":s, "page":p, "text":t} for d,s,p,t in rows]
@@ -295,9 +538,6 @@ def list_proposal_drafts():
             full = os.path.join(base, f)
             try:
                 size = os.path.getsize(full)
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 size = 0
             items.append({"name": f, "path": full, "size": size})
@@ -307,9 +547,6 @@ def load_proposal_draft(path: str) -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return ""
 
@@ -317,9 +554,6 @@ def delete_proposal_draft(path: str) -> bool:
     try:
         os.remove(path)
         return True
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return False
 # ===== end Proposal drafts utilities =====
@@ -338,9 +572,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     try:
@@ -352,9 +583,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     if logo_bytes:
@@ -363,17 +591,11 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         try:
             from docx.shared import Inches as _Inches
             run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
     if title:
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception: pass
     _render_markdown_to_docx(doc, md_text)
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
@@ -392,9 +614,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     try:
@@ -406,17 +625,11 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     if title:
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception: pass
     _render_markdown_to_docx(doc, md_text)
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
@@ -445,9 +658,6 @@ def _add_paragraph_with_inlines(doc, text, style=None):
     if style:
         try:
             p.style = doc.styles[style]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
 
@@ -515,9 +725,6 @@ def _render_markdown_to_docx(doc, md_text):
             level = min(len(hashes), 6)
             try:
                 doc.add_heading(text, level=level)
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 _add_paragraph_with_inlines(doc, text)
             continue
@@ -557,9 +764,6 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     try:
@@ -571,9 +775,6 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     if logo_bytes:
@@ -581,17 +782,11 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         run = p_center.add_run()
         try:
             run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
     if title:
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception: pass
 
     _render_markdown_to_docx(doc, md_text)
@@ -618,9 +813,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     try:
@@ -632,18 +824,12 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     if title:
         h = doc.add_heading(title, level=1)
         try:
             h.style = doc.styles["Heading 1"]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
     lines = (md_text or "").splitlines()
@@ -653,9 +839,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         for item in bullet_buf:
             p = doc.add_paragraph(item)
             try: p.style = doc.styles["List Bullet"]
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception: pass
         bullet_buf = []
     def flush_numbers():
@@ -663,9 +846,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         for item in num_buf:
             p = doc.add_paragraph(item)
             try: p.style = doc.styles["List Number"]
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception: pass
         num_buf = []
     for raw in lines:
@@ -699,9 +879,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     try:
@@ -713,25 +890,16 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
     if logo_bytes:
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
         try: run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception: pass
     if title:
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception: pass
     lines = (md_text or "").splitlines()
     bullet_buf, num_buf = [], []
@@ -740,9 +908,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         for item in bullet_buf:
             p = doc.add_paragraph(item)
             try: p.style = doc.styles["List Bullet"]
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception: pass
         bullet_buf = []
     def flush_numbers():
@@ -750,9 +915,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         for item in num_buf:
             p = doc.add_paragraph(item)
             try: p.style = doc.styles["List Number"]
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception: pass
         num_buf = []
     for raw in lines:
@@ -786,9 +948,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 try:
     import pytesseract  # optional
     from pdf2image import convert_from_bytes
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except Exception:
     pytesseract = None
     convert_from_bytes = None
@@ -821,9 +980,6 @@ def _ocr_pdf_bytes(pdf_bytes: bytes) -> str:
         for img in pages[:30]:
             out.append(pytesseract.image_to_string(img))
         return "\n".join(out)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return ""
 
@@ -831,9 +987,6 @@ def _ocr_pdf_bytes(pdf_bytes: bytes) -> str:
 # Optional HTML parsing for email scraper
 try:
     from bs4 import BeautifulSoup  # pip install beautifulsoup4
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except Exception:
     BeautifulSoup = None
 
@@ -844,9 +997,6 @@ def _get_key(name: str) -> str:
         return v
     try:
         return st.secrets[name]
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return ""
 
@@ -862,9 +1012,6 @@ try:
     import openai as _openai_pkg
     from openai import OpenAI  # openai>=1.40.0 recommended
     _openai_version = getattr(_openai_pkg, "__version__", "unknown")
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except Exception as e:
     st.warning("OpenAI SDK missing or too old. Chat features disabled until installed.")
     OpenAI = None
@@ -909,9 +1056,6 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
     try:
         smtp_user = st.secrets.get("smtp_user")
         smtp_pass = st.secrets.get("smtp_pass")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         smtp_user = smtp_pass = None
 
@@ -922,37 +1066,22 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
             _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
             return "Sent"
         except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
-        except Exception as e:
             try:
                 st.warning(f"Gmail SMTP send failed: {e}")
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 pass
     # Fallback to Graph or preview
     try:
         sender_upn = get_setting("ms_sender_upn", "")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         sender_upn = ""
     try:
         res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)
         return res if isinstance(res, str) else "Sent"
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         try:
             import streamlit as _st
             _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
         return "Preview"
@@ -964,9 +1093,6 @@ st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout
 # ---- SAM date parsing helper ----
 try:
     _ = _parse_sam_date
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except NameError:
     from datetime import datetime
     def _parse_sam_date(s):
@@ -989,25 +1115,16 @@ except NameError:
         for f in fmts:
             try:
                 return datetime.strptime(txt, f)
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 pass
         return txt
 try:
     _ = _us_date
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except NameError:
     from datetime import datetime
     def _us_date(dt):
         try:
             return dt.strftime("%m/%d/%Y")
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             # If dt is a string or not a datetime, return as-is
             return str(dt)
@@ -1029,41 +1146,26 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     try:
         import os, requests
         from urllib.parse import quote_plus
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception as _e_imp:
         return f"Graph send error: missing dependency ({_e_imp})"
 
     # Load config: prefer env, then settings table if available
     try:
         sender = sender_upn or os.getenv("MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         sender = sender_upn or os.getenv("MS_SENDER_UPN") or ""
 
     # MS_* may already be loaded at module level; fall back to env/settings if empty
     try:
         _tenant = os.getenv("MS_TENANT_ID") or get_setting("MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         _tenant = os.getenv("MS_TENANT_ID") or ""
     try:
         _client_id = os.getenv("MS_CLIENT_ID") or get_setting("MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         _client_id = os.getenv("MS_CLIENT_ID") or ""
     try:
         _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting("MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         _client_secret = os.getenv("MS_CLIENT_SECRET") or ""
 
@@ -1087,17 +1189,12 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
             timeout=20,
         )
     except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
         return f"Graph token exception: {e}"
 
     if token_r.status_code != 200:
         return f"Graph token error {token_r.status_code}: {token_r.text[:300]}"
     try:
         token = token_r.json().get("access_token")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         token = None
     if not token:
@@ -1123,9 +1220,6 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
             timeout=30,
         )
     except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
-    except Exception as e:
         return f"Graph send exception: {e}"
 
     if r.status_code in (200, 202):
@@ -1135,9 +1229,6 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     try:
         err_json = r.json()
         err_txt = str(err_json)[:500]
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         err_txt = (r.text or "")[:500]
     return f"Graph send error {r.status_code}: {err_txt}"
@@ -1193,9 +1284,7 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
             else:
                 last_detail = f"Attempt {name}: HTTP {status}, empty; message: {js.get('detail') or js.get('messages') or ''}"
         except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
-        last_detail = f"Attempt {name}: exception {e}"
+            last_detail = f"Attempt {name}: exception {e}"
     if st_debug is not None:
         st_debug.caption(last_detail)
     return pd.DataFrame(), last_detail
@@ -1222,9 +1311,6 @@ def gsa_calc_rates(query: str, page: int = 1):
                  "education": it.get("education_level"), "min_years_exp": it.get("min_years_experience"),
                  "hourly_ceiling": it.get("current_price"), "schedule": it.get("schedule"), "sin": it.get("sin")} for it in items]
         return pd.DataFrame(rows)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         import pandas as pd
         return pd.DataFrame()
@@ -1236,9 +1322,6 @@ def _coerce_dt(x):
     try:
         y = _parse_sam_date(x)
         return y if isinstance(y, datetime) else None
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return None
 
@@ -1323,9 +1406,6 @@ def sam_search(
         if df.empty:
             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
         return df, info
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except requests.RequestException as e:
         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
 
@@ -1389,21 +1469,18 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
                 "raw_preview": (rs.text or "")[:800]}
         return out, info
     except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def linkedin_company_search(keyword: str) -> str:
-    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
-
+    """Return a LinkedIn companies search URL for the keyword."""
+    return f"https://www.linkedin.com/search/results/companies/?keywords={keyword}"
 def build_context(max_rows=6):
     conn = get_db()
     g = pd.read_sql_query("select * from goals limit 1", conn)
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; " f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -1439,9 +1516,6 @@ def build_context(max_rows=6):
 # ---- Safety helpers (fallbacks to avoid NameError at first render) ----
 try:
     _ = linkedin_company_search
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except NameError:
     def linkedin_company_search(q: str) -> str:
         return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(q)}"
@@ -1449,9 +1523,6 @@ except NameError:
 
 try:
     _ = google_places_search
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except NameError:
     def google_places_search(*args, **kwargs):
         """
@@ -1463,9 +1534,6 @@ except NameError:
             query = args[0] if len(args) >= 1 else kwargs.get("query","")
             loc = args[1] if len(args) >= 2 else kwargs.get("location","")
             radius_m = args[2] if len(args) >= 3 else kwargs.get("radius_meters", 1609)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             query, loc, radius_m = "", "", 1609
         url = f"https://www.google.com/maps/search/{quote_plus(str(query)+' '+str(loc))}"
@@ -1474,9 +1542,6 @@ except NameError:
 
 try:
     _ = build_context
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except NameError:
     def build_context(max_rows: int = 6) -> str:
         return ""
@@ -1677,9 +1742,6 @@ SCHEMA.update({
 def parse_pick_id(pick):
     try:
         return int(str(pick).split(":")[0])
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return None
 
@@ -1688,14 +1750,8 @@ def parse_pick_id(pick):
 def _ensure_outreach_log_columns(conn):
     cur = conn.cursor()
     try: cur.execute("alter table outreach_log add column error_text text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table outreach_log add column try_count integer default 0")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     conn.commit()
 
@@ -1712,33 +1768,18 @@ def normalize_vendor_website(website: str, display_link: str = None):
         if host in bad_hosts:
             return None
         return (u.scheme + "://" + u.netloc + u.path).rstrip("/")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return w
 
 def ensure_indexes(conn):
     cur = conn.cursor()
     try: cur.execute("create index if not exists idx_opp_notice on opportunities(sam_notice_id)")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("create index if not exists idx_outreach_vendor on outreach_log(vendor_id)")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("create index if not exists idx_rfq_vendor on rfq_outbox(vendor_id)")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("create index if not exists idx_tasks_opp on tasks(opp_id)")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     conn.commit()
 
@@ -1752,30 +1793,15 @@ def run_migrations():
     # opportunities table expansions
 
     try: cur.execute("alter table compliance_items add column owner text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table compliance_items add column snippet text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     # vendors table expansions
     try: cur.execute("alter table vendors add column distance_miles real")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     conn.commit()
 
@@ -1857,18 +1883,12 @@ def read_doc(uploaded_file):
                 if ocr_txt and len(ocr_txt.strip()) > len((txt or "").strip()):
                     return ocr_txt
             return txt
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             try:
                 data = uploaded_file.read()
                 ocr_txt = _ocr_pdf_bytes(data)
                 if ocr_txt:
                     return ocr_txt
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 pass
             return ""
@@ -1888,9 +1908,6 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
                 except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
-        except Exception as e:
             last_err = e; continue
     return f"LLM error ({type(last_err).__name__ if last_err else 'UnknownError'}). Tip: set OPENAI_MODEL to a model you have."
 
@@ -1905,9 +1922,6 @@ def llm_messages(messages, temp=0.2, max_tokens=1400):
                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
                 except Exception: pass
             return rsp.choices[0].message.content
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception as e:
             last_err = e; continue
     return f"LLM error ({type(last_err).__name__ if last_err else 'UnknownError'}). Tip: set OPENAI_MODEL to a model you have."
@@ -2025,9 +2039,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -2042,9 +2053,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -2143,7 +2151,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
     # Margins/spacing advisory
     if margins_in is not None and (margins_in < 0.5 or margins_in > 1.5):
-        warnings.append(f"Margin {margins_in}\" may violate standard 1\" requirement.")
+        warnings.append(f"Margin {margins_in} may violate standard 1\ requirement.")
 
     if line_spacing is not None and (line_spacing < 1.0 or line_spacing > 2.0):
         warnings.append(f"Line spacing {line_spacing} looks unusual.")
@@ -2178,9 +2186,6 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
     for sn in top:
         try:
             idx = chunks.index(sn); fname = labels[idx]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             fname = "attachment"
         key = (fname, sn[:60])
@@ -2200,16 +2205,10 @@ def _render_saved_vendors_manager(_container=None):
     try:
         conn = get_db()
     except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
-    except Exception as e:
         _c.error(f"DB error: {e}")
         return
     try:
         _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception as e:
         _c.warning("Vendors table missing. Creating it now...")
         try:
@@ -2234,9 +2233,6 @@ def _render_saved_vendors_manager(_container=None):
             """)
             conn.commit()
             _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception as ce:
             _c.error(f"Could not create/read vendors table: {ce}")
             return
@@ -2312,18 +2308,12 @@ def _render_saved_vendors_manager(_container=None):
                         updated += 1
                 conn.commit()
                 _c.success(f"Saved {saved} new, updated {updated} existing")
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception as se:
                 _c.error(f"Save failed: {se}")
 
     with c2:
         try:
             all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             all_ids = []
         del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids_tab1")
@@ -2335,9 +2325,6 @@ def _render_saved_vendors_manager(_container=None):
                         cur.execute("delete from vendors where id=?", (int(vid),))
                     conn.commit()
                     _c.success(f"Deleted {len(del_ids)} vendor(s)")
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception as de:
                 _c.error(f"Delete failed: {de}")
 
@@ -2358,9 +2345,6 @@ legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 def _ensure_extra_schema():
     try:
         conn = get_db()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return
     try:
@@ -2393,9 +2377,6 @@ def _ensure_extra_schema():
             updated_at text default current_timestamp
         );""")
         conn.commit()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -2404,9 +2385,6 @@ _ensure_extra_schema()
 def get_past_performance_df():
     try:
         return pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", get_db())
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return pd.DataFrame()
 
@@ -2421,9 +2399,6 @@ def upsert_win_score(opp_id: int, score: float, factors: dict):
                 computed_at=current_timestamp
         """, (int(opp_id), float(score), json.dumps(factors)))
         conn.commit()
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -2450,9 +2425,6 @@ def compute_win_score_row(opp_row, past_perf_df):
     # Time runway
     try:
         due = _parse_date_any(opp_row.get("response_due") or "")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         due = None
     runway = (due - _dt.now()).days if due else 21
@@ -2500,9 +2472,6 @@ try:
             conn.commit()
             st.success("Saved")
             st.experimental_rerun()
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except Exception as _e_pp:
     st.caption(f"[Past Performance tab init note: {_e_pp}]")
 
@@ -2552,9 +2521,6 @@ try:
                     if not winner_row.empty:
                         st.session_state["pricing_base_cost"] = float(winner_row["total"].iloc[0])
                     st.success(f"Winner selected {pick_winner}. Open Pricing Calculator to model markup.")
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except Exception as _e_qc:
     st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
 
@@ -2596,9 +2562,6 @@ except Exception as _e_qc:
         merged["score"] = merged.apply(_score_row, axis=1)
         merged = merged.sort_values("score", ascending=False)
         st.dataframe(merged[["company","score","certifications","set_asides","distance_miles","sent","preview"]].head(25), use_container_width=True)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception as _e_vs:
         st.caption(f"[Vendor ranking note: {_e_vs}]")
 
@@ -2636,9 +2599,6 @@ try:
                 row = next((x for x in rows if x["id"]==int(pick)), None)
                 if row:
                     st.json(row["factors"])
-except Exception as e:
-    import streamlit as st
-    st.error(f"Unhandled error: {e}")
 except Exception as _e_win:
     st.caption(f"[Win Probability tab init note: {_e_win}]")
 # === End injected ===
@@ -2665,9 +2625,6 @@ with legacy_tabs[0]:
             df_opp = df_opp[df_opp["assignee"].fillna("")==a_filter]
         if s_filter:
             df_opp = df_opp[df_opp["status"].fillna("")==s_filter]
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except KeyError:
         pass
 
@@ -2685,9 +2642,6 @@ with legacy_tabs[0]:
         # Make a copy of the original grid if present; else derive from filtered df
         try:
             pre_df = pre_df if "pre_df" in locals() else df_opp.copy()
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pre_df = df_opp.copy()
 
@@ -2695,9 +2649,6 @@ with legacy_tabs[0]:
         try:
             orig_ids = set(pd.to_numeric(pre_df.get("id"), errors="coerce").dropna().astype(int).tolist()) if "id" in pre_df.columns else set()
             new_ids = set(pd.to_numeric(edit.get("id"), errors="coerce").dropna().astype(int).tolist()) if "id" in edit.columns else set()
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             orig_ids, new_ids = set(), set()
 
@@ -2707,9 +2658,6 @@ with legacy_tabs[0]:
             for _, r in edit.iterrows():
                 try:
                     rid = int(r["id"])
-                except Exception as e:
-                    import streamlit as st
-                    st.error(f"Unhandled error: {e}")
                 except Exception:
                     continue
                 cur.execute(
@@ -2753,9 +2701,6 @@ with legacy_tabs[0]:
                 st.dataframe(dfw[["id","title","agency","score","prob"]])
         except Exception as _e_wa:
             st.caption(f"[Win score analytics note: {_e_wa}]")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception as _e_dash:
         st.caption(f"[Analytics dash note: {_e_dash}]")
 
@@ -2803,9 +2748,6 @@ with legacy_tabs[0]:
 
                     st.success("Tasks saved.")
 
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception as _e_tasks:
 
             st.caption(f"[Tasks panel note: {_e_tasks}]")
@@ -3111,19 +3053,10 @@ def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     conn.commit()
 
@@ -3161,9 +3094,6 @@ def _to_sqlite_value(v):
         if not isinstance(v, (str, int, float)):
             return str(v)
         return v
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         # Fallback minimal handling
         if isinstance(v, (list, dict)):
@@ -3176,9 +3106,6 @@ def save_opportunities(df, default_assignee=None):
         return 0, 0
     try:
         df = df.where(df.notnull(), None)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -3282,6 +3209,7 @@ with legacy_tabs[4]:
 
     # Show results from session (if any)
     df = st.session_state.get("sam_results_df")
+
     info = st.session_state.get("sam_results_info", {}) or {}
     if info and not info.get("ok", True):
         st.error(f"SAM API error: {info}")
@@ -3343,9 +3271,6 @@ with legacy_tabs[4]:
                     jj = {"raw": text_preview}
                 st.code(json.dumps(jj, indent=2)[:1200])
             except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
-            except Exception as e:
                 st.error(f"Key test failed: {e}")
 
 # Removed RFP mini-analyzer from SAM Watch
@@ -3358,6 +3283,7 @@ with legacy_tabs[6]:
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", key="cap_tagline_input_capability_builder", value="Responsive project management for federal facilities and services")
     core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
+
     diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
     past_perf = st.text_area("Representative experience", key="cap_past_textarea_capability_builder", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
     contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
@@ -3367,7 +3293,7 @@ with legacy_tabs[6]:
     with c1:
         if st.button("Generate one page", key="btn_cap_generate_capability_builder"):
             system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
-            prompt = f"""Company {company}
+            prompt = f"""Company {company}"
 Tagline {tagline}
 Core {core}
 Diff {diff}
@@ -3503,9 +3429,6 @@ with legacy_tabs[11]:
                 for up in up_files:
                     try:
                         text = read_doc(up)[:800_000]
-                    except Exception as e:
-                        import streamlit as st
-                        st.error(f"Unhandled error: {e}")
                     except Exception:
                         text = ""
                     conn.execute(
@@ -3546,9 +3469,6 @@ with legacy_tabs[11]:
                     try:
                         idx = chunks.index(sn)
                         fname = labels[idx]
-                    except Exception as e:
-                        import streamlit as st
-                        st.error(f"Unhandled error: {e}")
                     except Exception:
                         fname = "attachment"
                     key = (fname, sn[:60])
@@ -3580,16 +3500,13 @@ with legacy_tabs[11]:
                 # Build system + context
                 try:
                     context_snap = build_context(max_rows=6)
-                except Exception as e:
-                    import streamlit as st
-                    st.error(f"Unhandled error: {e}")
                 except Exception:
                     context_snap = ""
                 doc_snips = _chat_doc_snips(user_msg)
 
                 system_text = "\n\n".join(filter(None, [
                     "You are a helpful federal contracting assistant. Keep answers concise and actionable.",
-                    f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else "",
+                    (f"Context snapshot (keep answers consistent with this):\n{context_snap}" if context_snap else ""),
                     doc_snips
                 ]))
 
@@ -3623,9 +3540,6 @@ def _parse_date_any(s):
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
         try:
             return datetime.strptime(s, fmt)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
     return None
@@ -3710,14 +3624,8 @@ with legacy_tabs[__tabs_base + 1]:
                         txt = _ocr_pdf_bytes(data) or txt
                 else:
                     txt = read_doc(f)
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             finally:
                 try: f.seek(0)
-                except Exception as e:
-                    import streamlit as st
-                    st.error(f"Unhandled error: {e}")
                 except Exception: pass
 
             def _snip(text, pat):
@@ -3727,9 +3635,6 @@ with legacy_tabs[__tabs_base + 1]:
                     if not m: return ""
                     s0 = max(0, m.start()-120); e0 = min(len(text), m.end()+120)
                     return (text[s0:e0]).replace("\n", " ")[:240]
-                except Exception as e:
-                    import streamlit as st
-                    st.error(f"Unhandled error: {e}")
                 except Exception:
                     return ""
 
@@ -3806,7 +3711,7 @@ with legacy_tabs[__tabs_base + 2]:
             doc = Document()
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
-            for para in row[2].split("\\n\\n"):
+            for para in row[2].split("\n\n"):
                 doc.add_paragraph(para)
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
@@ -3854,9 +3759,6 @@ with legacy_tabs[__tabs_base + 3]:
                             values(?,?,?,?,?,?,?,?,?,?)""",
                         (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note, int(terms_days), float(fac_rate), float(advance_pct)))
             conn.commit()
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception as _e_pc:
             st.caption(f"[Pricing save note: {_e_pc}]")
 
@@ -3869,9 +3771,6 @@ with legacy_tabs[__tabs_base + 3]:
             st.dataframe(dfp, use_container_width=True)
         else:
             st.caption("No scenarios yet.")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception as _e_cmp:
         st.caption(f"[Scenario table note: {_e_cmp}]")
 
@@ -3917,9 +3816,6 @@ with legacy_tabs[__tabs_base + 3]:
                         ed = _dt.fromisoformat(str(e)[:10])
                         days = max((ed - sd).days, 1)
                         return max(round(days / 30.44, 2), 0.01)
-                    except Exception as e:
-                        import streamlit as st
-                        st.error(f"Unhandled error: {e}")
                     except Exception:
                         return None
 
@@ -3933,9 +3829,6 @@ with legacy_tabs[__tabs_base + 3]:
                     st.markdown("#### Save selected awards to your benchmark library")
                     try:
                         _choices = _df["award_id"].dropna().astype(str).unique().tolist()
-                    except Exception as e:
-                        import streamlit as st
-                        st.error(f"Unhandled error: {e}")
                     except Exception:
                         _choices = []
                     _sel_awards = st.multiselect("Pick award IDs to tag", _choices, key="md_pick_awards")
@@ -3957,9 +3850,6 @@ with legacy_tabs[__tabs_base + 3]:
                                 # Simple CPI adjustment by term in years
                                 _years = max((_tm / 12.0), 0.01)
                                 _factor = (1.0 + float(_cpi)/100.0) ** _years
-                            except Exception as e:
-                                import streamlit as st
-                                st.error(f"Unhandled error: {e}")
                             except Exception:
                                 _factor = 1.0
                             _annual = float(r["amount"]) * (12.0 / _tm) if _tm and _tm > 0 else float(r["amount"])
@@ -3971,9 +3861,6 @@ with legacy_tabs[__tabs_base + 3]:
                                     (str(r.get("award_id")), str(r.get("agency")), str(r.get("recipient")), str(r.get("start")), str(r.get("end")), float(r.get("amount") or 0), float(_tm or 0), float(r.get("monthly_spend") or 0), _sqft_val, int(_freq or 0), _facility, _scope, float(_dpsf) if _dpsf is not None else None, float(_factor), float(r.get("amount") or 0) * float(_factor), _note)
                                 )
                                 conn.commit()
-                            except Exception as e:
-                                import streamlit as st
-                                st.error(f"Unhandled error: {e}")
                             except Exception as _e:
                                 st.warning(f"Save failed for {r.get('award_id')}: {_e}")
                         st.success(f"Saved {len(_sel_awards)} benchmark rows")
@@ -3982,9 +3869,6 @@ with legacy_tabs[__tabs_base + 3]:
                     with st.expander("Your benchmark library", expanded=False):
                         try:
                             _bench = _pd.read_sql_query("select * from pricing_benchmarks order by id desc limit 100", conn)
-                        except Exception as e:
-                            import streamlit as st
-                            st.error(f"Unhandled error: {e}")
                         except Exception:
                             _bench = _pd.DataFrame()
                         if _bench is None or _bench.empty:
@@ -3994,16 +3878,10 @@ with legacy_tabs[__tabs_base + 3]:
                             # Compute medians for $ per sqft and monthly spend
                             try:
                                 _med_sqft = _pd.to_numeric(_bench["dollars_per_sqft_year"], errors="coerce").dropna().median()
-                            except Exception as e:
-                                import streamlit as st
-                                st.error(f"Unhandled error: {e}")
                             except Exception:
                                 _med_sqft = None
                             try:
                                 _med_month = _pd.to_numeric(_bench["monthly_spend"], errors="coerce").dropna().median()
-                            except Exception as e:
-                                import streamlit as st
-                                st.error(f"Unhandled error: {e}")
                             except Exception:
                                 _med_month = None
                             if _med_sqft:
@@ -4070,9 +3948,6 @@ def _parse_sam_date(s: str):
     for fmt in ("%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%m/%d/%Y"):
         try:
             return datetime.strptime(s, fmt).date()
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             continue
     return None
@@ -4084,8 +3959,7 @@ def build_context(max_rows=6):
     goals_line = ""
     if not g.empty:
         rr = g.iloc[0]
-        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
-                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; " f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
@@ -4116,15 +3990,14 @@ def build_context(max_rows=6):
 
 # ---------- External integrations ----------
 def linkedin_company_search(keyword: str) -> str:
-    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
+    """Return a LinkedIn companies search URL for the keyword."""
+    return f"https://www.linkedin.com/search/results/companies/?keywords={keyword}"
 
-def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
+def google_places_search(query: str, location: str, radius_m: int = 80000, strict: bool = True):
     """
     Google Places Text Search + Details (phone + website).
     Returns (list_of_vendors, info). Emails are NOT provided by Places.
     """
-    if not GOOGLE_PLACES_KEY:
-        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
     try:
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
@@ -4175,8 +4048,6 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
                 "raw_preview": (rs.text or "")[:800]}
         return out, info
     except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
 def _clean_url(url: str) -> str:
@@ -4189,9 +4060,6 @@ def _same_domain(u1: str, u2: str) -> bool:
         d1 = urlparse(u1).netloc.split(":")[0].lower()
         d2 = urlparse(u2).netloc.split(":")[0].lower()
         return d1.endswith(d2) or d2.endswith(d1)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return True
 
@@ -4210,9 +4078,6 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
         for rule in disallows:
             if path.startswith(rule): return False
         return True
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return True
 
@@ -4223,9 +4088,6 @@ def _fetch(url: str, timeout=12) -> str:
         if r.status_code != 200 or not r.headers.get("Content-Type","").lower().startswith("text"):
             return ""
         return r.text[:1_000_000]
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return ""
 
@@ -4243,9 +4105,6 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
     seed_url = _clean_url(seed_url)
     try:
         parsed = urlparse(seed_url); base = f"{parsed.scheme}://{parsed.netloc}"
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         return {"emails": set(), "visited": 0, "errors": ["bad seed url"]}
     queue = [seed_url, urljoin(base,"/contact"), urljoin(base,"/contact-us"),
@@ -4276,10 +4135,8 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
                 if nxt not in seen and len(queue) < (max_pages*3):
                     queue.append(nxt)
         except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
             errors.append(str(e))
-            time.sleep(delay_s)
+        time.sleep(delay_s)
     return {"emails": emails, "visited": visited, "errors": errors}
 
 # ---------- SAM search ----------
@@ -4364,9 +4221,6 @@ def sam_search(
         if df.empty:
             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
         return df, info
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except requests.RequestException as e:
         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
 
@@ -4377,19 +4231,10 @@ def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
     try: cur.execute("alter table opportunities add column status text default 'New'")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table opportunities add column assignee text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     try: cur.execute("alter table opportunities add column quick_note text")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception: pass
     conn.commit()
 
@@ -4427,9 +4272,6 @@ def _to_sqlite_value(v):
         if not isinstance(v, (str, int, float)):
             return str(v)
         return v
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         # Fallback minimal handling
         if isinstance(v, (list, dict)):
@@ -4442,9 +4284,6 @@ def save_opportunities(df, default_assignee=None):
         return 0, 0
     try:
         df = df.where(df.notnull(), None)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -4546,15 +4385,14 @@ with st.sidebar:
                 else:
                     st.warning("Non-200 but JSON returned."); st.code(text_preview)
             except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
-            if st.button("Test Google Places key"):
-                vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
-                st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
-
+                st.error(f"JSON parse error: {e}"); st.code(text_preview)
         except Exception as e:
-            import streamlit as st
-            st.error(f"SAM key test failed: {e}")
+            st.error(f"Request failed: {e}")
+
+    if st.button("Test Google Places key"):
+        vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
+        st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
+
     st.subheader("Watch list NAICS")
     conn = get_db()
     df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
@@ -4766,10 +4604,7 @@ def render_rfp_analyzer():
                 context_snap = ""
             doc_snips = _rfp_context_for(pending_prompt)
 
-            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable.
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
+            sys_text = f"""You are a federal contracting assistant. Keep answers concise and actionable."
     Context snapshot:
     {context_snap}
     {doc_snips if doc_snips else ""}"""
@@ -4801,7 +4636,10 @@ def render_rfp_analyzer():
 
             st.chat_message("user").markdown(pending_prompt)
             st.chat_message("assistant").markdown(assistant_out)
-    def render_proposal_builder():
+    except Exception as e:
+        st.error(f"RFP Analyzer error: {e}")
+
+def render_proposal_builder():
     try:
         st.subheader("Proposal Builder")
         st.caption("Draft federal proposal sections using your RFP thread and files. Select past performance. Export to DOCX with guardrails.")
@@ -4953,8 +4791,8 @@ def render_rfp_analyzer():
                     key = (fname, sn[:60])
                     if key in used: continue
                     used.add(key)
-                    parts.append(f"\n--- {fname} ---\\n{sn.strip()}\\n")
-                return "Attached RFP snippets (most relevant first):\n" + "\\n".join(parts[:16]) if parts else ""
+                    parts.append(f"\n--- {fname} ---\n{sn.strip()}\n")
+                return "Attached RFP snippets (most relevant first):\n" + "\n".join(parts[:16]) if parts else ""
 
             # Pull past performance selections text if any
             pp_text = ""
@@ -4976,11 +4814,11 @@ def render_rfp_analyzer():
                     continue
                 # Build doc context keyed to the section
                 doc_snips = _pb_doc_snips(sec)
-                system_text = "\\n\\n".join(filter(None, [
+                system_text = "\n\n".join(filter(None, [
                     "You are a federal proposal writer. Use clear headings and concise bullets. Be compliant and specific.",
-                    f"Company snapshot:\\n{context_snap}" if context_snap else "",
+                    (f"Company snapshot:\n{context_snap}" if context_snap else ""),
                     doc_snips,
-                    f"Past Performance selections:\\n{pp_text}" if (pp_text and sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan')) else ""
+                    (f"Past Performance selections:\n{pp_text}" if sec in ('Executive Summary','Past Performance','Technical Approach','Management & Staffing Plan') else "")
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
@@ -5129,30 +4967,24 @@ def render_rfp_analyzer():
 
         
     except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
-    # === End new features ===
+        st.error(f"Proposal Builder error: {e}")
+
+# === End new features ===
 
 
 # ---- Attach feature tabs now that functions are defined ----
+try:
     with legacy_tabs[5]:
-        
-            # === Auto-Draft UI (injected) ===
-            try:
-                llm_client = globals().get("llm_client") or globals().get("LLM_CLIENT") or globals().get("client")
-                conn = get_db() if 'get_db' in globals() else sqlite3.connect("ela.db", check_same_thread=False)
-                render_autodraft_ui(llm_client, conn)
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
-            except Exception as _e:
-                import streamlit as st
-                st.info("Auto-Draft UI available. Bind your model client as llm_client.prompt_json().")
-render_rfp_analyzer()
+        render_rfp_analyzer()
 except Exception as e:
     st.caption(f"[RFP Analyzer tab note: {e}]")
+
+try:
     with legacy_tabs[12]:
         render_proposal_builder()
+except Exception as e:
+    st.caption(f"[Proposal Builder tab note: {e}]")
+
 with conn:
     conn.execute("""
     create table if not exists pricing_benchmarks(
@@ -5205,9 +5037,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         section.bottom_margin = Inches(margins_in)
         section.left_margin = Inches(margins_in)
         section.right_margin = Inches(margins_in)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -5221,9 +5050,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         rFonts.set(qn('w:ascii'), base_font)
         rFonts.set(qn('w:hAnsi'), base_font)
         rFonts.set(qn('w:eastAsia'), base_font)
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
 
@@ -5234,9 +5060,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         run = p_center.add_run()
         try:
             run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
 
@@ -5245,9 +5068,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         h = doc.add_heading(title, level=1)
         try:
             h.style = doc.styles["Heading 1"]
-        except Exception as e:
-            import streamlit as st
-            st.error(f"Unhandled error: {e}")
         except Exception:
             pass
 
@@ -5263,9 +5083,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
             p = doc.add_paragraph(item)
             try:
                 p.style = doc.styles["List Bullet"]
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 pass
         bullet_buf = []
@@ -5276,9 +5093,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
             p = doc.add_paragraph(item)
             try:
                 p.style = doc.styles["List Number"]
-            except Exception as e:
-                import streamlit as st
-                st.error(f"Unhandled error: {e}")
             except Exception:
                 pass
         num_buf = []
@@ -5427,6 +5241,7 @@ def delete_deal(id_: int):
 
 
 # === Deals (CRM Pipeline) tab ===
+try:
     with legacy_tabs[13]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
@@ -5605,9 +5420,5 @@ def delete_deal(id_: int):
 except Exception as _e_deals:
     try:
         st.caption(f"[Deals tab note: {_e_deals}]")
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Unhandled error: {e}")
     except Exception:
         pass
-
