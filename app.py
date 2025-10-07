@@ -4918,81 +4918,1296 @@ except Exception as _e_deals:
         pass
 
 \n\n
-# === RFP Analyzer: Compliance + Forms Session Sync ===
-def _detect_forms_and_amendments(text, zip_names=None):
-    labels = set()
-    try:
-        patterns = [
-            r"SF\s*1449", r"SF\s*30", r"SF\s*33", r"SF\s*18",
-            r"Amendment\s*(No\.?|Number)?\s*\d+",
-            r"Amendment\s+\d+",
-            r"Attachment\s+[A-Za-z0-9\-\.]+",
-            r"Appendix\s+[A-Za-z0-9]+",
-            r"Exhibit\s+[A-Za-z0-9]+",
-        ]
-        for pat in patterns:
-            for m in re.finditer(pat, text, flags=re.I):
-                labels.add(m.group(0).strip())
-        if zip_names:
-            for name in zip_names:
-                base = str(name).rsplit("/",1)[-1]
-                labels.add(f"Attachment: {base}")
-    except Exception:
-        pass
-    return sorted(labels)
+# === SAM Watch 2.0 ===
+import datetime as _dt
 
-def _save_forms_db(rfp_no, forms):
+def _ensure_sam_cache_schema():
     try:
         conn = get_db()
-        conn.execute("create table if not exists rfp_forms (id integer primary key, rfp_no text, label text)")
-        conn.execute("delete from rfp_forms where rfp_no=?", (rfp_no,))
-        for lbl in forms[:500]:
-            conn.execute("insert into rfp_forms (rfp_no, label) values (?,?)", (rfp_no, lbl))
+        conn.execute("""
+        create table if not exists sam_cache (
+            id integer primary key,
+            solicitation_id text,
+            title text,
+            agency text,
+            set_aside text,
+            naics text,
+            state text,
+            due_date text,
+            posted_date text,
+            est_value numeric,
+            url text,
+            score numeric,
+            raw json,
+            created_at text default current_timestamp
+        );
+        """)
         conn.commit()
     except Exception as e:
-        st.caption(f"[RFP forms save note: {e}]")
+        st.caption(f"[SAM cache note: {e}]")
 
-def _get_forms_for_rfp(rfp_no):
+def _sam_cache_upsert(rows):
     try:
+        _ensure_sam_cache_schema()
         conn = get_db()
-        rows = conn.execute("select label from rfp_forms where rfp_no=?", (rfp_no,)).fetchall()
-        return [r[0] for r in rows] if rows else []
+        for r in rows:
+            sol = r.get("solicitation_id") or r.get("solicitationNumber") or r.get("noticeId")
+            if not sol:
+                continue
+            cur = conn.execute("select id from sam_cache where solicitation_id=?", (sol,)).fetchone()
+            fields = (
+                sol, r.get("title",""), r.get("agency",""), r.get("set_aside",""),
+                r.get("naics",""), r.get("state",""), r.get("due_date",""), r.get("posted",""),
+                r.get("est_value"), r.get("url",""), r.get("_score"), __import__("json").dumps(r, ensure_ascii=False)
+            )
+            if cur:
+                conn.execute("""update sam_cache
+                                set title=?, agency=?, set_aside=?, naics=?, state=?, due_date=?, posted_date=?, est_value=?, url=?, score=?, raw=?, created_at=current_timestamp
+                                where solicitation_id=?""",
+                             (fields[1],fields[2],fields[3],fields[4],fields[5],fields[6],fields[7],fields[8],fields[9],fields[10],fields[11], sol))
+            else:
+                conn.execute("""insert into sam_cache
+                                (solicitation_id,title,agency,set_aside,naics,state,due_date,posted_date,est_value,url,score,raw)
+                                values (?,?,?,?,?,?,?,?,?,?,?,?)""", fields)
+        conn.commit()
+    except Exception as e:
+        st.caption(f"[SAM upsert note: {e}]")
+
+def _fit_score(row, fav_naics, target_min, target_max, known_agencies, set_aside_ok, due_soon_weight=10, renewal_weight=10):
+    try:
+        score = 0
+        if row.get("naics") in fav_naics:
+            score += 25
+        val = float(row.get("est_value") or 0)
+        if target_min <= val <= target_max and val > 0:
+            score += 20
+        if row.get("agency") in known_agencies:
+            score += 20
+        sa = (row.get("set_aside") or "").lower()
+        if set_aside_ok and any(tag.lower() in sa for tag in set_aside_ok):
+            score += 15
+        try:
+            if row.get("due_date"):
+                due = __import__("datetime").datetime.fromisoformat(row["due_date"].replace("Z","").replace(" ","T"))
+                days = (due - __import__("datetime").datetime.utcnow()).days
+                if 0 <= days <= 14:
+                    score += due_soon_weight
+        except Exception:
+            pass
+        title = (row.get("title") or "").lower()
+        if "renewal" in title or "follow-on" in title or "follow on" in title:
+            score += renewal_weight
+        return min(score, 100)
+    except Exception:
+        return 0
+
+def _ai_summarize_opportunity(row):
+    title = row.get("title","").strip()
+    agency = row.get("agency","").strip()
+    naics = row.get("naics","").strip()
+    set_aside = row.get("set_aside","").strip()
+    due = row.get("due_date","").strip()
+    est = row.get("est_value")
+    parts = []
+    if title: parts.append(f"{title}")
+    if agency: parts.append(f"Agency: {agency}")
+    if naics: parts.append(f"NAICS {naics}")
+    if set_aside: parts.append(f"Set aside: {set_aside}")
+    if est: parts.append(f"Est value: ${est:,}" if isinstance(est,(int,float)) else f"Est value: {est}")
+    if due: parts.append(f"Due: {due}")
+    return " | ".join(parts) or "Summary not available"
+
+def _load_sam_results_from_session():
+    df = st.session_state.get("sam_results_df")
+    if df is None:
+        return []
+    try:
+        recs = df.to_dict(orient="records")
+        out = []
+        for r in recs:
+            out.append({
+                "solicitation_id": r.get("solicitation_id") or r.get("noticeId") or r.get("solicitationNumber"),
+                "title": r.get("title") or r.get("name"),
+                "agency": r.get("agency") or r.get("department"),
+                "set_aside": r.get("set_aside") or r.get("setAside"),
+                "naics": r.get("naics") or r.get("naicsCode"),
+                "state": r.get("state") or r.get("placeOfPerformanceState"),
+                "due_date": r.get("response_due") or r.get("responseDate") or r.get("dueDate"),
+                "posted": r.get("posted") or r.get("postedDate"),
+                "est_value": r.get("est_value") or r.get("value") or r.get("ceilingValue"),
+                "url": r.get("url") or r.get("noticeUrl") or r.get("link")
+            })
+        return out
     except Exception:
         return []
-\n\n\n
-# === PB2 Compliance Sync with RFP Analyzer ===
-def _pb2_get_compliance_from_session_or_db(rfp_no=None):
-    items = st.session_state.get("rfp_compliance_items")
-    if items:
-        return items
+
+def render_sam_watch_v2():
+    st.title("SAM Watch 2.0")
+    _ensure_sam_cache_schema()
     try:
-        conn = get_db()
-        row = conn.execute("select compliance_json from rfp_analysis where rfp_no=? order by created_at desc limit 1", (rfp_no or st.session_state.get("rfp_no",""),)).fetchone()
-        if row and row[0]:
-            import json
-            data = json.loads(row[0])
-            if isinstance(data, list):
-                return data
+        ensure_deals_schema()
     except Exception:
         pass
-    return []
 
-def _pb2_forms_for_current_rfp(rfp_no=None):
-    rfp = rfp_no or st.session_state.get("rfp_no","")
-    sess = st.session_state.get("rfp_forms")
-    if sess and isinstance(sess, list):
-        return sess
-    return _get_forms_for_rfp(rfp)
+    with st.sidebar:
+        st.subheader("Filters")
+        fav_naics = st.text_input("Favorite NAICS (comma separated)", value=st.session_state.get("fav_naics","561720, 238220, 424410"))
+        fav_naics_list = [x.strip() for x in fav_naics.split(",") if x.strip()]
+        set_aside_ok = st.multiselect("Eligible set-asides", ["Small Business", "WOSB", "SDVOSB", "HUBZone", "8(a)"], default=["Small Business"])
+        agency_filter = st.text_input("Agency contains", value="")
+        state_filter = st.text_input("State code", value="")
+        min_val = st.number_input("Min value", min_value=0.0, value=float(st.session_state.get("min_val", 0.0)), step=10000.0)
+        max_val = st.number_input("Max value", min_value=0.0, value=float(st.session_state.get("max_val", 5000000.0)), step=10000.0)
+        known_agencies_raw = st.text_area("Preferred agencies list", value=st.session_state.get("known_agencies","USDA\nVA\nUSAF"))
+        known_agencies = [l.strip() for l in known_agencies_raw.splitlines() if l.strip()]
+        st.session_state["fav_naics"] = fav_naics
+        st.session_state["min_val"] = min_val
+        st.session_state["max_val"] = max_val
+        st.session_state["known_agencies"] = known_agencies_raw
+        st.divider()
+        refresh = st.button("Refresh from current SAM results")
+        if refresh:
+            rows = _load_sam_results_from_session()
+            for r in rows:
+                r["_score"] = _fit_score(r, fav_naics_list, min_val, max_val, known_agencies, set_aside_ok)
+            _sam_cache_upsert(rows)
+            st.success(f"Cached {len(rows)} records")
 
-def _pb2_auto_check(items, contents):
-    if not items:
-        return []
-    combined = " ".join([contents.get(k,"") or "" for k in contents.keys()]).lower()
-    out = []
-    for it in items:
-        snippet = str(it).lower()[:120]
-        tokens = [t for t in re.split(r"[^a-z0-9]+", snippet) if t and len(t)>2]
-        hits = sum(1 for t in tokens if t in combined)
-        out.append(hits >= max(2, min(6, len(set(tokens))//3 or 2)))
-    return out
+    st.subheader("Active opportunities")
+    conn = get_db()
+    q = "select solicitation_id,title,agency,set_aside,naics,state,due_date,posted_date,est_value,url,score from sam_cache order by created_at desc limit 500"
+    try:
+        df = __import__("pandas").read_sql_query(q, conn)
+    except Exception as e:
+        st.caption(f"[SAM query note: {e}]")
+        df = __import__("pandas").DataFrame()
+
+    if not df.empty:
+        import pandas as _pd
+        m = _pd.Series([True] * len(df))
+        if agency_filter:
+            m &= df["agency"].fillna("").str.contains(agency_filter, case=False, na=False)
+        if state_filter:
+            m &= df["state"].fillna("").str.contains(state_filter, case=False, na=False)
+        if fav_naics_list:
+            m &= df["naics"].isin(fav_naics_list)
+        if min_val or max_val:
+            vals = __import__("pandas").to_numeric(df["est_value"], errors="coerce").fillna(0)
+            m &= (vals >= float(min_val)) & (vals <= float(max_val))
+        df = df[m]
+        if "score" in df.columns:
+            df = df.sort_values("score", ascending=False)
+
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: st.metric("Total active", len(df))
+        try:
+            soon = df["due_date"].dropna().astype(str).apply(lambda s: s[:10])
+            cnt_soon = sum((__import__("datetime").datetime.fromisoformat(x) - __import__("datetime").datetime.utcnow()).days <= 14 for x in soon if len(x)>=10)
+        except Exception:
+            cnt_soon = 0
+        with c2: st.metric("Due within 14 days", int(cnt_soon))
+        with c3: st.metric("Top score", int(df["score"].max() if "score" in df.columns and len(df) else 0))
+        with c4: st.metric("Avg est value", f"${__import__('pandas').to_numeric(df['est_value'], errors='coerce').dropna().mean():,.0f}" if not df.empty else "$0")
+
+        st.dataframe(df, use_container_width=True)
+
+        idx = st.number_input("Select row to act on", min_value=0, max_value=max(0, len(df)-1), value=0, step=1)
+        if len(df):
+            row = df.iloc[int(idx)].to_dict()
+            st.markdown("### Opportunity insights")
+            st.write(_ai_summarize_opportunity(row))
+
+            try:
+                if st.button("Show price benchmarks"):
+                    df_awards, diag = usaspending_search_awards(naics=str(row.get("naics","")), keyword=row.get("agency",""), limit=200)
+                    if df_awards is not None and not df_awards.empty:
+                        vals = __import__("pandas").to_numeric(df_awards.get("amount") or df_awards.get("value"), errors="coerce").dropna()
+                        if len(vals):
+                            st.metric("Median award", f"${vals.median():,.0f}")
+                            st.metric("Average award", f"${vals.mean():,.0f}")
+                        st.dataframe(df_awards.head(50), use_container_width=True)
+                    else:
+                        st.caption("No benchmark data returned")
+            except Exception as e:
+                st.caption(f"[Benchmark note: {e}]")
+
+            title = (row.get("title") or "").lower()
+            if "renewal" in title or "follow-on" in title or "follow on" in title:
+                st.success("Likely renewal or follow on")
+            else:
+                st.caption("No renewal signal detected in title")
+
+            meta = {
+                "rfp_no": row.get("solicitation_id",""),
+                "title": row.get("title",""),
+                "agency": row.get("agency",""),
+                "naics": row.get("naics",""),
+                "co_name": "",
+                "deal_amount": row.get("est_value") or 0,
+                "deal_owner": st.session_state.get("active_profile",""),
+            }
+            cA, cB, cC = st.columns(3)
+            with cA:
+                if st.button("Add to Deals"):
+                    ok = upsert_deal(meta, stage="No Contact Made", proposal_path=None)
+                    if ok: st.success("Added to Deals")
+            with cB:
+                if st.button("Start proposal"):
+                    st.session_state["rfp_no"] = meta["rfp_no"]
+                    st.session_state["rfp_agency"] = meta["agency"]
+                    st.session_state["rfp_naics"] = meta["naics"]
+                    st.success("Seeded Proposal Builder 2.0 with this opportunity")
+            with cC:
+                url = str(row.get("url",""))
+                if url:
+                    st.link_button("Open on SAM.gov", url)
+
+    else:
+        st.info("No cached results. Load SAM results in your existing SAM tab, then click Refresh in the sidebar.")
+
+    st.divider()
+    st.subheader("Saved watchlist and digests")
+    render_saved_searches_admin()
+    try:
+        st.caption("Daily digest preview of high score items")
+        conn = get_db()
+        df_digest = __import__("pandas").read_sql_query("select * from sam_cache where score >= 70 order by created_at desc limit 20", conn)
+        if not df_digest.empty:
+            st.dataframe(df_digest[["solicitation_id","title","agency","due_date","score"]], use_container_width=True)
+            if st.button("Send email digest preview"):
+                st.success("Email digest would include the items shown above. Configure actual email send in your messaging tab or secrets.")
+        else:
+            st.caption("No items scored 70 or higher yet.")
+    except Exception as e:
+        st.caption(f"[Digest note: {e}]")
+
+try:
+    st.markdown("---")
+    st.header("Opportunity Intelligence")
+    render_sam_watch_v2()
+except Exception as _e_sam2:
+    st.caption(f"[SAM Watch 2.0 note: {_e_sam2}]")
 \n
+
+
+# === Saved Searches + Scheduled Digests (Mandatory) ===
+def _ensure_saved_searches_schema():
+    try:
+        conn = get_db()
+        conn.execute("""
+        create table if not exists saved_searches (
+            id integer primary key,
+            name text,
+            filters json,
+            frequency text, -- DAILY or WEEKLY
+            recipients text, -- comma-separated emails or usernames
+            last_run text
+        );
+        """)
+        conn.commit()
+    except Exception as e:
+        st.caption(f"[Saved searches schema note: {e}]")
+
+def _is_due(last_run, frequency):
+    import datetime as dt
+    try:
+        if not last_run:
+            return True
+        last = dt.datetime.fromisoformat(last_run.replace("Z",""))
+        now = dt.datetime.utcnow()
+        if (frequency or "DAILY").upper() == "DAILY":
+            return (now - last).days >= 1
+        else:
+            return (now - last).days >= 7
+    except Exception:
+        return True
+
+def _run_saved_search(filters, fav_naics_defaults):
+    """Run a saved search using normalized filters dict and return rows to upsert."""
+    # Pull current session results as the universe and filter locally; in your prod build
+    # you can wire this to your SAM.gov fetcher.
+    rows = []
+    try:
+        base = _load_sam_results_from_session()  # normalizes keys
+        if not base:
+            return []
+        fa = filters.get("fav_naics") or fav_naics_defaults
+        fav_naics_list = [x.strip() for x in (fa.split(",") if isinstance(fa,str) else fa) if x and x.strip()]
+        known_agencies = filters.get("known_agencies") or []
+        if isinstance(known_agencies, str):
+            known_agencies = [x.strip() for x in known_agencies.split(",") if x.strip()]
+        set_aside_ok = filters.get("set_aside_ok") or []
+        min_val = float(filters.get("min_val") or 0)
+        max_val = float(filters.get("max_val") or 10_000_000_000)
+        agency_filter = (filters.get("agency_filter") or "").lower()
+        state_filter = (filters.get("state_filter") or "").lower()
+        # Filter + score
+        for r in base:
+            if agency_filter and agency_filter not in (r.get("agency","") or "").lower(): 
+                continue
+            if state_filter and state_filter not in (r.get("state","") or "").lower():
+                continue
+            if fav_naics_list and r.get("naics") not in fav_naics_list:
+                continue
+            val = float(r.get("est_value") or 0)
+            if not (min_val <= val <= max_val or val == 0):
+                continue
+            r["_score"] = _fit_score(r, fav_naics_list, min_val, max_val, known_agencies, set_aside_ok)
+            rows.append(r)
+        return rows
+    except Exception:
+        return []
+
+def _digest_body(rows, top_n=10):
+    rows = sorted(rows, key=lambda x: x.get("_score",0), reverse=True)[:top_n]
+    lines = []
+    for r in rows:
+        lines.append(f"{r.get('solicitation_id','')} – {r.get('title','')} | {r.get('agency','')} | "
+                     f"NAICS {r.get('naics','')} | Score {int(r.get('_score',0))} | Due {r.get('due_date','')}")
+    return "\n".join(lines) if lines else "No new high-priority items."
+
+def _send_digest_stub(recipients, subject, body):
+    """Safe no-op email sender; replace with your email integration. Logs to audit()."""
+    try:
+        audit(st.session_state.get("active_profile",""), "send_digest", f"to={recipients}|subject={subject}|len={len(body)}")
+    except Exception:
+        pass
+    st.success("Digest prepared. To enable actual sending, wire _send_digest_stub to your email sender.")
+
+def _process_due_saved_searches():
+    _ensure_saved_searches_schema()
+    _ensure_sam_cache_schema()
+    try:
+        conn = get_db()
+        df = __import__("pandas").read_sql_query("select * from saved_searches", conn)
+    except Exception as e:
+        st.caption(f"[Saved searches read note: {e}]")
+        return
+
+    if df is None or df.empty:
+        return
+
+    import json, datetime as dt
+    for _, row in df.iterrows():
+        filters = {}
+        try:
+            filters = json.loads(row["filters"]) if row.get("filters") else {}
+        except Exception:
+            pass
+        freq = (row.get("frequency") or "DAILY").upper()
+        last_run = row.get("last_run")
+        if _is_due(last_run, freq):
+            # Run search, upsert cache, compose digest, update last_run
+            fav_naics_defaults = "561720, 238220, 424410"
+            results = _run_saved_search(filters, fav_naics_defaults)
+            if results:
+                _sam_cache_upsert(results)
+            # Compose digest from scored results
+            digest_text = _digest_body(results, top_n=10)
+            recips = row.get("recipients") or ""
+            subject = f"SAM Watch Digest – {row.get('name','Saved Search')}"
+            _send_digest(recips, subject, digest_text)
+            # Update last_run
+            try:
+                conn.execute("update saved_searches set last_run=? where id=?", (dt.datetime.utcnow().isoformat(), row["id"]))
+                conn.commit()
+            except Exception:
+                pass
+
+def render_saved_searches_admin():
+    st.subheader("Saved Searches and Digests")
+    _ensure_saved_searches_schema()
+    import json
+    conn = get_db()
+    # Create form
+    with st.expander("Create or update a saved search", expanded=True):
+        ss_name = st.text_input("Name", value="Daily Janitorial")
+        fav_naics = st.text_input("Favorite NAICS (comma sep)", value="561720, 238220")
+        agency_filter = st.text_input("Agency contains", value="")
+        state_filter = st.text_input("State (code)", value="")
+        set_aside_ok = st.multiselect("Set-asides", ["Small Business","WOSB","SDVOSB","HUBZone","8(a)"], default=["Small Business"])
+        known_agencies = st.text_area("Preferred agencies", value="USDA\nVA")
+        min_val = st.number_input("Min value", min_value=0.0, value=0.0, step=10000.0)
+        max_val = st.number_input("Max value", min_value=0.0, value=5_000_000.0, step=10000.0)
+        frequency = st.selectbox("Frequency", ["DAILY","WEEKLY"], index=0)
+        recipients = st.text_input("Recipients (emails or usernames, comma separated)", value="")
+        if st.button("Save saved search"):
+            filters = {
+                "fav_naics": fav_naics,
+                "agency_filter": agency_filter,
+                "state_filter": state_filter,
+                "set_aside_ok": set_aside_ok,
+                "known_agencies": [x.strip() for x in known_agencies.splitlines() if x.strip()],
+                "min_val": min_val, "max_val": max_val
+            }
+            try:
+                # upsert by name
+                cur = conn.execute("select id from saved_searches where name=?", (ss_name,)).fetchone()
+                if cur:
+                    conn.execute("update saved_searches set filters=?, frequency=?, recipients=? where id=?",
+                                 (json.dumps(filters, ensure_ascii=False), frequency, recipients, cur[0]))
+                else:
+                    conn.execute("insert into saved_searches (name, filters, frequency, recipients) values (?,?,?,?)",
+                                 (ss_name, json.dumps(filters, ensure_ascii=False), frequency, recipients))
+                conn.commit()
+                st.success("Saved")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+    # List searches
+    try:
+        df = __import__("pandas").read_sql_query("select id, name, frequency, recipients, last_run from saved_searches order by name", conn)
+        st.dataframe(df, use_container_width=True)
+        if not df.empty:
+            sel = st.selectbox("Pick a saved search to run now", df["name"].tolist())
+            if st.button("Run selected now"):
+                row = conn.execute("select * from saved_searches where name=?", (sel,)).fetchone()
+                if row:
+                    import json, datetime as dt
+                    filters = json.loads(row["filters"]) if row["filters"] else {}
+                    results = _run_saved_search(filters, fav_naics_defaults="561720, 238220, 424410")
+                    if results:
+                        _sam_cache_upsert(results)
+                    digest_text = _digest_body(results, top_n=10)
+                    _send_digest(row["recipients"] or "", f"SAM Watch Digest – {row['name']}", digest_text)
+                    try:
+                        conn.execute("update saved_searches set last_run=? where id=?", (dt.datetime.utcnow().isoformat(), row["id"]))
+                        conn.commit()
+                    except Exception:
+                        pass
+    except Exception as e:
+        st.caption(f"[Saved searches list note: {e}]")
+
+# Ensure due saved searches run automatically on every app start
+try:
+    _process_due_saved_searches()
+except Exception as _e_due:
+    st.caption(f"[Saved search scheduler note: {_e_due}]")
+
+
+
+
+def _resolve_recipients_from_secrets(recips_raw):
+    """Accept comma separated usernames or emails. Map usernames via secrets.team_emails."""
+    items = [x.strip() for x in str(recips_raw or "").split(",") if x and x.strip()]
+    emails = []
+    team = getattr(st, "secrets", {}).get("team_emails", {})
+    for it in items:
+        if "@" in it:
+            emails.append(it)
+        else:
+            em = team.get(it) if isinstance(team, dict) else None
+            if em:
+                emails.append(em)
+    return list(dict.fromkeys(emails))  # unique preserve order
+
+def _send_digest(recipients, subject, body):
+    """Send using SMTP or SendGrid based on secrets. Falls back to audit log if not configured."""
+    to_list = _resolve_recipients_from_secrets(recipients)
+    if not to_list:
+        st.warning("No valid recipient emails resolved from secrets.team_emails or provided list")
+        _send_digest_stub(recipients, subject, body)
+        return
+    # SMTP path: require host, port, username, password, from
+    smtp_cfg = getattr(st, "secrets", {}).get("smtp", {})
+    try:
+        if smtp_cfg and smtp_cfg.get("host") and smtp_cfg.get("from"):
+            import smtplib, ssl
+            from email.mime.text import MIMEText
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = subject
+            msg["From"] = smtp_cfg["from"]
+            msg["To"] = ", ".join(to_list)
+            context = ssl.create_default_context()
+            with smtplib.SMTP(smtp_cfg.get("host"), int(smtp_cfg.get("port", 587))) as server:
+                server.starttls(context=context)
+                if smtp_cfg.get("username") and smtp_cfg.get("password"):
+                    server.login(smtp_cfg["username"], smtp_cfg["password"])
+                server.sendmail(msg["From"], to_list, msg.as_string())
+            st.success(f"Digest emailed to {len(to_list)} recipient(s) via SMTP")
+            try:
+                audit(st.session_state.get("active_profile",""), "send_digest_smtp", f"to={to_list}|subject={subject}")
+            except Exception:
+                pass
+            return
+    except Exception as e:
+        st.warning(f"SMTP send failed: {e}")
+
+    # SendGrid fallback if API key present
+    try:
+        sg_key = getattr(st, "secrets", {}).get("sendgrid_api_key")
+        from_addr = smtp_cfg.get("from") or getattr(st, "secrets", {}).get("from_email")
+        if sg_key and from_addr:
+            import requests, json
+            resp = requests.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {sg_key}", "Content-Type": "application/json"},
+                json={
+                    "personalizations": [{"to": [{"email": e} for e in to_list]}],
+                    "from": {"email": from_addr},
+                    "subject": subject,
+                    "content": [{"type": "text/plain", "value": body}]
+                }
+            )
+            if 200 <= resp.status_code < 300:
+                st.success(f"Digest emailed to {len(to_list)} recipient(s) via SendGrid")
+                try:
+                    audit(st.session_state.get("active_profile",""), "send_digest_sendgrid", f"to={to_list}|subject={subject}")
+                except Exception:
+                    pass
+                return
+            else:
+                st.warning(f"SendGrid send failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        st.warning(f"SendGrid send error: {e}")
+
+    # Fallback to stub if nothing worked
+    _send_digest_stub(recipients, subject, body)
+
+
+
+
+# === Pipeline Board 10/10 ===
+def _ensure_deals_extras():
+    """Add optional analytics columns if missing."""
+    try:
+        conn = get_db()
+        # Try to add columns; ignore if exist
+        for stmt in [
+            "alter table deals add column notes text",
+            "alter table deals add column proposal_file text",
+            "alter table deals add column win_probability real",
+            "alter table deals add column risk_flags text"
+        ]:
+            try:
+                conn.execute(stmt)
+                conn.commit()
+            except Exception:
+                pass
+    except Exception as e:
+        st.caption(f"[Deals extras note: {e}]")
+
+def _deal_win_prob(stage, base=0.05):
+    table = {
+        "No Contact Made": 0.05,
+        "CO Contacted": 0.10,
+        "Quote": 0.25,
+        "Multiple Quotes": 0.30,
+        "Proposal Started": 0.50,
+        "Proposal Finished": 0.60,
+        "Proposal Submitted": 0.75,
+        "Awarded": 1.00,
+        "Proposal Lost": 0.00,
+    }
+    return table.get(stage, base)
+
+def _deal_deadline_risk(due_str):
+    try:
+        if not due_str:
+            return "Unknown"
+        from datetime import datetime
+        due = datetime.fromisoformat(str(due_str)[:19])
+        days = (due - datetime.utcnow()).days
+        if days < 0:
+            return "Overdue"
+        if days <= 2:
+            return "High"
+        if days <= 7:
+            return "Medium"
+        return "Low"
+    except Exception:
+        return "Unknown"
+
+def render_pipeline_board():
+    st.title("ELA Pipeline Board")
+    try:
+        ensure_deals_schema()
+        _ensure_deals_extras()
+    except Exception:
+        pass
+
+    import pandas as _pd
+    conn = get_db()
+    try:
+        df = _pd.read_sql_query("select * from deals order by updated_at desc", conn)
+    except Exception as e:
+        st.error(f"Could not load deals: {e}")
+        return
+
+    # Top KPIs
+    st.subheader("Pipeline KPIs")
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    total_value = _pd.to_numeric(df.get("amount"), errors="coerce").fillna(0).sum() if not df.empty else 0
+    with c1: st.metric("Total Pipeline Value", f"${total_value:,.0f}")
+    weighted = 0
+    if not df.empty:
+        for _, r in df.iterrows():
+            weighted += float(_pd.to_numeric([r.get("amount")], errors="coerce").fillna(0).iloc[0]) * _deal_win_prob(r.get("stage","No Contact Made"))
+    with c2: st.metric("Weighted Forecast", f"${weighted:,.0f}")
+    with c3:
+        upcoming = 0
+        try:
+            # join to opportunities if present to fetch due date, otherwise use rfp_no in sam_cache
+            # fallback to 0 if schema not present
+            upcoming = 0
+        except Exception:
+            pass
+        st.metric("Upcoming Deadlines (7d)", upcoming)
+    with c4:
+        try:
+            by_agency = df.groupby("agency").size().sort_values(ascending=False)
+            top_agency = by_agency.index[0] if len(by_agency) else "—"
+            st.metric("Top Agency", top_agency)
+        except Exception:
+            st.metric("Top Agency", "—")
+    with c5:
+        try:
+            submitted = df[df["stage"]=="Proposal Submitted"]
+            awarded = df[df["stage"]=="Awarded"]
+            wr = (len(awarded) / max(1,len(submitted))) * 100
+            st.metric("Win Rate", f"{wr:.0f}%")
+        except Exception:
+            st.metric("Win Rate", "—")
+    with c6:
+        st.metric("Active Deals", len(df))
+
+    # Board view by stage
+    st.subheader("Board")
+    used_drag = _render_drag_board(df, stages)
+    if not used_drag:
+    stages = [
+        "No Contact Made","CO Contacted","Quote","Multiple Quotes",
+        "Proposal Started","Proposal Finished","Proposal Submitted","Awarded","Proposal Lost"
+    ]
+    cols = st.columns(len(stages))
+    for si, stage in enumerate(stages):
+        with cols[si]:
+            st.markdown(f"### {stage}")
+            subset = df[df["stage"]==stage] if not df.empty else df
+            if subset is None or subset.empty:
+                st.caption("No deals")
+                continue
+            for _, r in subset.iterrows():
+                with st.container(border=True):
+                    st.markdown(f"**{r.get('title','(Untitled)')}**")
+                    st.caption(f"RFP: {r.get('rfp_no','')} • {r.get('agency','')} • NAICS {r.get('naics','')}")
+                    amt = float(_pd.to_numeric([r.get('amount')], errors='coerce').fillna(0).iloc[0])
+                    st.write(f"Value: ${amt:,.0f}")
+                    wp = r.get("win_probability")
+                    if wp is None:
+                        wp = _deal_win_prob(stage)
+                    st.progress(min(1.0, max(0.0, float(wp))), text=f"Win Prob {int(float(wp)*100)}%")
+                    due_str = _get_due_date_for_deal(r.get('rfp_no',''))
+                    risk = _deal_deadline_risk(due_str)
+                    st.caption(f"Deadline Risk: {risk}")
+                    new_stage = st.selectbox("Move to stage", stages, index=stages.index(stage), key=f"stage_{r['id']}")
+                    owner = st.text_input("Owner", value=r.get("owner",""), key=f"owner_{r['id']}")
+                    notes = st.text_area("Notes", value=r.get("notes","") or "", height=80, key=f"notes_{r['id']}")
+                    if st.button("Update", key=f"upd_{r['id']}"):
+                        try:
+                            conn.execute("update deals set stage=?, owner=?, notes=?, win_probability=? where id=?",
+                                         (new_stage, owner, notes, float(wp), r["id"]))
+                            conn.commit()
+                            try:
+                                audit(st.session_state.get("active_profile",""), "update_deal", f"id={r['id']}|stage={new_stage}")
+                            except Exception:
+                                pass
+                            st.success("Updated")
+                        except Exception as e:
+                            st.error(f"Update failed: {e}")
+                    # Links
+                    if r.get("proposal_path"):
+                        try:
+                            st.link_button("Open proposal file", r["proposal_path"])
+                        except Exception:
+                            pass
+                    # History
+                    with st.expander("History"):
+                        try:
+                            # naive audit view
+                            aconn = get_db()
+                            adf = _pd.read_sql_query("select created_at, actor, action, target from audit_log order by created_at desc limit 200", aconn)
+                            adf = adf[adf["target"].astype(str).str.contains(str(r.get("rfp_no","")), na=False)]
+                            if not adf.empty:
+                                st.dataframe(adf, use_container_width=True, hide_index=True)
+                            else:
+                                st.caption("No history found")
+                        except Exception as e:
+                            st.caption(f"[Audit note: {e}]")
+
+    # Charts
+    _render_pipeline_charts(df)
+
+# Render the Pipeline Board
+try:
+    st.markdown("---")
+    st.header("Pipeline Intelligence")
+    render_pipeline_board()
+except Exception as _e_board:
+    st.caption(f"[Pipeline board note: {_e_board}]")
+
+
+
+
+def _get_due_date_for_deal(rfp_no):
+    """Try to find a due/response date for a given deal by RFP number via opportunities or sam_cache."""
+    try:
+        conn = get_db()
+        # opportunities table: response_due, solicitation or rfp fields may vary
+        try:
+            row = conn.execute("select response_due from opportunities where solicitation_id=? or rfp_no=? or title like ?", (rfp_no, rfp_no, f"%{rfp_no}%")).fetchone()
+            if row and row[0]:
+                return str(row[0])
+        except Exception:
+            pass
+        # sam_cache fallback
+        try:
+            row = conn.execute("select due_date from sam_cache where solicitation_id=?", (rfp_no,)).fetchone()
+            if row and row[0]:
+                return str(row[0])
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return ""
+
+
+
+
+def _render_drag_board(df, stages):
+    """Try to render a drag-and-drop kanban using streamlit-sortables. Fallback to simple board if package missing."""
+    try:
+        import streamlit_sortables as sortables  # pip install streamlit-sortables
+        cols = st.columns(len(stages))
+        lists = []
+        # Prepare lists of "id::title"
+        for stg in stages:
+            sub = df[df["stage"]==stg] if not df.empty else df
+            items = [f"{int(r['id'])}:: {r.get('title','(Untitled)')}" for _, r in sub.iterrows()]
+            lists.append(items)
+        with st.form("kanban_form"):
+            out = sortables.sort_items(lists, multi_containers=True, direction="vertical", key="kanban")
+            submitted = st.form_submit_button("Apply changes")
+        if submitted:
+            # out is list of lists mirroring stages order
+            conn = get_db()
+            changes = 0
+            for idx, items in enumerate(out):
+                stg = stages[idx]
+                for it in items:
+                    deal_id = int(str(it).split("::",1)[0])
+                    # Update to this stage
+                    try:
+                        conn.execute("update deals set stage=?, updated_at=current_timestamp where id=?", (stg, deal_id))
+                        changes += 1
+                    except Exception:
+                        pass
+            conn.commit()
+            if changes:
+                st.success(f"Updated {changes} cards")
+                try:
+                    audit(st.session_state.get("active_profile",""), "drag_stage_update", f"changes={changes}")
+                except Exception:
+                    pass
+        # Render lists visually
+        cols2 = st.columns(len(stages))
+        for i, stg in enumerate(stages):
+            with cols2[i]:
+                st.markdown(f"### {stg}")
+                for it in (out[i] if 'out' in locals() else lists[i]):
+                    st.write(it)
+        return True
+    except Exception as e:
+        st.caption(f"[Drag-and-drop not available: {e}]")
+        return False
+
+
+
+
+def _render_pipeline_charts(df):
+    import pandas as _pd
+    import matplotlib.pyplot as plt
+    from datetime import datetime
+
+    st.subheader("Forecast & Performance Charts")
+
+    if df is None or df.empty:
+        st.caption("No deals to chart yet.")
+        return
+
+    # Weighted forecast by month (next 6 months) using amount * stage prob
+    df2 = df.copy()
+    df2["amount_num"] = _pd.to_numeric(df2["amount"], errors="coerce").fillna(0.0)
+    df2["prob"] = df2["stage"].apply(_deal_win_prob)
+    # Assign to month by due date if available, else by current month
+    months = []
+    for _, r in df2.iterrows():
+        due = _get_due_date_for_deal(r.get("rfp_no",""))
+        try:
+            mo = datetime.fromisoformat(str(due)[:19]).strftime("%Y-%m")
+        except Exception:
+            mo = datetime.utcnow().strftime("%Y-%m")
+        months.append(mo)
+    df2["month"] = months
+    agg = df2.groupby("month").apply(lambda x: (x["amount_num"] * x["prob"]).sum()).reset_index(name="weighted_forecast")
+    agg = agg.sort_values("month")
+    # Plot 1
+    fig1 = plt.figure()
+    plt.plot(agg["month"], agg["weighted_forecast"])
+    plt.title("Weighted Forecast by Month")
+    plt.xlabel("Month")
+    plt.ylabel("Weighted $")
+    st.pyplot(fig1)
+
+    # Win rate trend by month: awarded / submitted
+    try:
+        conn = get_db()
+        adf = _pd.read_sql_query("select created_at, action, target from audit_log order by created_at asc", conn)
+        if not adf.empty:
+            # Extract month and infer submitted/awarded events
+            adf["month"] = adf["created_at"].astype(str).str[:7]
+            adf["is_submitted"] = adf["action"].astype(str).str.contains("update_deal") & adf["target"].astype(str).str.contains("stage=Proposal Submitted")
+            adf["is_awarded"] = adf["action"].astype(str).str.contains("update_deal") & adf["target"].astype(str).str.contains("stage=Awarded")
+            sub = adf.groupby("month")["is_submitted"].sum()
+            awd = adf.groupby("month")["is_awarded"].sum()
+            wr = (awd / sub.replace(0, 1)) * 100.0
+            wr = wr.reset_index(name="win_rate")
+            # Plot 2
+            fig2 = plt.figure()
+            plt.plot(wr["month"], wr["win_rate"])
+            plt.title("Win Rate Trend")
+            plt.xlabel("Month")
+            plt.ylabel("Win Rate %")
+            st.pyplot(fig2)
+    except Exception as e:
+        st.caption(f"[Charts note: {e}]")
+
+
+
+
+# === Subcontractor Finder 10/10 ===
+def ensure_vendors_schema():
+    try:
+        conn = get_db()
+        conn.execute("""
+        create table if not exists vendors (
+            id integer primary key,
+            name text,
+            naics text,
+            socio text,
+            city text,
+            state text,
+            phone text,
+            email text,
+            uei text,
+            cage text,
+            duns text,
+            sam_active integer,
+            rating real,
+            notes text,
+            last_contacted text,
+            awards_count integer,
+            cpars real
+        );
+        """)
+        conn.execute("""
+        create table if not exists vendors_history (
+            id integer primary key,
+            vendor_id integer,
+            name text,
+            agency text,
+            contacted_by text,
+            date_contacted text,
+            notes text,
+            rating integer
+        );
+        """)
+        conn.commit()
+    except Exception as e:
+        st.caption(f"[Vendors schema note: {e}]")
+
+def vendor_fit_score(v, target_naics, required_socio, target_state, max_distance_km=None):
+    # Simple deterministic score 0-100
+    score = 0
+    try:
+        if v.get("naics") and v["naics"] in target_naics:
+            score += 25
+        socio = (v.get("socio") or "").lower()
+        if required_socio and any(s.lower() in socio for s in required_socio):
+            score += 20
+        if v.get("awards_count") and int(v["awards_count"]) > 0:
+            score += 20
+        if v.get("state") and target_state and v["state"].strip().upper() == target_state.strip().upper():
+            score += 15
+        if v.get("sam_active"):
+            score += 10
+        if v.get("rating"):
+            score += min(10, float(v["rating"]) * 2)  # 5-star => +10
+    except Exception:
+        pass
+    return min(100, score)
+
+def _ai_vendor_summary(v):
+    bits = []
+    if v.get("name"): bits.append(v["name"])
+    if v.get("socio"): bits.append(f"({v['socio']})")
+    if v.get("city") or v.get("state"): bits.append(f"{v.get('city','')}, {v.get('state','')}")
+    if v.get("naics"): bits.append(f"NAICS {v['naics']}")
+    if v.get("awards_count"): bits.append(f"{int(v['awards_count'])} federal awards")
+    if v.get("cpars"): bits.append(f"CPARS {v['cpars']}/5")
+    if v.get("sam_active"): bits.append("Active SAM")
+    return " | ".join([b for b in bits if b])
+
+def export_nda_docx(vendor_name, email=None):
+    try:
+        import docx
+    except Exception:
+        st.warning("Install python-docx to export NDA: pip install python-docx")
+        return None
+    doc = docx.Document()
+    doc.add_heading("Mutual Non-Disclosure Agreement", 0)
+    doc.add_paragraph(f"Between: ELA Management LLC and {vendor_name}")
+    doc.add_paragraph("Purpose: To exchange information for federal contracting teaming and proposal preparation.")
+    doc.add_paragraph("Term: 2 years from date of execution.")
+    doc.add_paragraph("Confidentiality: Both parties agree to keep exchanged information confidential and use only for the stated purpose.")
+    doc.add_paragraph("Signatures:")
+    doc.add_paragraph("ELA Management LLC: __________________ Date: ______")
+    doc.add_paragraph(f"{vendor_name}: __________________ Date: ______")
+    out = f"/mnt/data/NDA_{vendor_name.replace(' ','_')}.docx"
+    doc.save(out)
+    return out
+
+def export_teaming_agreement_docx(vendor_name, role, naics):
+    try:
+        import docx
+    except Exception:
+        st.warning("Install python-docx to export Teaming Agreement: pip install python-docx")
+        return None
+    doc = docx.Document()
+    doc.add_heading("Teaming Agreement", 0)
+    doc.add_paragraph(f"Between: ELA Management LLC (Prime) and {vendor_name} (Subcontractor)")
+    doc.add_paragraph(f"Scope of Work: {role}")
+    doc.add_paragraph(f"Applicable NAICS: {naics}")
+    doc.add_paragraph("Pricing & Proposal: Parties will collaborate on pricing and proposal development; final proposal ownership by Prime.")
+    doc.add_paragraph("Exclusivity: Subcontractor agrees not to team on the same opportunity with another offeror without prior consent.")
+    doc.add_paragraph("Term: Until award or cancellation of the opportunity.")
+    doc.add_paragraph("Signatures:")
+    doc.add_paragraph("ELA Management LLC: __________________ Date: ______")
+    doc.add_paragraph(f"{vendor_name}: __________________ Date: ______")
+    out = f"/mnt/data/Teaming_{vendor_name.replace(' ','_')}.docx"
+    doc.save(out)
+    return out
+
+def render_subcontractor_finder():
+    st.title("Subcontractor Finder")
+    ensure_vendors_schema()
+    try:
+        ensure_deals_schema()
+    except Exception:
+        pass
+
+    # Sidebar filters
+    with st.sidebar:
+        st.subheader("Vendor filters")
+        target_naics = [x.strip() for x in st.text_input("NAICS (comma sep)", value="561720, 238220, 424410").split(",") if x.strip()]
+        target_state = st.text_input("State (2-letter)", value="")
+        required_socio = st.multiselect("Socio-economic certs", ["8(a)","WOSB","HUBZone","SDVOSB","VOSB","Small Business"], default=["Small Business"])
+        must_have_awards = st.checkbox("Past federal awards", value=True)
+        active_sam = st.checkbox("Active in SAM", value=True)
+        keyword = st.text_input("Keyword", value="")
+        fetch_btn = st.button("Search in current data")
+
+    # Load vendor results from session or DB (graceful)
+
+with st.expander("Import vendors (CSV/XLSX) or fetch DSBS-like", expanded=False):
+    up = st.file_uploader("Upload vendor list", type=["csv","xlsx"])
+    if up is not None:
+        _import_vendors_csv(up)
+    st.caption("Or try a placeholder DSBS request (replace with your API later).")
+    na = st.text_input("NAICS for DSBS fetch", value="561720")
+    stt = st.text_input("State for DSBS fetch", value="TX")
+    kwd = st.text_input("Keyword for DSBS fetch", value="")
+    if st.button("Fetch DSBS-like vendors"):
+        new_rows = _fetch_dsbs_like(na, stt, kwd)
+        if new_rows:
+            import pandas as _pd
+            df_stub = _pd.DataFrame(new_rows)
+            st.session_state["vendors_df"] = df_stub
+            st.success(f"Loaded {len(df_stub)} vendors from DSBS-like")
+        else:
+            st.info("No vendors returned")
+
+
+    import pandas as _pd
+    conn = get_db()
+    df_db = _pd.DataFrame()
+    try:
+        df_db = _pd.read_sql_query("select * from vendors", conn)
+    except Exception:
+        pass
+
+    base_records = []
+    # Prefer session-provided vendor df if exists (user can import from DSBS elsewhere)
+    sdf = st.session_state.get("vendors_df")
+    if isinstance(sdf, _pd.DataFrame) and not sdf.empty:
+        base_records = sdf.to_dict(orient="records")
+    elif df_db is not None and not df_db.empty:
+        base_records = df_db.to_dict(orient="records")
+
+    # Filter & score
+    filtered = []
+    for v in base_records:
+        if target_state and str(v.get("state","")).strip().upper() != target_state.strip().upper():
+            continue
+        if active_sam and not bool(v.get("sam_active", 0)):
+            continue
+        if must_have_awards and not int(v.get("awards_count") or 0) > 0:
+            continue
+        if keyword:
+            hay = " ".join([str(v.get(k,"")) for k in ["name","naics","socio","city","state","notes"]]).lower()
+            if keyword.lower() not in hay:
+                continue
+        s = vendor_fit_score(v, target_naics, required_socio, target_state)
+        v["_fit"] = s
+        filtered.append(v)
+
+    if filtered:
+        filtered = sorted(filtered, key=lambda x: x.get("_fit",0), reverse=True)
+
+    # KPI cards
+    c1,c2,c3,c4 = st.columns(4)
+    with c1: st.metric("Vendors found", len(filtered))
+    with c2: st.metric("Avg Fit Score", f"{(sum([x.get('_fit',0) for x in filtered])/len(filtered)):.0f}%" if filtered else "—")
+    with c3: st.metric("Active SAM", sum(1 for x in filtered if x.get("sam_active")))
+    with c4: st.metric("With Awards", sum(1 for x in filtered if int(x.get("awards_count") or 0) > 0))
+
+    # Results grid
+    if not filtered:
+        st.info("No vendors matched. Load vendor data (session or DB) or broaden filters.")
+        return
+
+    st.subheader("Results")
+    for v in filtered[:200]:
+        with st.container(border=True):
+            st.markdown(f"### {v.get('name','(Unknown)')}")
+            badges = []
+            if v.get("socio"): badges.append(v["socio"])
+            if v.get("sam_active"): badges.append("Active SAM")
+            if v.get("cpars"): badges.append(f"CPARS {v['cpars']}/5")
+            st.caption(" • ".join(badges))
+            st.caption(f"{v.get('city','')}, {v.get('state','')} | NAICS {v.get('naics','')} | UEI {v.get('uei','') or '—'} | CAGE {v.get('cage','') or '—'}")
+            st.write(_ai_vendor_summary(v))
+            cc1, cc2, cc3, cc4 = st.columns([1,1,1,2])
+            with cc1:
+                st.metric("Fit", f"{int(v.get('_fit',0))}/100")
+            with cc2:
+                st.metric("Awards", int(v.get("awards_count") or 0))
+            with cc3:
+                st.metric("Rating", f"{float(v.get('rating') or 0):.1f}/5")
+            with cc4:
+                st.caption(f"Phone: {v.get('phone','—')} • Email: {v.get('email','—')}")
+
+            # Actions
+
+inv1, inv2 = st.columns([2,2])
+with inv1:
+    invite_subject = st.text_input('Invite subject', value='Teaming Opportunity with ELA Management', key=f'subj_{v.get("id",v.get("name",""))}')
+with inv2:
+    invite_recip = st.text_input('Invite recipient email(s)', value=v.get('email',''), key=f'rec_{v.get("id",v.get("name",""))}')
+inv_body = st.text_area('Invite message', value=f"Hello {v.get('name','')},\n\nELA Management is preparing a proposal where your capabilities in NAICS {v.get('naics','')} could be a strong fit. Are you available to team?\n\nBest,\n{st.session_state.get('active_profile','ELA Team')}", key=f'body_{v.get("id",v.get("name",""))}')
+
+            ac1, ac2, ac3, ac4 = st.columns(4)
+            with ac1:
+                if st.button("Add to Proposal Team", key=f"addteam_{v.get('id',v.get('name',''))}"):
+                    team = st.session_state.get("proposal_team", [])
+                    team.append({"name": v.get("name",""), "role": "Subcontractor", "naics": v.get("naics",""), "socio": v.get("socio","")})
+                    st.session_state["proposal_team"] = team
+                    st.success("Added to current proposal team")
+            with ac2:
+                if st.button("Save Vendor", key=f"save_{v.get('id',v.get('name',''))}"):
+                    try:
+                        ensure_vendors_schema()
+                        conn = get_db()
+                        # upsert by name + state
+                        row = conn.execute("select id from vendors where name=? and state=?", (v.get("name",""), v.get("state",""))).fetchone()
+                        if row:
+                            conn.execute("""update vendors set naics=?, socio=?, city=?, phone=?, email=?, uei=?, cage=?, duns=?, sam_active=?, rating=?, notes=?, awards_count=?, cpars=? where id=?""",
+                                         (v.get("naics"), v.get("socio"), v.get("city"), v.get("phone"), v.get("email"), v.get("uei"), v.get("cage"), v.get("duns"), int(bool(v.get("sam_active"))), v.get("rating"), v.get("notes"), v.get("awards_count"), v.get("cpars"), row[0]))
+                        else:
+                            conn.execute("""insert into vendors (name, naics, socio, city, state, phone, email, uei, cage, duns, sam_active, rating, notes, awards_count, cpars)
+                                            values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                         (v.get("name"), v.get("naics"), v.get("socio"), v.get("city"), v.get("state"), v.get("phone"), v.get("email"), v.get("uei"), v.get("cage"), v.get("duns"), int(bool(v.get("sam_active"))), v.get("rating"), v.get("notes"), v.get("awards_count"), v.get("cpars")))
+                        conn.commit()
+                        st.success("Vendor saved")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+            with ac3:
+                if st.button("Export NDA", key=f"nda_{v.get('id',v.get('name',''))}"):
+                    path = export_nda_docx(v.get("name",""), email=v.get("email"))
+                    if path:
+                        with open(path, "rb") as f:
+                            st.download_button("Download NDA", data=f.read(), file_name=Path(path).name, key=f"dlnda_{v.get('name','')}")
+            with ac4:
+                if st.button("Invite to Team", key=f"invite_{v.get('id',v.get('name',''))}"):
+                    ok = _send_email(invite_recip, invite_subject, inv_body)
+                    if ok:
+                        st.success("Invite sent")
+                    else:
+                        st.info("Invite not sent")
+
+            with ac4:
+                if st.button("Export Teaming Agreement", key=f"ta_{v.get('id',v.get('name',''))}"):
+                    path = export_teaming_agreement_docx(v.get("name",""), role=f"Support under NAICS {v.get('naics','')}", naics=v.get("naics",""))
+                    if path:
+                        with open(path, "rb") as f:
+                            st.download_button("Download Teaming Agreement", data=f.read(), file_name=Path(path).name, key=f"dlagr_{v.get('name','')}")
+
+            # Contact log & notes
+            with st.expander("Contact & Notes"):
+                c_by = st.text_input("Contacted by", value=st.session_state.get("active_profile",""), key=f"cb_{v.get('id',v.get('name',''))}")
+                note = st.text_area("Notes", value=v.get("notes","") or "", key=f"nt_{v.get('id',v.get('name',''))}")
+                rtg = st.slider("Rating", min_value=0, max_value=5, value=int(float(v.get("rating") or 0)), key=f"rt_{v.get('id',v.get('name',''))}")
+                if st.button("Log contact", key=f"log_{v.get('id',v.get('name',''))}"):
+                    try:
+                        ensure_vendors_schema()
+                        conn = get_db()
+                        conn.execute("""insert into vendors_history (vendor_id, name, agency, contacted_by, date_contacted, notes, rating)
+                                        values (?,?,?,?,datetime('now'),?,?)""",
+                                     (v.get("id"), v.get("name"), "", c_by, note, int(rtg)))
+                        conn.execute("""update vendors set notes=?, rating=?, last_contacted=datetime('now') where name=?""",
+                                     (note, float(rtg), v.get("name")))
+                        conn.commit()
+                        st.success("Contact logged")
+                    except Exception as e:
+                        st.error(f"Log failed: {e}")
+
+    # Analytics & Map
+    st.markdown("---")
+    st.subheader("Vendor Analytics")
+    try:
+        dfv = _pd.DataFrame(filtered)
+        if not dfv.empty:
+            c1,c2,c3 = st.columns(3)
+            with c1:
+                by_naics = dfv.groupby("naics").size().sort_values(ascending=False).head(10)
+                st.write("Top NAICS", by_naics)
+            with c2:
+                by_socio = dfv.groupby("socio").size().sort_values(ascending=False)
+                st.write("By Socio", by_socio)
+            with c3:
+                avg_rating = dfv["rating"].astype(float).fillna(0).mean()
+                st.metric("Average Rating", f"{avg_rating:.1f}/5")
+    except Exception as e:
+        st.caption(f"[Analytics note: {e}]")
+
+    st.subheader("Map View")
+    try:
+        import folium
+        from streamlit_folium import st_folium
+        # If vendors have lat/lon columns; otherwise, skip
+        if "lat" in df_db.columns and "lon" in df_db.columns and not df_db.empty:
+            m = folium.Map(location=[39.8283, -98.5795], zoom_start=4)  # USA center
+            for _, r in df_db.iterrows():
+                try:
+                    folium.Marker([float(r["lat"]), float(r["lon"])], tooltip=r["name"]).add_to(m)
+                except Exception:
+                    pass
+            st_folium(m, width=700, height=350)
+        else:
+            st.caption("No lat/lon columns on vendors yet. You can enrich data later for map plotting.")
+    except Exception as e:
+        st.caption(f"[Map note: {e}]")
+
+# Render module
+try:
+    st.markdown("---")
+    st.header("Vendor Intelligence")
+    render_subcontractor_finder()
+except Exception as _e_vendors:
+    st.caption(f"[Subcontractor Finder note: {_e_vendors}]")
+
+
+
+
+def _send_email(to_emails, subject, body):
+    to_list = []
+    if isinstance(to_emails, (list, tuple)):
+        to_list = [e for e in to_emails if e]
+    else:
+        to_list = [x.strip() for x in str(to_emails or "").split(",") if x and x.strip()]
+    if not to_list:
+        st.warning("No recipient emails provided.")
+        return False
+    smtp_cfg = getattr(st, "secrets", {}).get("smtp", {})
+    try:
+        if smtp_cfg and smtp_cfg.get("host") and smtp_cfg.get("from"):
+            import smtplib, ssl
+            from email.mime.text import MIMEText
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = subject
+            msg["From"] = smtp_cfg["from"]
+            msg["To"] = ", ".join(to_list)
+            context = ssl.create_default_context()
+            with smtplib.SMTP(smtp_cfg.get("host"), int(smtp_cfg.get("port", 587))) as server:
+                server.starttls(context=context)
+                if smtp_cfg.get("username") and smtp_cfg.get("password"):
+                    server.login(smtp_cfg["username"], smtp_cfg["password"])
+                server.sendmail(msg["From"], to_list, msg.as_string())
+            try:
+                audit(st.session_state.get("active_profile",""), "email_smtp", f"to={to_list}|subject={subject}")
+            except Exception:
+                pass
+            return True
+    except Exception as e:
+        st.warning(f"SMTP send failed: {e}")
+    try:
+        sg_key = getattr(st, "secrets", {}).get("sendgrid_api_key")
+        from_addr = smtp_cfg.get("from") or getattr(st, "secrets", {}).get("from_email")
+        if sg_key and from_addr:
+            import requests, json
+            resp = requests.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {sg_key}", "Content-Type": "application/json"},
+                json={
+                    "personalizations": [{"to": [{"email": e} for e in to_list]}],
+                    "from": {"email": from_addr},
+                    "subject": subject,
+                    "content": [{"type": "text/plain", "value": body}]
+                }
+            )
+            if 200 <= resp.status_code < 300:
+                try:
+                    audit(st.session_state.get("active_profile",""), "email_sendgrid", f"to={to_list}|subject={subject}")
+                except Exception:
+                    pass
+                return True
+            else:
+                st.warning(f"SendGrid send failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        st.warning(f"SendGrid send error: {e}")
+    try:
+        audit(st.session_state.get("active_profile",""), "email_stub", f"to={to_list}|subject={subject}|len={len(body)}")
+    except Exception:
+        pass
+    st.info("Email not sent (no mail service configured); logged to audit.")
+    return False
+
+
+
+
+# === Control Center: Diversity KPIs ===
+try:
+    _df_vendors = __import__("pandas").read_sql_query("select socio from vendors", get_db())
+    _total_v = len(_df_vendors) if _df_vendors is not None else 0
+    if _total_v:
+        _pct_hub = int((_df_vendors["socio"].fillna("").str.contains("HUBZone", case=False)).mean() * 100)
+        _pct_wosb = int((_df_vendors["socio"].fillna("").str.contains("WOSB", case=False)).mean() * 100)
+        _pct_sdv = int((_df_vendors["socio"].fillna("").str.contains("SDVOSB", case=False)).mean() * 100)
+    else:
+        _pct_hub = _pct_wosb = _pct_sdv = 0
+    d1, d2, d3 = st.columns(3)
+    with d1: st.metric("HUBZone %", f"{_pct_hub}%")
+    with d2: st.metric("WOSB %", f"{_pct_wosb}%")
+    with d3: st.metric("SDVOSB %", f"{_pct_sdv}%")
+except Exception as _e_div:
+    st.caption(f"[Control Center diversity note: {_e_div}]")
+
