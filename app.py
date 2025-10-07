@@ -1,3 +1,32 @@
+def ensure_core_tables():
+    try:
+        conn = get_db()
+    except Exception:
+        return
+    with conn:
+        conn.execute("""create table if not exists attachments(
+            id integer primary key,
+            session_id text,
+            filename text,
+            content_text text,
+            uploaded_at text default current_timestamp)""")
+        conn.execute("""create table if not exists proposal_drafts(
+            id integer primary key,
+            session_id text,
+            section text,
+            content text,
+            updated_at text default current_timestamp)""")
+        conn.execute("""create table if not exists rfp_messages(
+            id integer primary key,
+            session_id text,
+            role text,
+            content text,
+            created_at text default current_timestamp)""")
+try:
+    ensure_core_tables()
+except Exception:
+    pass
+
 # ===== app.py =====
 import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
@@ -29,9 +58,10 @@ def list_proposal_drafts():
     for f in sorted(os.listdir(base)):
         if f.lower().endswith(".md"):
             full = os.path.join(base, f)
-            try:
-                size = os.path.getsize(full)
-            except Exception:
+            import contextlib
+        try:
+            size = os.path.getsize(full)
+        except Exception:
                 size = 0
             items.append({"name": f, "path": full, "size": size})
     return list(reversed(items))  # newest first
@@ -81,7 +111,8 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     if logo_bytes:
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             from docx.shared import Inches as _Inches
             run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
         except Exception:
@@ -149,7 +180,8 @@ def _add_paragraph_with_inlines(doc, text, style=None):
     import re as _re
     p = doc.add_paragraph()
     if style:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             p.style = doc.styles[style]
         except Exception:
             pass
@@ -216,7 +248,8 @@ def _render_markdown_to_docx(doc, md_text):
             flush_bullets(); flush_numbers()
             hashes, text = m.group(1), m.group(2).strip()
             level = min(len(hashes), 6)
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 doc.add_heading(text, level=level)
             except Exception:
                 _add_paragraph_with_inlines(doc, text)
@@ -273,7 +306,8 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
     if logo_bytes:
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
         except Exception:
             pass
@@ -321,7 +355,8 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         pass
     if title:
         h = doc.add_heading(title, level=1)
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             h.style = doc.styles["Heading 1"]
         except Exception:
             pass
@@ -555,11 +590,13 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
     if smtp_user and smtp_pass:
         from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
         reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
             return "Sent"
         except Exception as e:
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 st.warning(f"Gmail SMTP send failed: {e}")
             except Exception:
                 pass
@@ -572,7 +609,8 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
         res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)
         return res if isinstance(res, str) else "Sent"
     except Exception:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             import streamlit as _st
             _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
         except Exception:
@@ -606,7 +644,8 @@ except NameError:
             "%Y-%m-%d"                # 2025-09-30
         ]
         for f in fmts:
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 return datetime.strptime(txt, f)
             except Exception:
                 pass
@@ -616,7 +655,8 @@ try:
 except NameError:
     from datetime import datetime
     def _us_date(dt):
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             return dt.strftime("%m/%d/%Y")
         except Exception:
             # If dt is a string or not a datetime, return as-is
@@ -755,7 +795,8 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
     for name, flt in attempts:
         payload = {"filters": flt, "fields": ["Award ID","Recipient Name","Start Date","End Date","Award Amount","Awarding Agency","NAICS Code","PSC Code"],
                    "page": 1, "limit": max(1, min(int(limit), 500)), "sort": "Award Amount", "order": "desc"}
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             r = requests.post(url, headers=headers, json=payload, timeout=30)
             status = r.status_code
             js = r.json() if status < 500 else {}
@@ -847,14 +888,18 @@ def sam_search(
     if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
     if keyword:      params["keywords"] = keyword
 
+
+
+
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
         r = requests.get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             data = r.json()
-        except Exception:
+    except Exception:
             return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
         if status != 200:
             err_msg = ""
@@ -1024,7 +1069,8 @@ except NameError:
         Accepts flexible signatures, e.g. (query, location, radius_meters).
         Returns (results, info) where results is a list and info is a dict.
         """
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             query = args[0] if len(args) >= 1 else kwargs.get("query","")
             loc = args[1] if len(args) >= 2 else kwargs.get("location","")
             radius_m = args[2] if len(args) >= 3 else kwargs.get("radius_meters", 1609)
@@ -1367,7 +1413,8 @@ def read_doc(uploaded_file):
         d = docx.Document(uploaded_file)
         return "\n".join(p.text for p in d.paragraphs)
     if suffix == "pdf":
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             data = uploaded_file.read()
             r = PdfReader(io.BytesIO(data))
             txt = "\n".join((p.extract_text() or "") for p in r.pages)
@@ -1378,7 +1425,8 @@ def read_doc(uploaded_file):
                     return ocr_txt
             return txt
         except Exception:
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 data = uploaded_file.read()
                 ocr_txt = _ocr_pdf_bytes(data)
                 if ocr_txt:
@@ -1394,7 +1442,8 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
     messages = [{"role":"system","content":system},{"role":"user","content":prompt}]
     last_err = None
     for model_name in _OPENAI_FALLBACK_MODELS:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             rsp = client.chat.completions.create(model=model_name, messages=messages,
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
@@ -1409,7 +1458,8 @@ def llm_messages(messages, temp=0.2, max_tokens=1400):
     if not client: return "Set OPENAI_API_KEY to enable drafting."
     last_err = None
     for model_name in _OPENAI_FALLBACK_MODELS:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             rsp = client.chat.completions.create(model=model_name, messages=messages,
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
@@ -1678,7 +1728,8 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
     top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
     parts, used = [], set()
     for sn in top:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             idx = chunks.index(sn); fname = labels[idx]
         except Exception:
             fname = "attachment"
@@ -1705,7 +1756,8 @@ def _render_saved_vendors_manager(_container=None):
         _v = pd.read_sql_query("select * from vendors order by updated_at desc, company", conn)
     except Exception as e:
         _c.warning("Vendors table missing. Creating it now...")
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             cur = conn.cursor()
             cur.execute("""
             create table if not exists vendors(
@@ -1769,9 +1821,11 @@ def _render_saved_vendors_manager(_container=None):
     c1, c2, c3 = _c.columns([1,1,2])
     with c1:
         if _c.button("Save changes", key="vendors_save_btn_tab1"):
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 cur = conn.cursor()
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     editor = editor.where(editor.notnull(), None)
                 except Exception:
                     pass
@@ -1806,13 +1860,15 @@ def _render_saved_vendors_manager(_container=None):
                 _c.error(f"Save failed: {se}")
 
     with c2:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             all_ids = [int(x) for x in editor.get("id", pd.Series(dtype=float)).dropna().astype(int).tolist()]
         except Exception:
             all_ids = []
         del_ids = _c.multiselect("Delete vendor IDs", options=all_ids, key="vendors_del_ids_tab1")
         if _c.button("Delete selected", key="vendors_del_btn_tab1"):
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 if del_ids:
                     cur = conn.cursor()
                     for vid in del_ids:
@@ -2045,7 +2101,8 @@ except Exception as _e_qc:
             # Set-asides
             score += 20 if (r.get("set_asides") or "").strip() else 10
             # Past performance proxy (existence in library)
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 pp = pd.read_sql_query("select count(*) as cnt from past_performance where agency like ? or naics <> ''", conn, params=(f"%{get_setting('company_name','ELA')}%",))
                 has_pp = int(pp.iloc[0]["cnt"]) > 0
             except Exception:
@@ -2082,7 +2139,8 @@ try:
                     "score": s,
                     "factors": f
                 })
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     upsert_win_score(int(r.get("id")), s, f)
                 except Exception:
                     pass
@@ -2134,13 +2192,15 @@ with legacy_tabs[0]:
     if st.button("Save pipeline changes"):
         cur = conn.cursor()
         # Make a copy of the original grid if present; else derive from filtered df
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             pre_df = pre_df if "pre_df" in locals() else df_opp.copy()
         except Exception:
             pre_df = df_opp.copy()
 
         # Normalize IDs
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             orig_ids = set(pd.to_numeric(pre_df.get("id"), errors="coerce").dropna().astype(int).tolist()) if "id" in pre_df.columns else set()
             new_ids = set(pd.to_numeric(edit.get("id"), errors="coerce").dropna().astype(int).tolist()) if "id" in edit.columns else set()
         except Exception:
@@ -2150,7 +2210,8 @@ with legacy_tabs[0]:
         updated = 0
         if "id" in edit.columns:
             for _, r in edit.iterrows():
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     rid = int(r["id"])
                 except Exception:
                     continue
@@ -2176,6 +2237,13 @@ with legacy_tabs[0]:
 # Analytics mini-dashboard (scoped to Pipeline tab)
 with legacy_tabs[0]:
 
+
+
+
+
+
+
+
     # Analytics mini-dashboard
     try:
         conn = get_db()
@@ -2184,7 +2252,8 @@ with legacy_tabs[0]:
             st.markdown("### Pipeline analytics")
             st.bar_chart(df_all.set_index("status"))
         # Forecast (probability-adjusted revenue) using win_scores if any
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             dfw = pd.read_sql_query("""
                 select o.id, o.title, o.agency, coalesce(w.score, 50) as score
                 from opportunities o left join win_scores w on o.id = w.opp_id
@@ -2201,32 +2270,98 @@ with legacy_tabs[0]:
 
 with legacy_tabs[0]:
 
+
+
+
+
+
+
+
     if globals().get("__ctx_pipeline", False):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         st.markdown("### Tasks for selected opportunity")
 
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
+
+
+
+
+
+
+
 
             sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
 
             if sel_id:
 
+
+
+
+
+
+
+
                 df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
 
                 if df_tasks.empty:
+
+
+
+
+
+
+
 
                     df_tasks = pd.DataFrame(columns=["id","opp_id","title","assignee","due_date","status","notes"])
 
                 grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
 
-                if st.button("Save tasks"):
+        except Exception as e:
+            st.warning(f"Tasks section error: {e}")
+        if st.button("Save tasks"):
+
+
+
+
+
+
+
 
                     cur = conn.cursor()
 
                     for _, r in grid_tasks.iterrows():
 
+
+
+
+
+
+
+
                         if pd.isna(r.get("id")):
+
+
+
+
+
+
+
 
                             cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
 
@@ -2258,6 +2393,13 @@ with legacy_tabs[1]:
     colA, colB, colC = st.columns(3)
 
     with colA:
+
+
+
+
+
+
+
 
         if st.button("Google Places import"):
             results, info = google_places_search(f"{trade} small business", loc, int(radius_miles*1609.34))
@@ -2350,6 +2492,9 @@ with legacy_tabs[1]:
                         row = cur.fetchone()
                         if row: vid = row[0]
 
+
+
+
                     if vid:
                         cur.execute(
                             "update vendors set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, notes=?, source=?, updated_at=current_timestamp where id=?",
@@ -2383,6 +2528,27 @@ with legacy_tabs[1]:
     st.divider()
     _render_saved_vendors_manager()  # show manager only inside Subcontractor Finder
 with legacy_tabs[2]:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2567,7 +2733,8 @@ def _to_sqlite_value(v):
         if v is None:
             return None
         # Pandas NA
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             if pd.isna(v):
                 return None
         except Exception:
@@ -2580,7 +2747,8 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         # Bytes -> decode
         if isinstance(v, (bytes, bytearray)):
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 return v.decode("utf-8", "ignore")
             except Exception:
                 return str(v)
@@ -2751,14 +2919,16 @@ with legacy_tabs[4]:
 
     with cC:
         if st.button("Test SAM key only"):
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 today_us = _us_date(datetime.utcnow().date())
                 test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json", "postedFrom": today_us, "postedTo": today_us}
                 headers = {"X-Api-Key": SAM_API_KEY}
                 r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
                 st.write("HTTP", r.status_code)
                 text_preview = (r.text or "")[:1000]
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     jj = r.json()
                 except Exception:
                     jj = {"raw": text_preview}
@@ -2919,7 +3089,8 @@ with legacy_tabs[11]:
             if up_files and st.button("Add files to this chat"):
                 added = 0
                 for up in up_files:
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         text = read_doc(up)[:800_000]
                     except Exception:
                         text = ""
@@ -2958,7 +3129,8 @@ with legacy_tabs[11]:
                 top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
                 parts, used = [], set()
                 for sn in top:
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         idx = chunks.index(sn)
                         fname = labels[idx]
                     except Exception:
@@ -2990,7 +3162,8 @@ with legacy_tabs[11]:
                 conn.commit()
 
                 # Build system + context
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     context_snap = build_context(max_rows=6)
                 except Exception:
                     context_snap = ""
@@ -3030,7 +3203,8 @@ with legacy_tabs[11]:
 def _parse_date_any(s):
     s = (s or "").strip()
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             return datetime.strptime(s, fmt)
         except Exception:
             pass
@@ -3107,7 +3281,8 @@ with legacy_tabs[__tabs_base + 1]:
             name = f.name
             suffix = name.lower().split(".")[-1]
             # Extract with OCR fallback for snippets
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 if suffix == "pdf":
                     data = f.read()
                     r = PdfReader(io.BytesIO(data))
@@ -3121,7 +3296,8 @@ with legacy_tabs[__tabs_base + 1]:
                 except Exception: pass
 
             def _snip(text, pat):
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     rx = re.compile(pat, re.I|re.S)
                     m = rx.search(text or "")
                     if not m: return ""
@@ -3237,7 +3413,8 @@ with legacy_tabs[__tabs_base + 3]:
         st.write({"Advance": round(advance_amt,2), "Estimated fee": round(fee,2), "Remainder on payment": round(remainder,2)})
 
         conn = get_db()
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             cur = conn.cursor()
             # Ensure columns exist
             try: cur.execute("alter table pricing_scenarios add column terms_days integer")
@@ -3303,7 +3480,8 @@ with legacy_tabs[__tabs_base + 3]:
                 from datetime import datetime as _dt
 
                 def _months_between(s, e):
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         sd = _dt.fromisoformat(str(s)[:10])
                         ed = _dt.fromisoformat(str(e)[:10])
                         days = max((ed - sd).days, 1)
@@ -3319,7 +3497,8 @@ with legacy_tabs[__tabs_base + 3]:
                     st.markdown("#### Diagnostics: term and monthly spend")
                     # Save selected awards as benchmarks with your annotations
                     st.markdown("#### Save selected awards to your benchmark library")
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         _choices = _df["award_id"].dropna().astype(str).unique().tolist()
                     except Exception:
                         _choices = []
@@ -3338,7 +3517,8 @@ with legacy_tabs[__tabs_base + 3]:
                         _rows = _df[_df["award_id"].astype(str).isin(_sel_awards)].to_dict("records")
                         for r in _rows:
                             _tm = r.get("term_months") or 12.0
-                            try:
+                            import contextlib
+        with contextlib.suppress(Exception):
                                 # Simple CPI adjustment by term in years
                                 _years = max((_tm / 12.0), 0.01)
                                 _factor = (1.0 + float(_cpi)/100.0) ** _years
@@ -3347,7 +3527,8 @@ with legacy_tabs[__tabs_base + 3]:
                             _annual = float(r["amount"]) * (12.0 / _tm) if _tm and _tm > 0 else float(r["amount"])
                             _sqft_val = float(_sqft) if _sqft and _sqft > 0 else None
                             _dpsf = (_annual / _sqft_val) if _sqft_val else None
-                            try:
+                            import contextlib
+        with contextlib.suppress(Exception):
                                 conn.execute(
                                     "insert into pricing_benchmarks(award_id, agency, recipient, start, end, amount, term_months, monthly_spend, sqft, freq_per_week, facility_type, scope_tags, dollars_per_sqft_year, cpi_factor, amount_adj, notes) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                     (str(r.get("award_id")), str(r.get("agency")), str(r.get("recipient")), str(r.get("start")), str(r.get("end")), float(r.get("amount") or 0), float(_tm or 0), float(r.get("monthly_spend") or 0), _sqft_val, int(_freq or 0), _facility, _scope, float(_dpsf) if _dpsf is not None else None, float(_factor), float(r.get("amount") or 0) * float(_factor), _note)
@@ -3359,7 +3540,8 @@ with legacy_tabs[__tabs_base + 3]:
 
                     # View and use your benchmarks
                     with st.expander("Your benchmark library", expanded=False):
-                        try:
+                        import contextlib
+        with contextlib.suppress(Exception):
                             _bench = _pd.read_sql_query("select * from pricing_benchmarks order by id desc limit 100", conn)
                         except Exception:
                             _bench = _pd.DataFrame()
@@ -3368,11 +3550,13 @@ with legacy_tabs[__tabs_base + 3]:
                         else:
                             st.dataframe(_bench, use_container_width=True)
                             # Compute medians for $ per sqft and monthly spend
-                            try:
+                            import contextlib
+        with contextlib.suppress(Exception):
                                 _med_sqft = _pd.to_numeric(_bench["dollars_per_sqft_year"], errors="coerce").dropna().median()
                             except Exception:
                                 _med_sqft = None
-                            try:
+                            import contextlib
+        with contextlib.suppress(Exception):
                                 _med_month = _pd.to_numeric(_bench["monthly_spend"], errors="coerce").dropna().median()
                             except Exception:
                                 _med_month = None
@@ -3383,7 +3567,7 @@ with legacy_tabs[__tabs_base + 3]:
                             _apply_sqft = st.number_input("Use sqft to apply median $ per sqft", min_value=0, step=1000, value=0, key="md_apply_sqft")
                             if _apply_sqft and _apply_sqft > 0 and _med_sqft:
                                 _hint = float(_apply_sqft) * float(_med_sqft)
-                                if st.button("Set base cost from benchmark median", key="md_bench_setbase"):
+        if st.button("Set base cost from benchmark median", key="md_bench_setbase"):
                                     st.session_state["pricing_base_cost"] = float(_hint)
                                     st.success(f"Base cost set to ${_hint:,.2f} from benchmark median. Recalculate above.")
     
@@ -3406,7 +3590,7 @@ with legacy_tabs[__tabs_base + 3]:
                             if not _vals.empty:
                                 _med = float(_vals.median())
                                 st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
-                                if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
+        if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
                                     st.session_state["pricing_base_cost"] = _med * float(sqft)
                                     st.success(f"Base cost set to ${st.session_state['pricing_base_cost']:,.2f} from implied $/sqft median. Recalculate above.")
 
@@ -3438,7 +3622,8 @@ def _parse_sam_date(s: str):
     if not s: return None
     s = s.replace("Z","").strip()
     for fmt in ("%Y-%m-%d","%Y-%m-%dT%H:%M:%S","%m/%d/%Y"):
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             return datetime.strptime(s, fmt).date()
         except Exception:
             continue
@@ -3612,7 +3797,8 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
         html = _fetch(url)
         if not html: continue
         visited += 1
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             soup = BeautifulSoup(html, "html.parser")
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
@@ -3663,14 +3849,18 @@ def sam_search(
     if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
     if keyword:      params["keywords"] = keyword
 
+
+
+
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
         r = requests.get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             data = r.json()
-        except Exception:
+    except Exception:
             return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
         if status != 200:
             err_msg = ""
@@ -3745,7 +3935,8 @@ def _to_sqlite_value(v):
         if v is None:
             return None
         # Pandas NA
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             if pd.isna(v):
                 return None
         except Exception:
@@ -3758,7 +3949,8 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         # Bytes -> decode
         if isinstance(v, (bytes, bytearray)):
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 return v.decode("utf-8", "ignore")
             except Exception:
                 return str(v)
@@ -3859,7 +4051,8 @@ with st.sidebar:
     st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
 
     if st.button("Test SAM key"):
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             today_us = _us_date(datetime.utcnow().date())
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
                            "postedFrom": today_us, "postedTo": today_us}
@@ -3867,7 +4060,8 @@ with st.sidebar:
             r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
             st.write("HTTP", r.status_code)
             text_preview = (r.text or "")[:1000]
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 jj = r.json()
                 api_msg = ""
                 if isinstance(jj, dict):
@@ -3973,7 +4167,7 @@ def render_rfp_analyzer():
         if pick == "➤ New RFP thread":
             default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
             new_title = st.text_input("Thread title", value=default_title)
-            if st.button("Start RFP thread"):
+        if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
                 st.rerun()
@@ -4013,7 +4207,7 @@ def render_rfp_analyzer():
             st.caption("Attached files")
             st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
             del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
-            if st.button("Delete selected RFP file"):
+        if st.button("Delete selected RFP file"):
                 if del_id > 0:
                     conn.execute("delete from rfp_files where id=?", (int(del_id),))
                     conn.commit()
@@ -4053,7 +4247,8 @@ def render_rfp_analyzer():
             top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
             parts, used = [], set()
             for sn in top:
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     idx = chunks.index(sn)
                     fname = labels[idx]
                 except Exception:
@@ -4069,16 +4264,20 @@ def render_rfp_analyzer():
         colA, colB, colC, colD = st.columns(4)
         qa = None
         with colA:
-            if st.button("Compliance matrix"):
+            pass
+        if st.button("Compliance matrix"):
                 qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
         with colB:
-            if st.button("Evaluation factors"):
+            pass
+        if st.button("Evaluation factors"):
                 qa = "Summarize the evaluation factors and their relative importance and scoring approach."
         with colC:
-            if st.button("Submission checklist"):
+            pass
+        if st.button("Submission checklist"):
                 qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
         with colD:
-            if st.button("Grade my draft"):
+            pass
+        if st.button("Grade my draft"):
                 qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
 
         # Free form follow up like chat
@@ -4092,7 +4291,8 @@ def render_rfp_analyzer():
             conn.commit()
 
             # Build system and context using company snapshot and RFP snippets
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 context_snap = build_context(max_rows=6)
             except NameError:
                 context_snap = ""
@@ -4221,7 +4421,8 @@ def render_proposal_builder():
         # === Generate selected sections ===
         if regenerate:
             # Diagnostics: show which sections are selected
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 _on = [k for k,v in actions.items() if v]
                 st.info(f"Generating sections: {', '.join(_on) if _on else 'none'}")
             except Exception:
@@ -4229,7 +4430,8 @@ def render_proposal_builder():
 
             def _gen_with_fallback(system_text, user_prompt):
                 # Immediate template if OpenAI client is not configured
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     from builtins import globals as _g
                 except Exception:
                     _g = globals
@@ -4244,7 +4446,8 @@ def render_proposal_builder():
                         '• Compliance notes: Where Section L & M items are satisfied.',
                     ]
                     return '\n'.join(tmpl)
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     _out = llm(system_text, user_prompt, temp=0.3, max_tokens=1200)
                 except Exception as _e:
                     _out = f'LLM error: {type(_e).__name__}: {_e}'
@@ -4278,7 +4481,8 @@ def render_proposal_builder():
                 top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
                 parts, used = [], set()
                 for sn in top:
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         idx = chunks.index(sn); fname = labels[idx]
                     except Exception:
                         fname = "attachment"
@@ -4299,7 +4503,8 @@ def render_proposal_builder():
                 pp_text = "\n".join(lines)
 
             # Build common system context
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 context_snap = build_context(max_rows=6)
             except Exception:
                 context_snap = ""
@@ -4327,7 +4532,8 @@ def render_proposal_builder():
                 else:
                     cur.execute("insert into proposal_drafts(session_id, section, content) values(?,?,?)", (session_id, sec, out))
                 conn.commit()
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
             except Exception:
                 pass
@@ -4552,7 +4758,8 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         p_center = doc.add_paragraph()
         p_center.paragraph_format.alignment = 1  # center
         run = p_center.add_run()
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
         except Exception:
             pass
@@ -4560,7 +4767,8 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     # Optional document title
     if title:
         h = doc.add_heading(title, level=1)
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             h.style = doc.styles["Heading 1"]
         except Exception:
             pass
@@ -4575,7 +4783,8 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         nonlocal bullet_buf
         for item in bullet_buf:
             p = doc.add_paragraph(item)
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 p.style = doc.styles["List Bullet"]
             except Exception:
                 pass
@@ -4585,7 +4794,8 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         nonlocal num_buf
         for item in num_buf:
             p = doc.add_paragraph(item)
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 p.style = doc.styles["List Number"]
             except Exception:
                 pass
@@ -4863,7 +5073,7 @@ try:
                         _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
                     with qa2:
                         _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
-                    if st.button("New in this stage", key=f"quick_new_btn_{i}"):
+        if st.button("New in this stage", key=f"quick_new_btn_{i}"):
                         if _new_title.strip():
                             create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
                             st.success("Deal created")
@@ -4886,7 +5096,8 @@ try:
                         with km1:
                             new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
                         with km2:
-                            if st.button("Save", key=f"save_{row['id']}"):
+                            pass
+        if st.button("Save", key=f"save_{row['id']}"):
                                 changes = {}
                                 if new_owner != (row["owner"] or ""):
                                     changes["owner"] = new_owner or None
@@ -4905,7 +5116,7 @@ try:
         # Danger zone
         with st.expander("Danger zone: delete a deal"):
             del_id = st.number_input("Deal ID to delete", min_value=1, step=1, value=1)
-            if st.button("Delete deal"):
+        if st.button("Delete deal"):
                 if delete_deal(int(del_id)):
                     st.warning(f"Deleted deal {int(del_id)}.")
                     st.rerun()
@@ -4917,7 +5128,6 @@ except Exception as _e_deals:
     except Exception:
         pass
 
-\n\n
 # === SAM Watch 2.0 ===
 import datetime as _dt
 
@@ -4986,7 +5196,8 @@ def _fit_score(row, fav_naics, target_min, target_max, known_agencies, set_aside
         sa = (row.get("set_aside") or "").lower()
         if set_aside_ok and any(tag.lower() in sa for tag in set_aside_ok):
             score += 15
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             if row.get("due_date"):
                 due = __import__("datetime").datetime.fromisoformat(row["due_date"].replace("Z","").replace(" ","T"))
                 days = (due - __import__("datetime").datetime.utcnow()).days
@@ -5100,7 +5311,8 @@ def render_sam_watch_v2():
 
         c1,c2,c3,c4 = st.columns(4)
         with c1: st.metric("Total active", len(df))
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             soon = df["due_date"].dropna().astype(str).apply(lambda s: s[:10])
             cnt_soon = sum((__import__("datetime").datetime.fromisoformat(x) - __import__("datetime").datetime.utcnow()).days <= 14 for x in soon if len(x)>=10)
         except Exception:
@@ -5108,6 +5320,9 @@ def render_sam_watch_v2():
         with c2: st.metric("Due within 14 days", int(cnt_soon))
         with c3: st.metric("Top score", int(df["score"].max() if "score" in df.columns and len(df) else 0))
         with c4: st.metric("Avg est value", f"${__import__('pandas').to_numeric(df['est_value'], errors='coerce').dropna().mean():,.0f}" if not df.empty else "$0")
+
+
+
 
         st.dataframe(df, use_container_width=True)
 
@@ -5117,8 +5332,10 @@ def render_sam_watch_v2():
             st.markdown("### Opportunity insights")
             st.write(_ai_summarize_opportunity(row))
 
-            try:
-                if st.button("Show price benchmarks"):
+            import contextlib
+        with contextlib.suppress(Exception):
+                pass
+        if st.button("Show price benchmarks"):
                     df_awards, diag = usaspending_search_awards(naics=str(row.get("naics","")), keyword=row.get("agency",""), limit=200)
                     if df_awards is not None and not df_awards.empty:
                         vals = __import__("pandas").to_numeric(df_awards.get("amount") or df_awards.get("value"), errors="coerce").dropna()
@@ -5148,11 +5365,13 @@ def render_sam_watch_v2():
             }
             cA, cB, cC = st.columns(3)
             with cA:
-                if st.button("Add to Deals"):
+                pass
+        if st.button("Add to Deals"):
                     ok = upsert_deal(meta, stage="No Contact Made", proposal_path=None)
                     if ok: st.success("Added to Deals")
             with cB:
-                if st.button("Start proposal"):
+                pass
+        if st.button("Start proposal"):
                     st.session_state["rfp_no"] = meta["rfp_no"]
                     st.session_state["rfp_agency"] = meta["agency"]
                     st.session_state["rfp_naics"] = meta["naics"]
@@ -5174,7 +5393,7 @@ def render_sam_watch_v2():
         df_digest = __import__("pandas").read_sql_query("select * from sam_cache where score >= 70 order by created_at desc limit 20", conn)
         if not df_digest.empty:
             st.dataframe(df_digest[["solicitation_id","title","agency","due_date","score"]], use_container_width=True)
-            if st.button("Send email digest preview"):
+        if st.button("Send email digest preview"):
                 st.success("Email digest would include the items shown above. Configure actual email send in your messaging tab or secrets.")
         else:
             st.caption("No items scored 70 or higher yet.")
@@ -5187,7 +5406,6 @@ try:
     render_sam_watch_v2()
 except Exception as _e_sam2:
     st.caption(f"[SAM Watch 2.0 note: {_e_sam2}]")
-\n
 
 
 # === Saved Searches + Scheduled Digests (Mandatory) ===
@@ -5290,7 +5508,8 @@ def _process_due_saved_searches():
     import json, datetime as dt
     for _, row in df.iterrows():
         filters = {}
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             filters = json.loads(row["filters"]) if row.get("filters") else {}
         except Exception:
             pass
@@ -5308,7 +5527,8 @@ def _process_due_saved_searches():
             subject = f"SAM Watch Digest – {row.get('name','Saved Search')}"
             _send_digest(recips, subject, digest_text)
             # Update last_run
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 conn.execute("update saved_searches set last_run=? where id=?", (dt.datetime.utcnow().isoformat(), row["id"]))
                 conn.commit()
             except Exception:
@@ -5340,7 +5560,8 @@ def render_saved_searches_admin():
                 "known_agencies": [x.strip() for x in known_agencies.splitlines() if x.strip()],
                 "min_val": min_val, "max_val": max_val
             }
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 # upsert by name
                 cur = conn.execute("select id from saved_searches where name=?", (ss_name,)).fetchone()
                 if cur:
@@ -5359,7 +5580,7 @@ def render_saved_searches_admin():
         st.dataframe(df, use_container_width=True)
         if not df.empty:
             sel = st.selectbox("Pick a saved search to run now", df["name"].tolist())
-            if st.button("Run selected now"):
+        if st.button("Run selected now"):
                 row = conn.execute("select * from saved_searches where name=?", (sel,)).fetchone()
                 if row:
                     import json, datetime as dt
@@ -5369,7 +5590,8 @@ def render_saved_searches_admin():
                         _sam_cache_upsert(results)
                     digest_text = _digest_body(results, top_n=10)
                     _send_digest(row["recipients"] or "", f"SAM Watch Digest – {row['name']}", digest_text)
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         conn.execute("update saved_searches set last_run=? where id=?", (dt.datetime.utcnow().isoformat(), row["id"]))
                         conn.commit()
                     except Exception:
@@ -5424,7 +5646,8 @@ def _send_digest(recipients, subject, body):
                     server.login(smtp_cfg["username"], smtp_cfg["password"])
                 server.sendmail(msg["From"], to_list, msg.as_string())
             st.success(f"Digest emailed to {len(to_list)} recipient(s) via SMTP")
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 audit(st.session_state.get("active_profile",""), "send_digest_smtp", f"to={to_list}|subject={subject}")
             except Exception:
                 pass
@@ -5450,7 +5673,8 @@ def _send_digest(recipients, subject, body):
             )
             if 200 <= resp.status_code < 300:
                 st.success(f"Digest emailed to {len(to_list)} recipient(s) via SendGrid")
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     audit(st.session_state.get("active_profile",""), "send_digest_sendgrid", f"to={to_list}|subject={subject}")
                 except Exception:
                     pass
@@ -5478,7 +5702,8 @@ def _ensure_deals_extras():
             "alter table deals add column win_probability real",
             "alter table deals add column risk_flags text"
         ]:
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 conn.execute(stmt)
                 conn.commit()
             except Exception:
@@ -5545,7 +5770,8 @@ def render_pipeline_board():
     with c2: st.metric("Weighted Forecast", f"${weighted:,.0f}")
     with c3:
         upcoming = 0
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             # join to opportunities if present to fetch due date, otherwise use rfp_no in sam_cache
             # fallback to 0 if schema not present
             upcoming = 0
@@ -5553,14 +5779,16 @@ def render_pipeline_board():
             pass
         st.metric("Upcoming Deadlines (7d)", upcoming)
     with c4:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             by_agency = df.groupby("agency").size().sort_values(ascending=False)
             top_agency = by_agency.index[0] if len(by_agency) else "—"
             st.metric("Top Agency", top_agency)
         except Exception:
             st.metric("Top Agency", "—")
     with c5:
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             submitted = df[df["stage"]=="Proposal Submitted"]
             awarded = df[df["stage"]=="Awarded"]
             wr = (len(awarded) / max(1,len(submitted))) * 100
@@ -5574,7 +5802,7 @@ def render_pipeline_board():
     st.subheader("Board")
     used_drag = _render_drag_board(df, stages)
     if not used_drag:
-    stages = [
+        stages = [
         "No Contact Made","CO Contacted","Quote","Multiple Quotes",
         "Proposal Started","Proposal Finished","Proposal Submitted","Awarded","Proposal Lost"
     ]
@@ -5602,12 +5830,14 @@ def render_pipeline_board():
                     new_stage = st.selectbox("Move to stage", stages, index=stages.index(stage), key=f"stage_{r['id']}")
                     owner = st.text_input("Owner", value=r.get("owner",""), key=f"owner_{r['id']}")
                     notes = st.text_area("Notes", value=r.get("notes","") or "", height=80, key=f"notes_{r['id']}")
-                    if st.button("Update", key=f"upd_{r['id']}"):
-                        try:
+        if st.button("Update", key=f"upd_{r['id']}"):
+                        import contextlib
+        with contextlib.suppress(Exception):
                             conn.execute("update deals set stage=?, owner=?, notes=?, win_probability=? where id=?",
                                          (new_stage, owner, notes, float(wp), r["id"]))
                             conn.commit()
-                            try:
+                            import contextlib
+        with contextlib.suppress(Exception):
                                 audit(st.session_state.get("active_profile",""), "update_deal", f"id={r['id']}|stage={new_stage}")
                             except Exception:
                                 pass
@@ -5616,13 +5846,15 @@ def render_pipeline_board():
                             st.error(f"Update failed: {e}")
                     # Links
                     if r.get("proposal_path"):
-                        try:
+                        import contextlib
+        with contextlib.suppress(Exception):
                             st.link_button("Open proposal file", r["proposal_path"])
                         except Exception:
                             pass
                     # History
                     with st.expander("History"):
-                        try:
+                        import contextlib
+        with contextlib.suppress(Exception):
                             # naive audit view
                             aconn = get_db()
                             adf = _pd.read_sql_query("select created_at, actor, action, target from audit_log order by created_at desc limit 200", aconn)
@@ -5653,14 +5885,16 @@ def _get_due_date_for_deal(rfp_no):
     try:
         conn = get_db()
         # opportunities table: response_due, solicitation or rfp fields may vary
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             row = conn.execute("select response_due from opportunities where solicitation_id=? or rfp_no=? or title like ?", (rfp_no, rfp_no, f"%{rfp_no}%")).fetchone()
             if row and row[0]:
                 return str(row[0])
-        except Exception:
+    except Exception:
             pass
         # sam_cache fallback
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             row = conn.execute("select due_date from sam_cache where solicitation_id=?", (rfp_no,)).fetchone()
             if row and row[0]:
                 return str(row[0])
@@ -5696,7 +5930,8 @@ def _render_drag_board(df, stages):
                 for it in items:
                     deal_id = int(str(it).split("::",1)[0])
                     # Update to this stage
-                    try:
+                    import contextlib
+        with contextlib.suppress(Exception):
                         conn.execute("update deals set stage=?, updated_at=current_timestamp where id=?", (stg, deal_id))
                         changes += 1
                     except Exception:
@@ -5704,7 +5939,8 @@ def _render_drag_board(df, stages):
             conn.commit()
             if changes:
                 st.success(f"Updated {changes} cards")
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     audit(st.session_state.get("active_profile",""), "drag_stage_update", f"changes={changes}")
                 except Exception:
                     pass
@@ -5742,7 +5978,8 @@ def _render_pipeline_charts(df):
     months = []
     for _, r in df2.iterrows():
         due = _get_due_date_for_deal(r.get("rfp_no",""))
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             mo = datetime.fromisoformat(str(due)[:19]).strftime("%Y-%m")
         except Exception:
             mo = datetime.utcnow().strftime("%Y-%m")
@@ -5980,6 +6217,9 @@ with st.expander("Import vendors (CSV/XLSX) or fetch DSBS-like", expanded=False)
     with c3: st.metric("Active SAM", sum(1 for x in filtered if x.get("sam_active")))
     with c4: st.metric("With Awards", sum(1 for x in filtered if int(x.get("awards_count") or 0) > 0))
 
+
+
+
     # Results grid
     if not filtered:
         st.info("No vendors matched. Load vendor data (session or DB) or broaden filters.")
@@ -6015,16 +6255,17 @@ with inv2:
     invite_recip = st.text_input('Invite recipient email(s)', value=v.get('email',''), key=f'rec_{v.get("id",v.get("name",""))}')
 inv_body = st.text_area('Invite message', value=f"Hello {v.get('name','')},\n\nELA Management is preparing a proposal where your capabilities in NAICS {v.get('naics','')} could be a strong fit. Are you available to team?\n\nBest,\n{st.session_state.get('active_profile','ELA Team')}", key=f'body_{v.get("id",v.get("name",""))}')
 
-            ac1, ac2, ac3, ac4 = st.columns(4)
-            with ac1:
-                if st.button("Add to Proposal Team", key=f"addteam_{v.get('id',v.get('name',''))}"):
+    ac1, ac2, ac3, ac4 = st.columns(4)
+    with ac1:
+        if st.button("Add to Proposal Team", key=f"addteam_{v.get('id',v.get('name',''))}"):
                     team = st.session_state.get("proposal_team", [])
                     team.append({"name": v.get("name",""), "role": "Subcontractor", "naics": v.get("naics",""), "socio": v.get("socio","")})
                     st.session_state["proposal_team"] = team
                     st.success("Added to current proposal team")
-            with ac2:
-                if st.button("Save Vendor", key=f"save_{v.get('id',v.get('name',''))}"):
-                    try:
+    with ac2:
+        if st.button("Save Vendor", key=f"save_{v.get('id',v.get('name',''))}"):
+                    import contextlib
+        with contextlib.suppress(Exception):
                         ensure_vendors_schema()
                         conn = get_db()
                         # upsert by name + state
@@ -6040,22 +6281,22 @@ inv_body = st.text_area('Invite message', value=f"Hello {v.get('name','')},\n\nE
                         st.success("Vendor saved")
                     except Exception as e:
                         st.error(f"Save failed: {e}")
-            with ac3:
-                if st.button("Export NDA", key=f"nda_{v.get('id',v.get('name',''))}"):
+    with ac3:
+        if st.button("Export NDA", key=f"nda_{v.get('id',v.get('name',''))}"):
                     path = export_nda_docx(v.get("name",""), email=v.get("email"))
                     if path:
                         with open(path, "rb") as f:
                             st.download_button("Download NDA", data=f.read(), file_name=Path(path).name, key=f"dlnda_{v.get('name','')}")
-            with ac4:
-                if st.button("Invite to Team", key=f"invite_{v.get('id',v.get('name',''))}"):
+    with ac4:
+        if st.button("Invite to Team", key=f"invite_{v.get('id',v.get('name',''))}"):
                     ok = _send_email(invite_recip, invite_subject, inv_body)
                     if ok:
                         st.success("Invite sent")
                     else:
                         st.info("Invite not sent")
 
-            with ac4:
-                if st.button("Export Teaming Agreement", key=f"ta_{v.get('id',v.get('name',''))}"):
+    with ac4:
+        if st.button("Export Teaming Agreement", key=f"ta_{v.get('id',v.get('name',''))}"):
                     path = export_teaming_agreement_docx(v.get("name",""), role=f"Support under NAICS {v.get('naics','')}", naics=v.get("naics",""))
                     if path:
                         with open(path, "rb") as f:
@@ -6066,8 +6307,9 @@ inv_body = st.text_area('Invite message', value=f"Hello {v.get('name','')},\n\nE
                 c_by = st.text_input("Contacted by", value=st.session_state.get("active_profile",""), key=f"cb_{v.get('id',v.get('name',''))}")
                 note = st.text_area("Notes", value=v.get("notes","") or "", key=f"nt_{v.get('id',v.get('name',''))}")
                 rtg = st.slider("Rating", min_value=0, max_value=5, value=int(float(v.get("rating") or 0)), key=f"rt_{v.get('id',v.get('name',''))}")
-                if st.button("Log contact", key=f"log_{v.get('id',v.get('name',''))}"):
-                    try:
+        if st.button("Log contact", key=f"log_{v.get('id',v.get('name',''))}"):
+                    import contextlib
+        with contextlib.suppress(Exception):
                         ensure_vendors_schema()
                         conn = get_db()
                         conn.execute("""insert into vendors_history (vendor_id, name, agency, contacted_by, date_contacted, notes, rating)
@@ -6107,7 +6349,8 @@ inv_body = st.text_area('Invite message', value=f"Hello {v.get('name','')},\n\nE
         if "lat" in df_db.columns and "lon" in df_db.columns and not df_db.empty:
             m = folium.Map(location=[39.8283, -98.5795], zoom_start=4)  # USA center
             for _, r in df_db.iterrows():
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     folium.Marker([float(r["lat"]), float(r["lon"])], tooltip=r["name"]).add_to(m)
                 except Exception:
                     pass
@@ -6152,7 +6395,8 @@ def _send_email(to_emails, subject, body):
                 if smtp_cfg.get("username") and smtp_cfg.get("password"):
                     server.login(smtp_cfg["username"], smtp_cfg["password"])
                 server.sendmail(msg["From"], to_list, msg.as_string())
-            try:
+            import contextlib
+        with contextlib.suppress(Exception):
                 audit(st.session_state.get("active_profile",""), "email_smtp", f"to={to_list}|subject={subject}")
             except Exception:
                 pass
@@ -6175,7 +6419,8 @@ def _send_email(to_emails, subject, body):
                 }
             )
             if 200 <= resp.status_code < 300:
-                try:
+                import contextlib
+        with contextlib.suppress(Exception):
                     audit(st.session_state.get("active_profile",""), "email_sendgrid", f"to={to_list}|subject={subject}")
                 except Exception:
                     pass
@@ -6210,4 +6455,3 @@ try:
     with d3: st.metric("SDVOSB %", f"{_pct_sdv}%")
 except Exception as _e_div:
     st.caption(f"[Control Center diversity note: {_e_div}]")
-
