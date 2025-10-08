@@ -865,7 +865,7 @@ def render_outreach_tools():
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
         app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("save_app_pw")):
-            save_user_app_password(ACTIVE_USER, app_pw)
+            set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
     with st.expander("Quick Outreach Composer", expanded=False):
