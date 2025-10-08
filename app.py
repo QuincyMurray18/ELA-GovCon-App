@@ -433,6 +433,116 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 import pandas as pd
 import numpy as np
 import streamlit as st
+
+# === Multi-user Sign-in & Session Isolation (added by ChatGPT on 2025-10-08) ===
+from functools import wraps
+import uuid
+
+# Configure your users here
+USERS = ["Quincy", "Charles", "Collin"]
+# Optional PINs. Leave empty {} if you want passwordless sign-in.
+PINS = {"Quincy": "1111", "Charles": "2222", "Collin": "3333"}
+
+def _do_login():
+    with st.sidebar:
+        st.header("Sign in")
+        user = st.selectbox("User", USERS, index=0, key="login_user_select")
+        pin_ok = True
+        if PINS:
+            pin = st.text_input("PIN", type="password", key="login_pin_input")
+            pin_ok = (PINS.get(user, "") == pin)
+
+        if st.button("Sign in", use_container_width=True, key="login_btn"):
+            if pin_ok:
+                st.session_state["active_user"] = user
+                st.session_state.setdefault("private_mode", True)
+                st.success(f"Signed in as {user}")
+            else:
+                st.error("Incorrect PIN")
+
+    if "active_user" not in st.session_state:
+        st.stop()
+
+_do_login()
+ACTIVE_USER = st.session_state["active_user"]
+
+# --- Namespaced session state helpers ---
+def ns_key(key: str) -> str:
+    return f"{ACTIVE_USER}::{key}"
+
+class SessionNS:
+    def __init__(self, user: str):
+        self.user = user
+
+    def _k(self, key: str) -> str:
+        return f"{self.user}::{key}"
+
+    def __getitem__(self, key: str):
+        return st.session_state.get(self._k(key))
+
+    def __setitem__(self, key: str, value):
+        st.session_state[self._k(key)] = value
+
+    def get(self, key: str, default=None):
+        return st.session_state.get(self._k(key), default)
+
+    def setdefault(self, key: str, default):
+        return st.session_state.setdefault(self._k(key), default)
+
+    def pop(self, key: str, default=None):
+        return st.session_state.pop(self._k(key), default)
+
+NS = SessionNS(ACTIVE_USER)
+
+# --- Private workspace & publish queue ---
+with st.sidebar:
+    st.subheader("Workspace")
+    st.session_state.setdefault(f"{ACTIVE_USER}::private_mode", True)
+    NS["private_mode"] = st.toggle(
+        "Private mode",
+        value=NS.get("private_mode", True),
+        help="When ON your changes stay private to you until you publish."
+    )
+
+def queue_change(fn, *, label: str):
+    """Queue a change for this user instead of writing to shared data immediately."""
+    NS.setdefault("publish_queue", [])
+    q = NS.get("publish_queue", [])
+    q.append({"id": str(uuid.uuid4()), "label": label, "fn": fn})
+    NS["publish_queue"] = q
+
+def publish_changes():
+    q = NS.get("publish_queue", [])
+    errors = []
+    for item in q:
+        try:
+            item["fn"]()
+        except Exception as e:
+            errors.append((item["label"], e))
+    NS["publish_queue"] = []
+    return errors
+
+def write_or_queue(label, commit_fn):
+    if NS.get("private_mode", True):
+        queue_change(commit_fn, label=label)
+        st.info(f"Saved privately. Publish later. [{label}]")
+    else:
+        commit_fn()
+        st.success(f"Saved to team. [{label}]")
+
+with st.sidebar:
+    if st.button("Publish my changes", use_container_width=True, key="publish_btn"):
+        errs = publish_changes()
+        if not errs:
+            st.success("All your private changes are now published to the team data.")
+        else:
+            st.error("Some changes failed to publish. See below for details.")
+            for label, e in errs:
+                st.exception(RuntimeError(f"{label}: {e}"))
+
+# === End multi-user block ===
+
+
 import requests
 from PyPDF2 import PdfReader
 import docx
