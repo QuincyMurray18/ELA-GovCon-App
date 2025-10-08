@@ -2986,19 +2986,33 @@ with legacy_tabs[3]:
             reply_to = st.secrets.get("smtp_reply_to", None)
             _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
 
-    if st.session_state.get("mail_bodies"):
-        send_method = st.selectbox("Send with", ["Preview only","Gmail SMTP","Office365 SMTP","Microsoft Graph"])
+    
+if st.session_state.get("mail_bodies"):
+        send_method = st.selectbox("Send with", [
+            "Per-user Gmail (App Password)",
+            "Preview only",
+            "Gmail SMTP",
+            "Office365 SMTP",
+            "Microsoft Graph"
+        ])
         if st.button("Send now"):
             sent = 0
             for m in st.session_state["mail_bodies"]:
-                if send_method=="Gmail SMTP":
-                    status = _send_via_gmail(m["to"], m["subject"], m["body"])
-                elif send_method=="Office365 SMTP":
-                    _send_via_office365(m["to"], m["subject"], m["body"]); status = "Sent"
-                elif send_method=="Microsoft Graph":
-                    status = send_via_graph(m["to"], m["subject"], m["body"])
-                else:
-                    status = "Preview"
+                try:
+                    if send_method == "Per-user Gmail (App Password)":
+                        # Use the signed-in user's stored Gmail App Password + From address
+                        send_outreach_email(ACTIVE_USER, m["to"], m["subject"], m["body"])
+                        status = "Sent"
+                    elif send_method=="Gmail SMTP":
+                        status = _send_via_gmail(m["to"], m["subject"], m["body"])
+                    elif send_method=="Office365 SMTP":
+                        _send_via_office365(m["to"], m["subject"], m["body"]); status = "Sent"
+                    elif send_method=="Microsoft Graph":
+                        status = send_via_graph(m["to"], m["subject"], m["body"])
+                    else:
+                        status = "Preview"
+                except Exception as _e_send:
+                    status = f"Error: {_e_send}"
                 conn = get_db()
                 conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
                                 values(?,?,?,?,?,?,?)""",
@@ -3006,9 +3020,6 @@ with legacy_tabs[3]:
                 conn.commit()
                 sent += 1
             st.success(f"Processed {sent} messages")
-
-
-
 # === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
 
 def _ensure_opportunity_columns():
