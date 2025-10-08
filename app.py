@@ -434,6 +434,99 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
+# ==== ELA Management UI theme and branding helpers ====
+from pathlib import Path as _Path
+from PIL import Image as _Image
+
+# Set clean page config early
+try:
+    st.set_page_config(
+        page_title="ELA Management",
+        page_icon=None,
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+except Exception:
+    pass
+
+def _load_logo():
+    try:
+        p = _Path("/mnt/data/ELA Logo.png")
+        if p.exists():
+            return _Image.open(p)
+    except Exception:
+        return None
+    return None
+
+def _apply_global_styling():
+    # Minimalist professional theme
+    st.markdown(
+        """
+        <style>
+            /* Base typography */
+            html, body, [class*="css"]  {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            }
+            /* Primary colors aligned to ELA palette */
+            :root {
+                --ela-navy: #0A1C44;
+                --ela-accent: #009FE3;
+                --ela-light: #F7FAFC;
+            }
+            /* Tighter clean layout */
+            .block-container {
+                padding-top: 1.5rem;
+                padding-bottom: 2rem;
+                max-width: 1280px;
+            }
+            header[data-testid="stHeader"] {
+                background: var(--ela-navy);
+            }
+            /* Cards look */
+            .ela-card {
+                background: white;
+                border: 1px solid #e6e8eb;
+                border-radius: 16px;
+                padding: 16px 18px;
+                box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+                margin-bottom: 12px;
+            }
+            .ela-section-title h2, .ela-section-title h3 {
+                margin-top: 0.25rem;
+                color: var(--ela-navy);
+            }
+            /* Buttons */
+            .stButton>button {
+                border-radius: 10px;
+                padding: 0.5rem 0.9rem;
+                border: 1px solid #dfe3e8;
+            }
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 6px;
+            }
+            .stTabs [data-baseweb="tab"] {
+                background: #f5f7fb;
+                border-radius: 10px 10px 0 0;
+                padding: 10px 14px;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+def _sidebar_branding():
+    with st.sidebar:
+        logo = _load_logo()
+        if logo is not None:
+            st.image(logo, use_column_width=True)
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+# Apply styling and brand on import so all tabs inherit
+_apply_global_styling()
+_sidebar_branding()
+# ==== End ELA Management UI theme and branding helpers ====
+
+
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
