@@ -751,9 +751,9 @@ import base64
 
 # Map users to their From addresses
 USER_EMAILS = {
+    "Quincy": "quincy.elamgmt@gmail.com",
     "Charles": "charles.elamgmt@gmail.com",
     "Collin": "collin.elamgmt@gmail.com",
-    # Quincy can be added later if desired
 }
 
 def _mail_store_path():
