@@ -37,12 +37,16 @@ def get_db():
         try:
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 3000")
             return conn
         except sqlite3.OperationalError:
             # Fallback to local file in CWD
             fallback = os.path.join(os.getcwd(), "ela_govcon_fallback.db")
             conn = sqlite3.connect(fallback, check_same_thread=False)
             conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 3000")
             return conn
 
 def init_db():
@@ -507,13 +511,13 @@ def main():
     with st.sidebar.expander("Change password"):
         new_pwd = st.text_input("New password", type="password", key="pwd1")
         confirm_pwd = st.text_input("Confirm password", type="password", key="pwd2")
-        if st.button("Update password") and current_user():
+        if st.button("Update password") and current_user() and new_pwd and confirm_pwd:
             if not new_pwd:
                 st.error("Password cannot be empty")
             elif new_pwd != confirm_pwd:
                 st.error("Passwords do not match")
         else:
-            update("UPDATE users SET password=? WHERE username=?", (new_pwd, current_user()))
+            set_password(current_user(), new_pwd)
             st.success("Password updated")
 
     # Activity log in sidebar
@@ -574,5 +578,19 @@ def seed_admin_users():
             cur.execute("DELETE FROM users WHERE username=?", ("latrice",))
         except Exception:
             pass
+        conn.commit()
+        conn.close()
+
+def set_password(username: str, new_pwd: str):
+        if not username or not new_pwd:
+            return
+        ensure_users_schema()
+        # Upsert user row then update password
+        conn = get_db()
+        cur = conn.cursor()
+        # Ensure row exists
+        cur.execute("INSERT OR IGNORE INTO users(username, role, active) VALUES(?, ?, 1)", (username, "admin"))
+        # Update password
+        cur.execute("UPDATE users SET password=? WHERE username=?", (new_pwd, username))
         conn.commit()
         conn.close()
