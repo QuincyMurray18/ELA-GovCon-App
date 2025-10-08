@@ -118,7 +118,7 @@ def init_db():
     cur.execute("SELECT COUNT(*) FROM users")
     if cur.fetchone()[0] == 0:
         seed_users = [
-            ("latrice", "Latrice Mack", "admin", "latrice@example.com"),
+            ("", "", "admin", "@example.com"),
             ("quincy", "Quincy", "analyst", "quincy@example.com"),
             ("collin", "Collin", "analyst", "collin@example.com"),
             ("charles", "Charles", "sdr", "charles@example.com"),
@@ -358,7 +358,7 @@ def partners_ui():
             execute("""
                 INSERT INTO contacts(name, org, role, email, phone, type, rating, notes, created_at)
                 VALUES(?,?,?,?,?,?,?,?,?)
-            """, (name, org, role, email, phone, ptype, rating, notes, datetime.utcnow().isoformat()))
+            """, (name, org, role, email, phone, ptype, rating, notes, st.session_state.get("user",""), datetime.utcnow().isoformat()))
             log_activity(st.session_state.get("user","system"), "create", "contact", None)
             st.success(f"Added {name}")
     st.subheader("Directory")
@@ -484,6 +484,12 @@ def main():
     st.sidebar.selectbox("Data visibility", ["Mine", "All"], index=0, key="scope")
     choice = st.sidebar.radio("Go to", list(pages.keys()))
     pages[choice]()
+
+    # Session controls
+    if st.sidebar.button("Sign out"):
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.rerun()
 
     # Password change
     st.sidebar.markdown("**Account**")
