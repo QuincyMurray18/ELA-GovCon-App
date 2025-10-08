@@ -647,9 +647,9 @@ import base64
 
 # Map users to their From addresses
 USER_EMAILS = {
+        "Quincy": "quincy.elamgmt@gmail.com",
     "Charles": "charles.elamgmt@gmail.com",
     "Collin": "collin.elamgmt@gmail.com",
-    # Quincy can be added later if desired
 }
 
 def _mail_store_path():
@@ -752,7 +752,7 @@ with st.sidebar:
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user.")
     else:
         st.caption(f"From: {from_addr}")
 
