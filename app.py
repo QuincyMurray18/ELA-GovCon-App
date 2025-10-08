@@ -182,6 +182,14 @@ def require_capability(cap: str) -> bool:
 
 ################################################################################
 # CRM and Pipeline  Phase 2
+
+def current_user() -> str:
+        return st.session_state.get("user", "")
+
+def visibility_scope() -> str:
+        return st.session_state.get("scope", "Mine")
+
+
 ################################################################################
 
 PIPELINE_STAGES = [
@@ -267,7 +275,10 @@ def compliance_ui():
 
     colA, colB = st.columns(2)
     with colA:
-        deal_df = fetch_table("SELECT id, title, agency, naics, stage, due_date FROM deals ORDER BY updated_at DESC")
+        deal_df = fetch_table("SELECT id, title, agency, naics, stage, due_date, created_by, assigned_to FROM deals ORDER BY updated_at DESC")
+            if visibility_scope() == "Mine" and not deal_df.empty:
+                u = current_user()
+                deal_df = deal_df[(deal_df["created_by"] == u) | (deal_df["assigned_to"] == u)]
         deal_id = st.selectbox("Select deal", deal_df["id"].tolist() if not deal_df.empty else [None])
         if deal_id:
             deal_row = deal_df[deal_df["id"] == deal_id].iloc[0]
@@ -460,12 +471,29 @@ def main():
         "AI Tools": ai_tools_ui,
         "Integrations": integrations_ui
     }
-    choice = st.sidebar.radio("Go to", list(pages.keys()))
+    st.sidebar.selectbox("Data visibility", ["Mine", "All"], index=0, key="scope")
+        choice = st.sidebar.radio("Go to", list(pages.keys()))
     pages[choice]()
+
+        # Password change
+        st.sidebar.markdown("**Account**")
+        with st.sidebar.expander("Change password"):
+            new_pwd = st.text_input("New password", type="password", key="pwd1")
+            confirm_pwd = st.text_input("Confirm password", type="password", key="pwd2")
+            if st.button("Update password"):
+                if not new_pwd:
+                    st.error("Password cannot be empty")
+                elif new_pwd != confirm_pwd:
+                    st.error("Passwords do not match")
+                else:
+                    update("UPDATE users SET password=? WHERE username=?", (new_pwd, current_user()))
+                    st.success("Password updated")
 
     # Activity log in sidebar
     st.sidebar.subheader("Activity Log")
     act = fetch_table("SELECT * FROM activities ORDER BY ts DESC LIMIT 50")
+        if visibility_scope() == "Mine" and not act.empty:
+            act = act[act["user"] == current_user()]
     st.sidebar.dataframe(act, use_container_width=True, height=250)
 
 if __name__ == "__main__":
