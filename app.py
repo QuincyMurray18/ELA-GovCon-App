@@ -594,3 +594,5 @@ def set_password(username: str, new_pwd: str):
         cur.execute("UPDATE users SET password=? WHERE username=?", (new_pwd, username))
         conn.commit()
         conn.close()
+
+
