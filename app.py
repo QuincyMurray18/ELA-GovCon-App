@@ -275,10 +275,10 @@ def compliance_ui():
 
     colA, colB = st.columns(2)
     with colA:
-        deal_df = fetch_table("SELECT id, title, agency, naics, stage, due_date, created_by, assigned_to FROM deals ORDER BY updated_at DESC")
-            if visibility_scope() == "Mine" and not deal_df.empty:
-                u = current_user()
-                deal_df = deal_df[(deal_df["created_by"] == u) | (deal_df["assigned_to"] == u)]
+                deal_df = fetch_table("SELECT id, title, agency, naics, stage, due_date, created_by, assigned_to FROM deals ORDER BY updated_at DESC")
+        if visibility_scope() == "Mine" and not deal_df.empty:
+            u = current_user()
+            deal_df = deal_df[(deal_df["created_by"] == u) | (deal_df["assigned_to"] == u)]
         deal_id = st.selectbox("Select deal", deal_df["id"].tolist() if not deal_df.empty else [None])
         if deal_id:
             deal_row = deal_df[deal_df["id"] == deal_id].iloc[0]
