@@ -851,8 +851,9 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
 
-# --- Sidebar UI: Email setup and quick composer ---
-with st.sidebar:
+
+# --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
+def render_outreach_tools():
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
@@ -861,18 +862,12 @@ with st.sidebar:
         st.caption(f"From: {from_addr}")
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.write("Use a **Gmail App Password** for secure SMTP (Google Account → Security → App passwords).")
-        app_pw = st.text_input("App Password (paste 16-character code)", type="password", key=ns_key("mail_app_pw"))
-        if st.button("Save App Password", use_container_width=True, key=ns_key("save_mail_pw_btn")):
-            if not from_addr:
-                st.error("This user has no From address configured.")
-            elif not app_pw or len(app_pw) < 8:
-                st.error("Please paste a valid Gmail App Password.")
-            else:
-                set_user_smtp_app_password(ACTIVE_USER, app_pw)
-                st.success("Saved. You can now send emails from the Outreach composer.")
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("save_app_pw")):
+            save_user_app_password(ACTIVE_USER, app_pw)
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
-    # Quick composer (optional, complements your Outreach tab)
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("mail_to"),
@@ -887,17 +882,15 @@ with st.sidebar:
             try:
                 send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                 st.success("Email sent.")
-                # clear composer
                 for k in ["mail_to","mail_cc","mail_bcc","mail_subj","mail_body","mail_files"]:
                     NS.pop(k, None)
             except Exception as e:
                 st.error(f"Failed to send: {e}")
 
-# Helper for your Outreach tab code to call directly
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
-    """Use this in your Outreach tab to send with the signed-in user's From address."""
     return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
-# === End Outreach Email block ===
+# === End Outreach Email block (moved) ===
+
 
 
 
@@ -2873,6 +2866,10 @@ with legacy_tabs[2]:
 with legacy_tabs[3]:
     st.subheader("Outreach and mail merge")
     st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
+
+    # Render Outreach tools here (moved from sidebar)
+    render_outreach_tools()
+
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
 
 
