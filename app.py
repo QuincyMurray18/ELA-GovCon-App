@@ -441,7 +441,60 @@ import uuid
 # Configure your users here
 USERS = ["Quincy", "Charles", "Collin"]
 # Optional PINs. Leave empty {} if you want passwordless sign-in.
+
 PINS = {"Quincy": "1111", "Charles": "2222", "Collin": "3333"}
+
+# --- Persistent PIN store (salted) ---
+import json, os, secrets, hashlib
+
+def _pin_storage_path():
+    base = os.path.join(os.getcwd(), "secure_auth")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "pins.json")
+
+def _load_pin_store():
+    path = _pin_storage_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_pin_store(store: dict):
+    path = _pin_storage_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
+
+def _hash_pin(pin: str, salt: str) -> str:
+    return hashlib.sha256((salt + "|" + (pin or "")).encode("utf-8")).hexdigest()
+
+def _get_or_init_pin_store():
+    store = _load_pin_store()
+    # Seed from PINS dict on first run for the defined USERS
+    changed = False
+    for u in USERS:
+        if u not in store:
+            salt = secrets.token_hex(16)
+            store[u] = {"salt": salt, "hash": _hash_pin(PINS.get(u, ""), salt)}
+            changed = True
+    if changed:
+        _save_pin_store(store)
+    return store
+
+def _verify_pin(user: str, pin: str) -> bool:
+    store = _get_or_init_pin_store()
+    rec = store.get(user)
+    if not rec:
+        return False
+    return _hash_pin(pin or "", rec["salt"]) == rec["hash"]
+
+def set_user_pin(user: str, new_pin: str):
+    store = _get_or_init_pin_store()
+    salt = secrets.token_hex(16)
+    store[user] = {"salt": salt, "hash": _hash_pin(new_pin or "", salt)}
+    _save_pin_store(store)
 
 def _do_login():
     with st.sidebar:
@@ -450,7 +503,7 @@ def _do_login():
         pin_ok = True
         if PINS:
             pin = st.text_input("PIN", type="password", key="login_pin_input")
-            pin_ok = (PINS.get(user, "") == pin)
+            pin_ok = _verify_pin(user, pin)
 
         if st.button("Sign in", use_container_width=True, key="login_btn"):
             if pin_ok:
@@ -520,6 +573,27 @@ NS = SessionNS(ACTIVE_USER)
 # --- Private workspace & publish queue ---
 with st.sidebar:
     st.subheader("Workspace")
+
+with st.sidebar:
+    st.subheader("Security")
+    with st.expander("Change My PIN", expanded=False):
+        st.write("Update your sign-in PIN. New PIN must be 4–12 characters.")
+        curr = st.text_input("Current PIN", type="password", key="pin_cur")
+        new1 = st.text_input("New PIN", type="password", key="pin_new1")
+        new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
+        if st.button("Update PIN", use_container_width=True, key="pin_update_btn"):
+            if not _verify_pin(ACTIVE_USER, curr or ''):
+                st.error("Current PIN is incorrect.")
+            elif not new1 or len(new1) < 4 or len(new1) > 12:
+                st.error("New PIN must be 4–12 characters.")
+            elif new1 != new2:
+                st.error("New PINs do not match.")
+            else:
+                set_user_pin(ACTIVE_USER, new1)
+                # Clear any cached login input
+                st.session_state.pop("login_pin_input", None)
+                st.success("Your PIN has been updated. It will be required next time you sign in.")
+
     st.session_state.setdefault(f"{ACTIVE_USER}::private_mode", True)
     NS["private_mode"] = st.toggle(
         "Private mode",
