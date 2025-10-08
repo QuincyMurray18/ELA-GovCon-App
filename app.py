@@ -466,6 +466,29 @@ def _do_login():
 _do_login()
 ACTIVE_USER = st.session_state["active_user"]
 
+# --- Post-login controls: Sign out and Switch user ---
+with st.sidebar:
+    # Show current user and offer Sign out
+    if st.session_state.get("active_user"):
+        st.caption(f"Signed in as {st.session_state['active_user']}")
+        if st.button("Sign out", use_container_width=True, key="logout_btn"):
+            # Clear login and PIN and force re-run back to login screen
+            st.session_state.pop("active_user", None)
+            st.session_state.pop("login_pin_input", None)
+            st.rerun()
+
+# If the selection differs from the active user, offer a quick switch
+_selected = st.session_state.get("login_user_select")
+_active = st.session_state.get("active_user")
+if _active and _selected and _selected != _active:
+    with st.sidebar:
+        st.warning(f"You selected {_selected}. To switch from {_active}, click below then sign in.")
+        if st.button(f"Switch to {_selected}", use_container_width=True, key="switch_user_btn"):
+            st.session_state.pop("active_user", None)  # this will trigger the login stop above on next run
+            st.session_state.pop("login_pin_input", None)
+            st.rerun()
+
+
 # --- Namespaced session state helpers ---
 def ns_key(key: str) -> str:
     return f"{ACTIVE_USER}::{key}"
