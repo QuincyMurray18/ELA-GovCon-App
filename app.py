@@ -154,12 +154,23 @@ def execute(query: str, params: Tuple = ()):
     conn.close()
     return rowid
 
-def update(query: str, params: Tuple = ()):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(query, params)
-    conn.commit()
-    conn.close()
+def update(query: str, params: Tuple = ()): 
+        import sqlite3 as _sqlite3
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute(query, params)
+            conn.commit()
+            conn.close()
+        except _sqlite3.OperationalError:
+            # Re-init schema and retry once
+            init_db()
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute(query, params)
+            conn.commit()
+            conn.close()
+
 
 ################################################################################
 # Authentication and Roles  Phase 1
@@ -496,7 +507,7 @@ def main():
     with st.sidebar.expander("Change password"):
         new_pwd = st.text_input("New password", type="password", key="pwd1")
         confirm_pwd = st.text_input("Confirm password", type="password", key="pwd2")
-        if st.button("Update password"):
+        if st.button("Update password") and current_user():
             if not new_pwd:
                 st.error("Password cannot be empty")
             elif new_pwd != confirm_pwd:
@@ -515,3 +526,53 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+def ensure_users_schema():
+        conn = get_db()
+        cur = conn.cursor()
+        # Ensure users table exists
+        cur.execute("""CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            full_name TEXT,
+            role TEXT NOT NULL,
+            email TEXT,
+            password TEXT,
+            active INTEGER DEFAULT 1
+        )""")
+        conn.commit()
+        # Ensure password column exists
+        cur.execute("PRAGMA table_info(users)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "password" not in cols:
+            try:
+                cur.execute("ALTER TABLE users ADD COLUMN password TEXT")
+                conn.commit()
+            except Exception:
+                pass
+        conn.close()
+
+def seed_admin_users():
+        conn = get_db()
+        cur = conn.cursor()
+        admins = [
+            ("quincy", "Quincy", "admin", "quincy@example.com", "change_me", 1),
+            ("collin", "Collin", "admin", "collin@example.com", "change_me", 1),
+            ("charles", "Charles", "admin", "charles@example.com", "change_me", 1),
+        ]
+        for u in admins:
+            # upsert-like logic
+            cur.execute("SELECT id FROM users WHERE username=?", (u[0],))
+            row = cur.fetchone()
+            if row is None:
+                cur.execute("INSERT INTO users(username, full_name, role, email, password, active) VALUES(?,?,?,?,?,?)", u)
+            else:
+                cur.execute("UPDATE users SET role=?, email=?, active=? WHERE username=?", (u[2], u[3], u[5], u[0]))
+        # Remove any legacy 'latrice' if present
+        try:
+            cur.execute("DELETE FROM users WHERE username=?", ("latrice",))
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
