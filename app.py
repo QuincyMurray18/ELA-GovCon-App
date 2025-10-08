@@ -134,6 +134,74 @@ def init_db():
         conn.commit()
     conn.close()
 
+
+def ensure_crm_schema():
+
+def get_deal_contacts(deal_id:int):
+    q = """
+        SELECT c.* FROM contacts c
+        JOIN deal_contacts dc ON dc.contact_id = c.id
+        WHERE dc.deal_id=?
+        ORDER BY c.name
+    """
+    return fetch_table(q, (deal_id,))
+
+def set_deal_contacts(deal_id:int, contact_ids):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM deal_contacts WHERE deal_id=?", (deal_id,))
+    for cid in contact_ids:
+        cur.execute("INSERT OR IGNORE INTO deal_contacts(deal_id, contact_id) VALUES(?,?)", (deal_id, int(cid)))
+    conn.commit()
+    conn.close()
+
+def get_deal_notes(deal_id:int):
+    return fetch_table("SELECT * FROM deal_notes WHERE deal_id=? ORDER BY datetime(created_at) DESC", (deal_id,))
+
+def add_deal_note(deal_id:int, user:str, note:str):
+    execute("INSERT INTO deal_notes(deal_id, user, note, created_at) VALUES(?,?,?,?)",
+            (deal_id, user, note, datetime.utcnow().isoformat()))
+
+def get_deal_tasks(deal_id:int):
+    return fetch_table("SELECT * FROM deal_tasks WHERE deal_id=? ORDER BY COALESCE(due_date, '9999-12-31')", (deal_id,))
+
+def add_deal_task(deal_id:int, task:str, due_date:str):
+    execute("INSERT INTO deal_tasks(deal_id, task, due_date, status, created_at) VALUES(?,?,?,?,?)",
+            (deal_id, task, due_date, 'Open', datetime.utcnow().isoformat()))
+
+def update_task_status(task_id:int, status:str):
+    update("UPDATE deal_tasks SET status=? WHERE id=?", (status, task_id))
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS deal_contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deal_id INTEGER NOT NULL,
+        contact_id INTEGER NOT NULL,
+        UNIQUE(deal_id, contact_id)
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS deal_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deal_id INTEGER NOT NULL,
+        user TEXT,
+        note TEXT,
+        created_at TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS deal_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deal_id INTEGER NOT NULL,
+        task TEXT NOT NULL,
+        due_date TEXT,
+        status TEXT DEFAULT 'Open',
+        created_at TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
 def log_activity(user: str, action: str, entity: str, entity_id: Optional[int]):
     conn = get_db()
     conn.execute(
@@ -227,35 +295,142 @@ PIPELINE_STAGES = [
     "Closed Lost"
 ]
 
+
+def _deal_card(df_row):
+    st.markdown(f"**{df_row['title']}**  — ${df_row['value_estimate'] or 0:,.0f}")
+    st.caption(f"Agency: {df_row.get('agency','') or 'N/A'} | NAICS: {df_row.get('naics','') or 'N/A'} | Due: {df_row.get('due_date','')}")
+    with st.expander("Open deal"):
+        deal_id = int(df_row['id'])
+        with st.form(f"edit_deal_{deal_id}"):
+            colA, colB = st.columns(2)
+            with colA:
+                new_title = st.text_input("Title", df_row['title'])
+                new_agency = st.text_input("Agency", df_row.get('agency','') or '')
+                new_naics = st.text_input("NAICS", df_row.get('naics','') or '')
+                new_value = st.number_input("Value estimate", value=float(df_row.get('value_estimate') or 0.0), step=1000.0)
+            with colB:
+                new_stage = st.selectbox("Stage", PIPELINE_STAGES, index=PIPELINE_STAGES.index(df_row['stage']) if df_row['stage'] in PIPELINE_STAGES else 0)
+                try:
+                    dd_default = datetime.strptime(df_row.get('due_date') or '', "%Y-%m-%d").date()
+                except Exception:
+                    dd_default = datetime.now().date()
+                new_due = st.date_input("Due date", value=dd_default)
+                users = fetch_table("SELECT username FROM users")["username"].tolist()
+                new_assigned = st.selectbox("Assigned to", users, index=users.index(df_row.get('assigned_to','')) if df_row.get('assigned_to','') in users else 0)
+            if st.form_submit_button("Save changes"):
+                update("""UPDATE deals 
+                          SET title=?, agency=?, naics=?, value_estimate=?, stage=?, due_date=?, assigned_to=?, updated_at=?
+                          WHERE id=?""",
+                       (new_title, new_agency, new_naics, float(new_value), new_stage, str(new_due), new_assigned, datetime.utcnow().isoformat(), deal_id))
+                log_activity(current_user() or "system", "update", "deal", deal_id)
+                st.success("Deal updated")
+                st.experimental_rerun()
+
+        st.markdown("**Contacts on this deal**")
+        contacts_df = fetch_table("SELECT id, name FROM contacts ORDER BY name ASC")
+        current_links = get_deal_contacts(deal_id)["id"].tolist() if not get_deal_contacts(deal_id).empty else []
+        selected = st.multiselect("Link contacts", options=contacts_df["id"].tolist(), format_func=lambda i: contacts_df.set_index("id").loc[i,"name"], default=current_links, key=f"contacts_{deal_id}")
+        if st.button("Save contacts", key=f"save_contacts_{deal_id}"):
+            set_deal_contacts(deal_id, selected)
+            log_activity(current_user() or "system", "link_contacts", "deal", deal_id)
+            st.success("Contacts updated")
+            st.experimental_rerun()
+
+        st.markdown("**Notes**")
+        with st.form(f"add_note_{deal_id}", clear_on_submit=True):
+            note = st.text_area("Add a note")
+            if st.form_submit_button("Add note") and note.strip():
+                add_deal_note(deal_id, current_user() or "system", note.strip())
+                log_activity(current_user() or "system", "note", "deal", deal_id)
+                st.success("Note added")
+        notes_df = get_deal_notes(deal_id)
+        if not notes_df.empty:
+            for _, r in notes_df.iterrows():
+                st.write(f"- {r['created_at'][:19]} by {r.get('user','')}  — {r.get('note','')}")
+
+        st.markdown("**Tasks**")
+        with st.form(f"add_task_{deal_id}", clear_on_submit=True):
+            tcol1, tcol2 = st.columns(2)
+            with tcol1:
+                task = st.text_input("Task")
+            with tcol2:
+                due = st.date_input("Due", value=datetime.now().date())
+            if st.form_submit_button("Add task") and task.strip():
+                add_deal_task(deal_id, task.strip(), str(due))
+                log_activity(current_user() or "system", "add_task", "deal", deal_id)
+                st.success("Task added")
+        tdf = get_deal_tasks(deal_id)
+        if not tdf.empty:
+            for _, tr in tdf.iterrows():
+                left, right = st.columns([3,1])
+                with left:
+                    st.write(f"- [{tr['status']}] {tr['task']} (due {tr.get('due_date','')})")
+                with right:
+                    new_status = st.selectbox("Status", ["Open","In Progress","Done"], index=["Open","In Progress","Done"].index(tr["status"] if tr["status"] in ["Open","In Progress","Done"] else "Open"), key=f"tskstat_{tr['id']}")
+                    if st.button("Update", key=f"updtsk_{tr['id']}"):
+                        update_task_status(int(tr["id"]), new_status)
+                        st.success("Task updated")
+                        st.experimental_rerun()
+
 def crm_pipeline_ui():
     st.header("CRM and Pipeline")
-    col1, col2 = st.columns([2,1])
-    with col1:
-        st.subheader("Create or Update Deal")
-        with st.form("deal_form", clear_on_submit=True):
-            title = st.text_input("Deal title")
-            agency = st.text_input("Agency")
-            naics = st.text_input("NAICS")
-            value_estimate = st.number_input("Value estimate", min_value=0.0, step=1000.0)
-            stage = st.selectbox("Stage", PIPELINE_STAGES, index=0)
-            due_date = st.date_input("Due date")
-            assigned_to = st.selectbox("Assigned to", fetch_table("SELECT username FROM users")["username"].tolist())
+    ensure_crm_schema()
+
+    with st.expander("New deal"):
+        with st.form("deal_form_v2", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                title = st.text_input("Deal title")
+                agency = st.text_input("Agency")
+                naics = st.text_input("NAICS")
+            with col2:
+                value_estimate = st.number_input("Value estimate", min_value=0.0, step=1000.0)
+                stage = st.selectbox("Stage", PIPELINE_STAGES, index=0)
+            with col3:
+                due_date = st.date_input("Due date")
+                assigned_to = st.selectbox("Assigned to", fetch_table("SELECT username FROM users")["username"].tolist())
             submitted = st.form_submit_button("Save deal")
             if submitted and title:
                 now = datetime.utcnow().isoformat()
                 deal_id = execute("""
                     INSERT INTO deals(title, agency, naics, value_estimate, stage, due_date, assigned_to, created_by, created_at, updated_at)
                     VALUES(?,?,?,?,?,?,?,?,?,?)
-                """, (title, agency, naics, value_estimate, stage, str(due_date), assigned_to, st.session_state.get("user","system"), now, now))
-                log_activity(st.session_state.get("user","system"), "create", "deal", deal_id)
+                """, (title, agency, naics, value_estimate, stage, str(due_date), assigned_to, current_user() or "system", now, now))
+                log_activity(current_user() or "system", "create", "deal", deal_id)
                 st.success(f"Saved deal {title}")
-    with col2:
-        st.subheader("Filters")
-        stage_filter = st.selectbox("Stage filter", ["All"] + PIPELINE_STAGES)
-        df = fetch_table("SELECT * FROM deals ORDER BY updated_at DESC")
-        if stage_filter != "All":
-            df = df[df["stage"] == stage_filter]
-        st.dataframe(df, use_container_width=True)
+
+    with st.sidebar:
+        st.subheader("Pipeline filters")
+        stage_filter = st.selectbox("Stage", ["All"] + PIPELINE_STAGES, key="stage_filter")
+        user_filter = st.selectbox("Owner", ["All"] + fetch_table("SELECT username FROM users")["username"].tolist(), key="owner_filter")
+        q = st.text_input("Keyword search", key="kw")
+
+    df = fetch_table("SELECT * FROM deals ORDER BY updated_at DESC")
+    if stage_filter != "All":
+        df = df[df["stage"] == stage_filter]
+    if user_filter != "All":
+        df = df[df["assigned_to"] == user_filter]
+    if q:
+        mask = df["title"].str.contains(q, case=False, na=False) | df["agency"].str.contains(q, case=False, na=False) | df["naics"].str.contains(q, case=False, na=False)
+        df = df[mask]
+
+    st.subheader("Pipeline board")
+    cols = st.columns(len(PIPELINE_STAGES))
+    for i, stage in enumerate(PIPELINE_STAGES):
+        with cols[i]:
+            st.markdown(f"### {stage}")
+            col_df = df[df["stage"] == stage]
+            if col_df.empty:
+                st.caption("No deals")
+            else:
+                for _, row in col_df.iterrows():
+                    with st.container(border=True):
+                        _deal_card(row)
+                        new_stage = st.selectbox("Move to", PIPELINE_STAGES, index=PIPELINE_STAGES.index(stage), key=f"move_{row['id']}")
+                        if new_stage != stage and st.button("Apply", key=f"apply_{row['id']}"):
+                            update("UPDATE deals SET stage=?, updated_at=? WHERE id=?", (new_stage, datetime.utcnow().isoformat(), int(row["id"])))
+                            log_activity(current_user() or "system", "move_stage", "deal", int(row["id"]))
+                            st.experimental_rerun()
 
 ################################################################################
 # Compliance and Proposal Accuracy  Phase 3
@@ -551,6 +726,7 @@ def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     st.title(APP_TITLE)
     init_db()
+    ensure_crm_schema()
     seed_admin_users()
 
     if "user" not in st.session_state:
