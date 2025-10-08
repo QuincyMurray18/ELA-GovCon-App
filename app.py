@@ -2987,39 +2987,50 @@ with legacy_tabs[3]:
             _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
 
     
+
+
 if st.session_state.get("mail_bodies"):
-        send_method = st.selectbox("Send with", [
-            "Per-user Gmail (App Password)",
-            "Preview only",
-            "Gmail SMTP",
-            "Office365 SMTP",
-            "Microsoft Graph"
-        ])
-        if st.button("Send now"):
-            sent = 0
-            for m in st.session_state["mail_bodies"]:
-                try:
-                    if send_method == "Per-user Gmail (App Password)":
-                        # Use the signed-in user's stored Gmail App Password + From address
-                        send_outreach_email(ACTIVE_USER, m["to"], m["subject"], m["body"])
-                        status = "Sent"
-                    elif send_method=="Gmail SMTP":
-                        status = _send_via_gmail(m["to"], m["subject"], m["body"])
-                    elif send_method=="Office365 SMTP":
-                        _send_via_office365(m["to"], m["subject"], m["body"]); status = "Sent"
-                    elif send_method=="Microsoft Graph":
-                        status = send_via_graph(m["to"], m["subject"], m["body"])
-                    else:
-                        status = "Preview"
-                except Exception as _e_send:
-                    status = f"Error: {_e_send}"
-                conn = get_db()
-                conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
-                                values(?,?,?,?,?,?,?)""",
-                             (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
-                conn.commit()
-                sent += 1
-            st.success(f"Processed {sent} messages")
+    # Attach files (optional) to ALL outgoing emails in this batch
+    merge_files = st.file_uploader(
+        "Attachments (drag & drop) — applied to all emails in this send",
+        type=["pdf","doc","docx","xls","xlsx","csv","txt","png","jpg","jpeg","gif"],
+        accept_multiple_files=True,
+        key="outreach_merge_files"
+    )
+
+    send_method = st.selectbox("Send with", [
+        "Per-user Gmail (App Password)",
+        "Preview only",
+        "Gmail SMTP",
+        "Office365 SMTP",
+        "Microsoft Graph"
+    ])
+    if st.button("Send now"):
+        sent = 0
+        for m in st.session_state["mail_bodies"]:
+            try:
+                if send_method == "Per-user Gmail (App Password)":
+                    # Use signed-in user's From + App Password and include attachments
+                    send_outreach_email(ACTIVE_USER, m["to"], m["subject"], m["body"], attachments=merge_files)
+                    status = "Sent"
+                elif send_method == "Gmail SMTP":
+                    status = _send_via_gmail(m["to"], m["subject"], m["body"])
+                elif send_method == "Office365 SMTP":
+                    _send_via_office365(m["to"], m["subject"], m["body"]); status = "Sent"
+                elif send_method == "Microsoft Graph":
+                    status = send_via_graph(m["to"], m["subject"], m["body"])
+                else:
+                    status = "Preview"
+            except Exception as _e_send:
+                status = f"Error: {_e_send}"
+            conn = get_db()
+            conn.execute("""insert into outreach_log(vendor_id,contact_method,to_addr,subject,body,sent_at,status)
+                            values(?,?,?,?,?,?,?)""",
+                         (m["vendor_id"], send_method, m["to"], m["subject"], m["body"], datetime.now().isoformat(), status))
+            conn.commit()
+            sent += 1
+        st.success(f"Processed {sent} messages")
+
 # === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
 
 def _ensure_opportunity_columns():
