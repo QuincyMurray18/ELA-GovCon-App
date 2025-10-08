@@ -434,6 +434,110 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
+
+# === Outreach Email (per-user) helpers ===
+import smtplib, base64
+from email.message import EmailMessage
+
+USER_EMAILS = {
+    "Quincy": USER_EMAILS.get(ACTIVE_USER, "quincy.elamgmt@gmail.com"),
+    "Charles": "charles.elamgmt@gmail.com",
+    "Collin": "collin.elamgmt@gmail.com",
+}
+
+def _mail_store_path():
+    base = os.path.join(os.getcwd(), "secure_auth")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "mail.json")
+
+def _load_mail_store():
+    try:
+        with open(_mail_store_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_mail_store(store: dict):
+    with open(_mail_store_path(), "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
+
+def set_user_smtp_app_password(user: str, app_password: str):
+    store = _load_mail_store()
+    u = store.get(user, {})
+    u["smtp_host"] = "smtp.gmail.com"
+    u["smtp_port"] = 587
+    u["username"] = USER_EMAILS.get(user, "")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
+    store[user] = u
+    _save_mail_store(store)
+
+def get_user_mail_config(user: str):
+    store = _load_mail_store()
+    rec = store.get(user, {})
+    if not rec:
+        return None
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    return {
+        "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
+        "smtp_port": rec.get("smtp_port", 587),
+        "username": rec.get("username", ""),
+        "password": pw,
+        "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
+    }
+
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+    cfg = get_user_mail_config(user)
+    if not cfg or not cfg.get("username") or not cfg.get("password"):
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject or ""
+    msg["From"] = cfg["from_addr"]
+
+    def _split(a):
+        if not a:
+            return []
+        if isinstance(a, list):
+            return a
+        return [x.strip() for x in str(a).replace(";", ",").split(",") if x.strip()]
+
+    to_list = _split(to_addrs)
+    cc_list = _split(cc_addrs)
+    bcc_list = _split(bcc_addrs)
+    if not to_list:
+        raise RuntimeError("Please provide at least one recipient in To.")
+
+    msg["To"] = ", ".join(to_list)
+    if cc_list: msg["Cc"] = ", ".join(cc_list)
+
+    import re as _re
+    plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+    msg.set_content(plain or "(no content)")
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
+
+    attachments = attachments or []
+    for att in attachments:
+        try:
+            content = att.getvalue()
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+        except Exception as e:
+            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+
+    all_rcpts = to_list + cc_list + bcc_list
+
+    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(cfg["username"], cfg["password"])
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+
+def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
+    # ACTIVE_USER provided by your sign-in block
+    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+# === End Outreach helpers ===
+
+
 # === Multi-user Sign-in & Session Isolation (added by ChatGPT on 2025-10-08) ===
 from functools import wraps
 import uuid
@@ -647,9 +751,9 @@ import base64
 
 # Map users to their From addresses
 USER_EMAILS = {
-        "Quincy": "quincy.elamgmt@gmail.com",
     "Charles": "charles.elamgmt@gmail.com",
     "Collin": "collin.elamgmt@gmail.com",
+    # Quincy can be added later if desired
 }
 
 def _mail_store_path():
@@ -752,7 +856,7 @@ with st.sidebar:
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption("No email configured for this user.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
@@ -5281,3 +5385,8 @@ except Exception as _e_deals:
     except Exception:
         pass
 
+
+
+# Convenience: call this from your Outreach tab after assembling fields
+def outreach_send(to: str, subject: str, body_html: str, cc: str = "", bcc: str = "", attachments=None):
+    return outreach_send_from_active_user(to, subject, body_html, cc=cc, bcc=bcc, attachments=attachments)
