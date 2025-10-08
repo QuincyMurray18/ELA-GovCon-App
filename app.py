@@ -440,7 +440,7 @@ import smtplib, base64
 from email.message import EmailMessage
 
 USER_EMAILS = {
-    "Quincy": USER_EMAILS.get(ACTIVE_USER, "quincy.elamgmt@gmail.com"),
+    "Quincy": "quincy.elamgmt@gmail.com",
     "Charles": "charles.elamgmt@gmail.com",
     "Collin": "collin.elamgmt@gmail.com",
 }
