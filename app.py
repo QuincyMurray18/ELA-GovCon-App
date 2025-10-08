@@ -136,6 +136,42 @@ def init_db():
 
 
 def ensure_crm_schema():
+    """Ensure all CRM-related tables exist (deals, contacts, deal_contacts, deal_notes, deal_tasks)."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS deal_contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deal_id INTEGER NOT NULL,
+        contact_id INTEGER NOT NULL,
+        UNIQUE(deal_id, contact_id)
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS deal_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deal_id INTEGER NOT NULL,
+        user TEXT,
+        note TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS deal_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deal_id INTEGER NOT NULL,
+        task TEXT NOT NULL,
+        due_date TEXT,
+        status TEXT DEFAULT 'Open',
+        created_at TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
 def get_deal_contacts(deal_id:int):
     q = """
