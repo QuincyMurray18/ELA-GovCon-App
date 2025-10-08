@@ -478,10 +478,80 @@ def integrations_ui():
 # Main
 ################################################################################
 
+
+
+def ensure_users_schema():
+        conn = get_db()
+        cur = conn.cursor()
+        # Ensure users table exists
+        cur.execute("""CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            full_name TEXT,
+            role TEXT NOT NULL,
+            email TEXT,
+            password TEXT,
+            active INTEGER DEFAULT 1
+        )""")
+        conn.commit()
+        # Ensure password column exists
+        cur.execute("PRAGMA table_info(users)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "password" not in cols:
+            try:
+                cur.execute("ALTER TABLE users ADD COLUMN password TEXT")
+                conn.commit()
+            except Exception:
+                pass
+        conn.close()
+
+
+
+def seed_admin_users():
+        conn = get_db()
+        cur = conn.cursor()
+        admins = [
+            ("quincy", "Quincy", "admin", "quincy@example.com", "change_me", 1),
+            ("collin", "Collin", "admin", "collin@example.com", "change_me", 1),
+            ("charles", "Charles", "admin", "charles@example.com", "change_me", 1),
+        ]
+        for u in admins:
+            # upsert-like logic
+            cur.execute("SELECT id FROM users WHERE username=?", (u[0],))
+            row = cur.fetchone()
+            if row is None:
+                cur.execute("INSERT INTO users(username, full_name, role, email, password, active) VALUES(?,?,?,?,?,?)", u)
+            else:
+                cur.execute("UPDATE users SET role=?, email=?, active=? WHERE username=?", (u[2], u[3], u[5], u[0]))
+        # Remove any legacy 'latrice' if present
+        try:
+            cur.execute("DELETE FROM users WHERE username=?", ("latrice",))
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+
+
+
+def set_password(username: str, new_pwd: str):
+        if not username or not new_pwd:
+            return
+        ensure_users_schema()
+        # Upsert user row then update password
+        conn = get_db()
+        cur = conn.cursor()
+        # Ensure row exists
+        cur.execute("INSERT OR IGNORE INTO users(username, role, active) VALUES(?, ?, 1)", (username, "admin"))
+        # Update password
+        cur.execute("UPDATE users SET password=? WHERE username=?", (new_pwd, username))
+        conn.commit()
+        conn.close()
+
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     st.title(APP_TITLE)
     init_db()
+    seed_admin_users()
 
     if "user" not in st.session_state:
         login_ui()
@@ -530,69 +600,5 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-
-def ensure_users_schema():
-        conn = get_db()
-        cur = conn.cursor()
-        # Ensure users table exists
-        cur.execute("""CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            full_name TEXT,
-            role TEXT NOT NULL,
-            email TEXT,
-            password TEXT,
-            active INTEGER DEFAULT 1
-        )""")
-        conn.commit()
-        # Ensure password column exists
-        cur.execute("PRAGMA table_info(users)")
-        cols = [r[1] for r in cur.fetchall()]
-        if "password" not in cols:
-            try:
-                cur.execute("ALTER TABLE users ADD COLUMN password TEXT")
-                conn.commit()
-            except Exception:
-                pass
-        conn.close()
-
-def seed_admin_users():
-        conn = get_db()
-        cur = conn.cursor()
-        admins = [
-            ("quincy", "Quincy", "admin", "quincy@example.com", "change_me", 1),
-            ("collin", "Collin", "admin", "collin@example.com", "change_me", 1),
-            ("charles", "Charles", "admin", "charles@example.com", "change_me", 1),
-        ]
-        for u in admins:
-            # upsert-like logic
-            cur.execute("SELECT id FROM users WHERE username=?", (u[0],))
-            row = cur.fetchone()
-            if row is None:
-                cur.execute("INSERT INTO users(username, full_name, role, email, password, active) VALUES(?,?,?,?,?,?)", u)
-            else:
-                cur.execute("UPDATE users SET role=?, email=?, active=? WHERE username=?", (u[2], u[3], u[5], u[0]))
-        # Remove any legacy 'latrice' if present
-        try:
-            cur.execute("DELETE FROM users WHERE username=?", ("latrice",))
-        except Exception:
-            pass
-        conn.commit()
-        conn.close()
-
-def set_password(username: str, new_pwd: str):
-        if not username or not new_pwd:
-            return
-        ensure_users_schema()
-        # Upsert user row then update password
-        conn = get_db()
-        cur = conn.cursor()
-        # Ensure row exists
-        cur.execute("INSERT OR IGNORE INTO users(username, role, active) VALUES(?, ?, 1)", (username, "admin"))
-        # Update password
-        cur.execute("UPDATE users SET password=? WHERE username=?", (new_pwd, username))
-        conn.commit()
-        conn.close()
 
 
