@@ -4984,6 +4984,26 @@ def render_proposal_builder():
             htxt = headings_map.get(sec, sec)
             try:
                 doc.add_heading(htxt, level=2)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
+            except Exception as e:
+                print('Handled error in try block:', e)
             except Exception:
                 doc.add_paragraph(htxt)
             # Optional prefix and suffix wrappers
@@ -5023,21 +5043,23 @@ def render_proposal_builder():
                     st.warning("Could not read outline. Use a JSON with an 'order' list, or a Markdown file with '# ' headings.")
             if st.session_state.get("ela_outline_cfg"):
                 st.info("Using ELA outline order: " + ", ".join(st.session_state['ela_outline_cfg'].get('order', [])))
-# Safeguarded proposal DOCX download
-    fname = f"{project_name}_Proposal.docx"
-        bio.seek(0)
-    except Exception:
-        pass
-    st.download_button(
-        label="Download Proposal DOCX",
-        data=bio.getvalue() if 'bio' in globals() or 'bio' in locals() else None,
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
-except Exception as e:
-    st.error(f"Download failed: {e}")
-
-        st.markdown("### Drafts")
+#     # Safeguarded proposal DOCX download
+#     try:
+#         fname = f"{project_name}_Proposal.docx"
+#         if 'bio' in locals() or 'bio' in globals():
+#             bio.seek(0)
+#             st.download_button(
+#                 label="Download Proposal DOCX",
+#                 data=bio.getvalue(),
+#                 file_name=fname,
+#                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+#             )
+#         else:
+#             st.info("No proposal document in memory yet. Generate it above first.")
+#     except Exception as e:
+#         st.error(f"Download failed: {e}")
+# 
+#         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
         # Refresh drafts after generation so new content appears immediately
         drafts_df = pd.read_sql_query(
