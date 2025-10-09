@@ -4732,6 +4732,8 @@ def render_proposal_builder():
             regenerate = False
 
         with colB:
+            with st.expander("Proposal Builder · Auto-Fill GovCon Template", expanded=False):
+                ela_autofill_ui()
             save_all = st.button("Save edited drafts")
             export_md = st.button("Assemble full proposal (Markdown)")
             export_docx = st.button("Export Proposal DOCX (guardrails)")
@@ -5848,8 +5850,8 @@ def ela_autofill_ui():
 # Render UI inside an expander if Streamlit is present
 try:
     import streamlit as st
-    with st.expander("Proposal Builder · Auto-Fill GovCon Template", expanded=False):
-        ela_autofill_ui()
+    # Disabled global render to prevent bleed across tabs.
+    # The Proposal Builder tab calls ela_autofill_ui() in-place.
 except Exception:
     pass
 # ==== End Auto-Fill GovCon Template ====
