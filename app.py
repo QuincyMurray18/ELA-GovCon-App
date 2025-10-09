@@ -2442,19 +2442,19 @@ try:
         with st.form("pp_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
-                title = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2444), "Project title")
-                agency = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2445), "Agency")
-                naics = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2446), "NAICS", value="")
-                psc = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2447), "PSC", value="")
-                period = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2448), "Period", value="")
+                title = st.text_input("Project title")
+                agency = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2445), "Agency", key='pp_'+str(hash(__name__)) + '_'+str(2444))
+                naics = st.text_input("NAICS", value="", key='pp_'+str(hash(__name__)) + '_'+str(2446))
+                psc = st.text_input("PSC", value="", key='pp_'+str(hash(__name__)) + '_'+str(2447))
+                period = st.text_input("Period", value="", key='pp_'+str(hash(__name__)) + '_'+str(2448))
             with col2:
-                value_amt = st.number_input(key='pp_'+str(hash(__name__)) + '_'+str(2450), "Contract value", min_value=0.0, step=1000.0)
-                role = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2451), "Role", value="Prime")
-                location = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2452), "Location", value="")
+                value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0, key='pp_'+str(hash(__name__)) + '_'+str(2450))
+                role = st.text_input("Role", value="Prime", key='pp_'+str(hash(__name__)) + '_'+str(2451))
+                location = st.text_input("Location", value="", key='pp_'+str(hash(__name__)) + '_'+str(2452))
                 highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
-            contact_name = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2454), "POC name", value="")
-            contact_email = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2455), "POC email", value="")
-            contact_phone = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2456), "POC phone", value="")
+            contact_name = st.text_input("POC name", value="", key='pp_'+str(hash(__name__)) + '_'+str(2454))
+            contact_email = st.text_input("POC email", value="", key='pp_'+str(hash(__name__)) + '_'+str(2455))
+            contact_phone = st.text_input("POC phone", value="", key='pp_'+str(hash(__name__)) + '_'+str(2456))
             submit = st.form_submit_button("Save record")
         if submit:
             conn.execute("""insert into past_performance
@@ -2474,7 +2474,7 @@ try:
         df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
         df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
         opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
-        opp_pick = st.selectbox(key='pp_'+str(hash(__name__)) + '_'+str(2476), "Opportunity", options=opp_opts)
+        opp_pick = st.selectbox("Opportunity", options=opp_opts, key='pp_'+str(hash(__name__)) + '_'+str(2476))
         if opp_pick:
             opp_id = int(opp_pick.split(":")[0])
 
@@ -2482,14 +2482,14 @@ try:
                 cols = st.columns(2)
                 with cols[0]:
                     v_opts = [""] + [f"{int(r.id)}: {r.company}" for _, r in df_vendors.iterrows()]
-                    v_pick = st.selectbox(key='pp_'+str(hash(__name__)) + '_'+str(2484), "Vendor", options=v_opts)
-                    subtotal = st.number_input(key='pp_'+str(hash(__name__)) + '_'+str(2485), "Subtotal", min_value=0.0, step=100.0, value=0.0)
-                    taxes = st.number_input(key='pp_'+str(hash(__name__)) + '_'+str(2486), "Taxes", min_value=0.0, step=50.0, value=0.0)
-                    shipping = st.number_input(key='pp_'+str(hash(__name__)) + '_'+str(2487), "Shipping", min_value=0.0, step=50.0, value=0.0)
+                    v_pick = st.selectbox("Vendor", options=v_opts, key='pp_'+str(hash(__name__)) + '_'+str(2484))
+                    subtotal = st.number_input("Subtotal", min_value=0.0, step=100.0, value=0.0, key='pp_'+str(hash(__name__)) + '_'+str(2485))
+                    taxes = st.number_input("Taxes", min_value=0.0, step=50.0, value=0.0, key='pp_'+str(hash(__name__)) + '_'+str(2486))
+                    shipping = st.number_input("Shipping", min_value=0.0, step=50.0, value=0.0, key='pp_'+str(hash(__name__)) + '_'+str(2487))
                 with cols[1]:
-                    lead_time = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2489), "Lead time", value="")
+                    lead_time = st.text_input("Lead time", value="", key='pp_'+str(hash(__name__)) + '_'+str(2489))
                     notes = st.text_area("Notes", height=120, value="")
-                    files = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2491), "Files list", value="")
+                    files = st.text_input("Files list", value="", key='pp_'+str(hash(__name__)) + '_'+str(2491))
                 add_btn = st.form_submit_button("Save quote line")
             if add_btn and v_pick:
                 vendor_id = int(v_pick.split(":")[0])
@@ -2506,7 +2506,7 @@ try:
                 st.info("No quotes yet")
             else:
                 st.dataframe(dfq[["company","subtotal","taxes","shipping","total","lead_time","notes"]], use_container_width=True)
-                pick_winner = st.selectbox(key='pp_'+str(hash(__name__)) + '_'+str(2508), "Pick winner", options=[""] + dfq["company"].tolist())
+                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist(, key='pp_'+str(hash(__name__)) + '_'+str(2508)))
                 if pick_winner and st.button("Pick Winner"):
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
@@ -2585,7 +2585,7 @@ try:
                     pass
             df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
             st.dataframe(df_scores[["id","title","agency","naics","response_due","score"]], use_container_width=True)
-            pick = st.number_input(key='pp_'+str(hash(__name__)) + '_'+str(2587), "Opportunity ID for factor breakdown", min_value=0, step=1, value=0)
+            pick = st.number_input("Opportunity ID for factor breakdown", min_value=0, step=1, value=0, key='pp_'+str(hash(__name__)) + '_'+str(2587))
             if pick:
                 row = next((x for x in rows if x["id"]==int(pick)), None)
                 if row:
@@ -2608,9 +2608,9 @@ with legacy_tabs[0]:
     assignees = ["","Quincy","Charles","Collin"]
     f1, f2 = st.columns(2)
     with f1:
-        a_filter = st.selectbox(key='pp_'+str(hash(__name__)) + '_'+str(2610), "Filter by assignee", assignees, index=(assignees.index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in assignees else 0))
+        a_filter = st.selectbox("Filter by assignee", assignees, index=(assignees.index(st.session_state.get('active_profile','', key='pp_'+str(hash(__name__)) + '_'+str(2610))) if st.session_state.get('active_profile','') in assignees else 0))
     with f2:
-        s_filter = st.selectbox(key='pp_'+str(hash(__name__)) + '_'+str(2612), "Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
+        s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0, key='pp_'+str(hash(__name__)) + '_'+str(2612))
     try:
         if a_filter:
             df_opp = df_opp[df_opp["assignee"].fillna("")==a_filter]
