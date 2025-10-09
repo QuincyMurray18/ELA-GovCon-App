@@ -435,84 +435,101 @@ import numpy as np
 import streamlit as st
 
 
+# === Outreach Email (per-user) helpers ===
+import smtplib, base64
+from email.message import EmailMessage
 
+USER_EMAILS = {
+    "Quincy": "quincy.elamgmt@gmail.com",
+    "Charles": "charles.elamgmt@gmail.com",
+    "Collin": "collin.elamgmt@gmail.com",
+}
 
-# ====== UI Helpers (Clean Theme) ======
-import streamlit as st
+def _mail_store_path():
+    base = os.path.join(os.getcwd(), "secure_auth")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "mail.json")
 
-def apply_clean_css():
-    st.set_page_config(layout="wide", page_title="ELA Management", page_icon="🗂️")
-    st.markdown("""
-        <style>
-            .block-container {padding-top:1.5rem;padding-bottom:3rem;max-width:1400px;}
-            html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
-            h1,h2,h3,h4{letter-spacing:.2px;}
-            :root{--bg:#ffffff;--muted:#f4f6f8;--text:#0f172a;--subtext:#475569;--line:#e5e7eb;}
-            .ela-card{background:var(--bg);border:1px solid var(--line);border-radius:16px;
-                      padding:18px;box-shadow:0 1px 2px rgba(0,0,0,0.03);margin-bottom:16px;}
-            .stDataFrame,.dataframe{border-radius:12px;overflow:hidden;border:1px solid var(--line);}
-            section[data-testid="stSidebar"]{background:#ffffff;border-right:1px solid var(--line);}
-            .stMarkdown h2{margin-top:.75rem;}
-        </style>
-    """, unsafe_allow_html=True)
+def _load_mail_store():
+    try:
+        with open(_mail_store_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
+def _save_mail_store(store: dict):
+    with open(_mail_store_path(), "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
 
-def sidebar_nav(logo_bytes=None):
-    with st.sidebar:
-        st.write("")
-        if logo_bytes:
-            st.image(logo_bytes, use_container_width=True)
-        else:
-            st.markdown("#### ELA Management")
-        st.caption("Government Contracting Platform")
+def set_user_smtp_app_password(user: str, app_password: str):
+    store = _load_mail_store()
+    u = store.get(user, {})
+    u["smtp_host"] = "smtp.gmail.com"
+    u["smtp_port"] = 587
+    u["username"] = USER_EMAILS.get(user, "")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
+    store[user] = u
+    _save_mail_store(store)
 
-        tabs = ["Dashboard", "Outreach", "Proposals", "Compliance", "Deals", "Reports", "Settings"]
-        choice = st.radio("Main tabs", tabs, index=0, horizontal=False, label_visibility="collapsed")
-        st.session_state["ela_active_tab"] = choice
+def get_user_mail_config(user: str):
+    store = _load_mail_store()
+    rec = store.get(user, {})
+    if not rec:
+        return None
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    return {
+        "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
+        "smtp_port": rec.get("smtp_port", 587),
+        "username": rec.get("username", ""),
+        "password": pw,
+        "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
+    }
 
-        st.divider()
-        st.caption("Quick actions")
-        colA, colB = st.columns(2)
-        with colA:
-            st.button("New Proposal", key="qa_new_proposal")
-        with colB:
-            st.button("Log Deal", key="qa_log_deal")
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+    cfg = get_user_mail_config(user)
+    if not cfg or not cfg.get("username") or not cfg.get("password"):
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
 
+    msg = EmailMessage()
+    msg["Subject"] = subject or ""
+    msg["From"] = cfg["from_addr"]
 
-def header_bar(title=""):
-    cols = st.columns([1, 4, 2])
-    with cols[1]:
-        st.markdown(f"### {title or 'ELA Management'}")
-        st.caption("Professional, clean, and easy navigation")
-    with cols[2]:
-        search = st.text_input("Search", placeholder="Find opportunities, vendors, proposals...")
-        if search:
-            st.session_state["ela_search_query"] = search
+    def _split(a):
+        if not a:
+            return []
+        if isinstance(a, list):
+            return a
+        return [x.strip() for x in str(a).replace(";", ",").split(",") if x.strip()]
 
+    to_list = _split(to_addrs)
+    cc_list = _split(cc_addrs)
+    bcc_list = _split(bcc_addrs)
+    if not to_list:
+        raise RuntimeError("Please provide at least one recipient in To.")
 
-# ====== ELA Clean Theme Boot ======
-try:
-    logo_paths = [
-        os.path.join(os.getcwd(), "logo.png"),
-        os.path.join(os.getcwd(), "assets", "logo.png"),
-        "/mnt/data/logo.png",
-    ]
-    logo_bytes = None
-    for p in logo_paths:
-        if os.path.exists(p):
-            with open(p, "rb") as f:
-                logo_bytes = f.read()
-            break
+    msg["To"] = ", ".join(to_list)
+    if cc_list: msg["Cc"] = ", ".join(cc_list)
 
-    apply_clean_css()
-    sidebar_nav(logo_bytes)
-    header_bar("Main Dashboard")
-except Exception as e:
-    import streamlit as st
-    st.warning(f"Theme setup issue: {e}")
+    import re as _re
+    plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+    msg.set_content(plain or "(no content)")
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
 
-    server.starttls()
-    server.login(cfg["username"], cfg["password"])
+    attachments = attachments or []
+    for att in attachments:
+        try:
+            content = att.getvalue()
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+        except Exception as e:
+            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+
+    all_rcpts = to_list + cc_list + bcc_list
+
+    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
@@ -830,8 +847,8 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
-    server.starttls()
-    server.login(cfg["username"], cfg["password"])
+        server.starttls()
+        server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
 
 
@@ -979,9 +996,9 @@ def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
         msg['Reply-To'] = reply_to
     msg.attach(MIMEText(body, 'plain'))
     with smtplib.SMTP(smtp_server, smtp_port) as server:
-    server.starttls()
-    server.login(smtp_user, smtp_pass)
-    server.sendmail(from_addr, [to_addr], msg.as_string())
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_addr, [to_addr], msg.as_string())
 
 
 def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
@@ -2942,9 +2959,9 @@ with legacy_tabs[3]:
                 msg['Reply-To'] = reply_to
             msg.attach(MIMEText(body, 'plain'))
             with smtplib.SMTP(smtp_server, smtp_port) as server:
-    server.starttls()
-    server.login(smtp_user, smtp_pass)
-    server.sendmail(from_addr, [to_addr], msg.as_string())
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(from_addr, [to_addr], msg.as_string())
 
         def _send_via_gmail(to_addr, subject, body):
             # Requires st.secrets: smtp_user, smtp_pass
@@ -5392,3 +5409,227 @@ except Exception as _e_deals:
 # Convenience: call this from your Outreach tab after assembling fields
 def outreach_send(to: str, subject: str, body_html: str, cc: str = "", bcc: str = "", attachments=None):
     return outreach_send_from_active_user(to, subject, body_html, cc=cc, bcc=bcc, attachments=attachments)
+
+
+# === AI Compliance and CO-Minded Proposal Utilities ===
+
+from typing import List, Tuple, Dict
+import re
+import math
+
+# Safe syllable count for readability
+_vowels = "aeiouy"
+
+def _count_syllables(word: str) -> int:
+    w = word.lower()
+    if not w:
+        return 0
+    count = 0
+    prev_vowel = False
+    for ch in w:
+        is_vowel = ch in _vowels
+        if is_vowel and not prev_vowel:
+            count += 1
+        prev_vowel = is_vowel
+    if w.endswith("e") and count > 1:
+        count -= 1
+    return max(count, 1)
+
+def flesch_kincaid_grade(text: str) -> float:
+    sentences = max(len(re.findall(r'[.!?]+', text)) , 1)
+    words = re.findall(r"[A-Za-z0-9']+", text)
+    word_count = max(len(words), 1)
+    syllables = sum(_count_syllables(w) for w in words) or 1
+    # Flesch Kincaid Grade Level
+    return 0.39 * (word_count / sentences) + 11.8 * (syllables / word_count) - 15.59
+
+# Extract key terms and headings from SOW or PWS
+SECTION_HINTS = [
+    "Scope", "Scope of Work", "Performance Work Statement", "PWS",
+    "Statement of Work", "SOW", "Deliverables", "Period of Performance",
+    "Place of Performance", "Quality Assurance", "QA", "Quality Control",
+    "QC", "Safety", "Standards", "Reports", "Schedule", "Milestones",
+    "Contract Type", "Evaluation", "Evaluation Criteria", "CLIN",
+    "Security", "Travel", "Invoicing", "Acceptance", "Inspection"
+]
+
+def extract_keywords_and_sections(src: str) -> Dict[str, List[str]]:
+    # Keywords: all capitalized multi word phrases and section hints
+    tokens = re.findall(r'\b[A-Z][A-Za-z0-9\-\/&]+\b', src)
+    # Keep meaningful unique tokens
+    cap_keywords = sorted(set(t for t in tokens if len(t) > 2))
+    # Section heads: lines that look like headings
+    lines = src.splitlines()
+    heads = []
+    for ln in lines:
+        if len(ln) <= 2:
+            continue
+        if re.match(r'^\s*(\d+(\.\d+)*)?\s*[A-Z][A-Za-z0-9 \-\/&]{3,}$', ln.strip()):
+            heads.append(ln.strip())
+    hints = [h for h in SECTION_HINTS if h.lower() in src.lower()]
+    return {
+        "keywords": cap_keywords[:300],
+        "sections": heads[:100],
+        "hints": hints
+    }
+
+# Compliance checklist sections
+REQUIRED_SECTIONS = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management Plan",
+    "Staffing Plan",
+    "Quality Assurance",
+    "Risk Mitigation",
+    "Schedule",
+    "Past Performance",
+    "Pricing",
+    "Assumptions and Constraints"
+]
+
+def find_missing_sections(draft_text: str) -> List[str]:
+    low = draft_text.lower()
+    missing = []
+    for sec in REQUIRED_SECTIONS:
+        if sec.lower() not in low:
+            missing.append(sec)
+    return missing
+
+# Simple evaluator scoring rubric that mirrors common federal evaluations
+EVAL_WEIGHTS = {
+    "Technical Capability": 0.35,
+    "Management Approach": 0.20,
+    "Past Performance": 0.20,
+    "Quality Assurance": 0.15,
+    "Risk Mitigation": 0.10
+}
+
+def _has_any(text: str, terms: List[str]) -> bool:
+    t = text.lower()
+    return any(term.lower() in t for term in terms)
+
+def score_proposal_against_rubric(draft: str, sow: str) -> Dict[str, float]:
+    scores = {}
+    # Technical Capability: references to meeting PWS tasks and deliverables
+    tech_terms = ["pws", "sow", "deliverable", "task order", "acceptance", "inspection", "standard", "section"]
+    tech_score = 1.0 if _has_any(draft, tech_terms) and _has_any(draft, extract_keywords_and_sections(sow)["hints"]) else 0.7
+    # Management Approach: schedule, roles, reporting, communication
+    mgmt_terms = ["schedule", "transition", "organizational chart", "roles", "responsibilities", "escalation", "communication", "supervisor"]
+    mgmt_score = 1.0 if _has_any(draft, mgmt_terms) else 0.6
+    # Past Performance
+    pp_terms = ["past performance", "contract number", "cpars", "references", "similar"]
+    pp_score = 1.0 if _has_any(draft, pp_terms) else 0.5
+    # Quality Assurance
+    qa_terms = ["quality assurance", "quality control", "qa", "qc", "inspection", "checklist", "kpi"]
+    qa_score = 1.0 if _has_any(draft, qa_terms) else 0.6
+    # Risk Mitigation
+    risk_terms = ["risk", "mitigation", "contingency", "proactive", "issue", "corrective action"]
+    risk_score = 1.0 if _has_any(draft, risk_terms) else 0.5
+
+    components = {
+        "Technical Capability": tech_score,
+        "Management Approach": mgmt_score,
+        "Past Performance": pp_score,
+        "Quality Assurance": qa_score,
+        "Risk Mitigation": risk_score
+    }
+    for k, base in components.items():
+        scores[k] = round(base * EVAL_WEIGHTS[k] * 100, 1)
+
+    total = round(sum(scores.values()), 1)
+    scores["Total"] = total
+    return scores
+
+# Auto detect risks and propose mitigations
+RISK_LIBRARY = [
+    ("Remote site logistics", ["remote", "rural", "island"], "Pre stage materials and use local subs"),
+    ("Tight schedule", ["accelerated", "expedite", "short notice", "compressed"], "Parallel tasking and add surge staff"),
+    ("Hazardous work", ["hazard", "osha", "confined space", "asbestos", "lead"], "Site safety plan and qualified PPE"),
+    ("Security and access", ["secret", "clearance", "escort", "badging"], "Advance badging and backup staff with clearances"),
+    ("Supply chain", ["lead time", "backorder", "long lead"], "Approved alternates and buffer stock"),
+    ("After hours work", ["after hours", "off hours", "weekend", "night"], "Noise control and CO approved schedule")
+]
+
+def identify_risks(src: str) -> List[Tuple[str, str]]:
+    low = src.lower()
+    found = []
+    for name, triggers, mitigation in RISK_LIBRARY:
+        if any(t in low for t in triggers):
+            found.append((name, mitigation))
+    return found
+
+def propose_outline_with_mirrored_terms(sow_text: str) -> str:
+    ex = extract_keywords_and_sections(sow_text)
+    hints = ", ".join(ex["hints"][:8])
+    outline = f"""Executive Summary
+Technical Approach
+  Alignment to PWS and SOW sections: {hints}
+  Tasks and Deliverables
+  Methods and Standards
+Management Plan
+  Roles and Responsibilities
+  Communication and Reporting
+  Schedule and Milestones
+Staffing Plan
+  Key Personnel Qualifications
+  Subcontractor Roles
+Quality Assurance
+  Inspection and Acceptance
+  KPIs and Checklists
+Risk Mitigation
+  Identified Risks and Proactive Controls
+Past Performance
+  Relevant Contracts and Outcomes
+Pricing
+  Assumptions and Basis of Estimate
+Assumptions and Constraints
+"""
+    return outline
+
+def clean_placeholders(text: str) -> str:
+    # Remove INSERT style placeholders while keeping content safe
+    return re.sub(r"\bINSERT[\w\s\-:]*\b", "", text, flags=re.IGNORECASE)
+
+def compliance_assess(draft_text: str, sow_text: str) -> Dict[str, object]:
+    fk = round(flesch_kincaid_grade(draft_text), 2)
+    missing = find_missing_sections(draft_text)
+    ex = extract_keywords_and_sections(sow_text)
+    risks = identify_risks(sow_text + "\n" + draft_text)
+    scores = score_proposal_against_rubric(draft_text, sow_text)
+    return {
+        "fk_grade": fk,
+        "missing_sections": missing,
+        "mirrored_terms_sample": ex["hints"][:10],
+        "risks": risks,
+        "scores": scores
+    }
+
+# Optional Streamlit UI injection guarded to avoid import errors
+def mount_compliance_assistant():
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    with st.expander("Proposal Compliance Assistant", expanded=False):
+        sow = st.text_area("Paste Solicitation or SOW text", height=200, key="co_sow_text")
+        draft = st.text_area("Paste Proposal Draft text", height=200, key="co_draft_text")
+        if st.button("Run Compliance Check"):
+            result = compliance_assess(draft, sow)
+            st.write("Flesch Kincaid grade:", result["fk_grade"])
+            st.write("Missing sections:", result["missing_sections"] or "None")
+            st.write("Mirrored terms to use:", result["mirrored_terms_sample"] or "None")
+            if result["risks"]:
+                st.write("Detected risks and mitigations:")
+                for r, m in result["risks"]:
+                    st.write(f"- {r}: {m}")
+            st.write("Evaluator style scores:", result["scores"])
+        if st.button("Suggest Outline from SOW"):
+            st.code(propose_outline_with_mirrored_terms(sow), language="markdown")
+        if st.button("Clean Placeholders in Draft"):
+            st.text_area("Cleaned Draft", clean_placeholders(draft), height=200, key="co_cleaned_draft_out")
+
+# Attempt to mount automatically if Streamlit is present
+try:
+    mount_compliance_assistant()
+except Exception:
+    pass
