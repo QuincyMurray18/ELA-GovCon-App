@@ -4760,6 +4760,7 @@ def render_proposal_builder():
             "select id, section, content, updated_at from proposal_drafts where session_id=? order by section",
             conn, params=(session_id,)
         )
+        existing = {r["section"]: r for _, r in drafts_df.iterrows()} if 'drafts_df' in locals() or 'drafts_df' in globals() else {}
 
         colA, colB = st.columns([1,1])
         with colA:
