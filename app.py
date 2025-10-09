@@ -2317,9 +2317,8 @@ def _render_saved_vendors_manager(_container=None):
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 
 TAB_LABELS = [
-    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
-]
-tabs = st.tabs(TAB_LABELS)
+    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Proposal Builder", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
+]tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
