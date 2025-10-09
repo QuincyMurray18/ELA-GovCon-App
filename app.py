@@ -434,142 +434,117 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# === ELA THEME START ===
-import streamlit as st
-from pathlib import Path
 
-# Page config (safe if called early; guarded to avoid duplicate writes)
-try:
-    st.set_page_config(
-        page_title="ELA Management – GovCon Portal",
-        page_icon="📘",
-        layout="wide",
-        initial_sidebar_state="expanded"
+
+
+# ====== UI Helpers (Clean Theme) ======
+import streamlit as st
+
+def apply_clean_css():
+    st.set_page_config(layout="wide", page_title="ELA Management", page_icon="🗂️")
+    st.markdown(
+        '''
+        <style>
+            /* Base layout */
+            .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1400px;}
+            /* Typography */
+            html, body, [class*="css"] {font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
+            h1, h2, h3, h4 {letter-spacing: .2px;}
+            /* Neutral palette */
+            :root {
+                --bg: #ffffff;
+                --muted: #f4f6f8;
+                --text: #0f172a;
+                --subtext: #475569;
+                --line: #e5e7eb;
+            }
+            /* Cards */
+            .ela-card {
+                background: var(--bg);
+                border: 1px solid var(--line);
+                border-radius: 16px;
+                padding: 18px 18px;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+                margin-bottom: 16px;
+            }
+            /* Tables */
+            .stDataFrame, .dataframe {border-radius: 12px; overflow: hidden; border: 1px solid var(--line);}
+            /* Inputs */
+            .stSelectbox, .stTextInput, .stNumberInput, .stTextArea, .stDateInput {
+                border-radius: 10px !important;
+            }
+            /* Sidebar */
+            section[data-testid="stSidebar"] {
+                background: #ffffff;
+                border-right: 1px solid var(--line);
+            }
+            /* Headers spacing */
+            .stMarkdown h2 {margin-top: .75rem;}
+        </style>
+        ''',
+        unsafe_allow_html=True
     )
-except Exception:
+
+def sidebar_nav(logo_bytes: bytes | None = None):
+    with st.sidebar:
+        st.write(" ")
+        if logo_bytes:
+            st.image(logo_bytes, use_container_width=True)
+        else:
+            st.markdown("#### ELA Management")
+        st.caption("Government Contracting Platform")
+
+        # Main navigation
+        tabs = ["Dashboard", "Outreach", "Proposals", "Compliance", "Deals", "Reports", "Settings"]
+        choice = st.radio("Main tabs", tabs, index=0, horizontal=False, label_visibility="collapsed")
+        st.session_state.setdefault("ela_active_tab", choice)
+        st.session_state["ela_active_tab"] = choice
+
+        st.divider()
+        st.caption("Quick actions")
+        colA, colB = st.columns(2)
+        with colA: st.button("New Proposal", key="qa_new_proposal")
+        with colB: st.button("Log Deal", key="qa_log_deal")
+
+def header_bar(title=""):
+
+
+# ====== ELA Clean Theme Boot ======
+try:
+    _logo_path_candidates = [
+        os.path.join(os.getcwd(), "logo.png"),
+        os.path.join(os.getcwd(), "assets", "logo.png"),
+        "/mnt/data/logo.png",
+    ]
+    _logo_bytes = None
+    for _p in _logo_path_candidates:
+        if os.path.exists(_p):
+            try:
+                with open(_p, "rb") as _lf:
+                    _logo_bytes = _lf.read()
+                    break
+            except Exception:
+                pass
+
+    apply_clean_css()
+    sidebar_nav(_logo_bytes)
+    header_bar("Main Dashboard")
+except Exception as _e:
+    # Non-fatal if theme shell fails
     pass
 
-ELA_BRAND_NAVY = "#0A1633"
-ELA_BRAND_BLUE = "#20A4FF"
-ELA_BRAND_LIGHT = "#F6F8FC"
 
-def apply_ela_branding():
-    # Sidebar logo (only once)
-    _logo_path = Path("/mnt/data/ELA Logo.png")
-    if _logo_path.exists():
-        try:
-            st.sidebar.image(str(_logo_path), use_container_width=True)
-        except Exception:
-            pass
 
-    st.markdown(f"""
-        <style>
-            /* Overall page */
-            .stApp {{
-                background: {ELA_BRAND_LIGHT};
-            }}
-
-            /* Center column width and spacing */
-            .block-container {{
-                padding-top: 1.5rem;
-                padding-bottom: 2rem;
-                padding-left: 2rem;
-                padding-right: 2rem;
-                max-width: 1200px;
-            }}
-
-            /* Sidebar styling */
-            section[data-testid="stSidebar"] > div {{
-                background: {ELA_BRAND_NAVY};
-            }}
-            section[data-testid="stSidebar"] * {{
-                color: #FFFFFF !important;
-            }}
-            section[data-testid="stSidebar"] .stTextInput input,
-            section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div,
-            section[data-testid="stSidebar"] .stMultiSelect div[data-baseweb="select"] > div {{
-                background: rgba(255,255,255,0.06);
-                border: 1px solid rgba(255,255,255,0.18);
-                border-radius: 10px;
-                color: #FFFFFF !important;
-            }}
-
-            /* Headers */
-            h1, h2, h3, h4 {{
-                color: #0C1B3A;
-                letter-spacing: 0.2px;
-                margin-bottom: 0.35rem;
-            }}
-            p, li, label {{
-                color: #1d2433;
-            }}
-
-            /* Buttons */
-            .stButton > button {{
-                background: {ELA_BRAND_NAVY};
-                color: #FFFFFF;
-                border-radius: 10px;
-                border: none;
-                padding: 0.6rem 1rem;
-                font-weight: 600;
-                box-shadow: 0 2px 8px rgba(10,22,51,0.15);
-            }}
-            .stButton > button:hover {{
-                background: {ELA_BRAND_BLUE};
-                transform: translateY(-1px);
-                transition: all 120ms ease-in-out;
-            }}
-
-            /* Inputs */
-            .stTextInput input, .stTextArea textarea, .stNumberInput input,
-            .stDateInput input, .stSelectbox div[role="combobox"],
-            .stMultiSelect div[role="combobox"], .stFileUploader label {{
-                border-radius: 10px !important;
-                border: 1px solid #E2E8F0 !important;
-                background: #FFFFFF !important;
-                box-shadow: 0 1px 3px rgba(16,24,40,0.04);
-            }}
-
-            /* Dataframes / tables */
-            .stDataFrame, .stTable {{
-                background: #FFFFFF;
-                border-radius: 12px;
-                box-shadow: 0 1px 6px rgba(16,24,40,0.08);
-                padding: 0.25rem 0.25rem 0.5rem 0.25rem;
-            }}
-
-            /* Cards helper class */
-            .ela-card {{
-                background: #FFFFFF;
-                border-radius: 16px;
-                padding: 1.25rem 1.25rem;
-                box-shadow: 0 1px 12px rgba(16,24,40,0.10);
-                margin-bottom: 1rem;
-                border: 1px solid #EEF2F7;
-            }}
-
-            /* Tabs spacing */
-            div[data-baseweb="tab-list"] {{
-                gap: 6px;
-            }}
-            button[role="tab"] {{
-                border-radius: 12px !important;
-            }}
-        </style>
-    """, unsafe_allow_html=True)
-
-def ela_header(title: str, subtitle: str = ""):
-    col1, col2 = st.columns([0.85, 0.15])
-    with col1:
-        st.markdown(f"### {title}")
-        if subtitle:
-            st.caption(subtitle)
-    st.divider()
-
-# Apply on import
-apply_ela_branding()
-# === ELA THEME END ===
-
+    cols = st.columns([1, 4, 2])
+    with cols[0]:
+        st.write("")
+    with cols[1]:
+        st.markdown(f"### {title or 'ELA Management'}")
+        st.caption("Professional, clean, and easy navigation")
+    with cols[2]:
+        search = st.text_input("Search", placeholder="Find opportunities, vendors, proposals...")
+        if search:
+            st.session_state["ela_search_query"] = search
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
