@@ -2443,7 +2443,7 @@ try:
             col1, col2 = st.columns(2)
             with col1:
                 title = st.text_input("Project title")
-                agency = st.text_input(key='pp_'+str(hash(__name__)) + '_'+str(2445), "Agency", key='pp_'+str(hash(__name__)) + '_'+str(2444))
+                agency = st.text_input("Agency", key='pp_'+str(hash(__name__)) + '_'+str(2444))
                 naics = st.text_input("NAICS", value="", key='pp_'+str(hash(__name__)) + '_'+str(2446))
                 psc = st.text_input("PSC", value="", key='pp_'+str(hash(__name__)) + '_'+str(2447))
                 period = st.text_input("Period", value="", key='pp_'+str(hash(__name__)) + '_'+str(2448))
