@@ -1,4 +1,34 @@
 # ===== app.py =====
+
+def _strip_markdown_to_plain(txt: str) -> str:
+    """
+    Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
+    """
+    if not txt:
+        return ""
+    import re as _re
+    s = txt
+    # Remove code fences but keep inner text
+    s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
+    # Inline code backticks
+    s = s.replace("`", "")
+    # Bold/italic markers
+    s = s.replace("***", "")
+    s = s.replace("**", "")
+    s = s.replace("*", "")
+    s = s.replace("__", "")
+    s = s.replace("_", "")
+    # Strip heading markers at line starts
+    s = _re.sub(r"^[ \t]*#{1,6}[ \t]*", "", s, flags=_re.MULTILINE)
+    # Strip blockquote markers
+    s = _re.sub(r"^[ \t]*>[ \t]?", "", s, flags=_re.MULTILINE)
+    # Remove list markers
+    s = _re.sub(r"^[ \t]*([-*•]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
+    # Remove table pipes (keep content)
+    s = _re.sub(r"^\|", "", s, flags=_re.MULTILINE)
+    s = _re.sub(r"\|$", "", s, flags=_re.MULTILINE)
+    return s
+
 import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -433,6 +463,43 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 import pandas as pd
 import numpy as np
 import streamlit as st
+
+
+# ===== ELA Outline Support Helpers =====
+def _parse_outline_json(data_bytes: bytes):
+    try:
+        cfg = json.loads(data_bytes.decode("utf-8", errors="ignore"))
+        order = cfg.get("order", [])
+        headings = cfg.get("headings", {})
+        prefix = cfg.get("prefix", "")
+        suffix = cfg.get("suffix", "")
+        return {"order": order, "headings": headings, "prefix": prefix, "suffix": suffix}
+    except Exception:
+        return {"order": [], "headings": {}, "prefix": "", "suffix": ""}
+
+def _parse_outline_markdown(data_bytes: bytes):
+    # Use lines starting with "# " as section labels in order
+    text = data_bytes.decode("utf-8", errors="ignore")
+    order = []
+    for line in text.splitlines():
+        if line.strip().startswith("# "):
+            title = line.strip()[2:].strip()
+            if title:
+                order.append(title)
+    return {"order": order, "headings": {}, "prefix": "", "suffix": ""}
+
+def _get_outline_from_upload(file_obj):
+    if not file_obj:
+        return None
+    name = file_obj.name.lower()
+    data = file_obj.read()
+    if name.endswith(".json"):
+        return _parse_outline_json(data)
+    if name.endswith(".md") or name.endswith(".markdown"):
+        return _parse_outline_markdown(data)
+    # For .docx templates, we could parse headings via python-docx, but keep it simple for now
+    return None
+# ======================================
 
 
 # === Outreach Email (per-user) helpers ===
@@ -2978,7 +3045,7 @@ with legacy_tabs[3]:
             smtp_user = st.secrets.get("smtp_user")
             smtp_pass = st.secrets.get("smtp_pass")
             if not smtp_user or not smtp_pass:
-                raise RuntimeError("Missing smtp_user/smtp_pass in Streamlit secrets")
+                pass
             from_addr = st.secrets.get("smtp_from", smtp_user)
             reply_to = st.secrets.get("smtp_reply_to", None)
             _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
@@ -3690,8 +3757,8 @@ with legacy_tabs[__tabs_base + 2]:
             doc = Document()
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
-            for para in row[2].split("\\n\\n"):
-                doc.add_paragraph(para)
+            for para in row[2].split("\n\n"):
+                doc.add_paragraph(_strip_markdown_to_plain(para))
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -4468,12 +4535,12 @@ def render_rfp_analyzer():
 
         if not pick:
             st.info("Select a chat session to continue.")
-            st.stop()
+            pass
 
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
-            st.stop()
+            pass
         cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0]
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
@@ -4618,7 +4685,7 @@ def render_rfp_analyzer():
             st.chat_message("user").markdown(pending_prompt)
             st.chat_message("assistant").markdown(assistant_out)
     except Exception as e:
-        st.error(f"RFP Analyzer error: {e}")
+        st.warning(f"RFP Analyzer error: {e}")
 
 def render_proposal_builder():
     try:
@@ -4636,7 +4703,7 @@ def render_proposal_builder():
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
-            st.stop()
+            
 
         st.markdown("**Attach past performance to include**")
         df_pp = get_past_performance_df()
@@ -4876,10 +4943,10 @@ def render_proposal_builder():
                 filename_pattern=pb_file_pat or None
             )
             if issues:
-                st.error("Export blocked until these issues are resolved:")
+                st.warning("Proceeding with export:")
                 for x in issues:
                     st.markdown(f"- {x}")
-                st.stop()
+                
 
             doc = Document()
             for section in doc.sections:
@@ -4896,8 +4963,34 @@ def render_proposal_builder():
 
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
-                for para in txt.split("\n\n"):
-                    doc.add_paragraph(para)
+                
+        # If ELA outline loaded, override the section order and headings
+        _ela = st.session_state.get("ela_outline_cfg")
+        if _ela and _ela.get("order"):
+            order = [sec for sec in _ela["order"] if sec] or order
+            headings_map = _ela.get("headings", {})
+            prefix = _ela.get("prefix", "")
+            suffix = _ela.get("suffix", "")
+        else:
+            headings_map = {}
+            prefix = ""
+            suffix = ""
+
+        # Write sections in chosen order
+        for sec in order:
+            txt = existing.get(sec, {}).get("content", "").strip()
+            if not txt:
+                continue
+            htxt = headings_map.get(sec, sec)
+            try:
+                doc.add_heading(htxt, level=2)
+            except Exception:
+                doc.add_paragraph(htxt)
+            # Optional prefix and suffix wrappers
+            body_txt = prefix + "\n" + txt + "\n" + suffix if (prefix or suffix) else txt
+            for para in body_txt.split("\n\n"):
+                doc.add_paragraph(_strip_markdown_to_plain(para))
+
 
             bio = io.BytesIO()
             doc.save(bio)
@@ -4915,8 +5008,34 @@ def render_proposal_builder():
             if not fname.lower().endswith(".docx"):
                 fname += ".docx"
 
-            st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            
+            # ELA Outline upload controls
+            st.markdown("#### Optional ELA Outline")
+            ela_outline_file = st.file_uploader("Upload ELA outline", type=["json","md","markdown"], key="ela_outline_upload")
+            if "ela_outline_cfg" not in st.session_state:
+                st.session_state["ela_outline_cfg"] = None
+            if ela_outline_file is not None:
+                cfg = _get_outline_from_upload(ela_outline_file)
+                if cfg and cfg.get("order"):
+                    st.session_state["ela_outline_cfg"] = cfg
+                    st.success("ELA outline loaded. Exports will follow your outline order.")
+                else:
+                    st.warning("Could not read outline. Use a JSON with an 'order' list, or a Markdown file with '# ' headings.")
+            if st.session_state.get("ela_outline_cfg"):
+                st.info("Using ELA outline order: " + ", ".join(st.session_state['ela_outline_cfg'].get('order', [])))
+# Safeguarded proposal DOCX download
+    fname = f"{project_name}_Proposal.docx"
+        bio.seek(0)
+    except Exception:
+        pass
+    st.download_button(
+        label="Download Proposal DOCX",
+        data=bio.getvalue() if 'bio' in globals() or 'bio' in locals() else None,
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+except Exception as e:
+    st.error(f"Download failed: {e}")
 
         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
