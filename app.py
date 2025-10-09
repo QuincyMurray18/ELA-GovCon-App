@@ -465,43 +465,6 @@ import numpy as np
 import streamlit as st
 
 
-# ===== ELA Outline Support Helpers =====
-def _parse_outline_json(data_bytes: bytes):
-    try:
-        cfg = json.loads(data_bytes.decode("utf-8", errors="ignore"))
-        order = cfg.get("order", [])
-        headings = cfg.get("headings", {})
-        prefix = cfg.get("prefix", "")
-        suffix = cfg.get("suffix", "")
-        return {"order": order, "headings": headings, "prefix": prefix, "suffix": suffix}
-    except Exception:
-        return {"order": [], "headings": {}, "prefix": "", "suffix": ""}
-
-def _parse_outline_markdown(data_bytes: bytes):
-    # Use lines starting with "# " as section labels in order
-    text = data_bytes.decode("utf-8", errors="ignore")
-    order = []
-    for line in text.splitlines():
-        if line.strip().startswith("# "):
-            title = line.strip()[2:].strip()
-            if title:
-                order.append(title)
-    return {"order": order, "headings": {}, "prefix": "", "suffix": ""}
-
-def _get_outline_from_upload(file_obj):
-    if not file_obj:
-        return None
-    name = file_obj.name.lower()
-    data = file_obj.read()
-    if name.endswith(".json"):
-        return _parse_outline_json(data)
-    if name.endswith(".md") or name.endswith(".markdown"):
-        return _parse_outline_markdown(data)
-    # For .docx templates, we could parse headings via python-docx, but keep it simple for now
-    return None
-# ======================================
-
-
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
 from email.message import EmailMessage
@@ -4963,34 +4926,8 @@ def render_proposal_builder():
 
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
-                
-        # If ELA outline loaded, override the section order and headings
-        _ela = st.session_state.get("ela_outline_cfg")
-        if _ela and _ela.get("order"):
-            order = [sec for sec in _ela["order"] if sec] or order
-            headings_map = _ela.get("headings", {})
-            prefix = _ela.get("prefix", "")
-            suffix = _ela.get("suffix", "")
-        else:
-            headings_map = {}
-            prefix = ""
-            suffix = ""
-
-        # Write sections in chosen order
-        for sec in order:
-            txt = existing.get(sec, {}).get("content", "").strip()
-            if not txt:
-                continue
-            htxt = headings_map.get(sec, sec)
-            try:
-                doc.add_heading(htxt, level=2)
-            except Exception:
-                doc.add_paragraph(htxt)
-            # Optional prefix and suffix wrappers
-            body_txt = prefix + "\n" + txt + "\n" + suffix if (prefix or suffix) else txt
-            for para in body_txt.split("\n\n"):
-                doc.add_paragraph(_strip_markdown_to_plain(para))
-
+                for para in txt.split("\n\n"):
+                    doc.add_paragraph(_strip_markdown_to_plain(para))
 
             bio = io.BytesIO()
             doc.save(bio)
@@ -5008,36 +4945,8 @@ def render_proposal_builder():
             if not fname.lower().endswith(".docx"):
                 fname += ".docx"
 
-            
-            # ELA Outline upload controls
-            st.markdown("#### Optional ELA Outline")
-            ela_outline_file = st.file_uploader("Upload ELA outline", type=["json","md","markdown"], key="ela_outline_upload")
-            if "ela_outline_cfg" not in st.session_state:
-                st.session_state["ela_outline_cfg"] = None
-            if ela_outline_file is not None:
-                cfg = _get_outline_from_upload(ela_outline_file)
-                if cfg and cfg.get("order"):
-                    st.session_state["ela_outline_cfg"] = cfg
-                    st.success("ELA outline loaded. Exports will follow your outline order.")
-                else:
-                    st.warning("Could not read outline. Use a JSON with an 'order' list, or a Markdown file with '# ' headings.")
-            if st.session_state.get("ela_outline_cfg"):
-                st.info("Using ELA outline order: " + ", ".join(st.session_state['ela_outline_cfg'].get('order', [])))
-# Safeguarded proposal DOCX download
-try:
-    fname = f"{project_name}_Proposal.docx"
-    try:
-        bio.seek(0)
-    except Exception:
-        pass
-    st.download_button(
-        label="Download Proposal DOCX",
-        data=bio.getvalue() if 'bio' in globals() or 'bio' in locals() else None,
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
-except Exception as e:
-    st.error(f"Download failed: {e}")
+            st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
