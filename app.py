@@ -1,4 +1,34 @@
 # ===== app.py =====
+
+def _strip_markdown_to_plain(txt: str) -> str:
+    """
+    Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
+    """
+    if not txt:
+        return ""
+    import re as _re
+    s = txt
+    # Remove code fences but keep inner text
+    s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
+    # Inline code backticks
+    s = s.replace("`", "")
+    # Bold/italic markers
+    s = s.replace("***", "")
+    s = s.replace("**", "")
+    s = s.replace("*", "")
+    s = s.replace("__", "")
+    s = s.replace("_", "")
+    # Strip heading markers at line starts
+    s = _re.sub(r"^[ \t]*#{1,6}[ \t]*", "", s, flags=_re.MULTILINE)
+    # Strip blockquote markers
+    s = _re.sub(r"^[ \t]*>[ \t]?", "", s, flags=_re.MULTILINE)
+    # Remove list markers
+    s = _re.sub(r"^[ \t]*([-*•]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
+    # Remove table pipes (keep content)
+    s = _re.sub(r"^\|", "", s, flags=_re.MULTILINE)
+    s = _re.sub(r"\|$", "", s, flags=_re.MULTILINE)
+    return s
+
 import os, re, io, json, sqlite3, time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -3690,8 +3720,8 @@ with legacy_tabs[__tabs_base + 2]:
             doc = Document()
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
-            for para in row[2].split("\\n\\n"):
-                doc.add_paragraph(para)
+            for para in row[2].split("\n\n"):
+                doc.add_paragraph(_strip_markdown_to_plain(para))
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -4897,7 +4927,7 @@ def render_proposal_builder():
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
                 for para in txt.split("\n\n"):
-                    doc.add_paragraph(para)
+                    doc.add_paragraph(_strip_markdown_to_plain(para))
 
             bio = io.BytesIO()
             doc.save(bio)
