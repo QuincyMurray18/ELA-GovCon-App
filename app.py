@@ -5630,6 +5630,7 @@ def mount_compliance_assistant():
 
 # Attempt to mount automatically if Streamlit is present
 try:
+    pass  # auto-inserted to fix empty try block
 #     mount_compliance_assistant()
 except Exception:
     pass
