@@ -442,102 +442,45 @@ import streamlit as st
 
 def apply_clean_css():
     st.set_page_config(layout="wide", page_title="ELA Management", page_icon="🗂️")
-    st.markdown(
-        '''
+    st.markdown("""
         <style>
-            /* Base layout */
-            .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1400px;}
-            /* Typography */
-            html, body, [class*="css"] {font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
-            h1, h2, h3, h4 {letter-spacing: .2px;}
-            /* Neutral palette */
-            :root {
-                --bg: #ffffff;
-                --muted: #f4f6f8;
-                --text: #0f172a;
-                --subtext: #475569;
-                --line: #e5e7eb;
-            }
-            /* Cards */
-            .ela-card {
-                background: var(--bg);
-                border: 1px solid var(--line);
-                border-radius: 16px;
-                padding: 18px 18px;
-                box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-                margin-bottom: 16px;
-            }
-            /* Tables */
-            .stDataFrame, .dataframe {border-radius: 12px; overflow: hidden; border: 1px solid var(--line);}
-            /* Inputs */
-            .stSelectbox, .stTextInput, .stNumberInput, .stTextArea, .stDateInput {
-                border-radius: 10px !important;
-            }
-            /* Sidebar */
-            section[data-testid="stSidebar"] {
-                background: #ffffff;
-                border-right: 1px solid var(--line);
-            }
-            /* Headers spacing */
-            .stMarkdown h2 {margin-top: .75rem;}
+            .block-container {padding-top:1.5rem;padding-bottom:3rem;max-width:1400px;}
+            html,body,[class*="css"]{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+            h1,h2,h3,h4{letter-spacing:.2px;}
+            :root{--bg:#ffffff;--muted:#f4f6f8;--text:#0f172a;--subtext:#475569;--line:#e5e7eb;}
+            .ela-card{background:var(--bg);border:1px solid var(--line);border-radius:16px;
+                      padding:18px;box-shadow:0 1px 2px rgba(0,0,0,0.03);margin-bottom:16px;}
+            .stDataFrame,.dataframe{border-radius:12px;overflow:hidden;border:1px solid var(--line);}
+            section[data-testid="stSidebar"]{background:#ffffff;border-right:1px solid var(--line);}
+            .stMarkdown h2{margin-top:.75rem;}
         </style>
-        ''',
-        unsafe_allow_html=True
-    )
+    """, unsafe_allow_html=True)
 
-def sidebar_nav(logo_bytes: bytes | None = None):
+
+def sidebar_nav(logo_bytes=None):
     with st.sidebar:
-        st.write(" ")
+        st.write("")
         if logo_bytes:
             st.image(logo_bytes, use_container_width=True)
         else:
             st.markdown("#### ELA Management")
         st.caption("Government Contracting Platform")
 
-        # Main navigation
         tabs = ["Dashboard", "Outreach", "Proposals", "Compliance", "Deals", "Reports", "Settings"]
         choice = st.radio("Main tabs", tabs, index=0, horizontal=False, label_visibility="collapsed")
-        st.session_state.setdefault("ela_active_tab", choice)
         st.session_state["ela_active_tab"] = choice
 
         st.divider()
         st.caption("Quick actions")
         colA, colB = st.columns(2)
-        with colA: st.button("New Proposal", key="qa_new_proposal")
-        with colB: st.button("Log Deal", key="qa_log_deal")
+        with colA:
+            st.button("New Proposal", key="qa_new_proposal")
+        with colB:
+            st.button("Log Deal", key="qa_log_deal")
+
 
 def header_bar(title=""):
-
-
-# ====== ELA Clean Theme Boot ======
-try:
-    _logo_path_candidates = [
-        os.path.join(os.getcwd(), "logo.png"),
-        os.path.join(os.getcwd(), "assets", "logo.png"),
-        "/mnt/data/logo.png",
-    ]
-    _logo_bytes = None
-    for _p in _logo_path_candidates:
-        if os.path.exists(_p):
-            try:
-                with open(_p, "rb") as _lf:
-                    _logo_bytes = _lf.read()
-                    break
-            except Exception:
-                pass
-
-    apply_clean_css()
-    sidebar_nav(_logo_bytes)
-    header_bar("Main Dashboard")
-except Exception as _e:
-    # Non-fatal if theme shell fails
-    pass
-
-
-
     cols = st.columns([1, 4, 2])
-    with cols[0]:
-        st.write("")
     with cols[1]:
         st.markdown(f"### {title or 'ELA Management'}")
         st.caption("Professional, clean, and easy navigation")
@@ -546,99 +489,28 @@ except Exception as _e:
         if search:
             st.session_state["ela_search_query"] = search
 
-# === Outreach Email (per-user) helpers ===
-import smtplib, base64
-from email.message import EmailMessage
 
-USER_EMAILS = {
-    "Quincy": "quincy.elamgmt@gmail.com",
-    "Charles": "charles.elamgmt@gmail.com",
-    "Collin": "collin.elamgmt@gmail.com",
-}
+# ====== ELA Clean Theme Boot ======
+try:
+    logo_paths = [
+        os.path.join(os.getcwd(), "logo.png"),
+        os.path.join(os.getcwd(), "assets", "logo.png"),
+        "/mnt/data/logo.png",
+    ]
+    logo_bytes = None
+    for p in logo_paths:
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                logo_bytes = f.read()
+            break
 
-def _mail_store_path():
-    base = os.path.join(os.getcwd(), "secure_auth")
-    os.makedirs(base, exist_ok=True)
-    return os.path.join(base, "mail.json")
+    apply_clean_css()
+    sidebar_nav(logo_bytes)
+    header_bar("Main Dashboard")
+except Exception as e:
+    import streamlit as st
+    st.warning(f"Theme setup issue: {e}")
 
-def _load_mail_store():
-    try:
-        with open(_mail_store_path(), "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _save_mail_store(store: dict):
-    with open(_mail_store_path(), "w", encoding="utf-8") as f:
-        json.dump(store, f, indent=2)
-
-def set_user_smtp_app_password(user: str, app_password: str):
-    store = _load_mail_store()
-    u = store.get(user, {})
-    u["smtp_host"] = "smtp.gmail.com"
-    u["smtp_port"] = 587
-    u["username"] = USER_EMAILS.get(user, "")
-    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
-    store[user] = u
-    _save_mail_store(store)
-
-def get_user_mail_config(user: str):
-    store = _load_mail_store()
-    rec = store.get(user, {})
-    if not rec:
-        return None
-    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
-    return {
-        "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
-        "smtp_port": rec.get("smtp_port", 587),
-        "username": rec.get("username", ""),
-        "password": pw,
-        "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
-    }
-
-def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
-    cfg = get_user_mail_config(user)
-    if not cfg or not cfg.get("username") or not cfg.get("password"):
-        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
-
-    msg = EmailMessage()
-    msg["Subject"] = subject or ""
-    msg["From"] = cfg["from_addr"]
-
-    def _split(a):
-        if not a:
-            return []
-        if isinstance(a, list):
-            return a
-        return [x.strip() for x in str(a).replace(";", ",").split(",") if x.strip()]
-
-    to_list = _split(to_addrs)
-    cc_list = _split(cc_addrs)
-    bcc_list = _split(bcc_addrs)
-    if not to_list:
-        raise RuntimeError("Please provide at least one recipient in To.")
-
-    msg["To"] = ", ".join(to_list)
-    if cc_list: msg["Cc"] = ", ".join(cc_list)
-
-    import re as _re
-    plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
-    msg.set_content(plain or "(no content)")
-    if body_html:
-        msg.add_alternative(body_html, subtype="html")
-
-    attachments = attachments or []
-    for att in attachments:
-        try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
-        except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
-
-    all_rcpts = to_list + cc_list + bcc_list
-
-    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
-        server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
