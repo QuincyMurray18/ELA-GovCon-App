@@ -4984,26 +4984,6 @@ def render_proposal_builder():
             htxt = headings_map.get(sec, sec)
             try:
                 doc.add_heading(htxt, level=2)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
-            except Exception as e:
-                print('Handled error in try block:', e)
             except Exception:
                 doc.add_paragraph(htxt)
             # Optional prefix and suffix wrappers
@@ -5043,23 +5023,23 @@ def render_proposal_builder():
                     st.warning("Could not read outline. Use a JSON with an 'order' list, or a Markdown file with '# ' headings.")
             if st.session_state.get("ela_outline_cfg"):
                 st.info("Using ELA outline order: " + ", ".join(st.session_state['ela_outline_cfg'].get('order', [])))
-#     # Safeguarded proposal DOCX download
-#     try:
-#         fname = f"{project_name}_Proposal.docx"
-#         if 'bio' in locals() or 'bio' in globals():
-#             bio.seek(0)
-#             st.download_button(
-#                 label="Download Proposal DOCX",
-#                 data=bio.getvalue(),
-#                 file_name=fname,
-#                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-#             )
-#         else:
-#             st.info("No proposal document in memory yet. Generate it above first.")
-#     except Exception as e:
-#         st.error(f"Download failed: {e}")
-# 
-#         st.markdown("### Drafts")
+# Safeguarded proposal DOCX download
+try:
+    fname = f"{project_name}_Proposal.docx"
+    try:
+        bio.seek(0)
+    except Exception:
+        pass
+    st.download_button(
+        label="Download Proposal DOCX",
+        data=bio.getvalue() if 'bio' in globals() or 'bio' in locals() else None,
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+except Exception as e:
+    st.error(f"Download failed: {e}")
+
+        st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
         # Refresh drafts after generation so new content appears immediately
         drafts_df = pd.read_sql_query(
@@ -5774,189 +5754,4 @@ try:
     pass  # auto-inserted to fix empty try block
 #     mount_compliance_assistant()
 except Exception:
-    pass
-
-
-# ===== Outline Exporter: fill your GovCon Proposal .docx outline =====
-try:
-    import streamlit as st
-    import pandas as pd
-    from docx import Document
-    from docx.shared import Pt, Inches
-    from docx.oxml.ns import qn
-    from io import BytesIO
-
-    def _get_latest_session_id(conn):
-        try:
-            df = pd.read_sql_query("select id, title, created_at from rfp_sessions order by created_at desc", conn)
-            if df.empty:
-                return None, None
-            row = df.iloc[0]
-            return int(row["id"]), row.get("title") or "(untitled)"
-        except Exception:
-            return None, None
-
-    def _get_drafts_text(conn, session_id):
-        try:
-            df = pd.read_sql_query("select section, content from proposal_drafts where session_id=?",
-                                   conn, params=(session_id,))
-            texts = {r["section"]: r["content"] for _, r in df.iterrows()}
-            tech = texts.get("Technical Approach", "")
-            pp = []
-            for k in ["Past Performance 1", "Past Performance 2", "Past Performance 3", "Past Performance"]:
-                if texts.get(k):
-                    pp.append(texts[k])
-            past_perf = "\n\n".join(pp) if pp else texts.get("Past Performance", "")
-            pricing = texts.get("Pricing", "")
-            return tech, past_perf, pricing, texts
-        except Exception:
-            return "", "", "", {}
-
-    def _replace_text_runs(paragraph, find, replace):
-        for run in paragraph.runs:
-            if find in run.text:
-                run.text = run.text.replace(find, replace)
-
-    def _replace_in_tables(doc, mapping):
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for p in cell.paragraphs:
-                        for k, v in mapping.items():
-                            if k in p.text:
-                                _replace_text_runs(p, k, v)
-
-    def _replace_in_paragraphs(doc, mapping):
-        for p in doc.paragraphs:
-            for k, v in mapping.items():
-                if k in p.text:
-                    _replace_text_runs(p, k, v)
-
-    def _insert_after_heading(doc, heading_text, body_text):
-        if not body_text:
-            return
-        for i, p in enumerate(doc.paragraphs):
-            if p.text.strip().lower() == heading_text.strip().lower():
-                # Insert body lines as paragraphs after this one
-                lines = body_text.splitlines()
-                for line in reversed(lines):
-                    newp = p._element.addnext(p._element.__class__(p._element.tag))  # duplicate element
-                # The above approach can be fragile. Safer: add a run to the same paragraph below.
-                # Fallback: append after heading with a new paragraph using the doc._body API.
-                # Simpler approach: if python-docx element ops fail, append to the end.
-                break
-
-    def _append_section_at_end(doc, heading_text, body_text):
-        if not body_text:
-            return
-        doc.add_heading(heading_text, level=2)
-        for para in body_text.split("\n"):
-            doc.add_paragraph(para)
-
-    def _fill_outline(template_bytes, mapping, sections):
-        doc = Document(io.BytesIO(template_bytes))
-        # Replace placeholders everywhere
-        _replace_in_paragraphs(doc, mapping)
-        _replace_in_tables(doc, mapping)
-
-        # Try to find headings and append body. If not found, append at end.
-        tech, past_perf, pricing = sections
-        found_tech = any(p.text.strip().lower() == "technical approach" for p in doc.paragraphs)
-        found_pp = any(p.text.strip().lower() == "past performance" for p in doc.paragraphs)
-        found_prc = any(p.text.strip().lower() in ["pricing", "price", "pricing table"] for p in doc.paragraphs)
-
-        if not found_tech and tech:
-            _append_section_at_end(doc, "Technical Approach", tech)
-        if not found_pp and past_perf:
-            _append_section_at_end(doc, "Past Performance", past_perf)
-        if not found_prc and pricing:
-            _append_section_at_end(doc, "Pricing", pricing)
-
-        bio = BytesIO()
-        doc.save(bio)
-        bio.seek(0)
-        return bio
-
-    # UI
-    with st.expander("Export to your GovCon outline", expanded=False):
-        st.caption("Fill your uploaded outline template with Proposal Builder content and form fields")
-
-        # Choose template
-        default_template_path = Path("/mnt/data/GovCon Proposal .docx")
-        template_file = None
-        if default_template_path.exists():
-            st.success("Found uploaded template: GovCon Proposal .docx")
-            template_file = default_template_path.open("rb").read()
-        up = st.file_uploader("Use a different .docx outline template", type=["docx"])
-        if up is not None:
-            template_file = up.read()
-
-        # Connection and session
-        conn = get_db() if 'get_db' in globals() else None
-        sid, s_title = _get_latest_session_id(conn) if conn else (None, None)
-        st.write(f"RFP session: {sid or 'None'} {('- ' + s_title) if s_title else ''}")
-
-        # Form fields
-        col1, col2 = st.columns(2)
-        with col1:
-            sol = st.text_input("Solicitation Number", value="")
-            title = st.text_input("Title", value="")
-            agency = st.text_input("Agency", value="")
-            location = st.text_input("Location", value="")
-            date_str = st.text_input("Date", value="")
-            naics = st.text_input("NAICS", value="")
-        with col2:
-            poc = st.text_input("POC Name", value="")
-            poc_phone = st.text_input("POC Phone", value="")
-            poc_email = st.text_input("POC Email", value="")
-            uei = st.text_input("UEI", value="")
-            cage = st.text_input("CAGE", value="")
-            website = st.text_input("Website", value="")
-
-        # Pull drafts text if possible
-        tech_txt = ""
-        pp_txt = ""
-        prc_txt = ""
-        if conn and sid:
-            tech_txt, pp_txt, prc_txt, _all = _get_drafts_text(conn, sid)
-
-        st.text_area("Technical Approach body from Proposal Builder", value=tech_txt, height=180, key="govcon_tech")
-        st.text_area("Past Performance body from Proposal Builder", value=pp_txt, height=160, key="govcon_pp")
-        st.text_area("Pricing body from Proposal Builder", value=prc_txt, height=140, key="govcon_price")
-
-        go = st.button("Create DOCX using my outline")
-        if go:
-            if not template_file:
-                st.error("No template .docx provided")
-            else:
-                mapping = {
-                    "XXXXXXXXXXXXXXXXX": sol,
-                    "XXXXXXXXXXXXX": sol,
-                    "(Title, Agency)": f"{title}, {agency}" if title or agency else "",
-                    "Title, Agency": f"{title}, {agency}" if title or agency else "",
-                    "Date: XX/XX/XXX": f"Date: {date_str}" if date_str else "Date: ",
-                    "Date: XX/XX/XXXX": f"Date: {date_str}" if date_str else "Date: ",
-                    "ATTN: John Doe": f"ATTN: {poc}" if poc else "ATTN: ",
-                    "John Doe": poc or "John Doe",
-                    "Ph: XXX-XXX-XXXX": f"Ph: {poc_phone}" if poc_phone else "Ph: ",
-                    "Email:": f"Email: {poc_email}" if poc_email else "Email:",
-                    "NAICS, TITLE": f"{naics}, {title}".strip(", "),
-                    "Website: \t\tXXXXXXX.com": f"Website:\t\t{website}" if website else "Website:",
-                    "\t\t15303 Kaston Dr": "\t\t15303 Kaston Dr",  # keep default address unless changed later
-                    "ELA Management, LLC": "ELA Management, LLC",
-                }
-
-                sections = (
-                    st.session_state.get("govcon_tech", ""),
-                    st.session_state.get("govcon_pp", ""),
-                    st.session_state.get("govcon_price", ""),
-                )
-                out = _fill_outline(template_file, mapping, sections)
-                st.download_button("Download filled outline DOCX",
-                                   data=out.getvalue(),
-                                   file_name="ELA_Proposal_Outline_Filled.docx",
-                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-except Exception as _e:
-    # Do not break the whole app if this section fails
     pass
