@@ -447,15 +447,26 @@ def _ela_sidebar_brand():
         pass
 
 def _ela_min_css():
-    st.markdown(
-        """
+    st.markdown("""
         <style>
             .block-container {max-width: 1280px; padding-top: 1rem; padding-bottom: 2rem;}
-            /* Keep Streamlit tab defaults to avoid click issues */
+            /* Make long tab bars usable */
+            .stTabs [data-baseweb="tab-list"] {
+                flex-wrap: wrap;
+                row-gap: 6px;
+                column-gap: 6px;
+                overflow-x: auto;
+                scrollbar-width: thin;
+            }
+            .stTabs [data-baseweb="tab"] {
+                white-space: nowrap;
+                min-height: 38px;
+                border-radius: 10px 10px 0 0;
+            }
+            /* Prevent header from covering content on small screens */
+            [data-testid="stToolbar"] { z-index: 1; }
         </style>
-        """,
-        unsafe_allow_html=True
-    )
+        """, unsafe_allow_html=True)
 
 # invoke once so every tab sees the logo and spacing
 try:
