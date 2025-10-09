@@ -5023,8 +5023,21 @@ def render_proposal_builder():
                     st.warning("Could not read outline. Use a JSON with an 'order' list, or a Markdown file with '# ' headings.")
             if st.session_state.get("ela_outline_cfg"):
                 st.info("Using ELA outline order: " + ", ".join(st.session_state['ela_outline_cfg'].get('order', [])))
-st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+# Safeguarded proposal DOCX download
+try:
+    fname = f"{project_name}_Proposal.docx"
+    try:
+        bio.seek(0)
+    except Exception:
+        pass
+    st.download_button(
+        label="Download Proposal DOCX",
+        data=bio.getvalue() if 'bio' in globals() or 'bio' in locals() else None,
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+except Exception as e:
+    st.error(f"Download failed: {e}")
 
         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
