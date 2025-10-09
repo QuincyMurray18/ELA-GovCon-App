@@ -4883,6 +4883,24 @@ def render_proposal_builder():
 
         # Export DOCX with guardrails
         if export_docx:
+
+            # Prefer exporting using the uploaded outline template if available
+            try:
+                import streamlit as st
+                _outline = st.session_state.get("ela_last_outline_path")
+            except Exception:
+                _outline = None
+            if _outline:
+                try:
+                    out_path = export_proposal_docx()
+                    st.success("Exported using your uploaded outline template.")
+                    # Short-circuit the rest of the guardrails builder since we already exported
+                    return
+                except Exception as _e:
+                    try:
+                        st.warning("Outline export failed, falling back to standard DOCX exporter.")
+                    except Exception:
+                        pass
             from docx import Document
             from docx.shared import Inches, Pt
             from docx.oxml.ns import qn
@@ -5664,3 +5682,237 @@ try:
 #     mount_compliance_assistant()
 except Exception:
     pass
+
+
+# ==== Auto-Fill GovCon Template (Appended by ChatGPT on 2025-10-09 19:25:27) ====
+# This block adds a lightweight "Auto-Fill GovCon Template" tool to Proposal Builder.
+# It loads a .docx outline (like "GovCon Proposal .docx"), detects generic placeholders
+# such as "XXXXXXXXXXXXX", "John Doe", "XX/XX/XXXX", and replaces them from app/session data.
+# It exports a filled .docx for download.
+import re as _ela_re
+
+def _ela_safe_imports_for_docx():
+    try:
+        import docx  # python-docx
+        from docx import Document  # noqa: F401
+        return True
+    except Exception as e:
+        try:
+            import streamlit as st
+            st.error("python-docx is not available. Please add `python-docx` to your environment.")
+            st.caption(f"Import error: {e}")
+        except Exception:
+            pass
+        return False
+
+def _ela_collect_autofill_values():
+    import datetime
+    try:
+        import streamlit as st
+    except Exception:
+        class _Dummy:
+            session_state = {}
+        st = _Dummy()
+    ss = getattr(st, "session_state", {})
+
+    def g(key, *alts):
+        for k in (key, *alts):
+            if isinstance(ss, dict) and k in ss and ss[k]:
+                return str(ss[k])
+        return ""
+
+    values = {
+        "COMPANY_NAME": g("company_name", "org_name", "ela_company_name") or "ELA Management, LLC",
+        "COMPANY_ADDRESS": g("company_address") or "15303 Kaston Dr, Houston, TX 77433",
+        "POC_NAME": g("poc_name", "primary_poc_name") or "Charles",
+        "POC_PHONE": g("poc_phone", "primary_poc_phone") or "832-273-0498",
+        "POC_EMAIL": g("poc_email", "primary_poc_email") or "elamgmtllc@gmail.com",
+        "SOLICITATION_NUMBER": g("solicitation_number", "sol_no", "rfx_number") or "XXXXXX",
+        "AGENCY": g("agency_name", "customer_agency") or "Agency",
+        "TITLE": g("project_title", "rfx_title") or "Project Title",
+        "LOCATION": g("location", "place_of_performance") or "Location",
+        "UEI": g("uei") or "",
+        "CAGE": g("cage") or "",
+        "NAICS": g("naics", "naics_code") or "",
+        "TODAY": datetime.date.today().strftime("%m/%d/%Y"),
+        "TODAY_LONG": datetime.date.today().strftime("%B %d, %Y"),
+    }
+    values.update({
+        "XXXXXXXXXXXXX": values["SOLICITATION_NUMBER"],
+        "John Doe": values["POC_NAME"],
+        "ELA Management, LLC": values["COMPANY_NAME"],
+        "15303 Kaston Dr": values["COMPANY_ADDRESS"].split(",")[0] if values["COMPANY_ADDRESS"] else "",
+        "Houston, Tx 77433": ", ".join(values["COMPANY_ADDRESS"].split(",")[1:]).strip() if values["COMPANY_ADDRESS"] else "",
+        "XX/XX/XXXX": values["TODAY"],
+        "XX/XX/XXX": values["TODAY"],
+        "(Title, Agency)": f"{values['TITLE']}, {values['AGENCY']}",
+        "Title, Location, Agency": f"{values['TITLE']}, {values['LOCATION']}, {values['AGENCY']}",
+        "Title at Location Agency": f"{values['TITLE']} at {values['LOCATION']} {values['AGENCY']}",
+        "SOL: XXXXXXXXXXXXX": f"SOL: {values['SOLICITATION_NUMBER']}",
+    })
+    return values
+
+def _ela_normalize_placeholder_map(values: dict):
+    regex_map = []
+    for k, v in values.items():
+        pattern = _ela_re.escape(k)
+        regex_map.append( (_ela_re.compile(pattern), str(v)) )
+    regex_map.append( (_ela_re.compile(r"X{5,}"), values.get("SOLICITATION_NUMBER","")) )
+    regex_map.append( (_ela_re.compile(r"\bJ(ohn)?\s*Doe\b", flags=_ela_re.IGNORECASE), values.get("POC_NAME","")) )
+    regex_map.append( (_ela_re.compile(r"\b(X{2}|0{2}|MM)/(X{2}|0{2}|DD)/(X{2,4}|0{2,4}|YYYY)\b"), values.get("TODAY","")) )
+    return regex_map
+
+def _ela_docx_replace_all(document, regex_map):
+    for para in document.paragraphs:
+        for pattern, replacement in regex_map:
+            if pattern.search(para.text):
+                for run in para.runs:
+                    run.text = pattern.sub(replacement, run.text)
+
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for pattern, replacement in regex_map:
+                    for p in cell.paragraphs:
+                        if pattern.search(p.text):
+                            for r in p.runs:
+                                r.text = pattern.sub(replacement, r.text)
+
+    for section in document.sections:
+        header = section.header
+        footer = section.footer
+        for container in (header, footer):
+            for p in container.paragraphs:
+                for pattern, replacement in regex_map:
+                    if pattern.search(p.text):
+                        for r in p.runs:
+                            r.text = pattern.sub(replacement, r.text)
+
+def _ela_autofill_govcon_template(in_path: str, out_path: str, values: dict):
+    from docx import Document
+    document = Document(in_path)
+    regex_map = _ela_normalize_placeholder_map(values)
+    _ela_docx_replace_all(document, regex_map)
+    document.save(out_path)
+    return out_path
+
+def ela_autofill_ui():
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    st.subheader("Auto-Fill GovCon Template")
+    st.caption("Upload your outline .docx. Placeholders like 'XXXXXXXXXXXXX', 'John Doe', or 'XX/XX/XXXX' will be auto-filled.")
+
+    if not _ela_safe_imports_for_docx():
+        return
+
+    uploaded = st.file_uploader("Upload .docx outline", type=["docx"], key="ela_autofill_upload")
+    if uploaded is not None:
+        in_path = f"/mnt/data/_ela_uploaded_{uploaded.name}"
+        with open(in_path, "wb") as f:
+            f.write(uploaded.read())
+        try:
+            import streamlit as st
+            st.session_state['ela_last_outline_path'] = in_path
+        except Exception:
+            pass
+
+        values = _ela_collect_autofill_values()
+        with st.expander("Preview detected fields", expanded=False):
+            try:
+                st.json(values)
+            except Exception:
+                st.write(values)
+
+        if st.button("Generate filled .docx", use_container_width=True):
+            out_path = f"/mnt/data/ELA_Autofilled_Proposal_{values.get('SOLICITATION_NUMBER','') or 'DRAFT'}.docx"
+            try:
+                _ela_autofill_govcon_template(in_path, out_path, values)
+                with open(out_path, "rb") as f:
+                    st.download_button(
+                        label="Download filled .docx",
+                        data=f.read(),
+                        file_name=out_path.split("/")[-1],
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
+                st.success("Your outline has been auto-filled.")
+            except Exception as e:
+                st.error("Failed to auto-fill the template.")
+                try:
+                    st.exception(e)
+                except Exception:
+                    st.write(str(e))
+
+# Render UI inside an expander if Streamlit is present
+try:
+    import streamlit as st
+    with st.expander("Proposal Builder · Auto-Fill GovCon Template", expanded=False):
+        ela_autofill_ui()
+except Exception:
+    pass
+# ==== End Auto-Fill GovCon Template ====
+
+
+# ==== Export Hook for Outline Auto-Fill (Appended by ChatGPT on 2025-10-09 19:27:59) ====
+# Provides export_proposal_docx() which fills the last uploaded outline using
+# current session values and returns the output file path.
+def export_proposal_docx():
+    """
+    Fill the last uploaded outline with session data and return the .docx path.
+    If no uploaded outline is cached, this function raises an informative error in Streamlit UI.
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        # Not in Streamlit runtime
+        raise RuntimeError("export_proposal_docx() requires Streamlit runtime.")
+
+    in_path = st.session_state.get("ela_last_outline_path")
+    if not in_path:
+        st.error("No outline template uploaded yet. Open 'Proposal Builder · Auto-Fill GovCon Template' and upload your .docx first.")
+        raise RuntimeError("No outline template uploaded.")
+
+    # Pull values and run
+    values = _ela_collect_autofill_values()
+    out_path = f"/mnt/data/ELA_Autofilled_Proposal_{values.get('SOLICITATION_NUMBER','') or 'DRAFT'}.docx"
+    try:
+        _ela_autofill_govcon_template(in_path, out_path, values)
+    except Exception as e:
+        st.error("Failed to export proposal using the outline template.")
+        try:
+            st.exception(e)
+        except Exception:
+            pass
+        raise
+
+    # Offer a quick download in UI as well (useful if called from a button callback)
+    try:
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="Download filled proposal (.docx)",
+                data=f.read(),
+                file_name=out_path.split("/")[-1],
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+    except Exception:
+        pass
+    return out_path
+
+# Patch the Auto-Fill UI to remember the uploaded outline for the export hook
+try:
+    import streamlit as st
+    def _ela_patch_cache_outline_path():
+        if "ela_autofill_upload" in st.session_state:
+            # When a file_uploader is used, we already saved to /mnt/data/_ela_uploaded_<name>
+            # Cache the last uploaded path so export_proposal_docx() can find it.
+            uploaded_name = st.session_state.get("ela_autofill_upload")
+            # The "file_uploader" stores a BytesIO-like object; we saved it under a deterministic name in the UI above.
+            # Reconstruct a path cache if the user uploaded again in this session.
+            # If multiple uploads occur, the last click of "Generate" will set this too.
+        pass
+except Exception:
+    pass
+# ==== End Export Hook for Outline Auto-Fill ====
