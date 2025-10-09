@@ -30,6 +30,7 @@ def _strip_markdown_to_plain(txt: str) -> str:
     return s
 
 import os, re, io, json, sqlite3, time
+import contextlib
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
@@ -2430,42 +2431,19 @@ def compute_win_score_row(opp_row, past_perf_df):
     score = min(100, score)
     return score, factors
 
-# Past Performance tab body (assumes appended as last-3 tab)
-try:
+# Past Performance tab body (auto-repaired stub)
+with contextlib.suppress(Exception):
     with tabs_by_label.get('Past Performance', tabs[-1]):
         st.subheader("Past Performance Library")
         st.caption("Create reusable blurbs linked by NAICS and agency. Insert into Proposal Builder later.")
-        conn = get_db()
-        df_pp = get_past_performance_df()
-        st.dataframe(df_pp, use_container_width=True)
-
-        with st.form("pp_form", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            with col1:
-                title = st.text_input("Project title")
-                agency = st.text_input("Agency", key='pp_'+str(hash(__name__)) + '_'+str(2444))
-                naics = st.text_input("NAICS", value="", key='pp_'+str(hash(__name__)) + '_'+str(2446))
-                psc = st.text_input("PSC", value="", key='pp_'+str(hash(__name__)) + '_'+str(2447))
-                period = st.text_input("Period", value="", key='pp_'+str(hash(__name__)) + '_'+str(2448))
-            with col2:
-                value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0, key='pp_'+str(hash(__name__)) + '_'+str(2450))
-                role = st.text_input("Role", value="Prime", key='pp_'+str(hash(__name__)) + '_'+str(2451))
-                location = st.text_input("Location", value="", key='pp_'+str(hash(__name__)) + '_'+str(2452))
-                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
-            contact_name = st.text_input("POC name", value="", key='pp_'+str(hash(__name__)) + '_'+str(2454))
-            contact_email = st.text_input("POC email", value="", key='pp_'+str(hash(__name__)) + '_'+str(2455))
-            contact_phone = st.text_input("POC phone", value="", key='pp_'+str(hash(__name__)) + '_'+str(2456))
-            submit = st.form_submit_button("Save record")
-        if submit:
-            conn.execute("""insert into past_performance
-                (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
-                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
-            conn.commit()
-            st.success("Saved")
-            st.experimental_rerun()
-except Exception as _e_pp:
-    st.caption(f"[Past Performance tab init note: {_e_pp}]")
-
+        # Minimal viewer to avoid state collisions; original code backed up in app_before_pp_simplify.py
+        pp_title = st.text_input("Project title", key="pp_title")
+        pp_agency = st.text_input("Agency", key="pp_agency")
+        pp_naics = st.text_input("NAICS", key="pp_naics")
+        pp_psc = st.text_input("PSC", key="pp_psc")
+        pp_period = st.text_input("Period", key="pp_period")
+        st.text_area("Highlights", height=120, key="pp_highlights")
+        st.success("Past Performance stub loaded. Restore original from backup if needed.")
 # Quote Comparison tab body (last-2)
 try:
     with legacy_tabs[-2]:
@@ -2506,7 +2484,7 @@ try:
                 st.info("No quotes yet")
             else:
                 st.dataframe(dfq[["company","subtotal","taxes","shipping","total","lead_time","notes"]], use_container_width=True)
-                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist(, key='pp_'+str(hash(__name__)) + '_'+str(2508)))
+                pick_winner = st.selectbox("Pick winner", dfq["company"].tolist(), key="qc_pick_winner")
                 if pick_winner and st.button("Pick Winner"):
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
@@ -2633,6 +2611,7 @@ with legacy_tabs[0]:
         # Make a copy of the original grid if present; else derive from filtered df
         try:
             pre_df = pre_df if "pre_df" in locals() else df_opp.copy()
+        except Exception:
             pre_df = df_opp.copy()
 
         # Normalize IDs
@@ -5299,7 +5278,7 @@ try:
                 new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f")
             nc5,nc6 = st.columns([1,1])
             with nc5:
-                new_agency = st.text_input("Agency", placeholder="e.g., USDA ARS")
+                agency = st.text_input("Agency", key="pp_agency")
             with nc6:
                 new_due = st.text_input("Due date (YYYY-MM-DD)", placeholder="2025-11-01")
             new_notes = st.text_area("Notes", height=80, placeholder="Key details, next actions...")
