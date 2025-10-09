@@ -2318,7 +2318,9 @@ def _render_saved_vendors_manager(_container=None):
 
 TAB_LABELS = [
     "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Proposal Builder", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
-]tabs = st.tabs(TAB_LABELS)
+]
+
+tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
