@@ -5024,9 +5024,7 @@ def render_proposal_builder():
             if st.session_state.get("ela_outline_cfg"):
                 st.info("Using ELA outline order: " + ", ".join(st.session_state['ela_outline_cfg'].get('order', [])))
 # Safeguarded proposal DOCX download
-try:
     fname = f"{project_name}_Proposal.docx"
-    try:
         bio.seek(0)
     except Exception:
         pass
