@@ -434,49 +434,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# ==== ELA Branding (safe, minimal) ====
-from pathlib import Path as _Path
-from PIL import Image as _Image
-
-def _ela_sidebar_brand():
-    try:
-        p = _Path("/mnt/data/ELA Logo.png")
-        if p.exists():
-            st.sidebar.image(_Image.open(p), use_column_width=True)
-    except Exception:
-        pass
-
-def _ela_min_css():
-    st.markdown("""
-        <style>
-            .block-container {max-width: 1280px; padding-top: 1rem; padding-bottom: 2rem;}
-            /* Make long tab bars usable */
-            .stTabs [data-baseweb="tab-list"] {
-                flex-wrap: wrap;
-                row-gap: 6px;
-                column-gap: 6px;
-                overflow-x: auto;
-                scrollbar-width: thin;
-            }
-            .stTabs [data-baseweb="tab"] {
-                white-space: nowrap;
-                min-height: 38px;
-                border-radius: 10px 10px 0 0;
-            }
-            /* Prevent header from covering content on small screens */
-            [data-testid="stToolbar"] { z-index: 1; }
-        </style>
-        """, unsafe_allow_html=True)
-
-# invoke once so every tab sees the logo and spacing
-try:
-    _ela_min_css()
-    _ela_sidebar_brand()
-except Exception:
-    pass
-# ==== End ELA Branding ====
-
-
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
