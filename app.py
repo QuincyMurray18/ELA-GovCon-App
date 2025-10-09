@@ -511,8 +511,8 @@ except Exception as e:
     import streamlit as st
     st.warning(f"Theme setup issue: {e}")
 
-        server.starttls()
-        server.login(cfg["username"], cfg["password"])
+    server.starttls()
+    server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
@@ -830,8 +830,8 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
-        server.starttls()
-        server.login(cfg["username"], cfg["password"])
+    server.starttls()
+    server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
 
 
@@ -979,9 +979,9 @@ def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
         msg['Reply-To'] = reply_to
     msg.attach(MIMEText(body, 'plain'))
     with smtplib.SMTP(smtp_server, smtp_port) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
+    server.starttls()
+    server.login(smtp_user, smtp_pass)
+    server.sendmail(from_addr, [to_addr], msg.as_string())
 
 
 def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
@@ -2942,9 +2942,9 @@ with legacy_tabs[3]:
                 msg['Reply-To'] = reply_to
             msg.attach(MIMEText(body, 'plain'))
             with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, [to_addr], msg.as_string())
+    server.starttls()
+    server.login(smtp_user, smtp_pass)
+    server.sendmail(from_addr, [to_addr], msg.as_string())
 
         def _send_via_gmail(to_addr, subject, body):
             # Requires st.secrets: smtp_user, smtp_pass
