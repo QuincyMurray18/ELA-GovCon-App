@@ -2326,7 +2326,20 @@ TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 LEGACY_ORDER = [
     "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
 ]
-legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
+legacy_tabs = []
+_missing_legacy = []
+for label in LEGACY_ORDER:
+    idx = TAB.get(label)
+    if idx is not None:
+        legacy_tabs.append(tabs[idx])
+    else:
+        _missing_legacy.append(label)
+try:
+    import streamlit as st
+    if _missing_legacy:
+        st.caption("[Note] Skipped missing tabs: " + ", ".join(_missing_legacy))
+except Exception:
+    pass
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
     try:
