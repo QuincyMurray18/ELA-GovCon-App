@@ -1259,7 +1259,45 @@ def render_outreach_tools():
             with st.expander("Delivery & Tracking options", expanded=False):
                 want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
                 pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
-            # Load contacts from CSV
+            
+# Load contacts from DB
+conn = get_db()
+import pandas as pd
+try:
+    df_db = pd.read_sql_query("""
+        select id, name, org, role, email, phone, source, notes, created_at
+        from contacts
+        where coalesce(email,'') <> ''
+        order by created_at desc
+    """, conn)
+except Exception as e:
+    st.error(f"Failed to load contacts from DB: {e}")
+    df_db = pd.DataFrame(columns=['id','name','org','role','email','phone','source','notes','created_at'])
+
+contacts = df_db.to_dict("records")
+
+# Optional import to DB from CSV
+uploaded = st.file_uploader("Optional import contacts CSV", type=["csv"], key="outreach_contacts_csv")
+if uploaded is not None:
+    import csv, io
+    reader = csv.DictReader(io.StringIO(uploaded.getvalue().decode("utf-8", errors="ignore")))
+    cur = conn.cursor()
+    rows_added = 0
+    for row in reader:
+        nm = (row.get("name") or row.get("Name") or row.get("full_name") or "").strip()
+        em = (row.get("email") or row.get("Email") or row.get("mail") or "").strip()
+        if em:
+            cur.execute(
+                """insert into contacts(name, org, role, email, phone, source, notes)
+                   values (?, ?, ?, ?, ?, ?, ?)""",
+                (nm, row.get("org") or "", row.get("role") or "", em,
+                 row.get("phone") or "", "CSV import", row.get("notes") or "")
+            )
+            rows_added += 1
+    conn.commit()
+    st.success(f"Imported {rows_added} contacts from CSV")
+    st.rerun()
+
             col_c1, col_c2 = st.columns([2,1])
             with col_c1:
                 search = st.text_input("Search contacts", key="outreach_contact_search")
@@ -3700,8 +3738,7 @@ with legacy_tabs[0]:
             "assignee": st.column_config.SelectboxColumn("assignee", options=assignees),
             "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
         },
-        use_container_width=True, num_rows="dynamic", key="opp_grid"
-    )
+        use_container_width=True, num_rows="dynamic", key="opp_grid")
     if st.button("Save pipeline changes"):
         cur = conn.cursor()
         # Make a copy of the original grid if present; else derive from filtered df
@@ -3877,9 +3914,7 @@ with legacy_tabs[1]:
                     "Save": st.column_config.CheckboxColumn("Save")
                 },
                 use_container_width=True,
-                num_rows="fixed",
-                key="vendor_import_grid"
-            )
+                num_rows="fixed", key="vendor_import_grid")
 
             # Save only selected rows
             save_sel = edited[edited.get("Save", False) == True] if isinstance(edited, pd.DataFrame) else pd.DataFrame()
@@ -3963,7 +3998,9 @@ with legacy_tabs[2]:
     df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
-        cur = conn.cursor()
+        
+        st.rerun()
+cur = conn.cursor()
         for _, r in grid.iterrows():
             if pd.isna(r["id"]):
                 cur.execute("""insert into contacts(name,org,role,email,phone,source,notes) values(?,?,?,?,?,?,?)""",
@@ -4564,9 +4601,7 @@ except Exception:
                 "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
             },
             use_container_width=True,
-            num_rows="fixed",
-            key="sam_watch_grid"
-        )
+            num_rows="fixed", key="sam_watch_grid")
         # Save only selected rows
         save_sel = edited[edited.get("Save", False)==True] if "Save" in edited.columns else edited.iloc[0:0]
         st.caption(f"Selected to save: {len(save_sel)} of {len(edited)}")
@@ -6691,8 +6726,7 @@ try:
             st.info("No deals yet. Add your first deal above.")
         else:
             edited = st.data_editor(
-                df[["id","title","stage","owner","amount","agency","due_date","notes"]],
-                key="deals_editor",
+                df[["id","title","stage","owner","amount","agency","due_date","notes"]], key="deals_editor",
                 num_rows="dynamic",
                 column_config={
                     "id": st.column_config.NumberColumn("ID", disabled=True),
