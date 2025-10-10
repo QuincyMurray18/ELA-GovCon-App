@@ -201,100 +201,73 @@ def _add_paragraph_with_inlines(doc, text, style=None):
 
 # === Outreach Tools renderer (extracted) ===
 def render_outreach_tools():
-    """Render Outreach email tools in the Outreach tab."""
+
     ns = ns_key("outreach")
-    _container = st.container()
-    with _container:
+    with st.container():
+        st.subheader("Email – Outreach")
+        from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+        if from_addr:
+            st.caption(f"From: {from_addr}")
+        else:
+            st.caption("No email configured for this user.")
 
-
-    pass
-    # Render-once guard to prevent duplicate UI when function is called multiple times
-    if st.session_state.get("__rendered::outreach"):
-        return
-    st.session_state["__rendered::outreach"] = True
-    st.subheader("Email – Outreach")
-    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
-    if not from_addr:
-        st.caption("No email configured for this user. Only Charles and Collin are set up.")
-    else:
-        st.caption(f"From: {from_addr}")
-
-    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
-
-    hc1, hc2, hc3 = st.columns([1,1,2])
-    with hc1:
-        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
-            to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
-            cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
-            bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
-            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
-            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
-            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
-            st.session_state[ns_key("outreach::mail_preview_data")] = {
-                "to": to,
-                "cc": cc,
-                "bcc": bcc,
-                "subject": subj,
-                "body_html": body,
-                "attachments": atts,
-                "from_addr": from_addr,
-            }
-    with hc2:
-        if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
-            st.session_state[ns_key("outreach::mail_preview_data")] = None
-
-    with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
-            set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success("Saved. You can now send emails from the Outreach composer.")
-
-    with st.expander("Quick Outreach Composer", expanded=False):
-        to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"),
-                           placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
-                            placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
-                atts = []
+        # App password management
+        with st.expander("Set/Update my Gmail App Password", expanded=False):
+            st.caption("Generate an App Password in your Google Account → Security → 2‑Step Verification.")
+            app_pw = st.text_input("Gmail App Password (16 characters, no spaces)",
+                                   type="password", key=ns("gmail_app_pw"))
+            if st.button("Save App Password", key=ns("save_app_pw")):
                 try:
-                    for f in (files or []):
-                        try:
-                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                        except Exception:
-                            pass
-                except Exception:
-                    atts = []
-                st.session_state[ns_key("outreach::mail_preview_data")] = {
-                    "to": to or "",
-                    "cc": cc or "",
-                    "bcc": bcc or "",
-                    "subject": subj or "",
-                    "body_html": body or "",
-                    "attachments": atts,
-                    "from_addr": from_addr,
-                }
-        with c2:
-            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
-                try:
-                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
-                    st.success("Email sent.")
-                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                        NS.pop(k, None)
+                    set_user_smtp_app_password(ACTIVE_USER, app_pw)
+                    st.success("Saved. You can now send emails from the Outreach composer.")
                 except Exception as e:
-                    st.error(f"Failed to send: {e}")
+                    st.error(f"Could not save app password: {e}")
 
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
-    if preview:
-        import streamlit.components.v1 as components
-        with st.container(border=True):
+        # Quick composer
+        with st.expander("Quick Outreach Composer", expanded=True):
+            to = st.text_input("To (comma-separated)", key=ns("mail_to"))
+            cc = st.text_input("Cc (optional, comma-separated)", key=ns("mail_cc"))
+            bcc = st.text_input("Bcc (optional, comma-separated)", key=ns("mail_bcc"))
+            subj = st.text_input("Subject", key=ns("mail_subj"))
+            body = st.text_area("Message (HTML supported)", key=ns("mail_body"), height=250)
+            files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns("mail_files"))
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Preview email", use_container_width=True, key=ns("mail_preview_btn")):
+                    atts = []
+                    try:
+                        for f in (files or []):
+                            try:
+                                atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                            except Exception:
+                                pass
+                    except Exception:
+                        atts = []
+                    st.session_state[ns("mail_preview_data")] = {
+                        "to": to or "",
+                        "cc": cc or "",
+                        "bcc": bcc or "",
+                        "subject": subj or "",
+                        "body_html": body or "",
+                        "attachments": atts,
+                        "from_addr": from_addr,
+                    }
+
+            with c2:
+                if st.button("Send email", use_container_width=True, key=ns("mail_send_btn")):
+                    try:
+                        send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                        st.success("Email sent.")
+                        for k in ["mail_to","mail_cc","mail_bcc","mail_subj","mail_body","mail_files"]:
+                            st.session_state.pop(ns(k), None)
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+
+        # Render preview if present
+        preview = st.session_state.get(ns("mail_preview_data"))
+        if preview:
+            import streamlit.components.v1 as components
             st.markdown("#### Email preview")
             st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
@@ -302,216 +275,13 @@ def render_outreach_tools():
             if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
             st.markdown(f"**Subject:** {preview.get('subject','')}")
             html = preview.get("body_html") or ""
-            components.html(
-                f"""
-                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
-                    {html}
-                </div>
-                """,
-                height=400,
-                scrolling=True,
-            )
-        atts = preview.get("attachments") or []
-        if atts:
-            names = [a.get("name","file") for a in atts]
-            st.caption("Attachments: " + ", ".join(names))
+            components.html(f"<div style='border:1px solid #ddd;padding:16px;margin-top:8px;'>{html}</div>",
+                            height=400, scrolling=True)
+            cc1, cc2, _ = st.columns([1,1,2])
+            with cc1:
+                if st.button("Close preview", key=ns("mail_preview_close")):
+                    st.session_state[ns("mail_preview_data")] = None
 
-        cc1, cc2, _ = st.columns([1,1,2])
-        with cc1:
-            if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
-                class _MemFile:
-                    def __init__(self, name, data):
-                        self.name = name
-                        self._data = data
-                    def getvalue(self):
-                        return self._data
-                mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
-                try:
-                    send_outreach_email(
-                        ACTIVE_USER,
-                        preview.get("to",""),
-                        preview.get("subject",""),
-                        preview.get("body_html",""),
-                        cc_addrs=preview.get("cc",""),
-                        bcc_addrs=preview.get("bcc",""),
-                        attachments=mem_files
-                    )
-                    st.success("Email sent.")
-                    st.session_state[ns_key("outreach::mail_preview_data")] = None
-                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                        NS.pop(k, None)
-                except Exception as e:
-                    st.error(f"Failed to send: {e}")
-        with cc2:
-            if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                st.session_state[ns_key("outreach::mail_preview_data")] = None
-    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
-    if not from_addr:
-        st.caption("No email configured for this user. Only Charles and Collin are set up.")
-    else:
-        st.caption(f"From: {from_addr}")
-
-    # Global preview state
-    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
-
-    # === Header-level controls ===
-    hc1, hc2, hc3 = st.columns([1,1,2])
-    with hc1:
-        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
-            # Pull current draft values from session, even if the composer expander is closed
-            to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
-            cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
-            bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
-        subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
-        body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
-        # Attachments are not easily accessible from header because uploader holds file objects;
-        # keep whatever was already captured if a composer preview was taken, else empty.
-        atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
-
-        st.session_state[ns_key("outreach::mail_preview_data")] = {
-            "to": to, "cc": cc, "bcc": bcc,
-            "subject": subj,
-            "body_html": body,
-            "attachments": atts,
-            "from_addr": from_addr,
-        }
-    with hc2:
-    if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
-        st.session_state[ns_key("outreach::mail_preview_data")] = None
-
-    with st.expander("Set/Update my Gmail App Password", expanded=False):
-    st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-    app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-    if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
-        set_user_smtp_app_password(ACTIVE_USER, app_pw)
-        st.success("Saved. You can now send emails from the Outreach composer.")
-
-    # === Quick Outreach Composer [hidden duplicate] ===
-    with st.expander("Quick Outreach Composer [hidden duplicate]", expanded=False):
-    to = st.text_input("To (comma-separated)",
-                       key=ns_key("outreach::mail_to"),
-                       placeholder="recipient@example.com, another@domain.com")
-    cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-    bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-    subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-    body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
-                        placeholder="<p>Hello.</p>")
-    files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
-            # Snapshot current fields (including attachments) for a pixel-accurate preview
-            atts = []
-            try:
-                for f in (files or []):
-                    try:
-                        atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                    except Exception:
-                        pass
-            except Exception:
-                atts = []
-            st.session_state[ns_key("outreach::mail_preview_data")] = {
-                "to": to or "",
-                "cc": cc or "",
-                "bcc": bcc or "",
-                "subject": subj or "",
-                "body_html": body or "",
-                "attachments": atts,
-                "from_addr": from_addr,
-            }
-    with c2:
-        if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
-            try:
-                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
-                st.success("Email sent.")
-                for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                    NS.pop(k, None)
-            except Exception as e:
-                st.error(f"Failed to send: {e}")
-
-    # === Unified Preview Block (used by both header-level and composer-level triggers) ===
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
-    if preview:
-    import streamlit.components.v1 as components
-    with st.container(border=True):
-        st.markdown("#### Email preview")
-        st.markdown(f"**From:** {preview.get('from_addr','')}")
-        if preview.get("to"):
-            st.markdown(f"**To:** {preview['to']}")
-        if preview.get("cc"):
-            st.markdown(f"**Cc:** {preview['cc']}")
-        if preview.get("bcc"):
-            st.markdown(f"**Bcc:** {preview['bcc']}")
-        st.markdown(f"**Subject:** {preview.get('subject','')}")
-
-        html = preview.get("body_html") or ""
-        components.html(
-            f"""
-            <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
-                {html}
-            </div>
-            """,
-            height=400,
-            scrolling=True,
-        )
-
-        atts = preview.get("attachments") or []
-        if atts:
-            names = [a.get("name","file") for a in atts]
-            st.caption("Attachments: " + ", ".join(names))
-
-        cc1, cc2, cc3 = st.columns([1,1,2])
-        with cc1:
-            if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
-                class _MemFile:
-                    def __init__(self, name, data):
-                        self.name = name
-                        self._data = data
-                    def getvalue(self):
-                        return self._data
-                mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
-                try:
-                    send_outreach_email(
-                        ACTIVE_USER,
-                        preview.get("to",""),
-                        preview.get("subject",""),
-                        preview.get("body_html",""),
-                        cc_addrs=preview.get("cc",""),
-                        bcc_addrs=preview.get("bcc",""),
-                        attachments=mem_files
-                    )
-                    st.success("Email sent.")
-                    st.session_state[ns_key("outreach::mail_preview_data")] = None
-                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                        NS.pop(k, None)
-                except Exception as e:
-                    st.error(f"Failed to send: {e}")
-        with cc2:
-            if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                st.session_state[ns_key("outreach::mail_preview_data")] = None
-    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
-    if not from_addr:
-    st.caption("No email configured for this user. Only Charles and Collin are set up.")
-    else:
-    st.caption(f"From: {from_addr}")
-
-    with st.expander("Set/Update my Gmail App Password", expanded=False):
-    st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-    app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-    if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
-        set_user_smtp_app_password(ACTIVE_USER, app_pw)
-        st.success("Saved. You can now send emails from the Outreach composer.")
-
-    for kind, chunk in tokens:
-    if not chunk:
-        continue
-    run = p.add_run(chunk)
-    if kind == 'bold':
-        run.bold = True
-    elif kind == 'italic':
-        run.italic = True
-    return p
 def _render_markdown_to_docx(doc, md_text):
     import re as _re
     lines = (md_text or '').splitlines()
@@ -1198,163 +968,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
 
 
-# --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
-
-
-    # Outreach block moved to render_outreach_tools()
-    # (This placeholder prevents UI from rendering inside _split.)
-    pass
-            st.success("Saved. You can now send emails from the Outreach composer.")
-
-    # Preview state
-    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
-
-    with st.expander("Quick Outreach Composer [hidden duplicate]", expanded=False):
-        to = st.text_input("To (comma-separated)",
-                           key=ns_key("outreach::mail_to"),
-                           placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
-                            placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
-                # Store a snapshot of the compose fields in session so a rerun preserves the preview
-                # For attachments, store name and raw bytes so we can reconstruct file-like objects later.
-                atts = []
-                try:
-                    for f in (files or []):
-                        try:
-                            atts.append({
-                                "name": getattr(f, "name", "file"),
-                                "data": f.getvalue()
-                            })
-                        except Exception:
-                            pass
-                except Exception:
-                    atts = []
-                st.session_state[ns_key("outreach::mail_preview_data")] = {
-                    "to": to or "",
-                    "cc": cc or "",
-                    "bcc": bcc or "",
-                    "subject": subj or "",
-                    "body_html": body or "",
-                    "attachments": atts,
-                    "from_addr": from_addr,
-                }
-        with c2:
-            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
-                try:
-                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
-                    st.success("Email sent.")
-                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                        NS.pop(k, None)
-                except Exception as e:
-                    st.error(f"Failed to send: {e}")
-
-    # If a preview has been requested, render it exactly like the HTML body will appear.
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
-    if preview:
-        import streamlit.components.v1 as components
-
-        with st.container(border=True):
-            st.markdown("#### Email preview")
-            # Header preview
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
-            if preview.get("to"):
-                st.markdown(f"**To:** {preview['to']}")
-            if preview.get("cc"):
-                st.markdown(f"**Cc:** {preview['cc']}")
-            if preview.get("bcc"):
-                st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
-
-            # Render the HTML body using a component so styles and tags are honored
-            html = preview.get("body_html") or ""
-            components.html(
-                f"""
-                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
-                    {html}
-                </div>
-                """,
-                height=400,
-                scrolling=True,
-            )
-
-            # Show attachment list if any
-            atts = preview.get("attachments") or []
-            if atts:
-                names = [a.get("name","file") for a in atts]
-                st.caption("Attachments: " + ", ".join(names))
-
-            # Confirm send buttons
-            cc1, cc2, cc3 = st.columns([1,1,2])
-            with cc1:
-                if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
-                    # Rebuild simple in memory files compatible with send_outreach_email expectations
-                    class _MemFile:
-                        def __init__(self, name, data):
-                            self.name = name
-                            self._data = data
-                        def getvalue(self):
-                            return self._data
-                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
-                    try:
-                        send_outreach_email(
-                            ACTIVE_USER,
-                            preview.get("to",""),
-                            preview.get("subject",""),
-                            preview.get("body_html",""),
-                            cc_addrs=preview.get("cc",""),
-                            bcc_addrs=preview.get("bcc",""),
-                            attachments=mem_files
-                        )
-                        st.success("Email sent.")
-                        st.session_state[ns_key("outreach::mail_preview_data")] = None
-                        # Clear compose fields
-                        for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                            NS.pop(k, None)
-                    except Exception as e:
-                        st.error(f"Failed to send: {e}")
-            with cc2:
-                if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[ns_key("outreach::mail_preview_data")] = None
-    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
-    if not from_addr:
-        st.caption("No email configured for this user. Only Charles and Collin are set up.")
-    else:
-        st.caption(f"From: {from_addr}")
-
-    with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
-            set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success("Saved. You can now send emails from the Outreach composer.")
-
-    with st.expander("Quick Outreach Composer [hidden duplicate]", expanded=False):
-        to = st.text_input("To (comma-separated)",
-                           key=ns_key("outreach::mail_to"),
-                           placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
-                            placeholder="<p>Hello...</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-        if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
-            try:
-                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
-                st.success("Email sent.")
-                for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
-                    NS.pop(k, None)
-            except Exception as e:
-                st.error(f"Failed to send: {e}")
-
+# Outreach UI moved to render_outreach_tools(); removed duplicate block.
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
 # === End Outreach Email block (moved) ===
