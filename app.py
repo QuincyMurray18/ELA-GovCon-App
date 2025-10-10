@@ -465,27 +465,6 @@ import numpy as np
 import streamlit as st
 
 
-
-def _ela_preview_email_ui(subject: str, body_html: str, to_addr: str = None, from_addr: str = None, show_edit: bool = False, key_prefix: str = "ela_prev"):
-    import streamlit as st
-    st.write("Preview")
-    cols = st.columns(2)
-    with cols[0]:
-        subj_val = st.text_input("Subject", value=subject or "", key=f"{key_prefix}_subj") if show_edit else st.text(f"Subject: {subject or ''}")
-        to_val = st.text_input("To", value=to_addr or "", key=f"{key_prefix}_to") if show_edit else st.text(f"To: {to_addr or ''}")
-        from_val = st.text_input("From", value=from_addr or "", key=f"{key_prefix}_from") if show_edit else st.text(f"From: {from_addr or ''}")
-    with cols[1]:
-        st.markdown("Body", help="Rendered below")
-    st.divider()
-    # Render the HTML body, allowing basic HTML
-    st.markdown(body_html or "", unsafe_allow_html=True)
-    if show_edit:
-        return subj_val, to_val, from_val
-    return subject, to_addr, from_addr
-
-
-
-
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
 from email.message import EmailMessage
@@ -926,15 +905,7 @@ def render_outreach_tools():
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("mail_subj"))
-        body = st.text_area("Message (HTML supported)")
-
-        # Live preview for single email
-        _ela_prev_live = st.checkbox("Live preview", value=True, help="See a rendered preview before sending")
-        if _ela_prev_live:
-            _ = _ela_preview_email_ui(subject, body_html, to_addr=to_addr, from_addr=from_addr, show_edit=False, key_prefix="ela_quick_prev")
-            st.info("This is a preview. Use the fields above to make changes before sending.")
-
-", key=ns_key("mail_body"), height=200,
+        body = st.text_area("Message (HTML supported)", key=ns_key("mail_body"), height=200)
                             placeholder="<p>Hello...</p>")
         files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("mail_files"))
         if st.button("Send email", use_container_width=True, key=ns_key("mail_send_btn")):
@@ -2998,31 +2969,6 @@ with legacy_tabs[3]:
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
     if st.button("Generate emails"):
         st.session_state["mail_bodies"] = []
-
-
-# Preview and finalize emails before sending
-if st.session_state.get("mail_bodies"):
-    st.subheader("Preview & finalize emails")
-    to_send_flags = []
-    updated_payloads = []
-    for idx, payload in enumerate(st.session_state["mail_bodies"]):
-        with st.expander(f"Email {idx + 1}: {payload.get('to','')} — {payload.get('subject','')}", expanded=False):
-            # editable subject and body if desired
-            edit = st.checkbox("Edit this email", key=f"ela_edit_{idx}", value=False)
-            if edit:
-                new_subject = st.text_input("Subject", value=payload.get("subject",""), key=f"ela_subj_{idx}")
-                new_body = st.text_area("HTML body", value=payload.get("html",""), height=240, key=f"ela_body_{idx}")
-                payload["subject"] = new_subject
-                payload["html"] = new_body
-            # always show a preview
-            _ela_preview_email_ui(payload.get("subject",""), payload.get("html",""), to_addr=payload.get("to"), from_addr=payload.get("from"), show_edit=False, key_prefix=f"ela_prev_{idx}")
-            include = st.checkbox("Queue this email to send", value=True, key=f"ela_inc_{idx}")
-            to_send_flags.append(include)
-            updated_payloads.append(payload)
-    # keep only those selected
-    st.session_state["mail_bodies"] = [p for p, inc in zip(updated_payloads, to_send_flags) if inc]
-    st.success(f"{len(st.session_state['mail_bodies'])} emails currently selected for sending")
-
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
             to_addr = row.get("email","")
