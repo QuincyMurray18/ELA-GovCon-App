@@ -549,10 +549,34 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            # Streamlit UploadedFile
+            if hasattr(att, "getvalue") and hasattr(att, "name"):
+                content = att.getvalue()
+                if content:
+                    msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=getattr(att, "name", "attachment"))
+                continue
+            # Dicts: {"name": ..., "data"/"content": ...}
+            if isinstance(att, dict):
+                fname = att.get("name") or att.get("filename") or "attachment"
+                data = att.get("data") if att.get("data") is not None else att.get("content")
+                if data:
+                    msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=fname)
+                continue
+            # String path
+            if isinstance(att, str):
+                import os
+                try:
+                    with open(att, "rb") as f:
+                        msg.add_attachment(f.read(), maintype="application", subtype="octet-stream", filename=os.path.basename(att))
+                except Exception:
+                    pass
+                continue
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+            try:
+                import streamlit as st
+                st.warning(f"Skipping attachment due to error: {e}")
+            except Exception:
+                pass}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -880,10 +904,34 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            # Streamlit UploadedFile
+            if hasattr(att, "getvalue") and hasattr(att, "name"):
+                content = att.getvalue()
+                if content:
+                    msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=getattr(att, "name", "attachment"))
+                continue
+            # Dicts: {"name": ..., "data"/"content": ...}
+            if isinstance(att, dict):
+                fname = att.get("name") or att.get("filename") or "attachment"
+                data = att.get("data") if att.get("data") is not None else att.get("content")
+                if data:
+                    msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=fname)
+                continue
+            # String path
+            if isinstance(att, str):
+                import os
+                try:
+                    with open(att, "rb") as f:
+                        msg.add_attachment(f.read(), maintype="application", subtype="octet-stream", filename=os.path.basename(att))
+                except Exception:
+                    pass
+                continue
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+            try:
+                import streamlit as st
+                st.warning(f"Skipping attachment due to error: {e}")
+            except Exception:
+                pass}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -997,7 +1045,7 @@ def render_outreach_tools():
 
     st.divider()
     
-    # ---------- Choose Generated Email & Attachments (required) ----------
+    # ---------- Choose Generated Email & Attachments (optional) ----------
     with st.container(border=True):
         st.markdown("#### Choose Generated Email")
         mb = st.session_state.get("mail_bodies") or []
@@ -1020,7 +1068,7 @@ def render_outreach_tools():
                 st.markdown(f"**Quote Due:** {due_disp}")
 
             # Attachments uploader (REQUIRED) placed below Quote Due
-            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+            extra_files = st.file_uploader("Attachments (optional)", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
@@ -1028,9 +1076,7 @@ def render_outreach_tools():
             # Generate preview button
             if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
                 files = st.session_state.get(SKEY_ATTACH) or []
-                if not files:
-                    st.warning("Please upload at least one attachment before generating the preview.")
-                else:
+                if True:
                     # Build display names from generated attachments + uploaded files
                     gen_names = _normalize_sel_attachments(sel.get("attachments"))
                     try:
@@ -1055,9 +1101,7 @@ def render_outreach_tools():
             with actions2[1]:
                 if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
-                    if not files:
-                        st.warning("Please upload at least one attachment before sending.")
-                    else:
+                    if True:
                         try:
                             merged_atts = _normalize_sel_attachments(sel.get("attachments")) + _normalize_extra_files(files)
                             _send_email(
@@ -1075,9 +1119,7 @@ def render_outreach_tools():
             with actions2[2]:
                 if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
-                    if not files:
-                        st.warning("Please upload at least one attachment before mass sending.")
-                    else:
+                    if True:
                         mb_all = st.session_state.get("mail_bodies") or []
                         sent = 0
                         failures = []
@@ -1127,7 +1169,7 @@ def render_outreach_tools():
 
             
             # Attachments uploader (positioned below Quote Due)
-            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+            extra_files = st.file_uploader("Attachments (optional)", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
@@ -1743,7 +1785,7 @@ def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
     with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
+            server.sendmail(from_addr, [to_addr], msg.as_string())
 
 
 def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
@@ -3706,7 +3748,7 @@ with legacy_tabs[3]:
     with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, [to_addr], msg.as_string())
+            server.sendmail(from_addr, [to_addr], msg.as_string())
 
         def _send_via_gmail(to_addr, subject, body):
             # Requires st.secrets: smtp_user, smtp_pass
