@@ -30,7 +30,6 @@ def _strip_markdown_to_plain(txt: str) -> str:
     return s
 
 import os, re, io, json, sqlite3, time
-import contextlib
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
@@ -464,6 +463,27 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 import pandas as pd
 import numpy as np
 import streamlit as st
+
+
+
+def _ela_preview_email_ui(subject: str, body_html: str, to_addr: str = None, from_addr: str = None, show_edit: bool = False, key_prefix: str = "ela_prev"):
+    import streamlit as st
+    st.write("Preview")
+    cols = st.columns(2)
+    with cols[0]:
+        subj_val = st.text_input("Subject", value=subject or "", key=f"{key_prefix}_subj") if show_edit else st.text(f"Subject: {subject or ''}")
+        to_val = st.text_input("To", value=to_addr or "", key=f"{key_prefix}_to") if show_edit else st.text(f"To: {to_addr or ''}")
+        from_val = st.text_input("From", value=from_addr or "", key=f"{key_prefix}_from") if show_edit else st.text(f"From: {from_addr or ''}")
+    with cols[1]:
+        st.markdown("Body", help="Rendered below")
+    st.divider()
+    # Render the HTML body, allowing basic HTML
+    st.markdown(body_html or "", unsafe_allow_html=True)
+    if show_edit:
+        return subj_val, to_val, from_val
+    return subject, to_addr, from_addr
+
+
 
 
 # === Outreach Email (per-user) helpers ===
@@ -906,7 +926,15 @@ def render_outreach_tools():
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("mail_body"), height=200,
+        body = st.text_area("Message (HTML supported)
+
+        # Live preview for single email
+        _ela_prev_live = st.checkbox("Live preview", value=True, help="See a rendered preview before sending")
+        if _ela_prev_live:
+            _ = _ela_preview_email_ui(subject, body_html, to_addr=to_addr, from_addr=from_addr, show_edit=False, key_prefix="ela_quick_prev")
+            st.info("This is a preview. Use the fields above to make changes before sending.")
+
+", key=ns_key("mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
         files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("mail_files"))
         if st.button("Send email", use_container_width=True, key=ns_key("mail_send_btn")):
@@ -2322,12 +2350,6 @@ TAB_LABELS = [
 ]
 tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
-# Safe name->tab mapping
-try:
-    tabs_by_label = {label: tabs[idx] for label, idx in TAB.items()}
-except Exception:
-    tabs_by_label = {str(i): t for i, t in enumerate(tabs)}
-
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
     "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
@@ -2431,19 +2453,42 @@ def compute_win_score_row(opp_row, past_perf_df):
     score = min(100, score)
     return score, factors
 
-# Past Performance tab body (auto-repaired stub)
-with contextlib.suppress(Exception):
-    with tabs_by_label.get('Past Performance', tabs[-1]):
+# Past Performance tab body (assumes appended as last-3 tab)
+try:
+    with legacy_tabs[-3]:
         st.subheader("Past Performance Library")
         st.caption("Create reusable blurbs linked by NAICS and agency. Insert into Proposal Builder later.")
-        # Minimal viewer to avoid state collisions; original code backed up in app_before_pp_simplify.py
-        pp_title = st.text_input("Project title", key="pp_title")
-        pp_agency = st.text_input("Agency", key="pp_agency")
-        pp_naics = st.text_input("NAICS", key="pp_naics")
-        pp_psc = st.text_input("PSC", key="pp_psc")
-        pp_period = st.text_input("Period", key="pp_period")
-        st.text_area("Highlights", height=120, key="pp_highlights")
-        st.success("Past Performance stub loaded. Restore original from backup if needed.")
+        conn = get_db()
+        df_pp = get_past_performance_df()
+        st.dataframe(df_pp, use_container_width=True)
+
+        with st.form("pp_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                title = st.text_input("Project title")
+                agency = st.text_input("Agency")
+                naics = st.text_input("NAICS", value="")
+                psc = st.text_input("PSC", value="")
+                period = st.text_input("Period", value="")
+            with col2:
+                value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0)
+                role = st.text_input("Role", value="Prime")
+                location = st.text_input("Location", value="")
+                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
+            contact_name = st.text_input("POC name", value="")
+            contact_email = st.text_input("POC email", value="")
+            contact_phone = st.text_input("POC phone", value="")
+            submit = st.form_submit_button("Save record")
+        if submit:
+            conn.execute("""insert into past_performance
+                (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
+                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
+            conn.commit()
+            st.success("Saved")
+            st.experimental_rerun()
+except Exception as _e_pp:
+    st.caption(f"[Past Performance tab init note: {_e_pp}]")
+
 # Quote Comparison tab body (last-2)
 try:
     with legacy_tabs[-2]:
@@ -2452,7 +2497,7 @@ try:
         df_opp = pd.read_sql_query("select id, title from opportunities order by posted desc", conn)
         df_vendors = pd.read_sql_query("select id, company from vendors order by company", conn)
         opp_opts = [""] + [f"{int(r.id)}: {r.title}" for _, r in df_opp.iterrows()]
-        opp_pick = st.selectbox("Opportunity", options=opp_opts, key='pp_'+str(hash(__name__)) + '_'+str(2476))
+        opp_pick = st.selectbox("Opportunity", options=opp_opts)
         if opp_pick:
             opp_id = int(opp_pick.split(":")[0])
 
@@ -2460,14 +2505,14 @@ try:
                 cols = st.columns(2)
                 with cols[0]:
                     v_opts = [""] + [f"{int(r.id)}: {r.company}" for _, r in df_vendors.iterrows()]
-                    v_pick = st.selectbox("Vendor", options=v_opts, key='pp_'+str(hash(__name__)) + '_'+str(2484))
-                    subtotal = st.number_input("Subtotal", min_value=0.0, step=100.0, value=0.0, key='pp_'+str(hash(__name__)) + '_'+str(2485))
-                    taxes = st.number_input("Taxes", min_value=0.0, step=50.0, value=0.0, key='pp_'+str(hash(__name__)) + '_'+str(2486))
-                    shipping = st.number_input("Shipping", min_value=0.0, step=50.0, value=0.0, key='pp_'+str(hash(__name__)) + '_'+str(2487))
+                    v_pick = st.selectbox("Vendor", options=v_opts)
+                    subtotal = st.number_input("Subtotal", min_value=0.0, step=100.0, value=0.0)
+                    taxes = st.number_input("Taxes", min_value=0.0, step=50.0, value=0.0)
+                    shipping = st.number_input("Shipping", min_value=0.0, step=50.0, value=0.0)
                 with cols[1]:
-                    lead_time = st.text_input("Lead time", value="", key='pp_'+str(hash(__name__)) + '_'+str(2489))
+                    lead_time = st.text_input("Lead time", value="")
                     notes = st.text_area("Notes", height=120, value="")
-                    files = st.text_input("Files list", value="", key='pp_'+str(hash(__name__)) + '_'+str(2491))
+                    files = st.text_input("Files list", value="")
                 add_btn = st.form_submit_button("Save quote line")
             if add_btn and v_pick:
                 vendor_id = int(v_pick.split(":")[0])
@@ -2484,7 +2529,7 @@ try:
                 st.info("No quotes yet")
             else:
                 st.dataframe(dfq[["company","subtotal","taxes","shipping","total","lead_time","notes"]], use_container_width=True)
-                pick_winner = st.selectbox("Pick winner", dfq["company"].tolist(), key="qc_pick_winner")
+                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist())
                 if pick_winner and st.button("Pick Winner"):
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
@@ -2563,7 +2608,7 @@ try:
                     pass
             df_scores = pd.DataFrame(rows).sort_values("score", ascending=False)
             st.dataframe(df_scores[["id","title","agency","naics","response_due","score"]], use_container_width=True)
-            pick = st.number_input("Opportunity ID for factor breakdown", min_value=0, step=1, value=0, key='pp_'+str(hash(__name__)) + '_'+str(2587))
+            pick = st.number_input("Opportunity ID for factor breakdown", min_value=0, step=1, value=0)
             if pick:
                 row = next((x for x in rows if x["id"]==int(pick)), None)
                 if row:
@@ -2586,9 +2631,9 @@ with legacy_tabs[0]:
     assignees = ["","Quincy","Charles","Collin"]
     f1, f2 = st.columns(2)
     with f1:
-        a_filter = st.selectbox("Filter by assignee", assignees, index=(assignees.index(st.session_state.get("active_profile", "")) if st.session_state.get("active_profile", "") in assignees else 0), key="assignee_filter")
+        a_filter = st.selectbox("Filter by assignee", assignees, index=(assignees.index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in assignees else 0))
     with f2:
-        s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0, key='pp_'+str(hash(__name__)) + '_'+str(2612))
+        s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
     try:
         if a_filter:
             df_opp = df_opp[df_opp["assignee"].fillna("")==a_filter]
@@ -2953,6 +2998,31 @@ with legacy_tabs[3]:
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
     if st.button("Generate emails"):
         st.session_state["mail_bodies"] = []
+
+
+# Preview and finalize emails before sending
+if st.session_state.get("mail_bodies"):
+    st.subheader("Preview & finalize emails")
+    to_send_flags = []
+    updated_payloads = []
+    for idx, payload in enumerate(st.session_state["mail_bodies"]):
+        with st.expander(f"Email {idx + 1}: {payload.get('to','')} — {payload.get('subject','')}", expanded=False):
+            # editable subject and body if desired
+            edit = st.checkbox("Edit this email", key=f"ela_edit_{idx}", value=False)
+            if edit:
+                new_subject = st.text_input("Subject", value=payload.get("subject",""), key=f"ela_subj_{idx}")
+                new_body = st.text_area("HTML body", value=payload.get("html",""), height=240, key=f"ela_body_{idx}")
+                payload["subject"] = new_subject
+                payload["html"] = new_body
+            # always show a preview
+            _ela_preview_email_ui(payload.get("subject",""), payload.get("html",""), to_addr=payload.get("to"), from_addr=payload.get("from"), show_edit=False, key_prefix=f"ela_prev_{idx}")
+            include = st.checkbox("Queue this email to send", value=True, key=f"ela_inc_{idx}")
+            to_send_flags.append(include)
+            updated_payloads.append(payload)
+    # keep only those selected
+    st.session_state["mail_bodies"] = [p for p, inc in zip(updated_payloads, to_send_flags) if inc]
+    st.success(f"{len(st.session_state['mail_bodies'])} emails currently selected for sending")
+
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
             to_addr = row.get("email","")
@@ -5278,7 +5348,7 @@ try:
                 new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f")
             nc5,nc6 = st.columns([1,1])
             with nc5:
-                agency = st.text_input("Agency", key="pp_agency")
+                new_agency = st.text_input("Agency", placeholder="e.g., USDA ARS")
             with nc6:
                 new_due = st.text_input("Due date (YYYY-MM-DD)", placeholder="2025-11-01")
             new_notes = st.text_area("Notes", height=80, placeholder="Key details, next actions...")
@@ -5648,244 +5718,3 @@ try:
 #     mount_compliance_assistant()
 except Exception:
     pass
-
-
-# =============================
-# Template Autofill (Docx) - Nonintrusive Add-On
-# =============================
-# This feature lets you select/upload a .docx "outline" (e.g., GovCon Proposal .docx)
-# and have Proposal Builder fill it automatically from entered fields.
-# It renders in a sidebar expander to avoid interfering with your current UI.
-
-try:
-    import streamlit as st
-    from io import BytesIO
-    from docx import Document
-    from docx.opc.exceptions import PackageNotFoundError
-    import json
-    import datetime as _dt
-    import os as _os
-except Exception as _e:
-    # If Streamlit/docx are not present in this environment, the rest of the app can still run.
-    # The Template Autofill UI simply won't render.
-    _st_autofill_available = False
-else:
-    _st_autofill_available = True
-
-def _detect_placeholders(text: str):
-    # Common placeholder patterns:
-    #  - Runs of X's: XXXXX, XX/XX/XXXX
-    #  - All-caps tokens like SOLICITATION, TITLE, AGENCY, UEI, CAGE
-    #  - Braced tokens like {{AGENCY}}, {{SOL_NUMBER}}, {{DATE}}
-    patterns = [
-        r"X{3,}[/X\-0-9]*",                # sequences of X with optional date-like separators
-        r"\{\{[A-Z0-9_ \-]+\}\}",          # {{TOKEN NAME}}
-        r"\b([A-Z]{3,}(?:\s+[A-Z]{2,})*)\b" # ALL CAPS words/phrases
-    ]
-    found = set()
-    for pat in patterns:
-        for m in re.finditer(pat, text):
-            found.add(m.group(0))
-    return found
-
-def _extract_all_placeholders(doc: Document):
-    ph = set()
-    # paragraphs
-    for p in doc.paragraphs:
-        ph |= _detect_placeholders(p.text)
-    # tables
-    for tbl in doc.tables:
-        for row in tbl.rows:
-            for cell in row.cells:
-                ph |= _detect_placeholders(cell.text)
-    # Clean noisy all-caps that are clearly not placeholders
-    noisy_drop = {"ELA", "LLC", "USA", "SAM", "WOSB", "VOSB", "SDVOSB", "HUBZONE", "EDWOSB", "NAICS"}
-    ph = {t for t in ph if t.strip() and t.strip() not in noisy_drop}
-    return sorted(ph, key=lambda s: (len(s), s))
-
-def _replace_text_in_run(run, replacements):
-    # Replace placeholders in a single run's text
-    txt = run.text
-    for k, v in replacements.items():
-        if not k:
-            continue
-        # Exact match replacement
-        txt = txt.replace(k, v)
-        # Handle braced variant if user entered key without braces
-        if not k.startswith("{{") and not k.endswith("}}"):
-            txt = txt.replace("{{"+k+"}}", v)
-    run.text = txt
-
-def _replace_in_doc(doc: Document, replacements: dict):
-    # Replace across paragraphs
-    for p in doc.paragraphs:
-        for run in p.runs:
-            _replace_text_in_run(run, replacements)
-    # Replace across tables
-    for tbl in doc.tables:
-        for row in tbl.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    for run in p.runs:
-                        _replace_text_in_run(run, replacements)
-
-def _suggest_defaults():
-    today = _dt.date.today().strftime("%m/%d/%Y")
-    return {
-        "DATE": today,
-        "SOLICITATION NUMBER": "",
-        "SOLICITATION": "",
-        "SOL NUMBER": "",
-        "TITLE": "",
-        "AGENCY": "",
-        "LOCATION": "",
-        "POC NAME": "",
-        "POC EMAIL": "",
-        "POC PHONE": "",
-        "COMPANY NAME": "ELA Management, LLC",
-        "ADDRESS": "15303 Kaston Dr, Houston, TX 77433",
-        "UEI": "",
-        "CAGE": "",
-        "NAICS": "",
-        "WEBSITE": "",
-        "EMAIL": "elamgmtllc@gmail.com",
-        "PHONE": "832-273-0498",
-    }
-
-if _st_autofill_available:
-    with st.sidebar.expander("Template Autofill (Docx)", expanded=False):
-        st.write("Auto-fill your GovCon proposal outline from Proposal Builder data and quick fields.")
-
-        # Template selection
-        default_template_path = None
-        # Try to suggest the uploaded template if present on disk
-        for cand in ["GovCon Proposal .docx", "GovCon_Proposal.docx", "GovCon-Proposal.docx"]:
-            if _os.path.exists(cand):
-                default_template_path = cand
-                break
-            if _os.path.exists("/mnt/data/" + cand):
-                default_template_path = "/mnt/data/" + cand
-                break
-
-        uploaded = st.file_uploader("Choose your .docx outline", type=["docx"], key="template_autofill_upload")
-        path_info = st.text_input("...or type a path to your .docx", value=default_template_path or "", help="If you already placed your outline on disk.")
-
-        doc = None
-        load_err = None
-        if uploaded is not None:
-            try:
-                doc = Document(uploaded)
-            except Exception as e:
-                load_err = f"Could not read the uploaded .docx: {e}"
-        elif path_info.strip():
-            try:
-                doc = Document(path_info.strip())
-            except Exception as e:
-                load_err = f"Could not open template at path '{path_info}': {e}"
-
-        if load_err:
-            st.error(load_err)
-
-        defaults = _suggest_defaults()
-        # Quick fields
-        st.subheader("Quick Fields")
-        with st.form("quick_fields_form", clear_on_submit=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                defaults["SOLICITATION NUMBER"] = st.text_input("Solicitation Number", value=defaults.get("SOLICITATION NUMBER",""))
-                defaults["TITLE"] = st.text_input("Title", value=defaults.get("TITLE",""))
-                defaults["AGENCY"] = st.text_input("Agency", value=defaults.get("AGENCY",""))
-                defaults["LOCATION"] = st.text_input("Location", value=defaults.get("LOCATION",""))
-                defaults["DATE"] = st.text_input("Date", value=defaults.get("DATE",""))
-                defaults["NAICS"] = st.text_input("NAICS Codes (comma-separated)", value=defaults.get("NAICS",""))
-                defaults["UEI"] = st.text_input("UEI", value=defaults.get("UEI",""))
-                defaults["CAGE"] = st.text_input("CAGE", value=defaults.get("CAGE",""))
-            with col2:
-                defaults["POC NAME"] = st.text_input("POC Name", value=defaults.get("POC NAME",""))
-                defaults["POC EMAIL"] = st.text_input("POC Email", value=defaults.get("POC EMAIL",""))
-                defaults["POC PHONE"] = st.text_input("POC Phone", value=defaults.get("POC PHONE",""))
-                defaults["COMPANY NAME"] = st.text_input("Company Name", value=defaults.get("COMPANY NAME","ELA Management, LLC"))
-                defaults["ADDRESS"] = st.text_input("Company Address", value=defaults.get("ADDRESS","15303 Kaston Dr, Houston, TX 77433"))
-                defaults["EMAIL"] = st.text_input("Company Email", value=defaults.get("EMAIL","elamgmtllc@gmail.com"))
-                defaults["PHONE"] = st.text_input("Company Phone", value=defaults.get("PHONE","832-273-0498"))
-                defaults["WEBSITE"] = st.text_input("Website", value=defaults.get("WEBSITE",""))
-
-            submitted_qf = st.form_submit_button("Save Quick Fields")
-
-        # Raw JSON overrides
-        st.subheader("Advanced: JSON Replacements")
-        st.caption("Optionally paste a JSON object of placeholder→value pairs to override quick fields and fill any custom placeholders.")
-        json_raw = st.text_area("JSON mapping", value="", placeholder='{"XXXXXXXXXXXXX":"12345", "John Doe":"Jane Smith"}')
-        replacements = dict(defaults)
-        if json_raw.strip():
-            try:
-                overrides = json.loads(json_raw)
-                if isinstance(overrides, dict):
-                    replacements.update({str(k): str(v) for k, v in overrides.items()})
-                else:
-                    st.warning("The JSON must be an object of key→value pairs.")
-            except Exception as e:
-                st.warning(f"JSON parse error: {e}")
-
-        extracted = []
-        if doc is not None:
-            extracted = _extract_all_placeholders(doc)
-            if extracted:
-                st.write("Detected placeholders (sample):", extracted[:25])
-            else:
-                st.info("No obvious placeholders detected. You can still proceed using your JSON mapping and quick fields.")
-
-        colA, colB = st.columns(2)
-        with colA:
-            do_preview = st.button("Preview Fill Count")
-        with colB:
-            do_export = st.button("Export Filled .docx")
-
-        if (do_preview or do_export) and doc is None:
-            st.error("Please upload or select a .docx outline first.")
-
-        if doc is not None and (do_preview or do_export):
-            # Try to build a combined replacement map that also covers "ALL CAPS colon" tokens, e.g., "Solicitation Number:"
-            expanded = dict(replacements)
-            # Generate common colon variants
-            for k, v in list(replacements.items()):
-                k_clean = k.strip().upper()
-                expanded[k_clean] = v
-                expanded[k_clean + ":"] = v
-                expanded["{{" + k_clean + "}}"] = v
-
-            # Count replacements by scanning text
-            before_text = []
-            after_text = []
-
-            # Clone doc by reloading bytes to avoid inplace changes on preview
-            import copy
-            doc_work = copy.deepcopy(doc)
-            _replace_in_doc(doc_work, expanded)
-
-            # Simple metric: count how many placeholder-like tokens from 'extracted' still remain
-            remaining = 0
-            for p in doc_work.paragraphs:
-                for token in extracted:
-                    if token in p.text:
-                        remaining += 1
-            for tbl in doc_work.tables:
-                for row in tbl.rows:
-                    for cell in row.cells:
-                        for token in extracted:
-                            if token in cell.text:
-                                remaining += 1
-
-            replaced_estimate = max(0, len(extracted) - remaining)
-            st.success(f"Estimated replacements: {replaced_estimate} of {len(extracted)} detectable placeholders.")
-
-            if do_export:
-                # Final replace into a fresh copy and stream for download
-                final_doc = copy.deepcopy(doc)
-                _replace_in_doc(final_doc, expanded)
-                bio = BytesIO()
-                final_doc.save(bio)
-                bio.seek(0)
-                out_name = "ELA_Filled_Proposal.docx"
-                st.download_button("Download Filled Proposal", data=bio.getvalue(), file_name=out_name, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                st.info("If some fields didn't fill, add them to JSON mapping exactly as they appear in the document (or wrap with {{...}}) and export again.")
