@@ -3706,7 +3706,7 @@ with legacy_tabs[3]:
     with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, [to_addr], msg.as_string())
+        server.sendmail(from_addr, [to_addr], msg.as_string())
 
         def _send_via_gmail(to_addr, subject, body):
             # Requires st.secrets: smtp_user, smtp_pass
