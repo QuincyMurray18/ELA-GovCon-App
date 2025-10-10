@@ -910,40 +910,116 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 
+
 def render_outreach_tools():
     import streamlit as st
     import streamlit.components.v1 as components
+    from datetime import date
 
-    # ---------- Helpers ----------
-    def _normalize_sel_attachments(sel_atts):
-        """Return a list of dicts with just 'name' for display when attachments in the generated item are names/dicts."""
-        out = []
-        base = sel_atts or []
-        try:
-            for a in base:
-                if isinstance(a, dict) and ("name" in a or "filename" in a):
-                    nm = a.get("name") or a.get("filename") or "attachment"
-                    out.append({"name": nm})
-                elif isinstance(a, str):
-                    out.append({"name": a})
-        except Exception:
-            pass
-        return out
+    def ns_key(k): 
+        return f"ns::{k}"
 
-    def _normalize_extra_files(files):
-        """Return a list of dicts with 'name' and raw 'data' from Streamlit UploadedFile objects."""
-        out = []
-        try:
-            for f in (files or []):
-                try:
-                    out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return out
+    st.session_state.setdefault(ns_key("outreach::drafts"), [])
+    st.session_state.setdefault(ns_key("outreach::attachments"), [])
+    st.session_state.setdefault(ns_key("outreach::preview"), None)
 
-    # Robust local sender that tries multiple implementations
+    st.markdown("### Quick Outreach Composer")
+
+    c1, c2 = st.columns([2,1])
+    with c1:
+        to_val = st.text_input("To", key=ns_key("outreach::to"), placeholder="comma-separated emails")
+        cc_val = st.text_input("Cc", key=ns_key("outreach::cc"), placeholder="optional")
+        bcc_val = st.text_input("Bcc", key=ns_key("outreach::bcc"), placeholder="optional")
+        subj_val = st.text_input("Subject", key=ns_key("outreach::subj"))
+    with c2:
+        quote_due = st.date_input("Quote Due", value=date.today(), key=ns_key("outreach::quote_due"))
+
+    uploads = st.file_uploader("Attachments (appear under Quote Due)", type=["pdf","docx","doc","txt","png","jpg"],
+                               accept_multiple_files=True, key=ns_key("outreach::uploader"))
+    if uploads is not None:
+        st.session_state[ns_key("outreach::attachments")] = [{"name": u.name, "data": u.read()} for u in uploads]
+
+    body_val = st.text_area("Message (HTML allowed)", key=ns_key("outreach::body"), height=240,
+                            placeholder="<p>Hello [Name], ...</p>")
+
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("Generate Emails", use_container_width=True, key=ns_key("outreach::gen")):
+            def _split_list(s):
+                if not s: return []
+                return [x.strip() for x in s.split(",") if x.strip()]
+            tos = _split_list(to_val)
+            if not tos:
+                st.warning("Please enter at least one recipient in 'To'.")
+            else:
+                drafts = []
+                for addr in tos:
+                    d = {
+                        "to": addr,
+                        "cc": cc_val,
+                        "bcc": bcc_val,
+                        "subject": subj_val,
+                        "body_html": body_val,
+                        "quote_due": str(quote_due),
+                        "attachments": list(st.session_state.get(ns_key('outreach::attachments'), [])),
+                    }
+                    drafts.append(d)
+                st.session_state[ns_key("outreach::drafts")] = drafts
+                st.session_state[ns_key("outreach::preview")] = drafts[0] if drafts else None
+                st.success(f"Generated {len(drafts)} draft(s).")
+
+    with b2:
+        if st.button("Send All Emails", use_container_width=True, key=ns_key("outreach::send_all")):
+            drafts = st.session_state.get(ns_key("outreach::drafts"), [])
+            if not drafts:
+                st.warning("No drafts to send. Click 'Generate Emails' first.")
+            else:
+                sent = 0
+                errs = []
+                for d in drafts:
+                    try:
+                        send_outreach_email(
+                            ACTIVE_USER,
+                            d.get("to",""),
+                            d.get("subject",""),
+                            d.get("body_html",""),
+                            cc_addrs=d.get("cc",""),
+                            bcc_addrs=d.get("bcc",""),
+                            attachments=d.get("attachments") or []
+                        )
+                        sent += 1
+                    except Exception as e:
+                        errs.append(f"{d.get('to','(no to)')}: {e}")
+                if sent:
+                    st.success(f"Sent {sent} / {len(drafts)}.")
+                if errs:
+                    st.error("Failures: " + " | ".join(errs))
+
+    preview = st.session_state.get(ns_key("outreach::preview"))
+    if preview:
+        with st.container(border=True):
+            st.markdown("#### Email preview")
+            st.markdown(f"**To:** {preview.get('to','')}")
+            if preview.get("cc"): st.markdown(f"**Cc:** {preview.get('cc')}")
+            if preview.get("bcc"): st.markdown(f"**Bcc:** {preview.get('bcc')}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
+
+            html = preview.get("body_html") or ""
+            components.html(
+                f"""
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
+                    {html}
+                </div>
+                """, height=360, scrolling=True
+            )
+
+            atts = preview.get("attachments") or []
+            if atts:
+                st.caption("Attachments")
+                for a in atts:
+                    st.write(f"- {a.get('name','attachment')}")
+
+
 def _send_email(user, to, subject, body_html, cc="", bcc="", attachments=None):
     try:
         return send_outreach_email(user, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
@@ -6491,127 +6567,3 @@ try:
 #     mount_compliance_assistant()
 except Exception:
     pass
-
-
-# === [Override] Outreach Tools (Simplified flow) ===
-def render_outreach_tools():
-    import streamlit as st
-    import streamlit.components.v1 as components
-    from datetime import date
-
-    # Namespaced state helper
-    def ns_key(k): 
-        return f"ns::{k}"
-
-    # Ensure state containers
-    if ns_key("outreach::drafts") not in st.session_state:
-        st.session_state[ns_key("outreach::drafts")] = []  # list of draft dicts
-    if ns_key("outreach::attachments") not in st.session_state:
-        st.session_state[ns_key("outreach::attachments")] = []  # list of {'name','data'}
-    if ns_key("outreach::preview") not in st.session_state:
-        st.session_state[ns_key("outreach::preview")] = None
-
-    st.markdown("### Quick Outreach Composer")
-
-    # Basic fields
-    c1, c2 = st.columns([2,1])
-    with c1:
-        to_val = st.text_input("To", key=ns_key("outreach::to"), placeholder="comma-separated emails")
-        cc_val = st.text_input("Cc", key=ns_key("outreach::cc"), placeholder="optional")
-        bcc_val = st.text_input("Bcc", key=ns_key("outreach::bcc"), placeholder="optional")
-        subj_val = st.text_input("Subject", key=ns_key("outreach::subj"))
-    with c2:
-        quote_due = st.date_input("Quote Due", value=date.today(), key=ns_key("outreach::quote_due"))
-
-    # Attachments directly under Quote Due (required by user)
-    uploads = st.file_uploader("Attachments (appear under Quote Due)", type=["pdf","docx","doc","txt","png","jpg"],
-                               accept_multiple_files=True, key=ns_key("outreach::uploader"))
-    if uploads:
-        # Persist as list[{'name','data'}]
-        st.session_state[ns_key("outreach::attachments")] = [{"name": u.name, "data": u.read()} for u in uploads]
-
-    body_val = st.text_area("Message (HTML allowed)", key=ns_key("outreach::body"), height=240,
-                            placeholder="<p>Hello [Name], ...</p>")
-
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("Generate Emails", use_container_width=True, key=ns_key("outreach::gen")):
-            # Build one or multiple drafts based on 'To'
-            def _split_list(s):
-                if not s: return []
-                return [x.strip() for x in s.split(",") if x.strip()]
-            tos = _split_list(to_val) or []
-            if not tos:
-                st.warning("Please enter at least one recipient in 'To'.")
-            else:
-                drafts = []
-                for addr in tos:
-                    d = {
-                        "to": addr,
-                        "cc": cc_val,
-                        "bcc": bcc_val,
-                        "subject": subj_val,
-                        "body_html": body_val,
-                        "quote_due": str(quote_due),
-                        "attachments": list(st.session_state.get(ns_key('outreach::attachments'), [])),
-                    }
-                    drafts.append(d)
-                st.session_state[ns_key("outreach::drafts")] = drafts
-                # Preview the first draft
-                st.session_state[ns_key("outreach::preview")] = drafts[0] if drafts else None
-                st.success(f"Generated {len(drafts)} draft(s).")
-
-    with b2:
-        if st.button("Send All Emails", use_container_width=True, key=ns_key("outreach::send_all")):
-            drafts = st.session_state.get(ns_key("outreach::drafts"), [])
-            if not drafts:
-                st.warning("No drafts to send. Click 'Generate Emails' first.")
-            else:
-                sent = 0
-                errs = []
-                for d in drafts:
-                    try:
-                        # Send using existing mailer (user-specific config)
-                        send_outreach_email(
-                            ACTIVE_USER,
-                            d.get("to",""),
-                            d.get("subject",""),
-                            d.get("body_html",""),
-                            cc_addrs=d.get("cc",""),
-                            bcc_addrs=d.get("bcc",""),
-                            attachments=d.get("attachments") or []
-                        )
-                        sent += 1
-                    except Exception as e:
-                        errs.append(f"{d.get('to','(no to)')}: {e}")
-                if sent:
-                    st.success(f"Sent {sent} / {len(drafts)}.")
-                if errs:
-                    st.error("Failures: " + " | ".join(errs))
-
-    # Live preview (no Close/Clear buttons per user request)
-    preview = st.session_state.get(ns_key("outreach::preview"))
-    if preview:
-        with st.container(border=True):
-            st.markdown("#### Email preview")
-            st.markdown(f"**To:** {preview.get('to','')}")
-            if preview.get("cc"): st.markdown(f"**Cc:** {preview.get('cc')}")
-            if preview.get("bcc"): st.markdown(f"**Bcc:** {preview.get('bcc')}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
-
-            html = preview.get("body_html") or ""
-            components.html(
-                f"""
-                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
-                    {html}
-                </div>
-                """, height=360, scrolling=True
-            )
-
-            # Show attachments list
-            atts = preview.get("attachments") or []
-            if atts:
-                st.caption("Attachments")
-                for a in atts:
-                    st.write(f"- {a.get('name','attachment')}")
-# === [End Override] Outreach Tools ===
