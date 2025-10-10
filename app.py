@@ -929,7 +929,7 @@ def render_outreach_tools():
     hc1, hc2, _ = st.columns([1,1,2])
     with hc1:
         if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
-            preview_payload = {
+            st.session_state[SKEY_PREVIEW] = {
                 "to": st.session_state.get(SKEY_TO, ""),
                 "cc": st.session_state.get(SKEY_CC, ""),
                 "bcc": st.session_state.get(SKEY_BCC, ""),
@@ -938,10 +938,81 @@ def render_outreach_tools():
                 "attachments": (st.session_state.get(SKEY_PREVIEW) or {}).get("attachments", []),
                 "from_addr": from_addr,
             }
-            st.session_state[SKEY_PREVIEW] = preview_payload
     with hc2:
         if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
             st.session_state[SKEY_PREVIEW] = None
+
+    # ALWAYS-VISIBLE PREVIEW (top of tab)
+    _fallback_preview = {
+        "to": st.session_state.get(SKEY_TO, ""),
+        "cc": st.session_state.get(SKEY_CC, ""),
+        "bcc": st.session_state.get(SKEY_BCC, ""),
+        "subject": st.session_state.get(SKEY_SUBJ, ""),
+        "body_html": st.session_state.get(SKEY_BODY, ""),
+        "attachments": [],
+        "from_addr": from_addr,
+    }
+    preview = st.session_state.get(SKEY_PREVIEW) or _fallback_preview
+
+    import streamlit.components.v1 as components
+    with st.container(border=True):
+        st.markdown("#### Email preview (live)")
+        st.markdown(f"**From:** {preview.get('from_addr','')}")
+        if preview.get("to"):
+            st.markdown(f"**To:** {preview['to']}")
+        if preview.get("cc"):
+            st.markdown(f"**Cc:** {preview['cc']}")
+        if preview.get("bcc"):
+            st.markdown(f"**Bcc:** {preview['bcc']}")
+        st.markdown(f"**Subject:** {preview.get('subject','')}")
+
+        html = (preview.get("body_html") or "").strip()
+        if not html:
+            st.info("No body content yet. Type a message below or click Preview current draft.", icon="ℹ️")
+        else:
+            components.html(
+                f"""
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
+                    {html}
+                </div>
+                """,
+                height=400,
+                scrolling=True,
+            )
+
+        atts = preview.get("attachments") or []
+        if atts:
+            names = [a.get("name","file") for a in atts]
+            st.caption("Attachments: " + ", ".join(names))
+
+        cc1, cc2, _ = st.columns([1,1,2])
+        with cc1:
+            if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
+                class _MemFile:
+                    def __init__(self, name, data):
+                        self.name = name
+                        self._data = data
+                    def getvalue(self):
+                        return self._data
+                mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts] if atts else None
+                try:
+                    send_outreach_email(
+                        ACTIVE_USER,
+                        preview.get("to",""),
+                        preview.get("subject",""),
+                        preview.get("body_html",""),
+                        cc_addrs=preview.get("cc",""),
+                        bcc_addrs=preview.get("bcc",""),
+                        attachments=mem_files
+                    )
+                    st.success("Email sent.")
+                    st.session_state[SKEY_PREVIEW] = None
+                except Exception as e:
+                    st.error(f"Failed to send: {e}")
+        with cc2:
+            if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
+                st.session_state[SKEY_PREVIEW] = None
+    # END PREVIEW
 
     # Credentials helper
     with st.expander("Set/Update my Gmail App Password", expanded=False):
@@ -1006,69 +1077,6 @@ def render_outreach_tools():
                         st.session_state[k] = "" if k != SKEY_PREVIEW else None
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
-
-    # Unified Preview Block
-    preview = st.session_state.get(SKEY_PREVIEW)
-    if preview is not None:
-        import streamlit.components.v1 as components
-        with st.container(border=True):
-            st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
-            if preview.get("to"):
-                st.markdown(f"**To:** {preview['to']}")
-            if preview.get("cc"):
-                st.markdown(f"**Cc:** {preview['cc']}")
-            if preview.get("bcc"):
-                st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
-            html = (preview.get("body_html") or "").strip()
-
-            if not html:
-                st.info("No body content yet. Type a message or paste HTML above, then click Preview.", icon="ℹ️")
-            else:
-                components.html(
-                    f"""
-                    <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
-                        {html}
-                    </div>
-                    """,
-                    height=400,
-                    scrolling=True,
-                )
-
-            atts = preview.get("attachments") or []
-            if atts:
-                names = [a.get("name","file") for a in atts]
-                st.caption("Attachments: " + ", ".join(names))
-
-            cc1, cc2, _ = st.columns([1,1,2])
-            with cc1:
-                if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
-                    class _MemFile:
-                        def __init__(self, name, data):
-                            self.name = name
-                            self._data = data
-                        def getvalue(self):
-                            return self._data
-                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
-                    try:
-                        send_outreach_email(
-                            ACTIVE_USER,
-                            preview.get("to",""),
-                            preview.get("subject",""),
-                            preview.get("body_html",""),
-                            cc_addrs=preview.get("cc",""),
-                            bcc_addrs=preview.get("bcc",""),
-                            attachments=mem_files
-                        )
-                        st.success("Email sent.")
-                        st.session_state[SKEY_PREVIEW] = None
-                    except Exception as e:
-                        st.error(f"Failed to send: {e}")
-            with cc2:
-                if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[SKEY_PREVIEW] = None
-
 
 
 
