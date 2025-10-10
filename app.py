@@ -1004,27 +1004,58 @@ def render_outreach_tools():
 
     st.divider()
     
-    # ---- Auto-load the latest generated email into preview (if new) ----
-    mb = st.session_state.get("mail_bodies") or []
-    if mb:
-        sel = mb[-1]  # latest generated
-        body = sel.get("body","") or ""
-        sig = f"{sel.get('to','')}|{sel.get('subject','')}|{len(body)}|{len(mb)}"
-        if not st.session_state.get(SKEY_PREVIEW) or st.session_state.get(SKEY_LASTSIG) != sig:
-            # Build preview snapshot with generated attachments (names only)
-            norm_atts = _normalize_sel_attachments(sel.get("attachments"))
-            st.session_state[SKEY_PREVIEW] = {
-                "to": sel.get("to",""),
-                "cc": sel.get("cc",""),
-                "bcc": sel.get("bcc",""),
-                "subject": sel.get("subject",""),
-                "body_html": body,
-                "from_addr": USER_EMAILS.get(ACTIVE_USER, ""),
-                "scope_summary": sel.get("scope_summary") or sel.get("scope") or "",
-                "quote_due": sel.get("quote_due") or sel.get("due") or "",
-                "attachments": norm_atts or [],   # display-only names
-            }
-            st.session_state[SKEY_LASTSIG] = sig
+    # ---------- Choose Generated Email & Attachments (required) ----------
+    with st.container(border=True):
+        st.markdown("#### Choose Generated Email")
+        mb = st.session_state.get("mail_bodies") or []
+        if not mb:
+            st.info("Generate emails to select one for preview.", icon="ℹ️")
+        else:
+            idx = st.number_input("Select one", min_value=1, max_value=len(mb), value=len(mb), step=1,
+                                  key=ns_key("outreach::pick_idx"))
+            sel = mb[int(idx)-1]
+
+            # Show key fields from the generated email
+            st.caption(f"**To:** {sel.get('to','')}")
+            st.caption(f"**Subject:** {sel.get('subject','')}")
+            scope_disp = sel.get("scope_summary") or sel.get("scope") or ""
+            due_disp = sel.get("quote_due") or sel.get("due") or ""
+            meta_cols = st.columns(2)
+            with meta_cols[0]:
+                st.markdown(f"**Scope Summary:** {scope_disp}")
+            with meta_cols[1]:
+                st.markdown(f"**Quote Due:** {due_disp}")
+
+            # Attachments uploader (REQUIRED) placed below Quote Due
+            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+                                           key=ns_key("outreach::extra_files"))
+            if extra_files is not None:
+                st.session_state[SKEY_ATTACH] = extra_files
+
+            # Generate preview button
+            if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
+                files = st.session_state.get(SKEY_ATTACH) or []
+                if not files:
+                    st.warning("Please upload at least one attachment before generating the preview.")
+                else:
+                    # Build display names from generated attachments + uploaded files
+                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
+                    try:
+                        upload_names = [{"name": getattr(f, "name", "file")} for f in files]
+                    except Exception:
+                        upload_names = []
+                    st.session_state[SKEY_PREVIEW] = {
+                        "to": sel.get("to",""),
+                        "cc": sel.get("cc",""),
+                        "bcc": sel.get("bcc",""),
+                        "subject": sel.get("subject",""),
+                        "body_html": sel.get("body",""),
+                        "from_addr": USER_EMAILS.get(ACTIVE_USER, ""),
+                        "scope_summary": scope_disp,
+                        "quote_due": due_disp,
+                        "attachments": (gen_names or []) + (upload_names or [])
+                    }
+                    st.success("Preview generated below.")
 
     # ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
