@@ -685,7 +685,6 @@ except NameError:
     _NS_KEY_COUNTS = {}
 def ns_key(key: str) -> str:
     base = f"{ACTIVE_USER}::{key}"
-    # increment and deduplicate within a single run
     c = _NS_KEY_COUNTS.get(base, 0) + 1
     _NS_KEY_COUNTS[base] = c
     if c == 1:
@@ -900,6 +899,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 def render_outreach_tools():
+
+    # Render-once guard to prevent duplicate UI when function is called multiple times
+    if st.session_state.get("__rendered::outreach"):
+        return
+    st.session_state["__rendered::outreach"] = True
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
