@@ -515,7 +515,8 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None):)
+    attachments = _coerce_attachments(attachments) if attachments else []
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
         raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
@@ -546,9 +547,9 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     if body_html:
         msg.add_alternative(body_html, subtype="html")
 
-    attachments = attachments or []
-    for att in attachments:
-        try:
+    attachments = _coerce_attachments(attachments or [])
+    for att in _coerce_attachments(attachments):
+try:
             content = att.getvalue()
             msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
@@ -564,7 +565,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     # ACTIVE_USER provided by your sign-in block
-    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, _coerce_attachments(attachments)=_coerce_attachments(attachments))
 # === End Outreach helpers ===
 
 
@@ -844,7 +845,7 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=_coerce_attachments(None), bcc_addrs=_coerce_attachments(None), attachments=_coerce_attachments(None)):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
         raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
@@ -938,7 +939,7 @@ def render_outreach_tools():
         # Preferred modern signature
         try:
             return send_outreach_email(user, to, subject, body_html,
-                                       cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+                                       cc_addrs=cc, bcc_addrs=bcc, _coerce_attachments(attachments)=_coerce_attachments(attachments))
         except Exception as e:
             last_err = e
         # Legacy fallback (active-user based)
@@ -1238,7 +1239,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = None  # attachments UI removed)
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1264,7 +1265,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc))
                     st.success("Email sent.")
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
@@ -1376,7 +1377,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = None  # attachments UI removed)
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1403,7 +1404,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc))
                     st.success("Email sent.")
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
@@ -1495,7 +1496,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = None  # attachments UI removed)
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1526,7 +1527,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc))
                     st.success("Email sent.")
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
@@ -1622,10 +1623,10 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = None  # attachments UI removed)
         if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
-                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc))
                 st.success("Email sent.")
                 for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                     NS.pop(k, None)
@@ -1633,7 +1634,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 st.error(f"Failed to send: {e}")
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
-    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, _coerce_attachments(attachments)=_coerce_attachments(attachments))
 # === End Outreach Email block (moved) ===
 
 
@@ -6453,6 +6454,51 @@ def outreach_send(to: str, subject: str, body_html: str, cc: str = "", bcc: str 
 from typing import List, Tuple, Dict
 import re
 import math
+
+# === BEGIN: Attachment helpers injected by GPT ===
+class _MemFile:
+    def __init__(self, name, data_bytes):
+        self.name = name
+        # store as bytes
+        self._buf = io.BytesIO(data_bytes if isinstance(data_bytes, (bytes, bytearray)) else (data_bytes or b""))
+    def getvalue(self):
+        return self._buf.getvalue()
+
+def _coerce_attachments(iterable):
+    safe = []
+    if not iterable:
+        return safe
+    for att in iterable:
+        try:
+            # already a memory file like object
+            if hasattr(att, "getvalue") and hasattr(att, "name"):
+                safe.append(att)
+                continue
+            # dict form: expect {'name': str, 'data': byteslike or filelike}
+            if isinstance(att, dict):
+                name = att.get("name") or "attachment.bin"
+                data = att.get("data")
+                # allow filelike with read()
+                if hasattr(data, "read"):
+                    data = data.read()
+                if data is None:
+                    data = b""
+                safe.append(_MemFile(name, data))
+                continue
+            # tuple form: (name, data)
+            if isinstance(att, tuple) and len(att) == 2:
+                name, data = att
+                if hasattr(data, "read"):
+                    data = data.read()
+                safe.append(_MemFile(name or "attachment.bin", data or b""))
+                continue
+        except Exception as _e:
+            # skip bad item
+            pass
+    return safe
+# === END: Attachment helpers injected by GPT ===
+
+
 
 # Safe syllable count for readability
 _vowels = "aeiouy"
