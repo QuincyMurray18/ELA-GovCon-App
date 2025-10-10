@@ -911,8 +911,10 @@ def render_outreach_tools():
     SKEY_SUBJ   = f"{ACTIVE_USER}::outreach::subj"
     SKEY_BODY   = f"{ACTIVE_USER}::outreach::body"
     SKEY_FILES  = f"{ACTIVE_USER}::outreach::files"
+    SKEY_MPREV_SHOW = f"{ACTIVE_USER}::outreach::main_preview_show"
 
     st.session_state.setdefault(SKEY_PREVIEW, None)
+    st.session_state.setdefault(SKEY_MPREV_SHOW, True)
     for k in (SKEY_TO, SKEY_CC, SKEY_BCC, SKEY_SUBJ, SKEY_BODY):
         st.session_state.setdefault(k, "")
 
@@ -963,7 +965,7 @@ def render_outreach_tools():
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
 
-    # ---- Account (restore): App Password ----
+    # ---- Account: App Password (restored) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
@@ -1036,6 +1038,7 @@ def render_outreach_tools():
         with st.container(border=True):
             st.markdown("#### Preview")
             tabs = st.tabs(["Compose preview", "Main Outreach"])
+
             # Tab 1: Compose snapshot preview (only when a snapshot exists)
             with tabs[0]:
                 snap = st.session_state.get(SKEY_PREVIEW)
@@ -1083,18 +1086,25 @@ def render_outreach_tools():
 
             # Tab 2: Main Outreach preview (passive, for generated emails)
             with tabs[1]:
-                mb = st.session_state.get("mail_bodies") or []
-                if not mb:
-                    st.info("Generate emails to preview them here.", icon="ℹ️")
+                if not st.session_state.get(SKEY_MPREV_SHOW, True):
+                    st.info("Main Outreach preview hidden.", icon="ℹ️")
+                    if st.button("Show main preview", key=ns_key("outreach::show_main_prev"), use_container_width=True):
+                        st.session_state[SKEY_MPREV_SHOW] = True
                 else:
-                    idx = st.number_input("Choose a generated email", min_value=1, max_value=len(mb), value=1, step=1)
-                    sel = mb[int(idx)-1]
-                    st.caption(f"**To:** {sel.get('to','')}")
-                    st.caption(f"**Subject:** {sel.get('subject','')}")
-                    components.html(
-                        f'<div style="border:1px solid #ddd;padding:12px;margin-top:6px;">{sel.get("body","")}</div>',
-                        height=340, scrolling=True
-                    )
+                    mb = st.session_state.get("mail_bodies") or []
+                    if not mb:
+                        st.info("Generate emails to preview them here.", icon="ℹ️")
+                    else:
+                        idx = st.number_input("Choose a generated email", min_value=1, max_value=len(mb), value=1, step=1)
+                        sel = mb[int(idx)-1]
+                        st.caption(f"**To:** {sel.get('to','')}")
+                        st.caption(f"**Subject:** {sel.get('subject','')}")
+                        components.html(
+                            f'<div style="border:1px solid #ddd;padding:12px;margin-top:6px;">{sel.get("body","")}</div>',
+                            height=340, scrolling=True
+                        )
+                        if st.button("Close main preview", key=ns_key("outreach::close_main_prev"), use_container_width=True):
+                            st.session_state[SKEY_MPREV_SHOW] = False
 
 def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
@@ -3650,6 +3660,34 @@ with legacy_tabs[3]:
             reply_to = st.secrets.get("smtp_reply_to", None)
             _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.office365.com", 587, smtp_user, smtp_pass, reply_to)
 
+    
+
+
+if st.session_state.get("mail_bodies"):
+    mb = st.session_state.get("mail_bodies") or []
+    if mb:
+        st.markdown("### Review generated emails")
+        idx = st.number_input("Pick a generated email to preview", min_value=1, max_value=len(mb), value=1, step=1)
+        sel = mb[int(idx)-1]
+        cprev, cload = st.columns([3,1])
+        with cprev:
+            st.markdown(f"**To:** {sel.get('to','')}")
+            st.markdown(f"**Subject:** {sel.get('subject','')}")
+            st.caption("Preview of body (HTML):")
+            import streamlit.components.v1 as components
+            components.html(f'''
+                <div style="border:1px solid #ddd;padding:12px;margin-top:6px;">
+                    {sel.get("body","")}
+                </div>
+            ''', height=300, scrolling=True)
+        with cload:
+            if st.button("Load into top preview"):
+                load_outreach_preview(
+                    to=sel.get("to",""),
+                    subject=sel.get("subject",""),
+                    html=sel.get("body","")
+                )
+                st.success("Loaded into the Outreach preview at the top.")
 
     # Attach files (optional) to ALL outgoing emails in this batch
     merge_files = st.file_uploader(
