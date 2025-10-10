@@ -900,6 +900,53 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 def render_outreach_tools():
+    # Always-visible preview (Outreach)
+    _key = lambda k: f"{ACTIVE_USER}::outreach::{k}"
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    snap = st.session_state.get(_key("preview")) or {
+        "to": st.session_state.get(_key("to"), ""),
+        "cc": st.session_state.get(_key("cc"), ""),
+        "bcc": st.session_state.get(_key("bcc"), ""),
+        "subject": st.session_state.get(_key("subj"), ""),
+        "body_html": st.session_state.get(_key("body"), ""),
+        "attachments": [],
+        "from_addr": from_addr,
+    }
+    import streamlit.components.v1 as components
+    with st.container(border=True):
+        st.markdown("#### Email preview (Outreach)")
+        if snap.get("from_addr"): st.markdown(f"**From:** {snap['from_addr']}")
+        if snap.get("to"): st.markdown(f"**To:** {snap['to']}")
+        if snap.get("cc"): st.markdown(f"**Cc:** {snap['cc']}")
+        if snap.get("bcc"): st.markdown(f"**Bcc:** {snap['bcc']}")
+        if snap.get("subject"): st.markdown(f"**Subject:** {snap['subject']}")
+        _html = (snap.get("body_html") or "").strip()
+        if not _html:
+            st.info("No body content yet. Type below or use Preview current draft.", icon="ℹ️")
+        else:
+            components.html(
+                f'<div style="border:1px solid #ddd;padding:12px;margin-top:6px;">{_html}</div>',
+                height=400, scrolling=True
+            )
+
+def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    key = lambda k: f"{ACTIVE_USER}::outreach::{k}"
+    st.session_state[key("to")] = to or ""
+    st.session_state[key("cc")] = cc or ""
+    st.session_state[key("bcc")] = bcc or ""
+    st.session_state[key("subj")] = subject or ""
+    st.session_state[key("body")] = html or ""
+    st.session_state[key("preview")] = {
+        "to": to or "",
+        "cc": cc or "",
+        "bcc": bcc or "",
+        "subject": subject or "",
+        "body_html": html or "",
+        "attachments": [],
+        "from_addr": from_addr,
+    }
+
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
@@ -3440,6 +3487,31 @@ with legacy_tabs[3]:
 
 
 if st.session_state.get("mail_bodies"):
+    mb = st.session_state.get("mail_bodies") or []
+    if mb:
+        st.markdown("### Review generated emails")
+        idx = st.number_input("Pick a generated email to preview", min_value=1, max_value=len(mb), value=1, step=1)
+        sel = mb[int(idx)-1]
+        cprev, cload = st.columns([3,1])
+        with cprev:
+            st.markdown(f"**To:** {sel.get('to','')}")
+            st.markdown(f"**Subject:** {sel.get('subject','')}")
+            st.caption("Preview of body (HTML):")
+            import streamlit.components.v1 as components
+            components.html(f'''
+                <div style="border:1px solid #ddd;padding:12px;margin-top:6px;">
+                    {sel.get("body","")}
+                </div>
+            ''', height=300, scrolling=True)
+        with cload:
+            if st.button("Load into top preview"):
+                load_outreach_preview(
+                    to=sel.get("to",""),
+                    subject=sel.get("subject",""),
+                    html=sel.get("body","")
+                )
+                st.success("Loaded into the Outreach preview at the top.")
+
     # Attach files (optional) to ALL outgoing emails in this batch
     merge_files = st.file_uploader(
         "Attachments (drag & drop) — applied to all emails in this send",
