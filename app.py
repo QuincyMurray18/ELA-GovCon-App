@@ -515,7 +515,7 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
         raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
@@ -546,13 +546,81 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     if body_html:
         msg.add_alternative(body_html, subtype="html")
 
+    # Optional read receipts
+    if add_read_receipts:
+        # These headers work only if recipient mail server honors them
+        msg["Disposition-Notification-To"] = cfg["from_addr"]
+        msg["Return-Receipt-To"] = cfg["from_addr"]
+
+    # Optional tracking pixel
+    if tracking_pixel_url and body_html:
+        try:
+            import uuid, urllib.parse as _u
+            tid = tracking_id or str(uuid.uuid4())
+            qp = {"id": tid, "to": ",".join(to_list)}
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            body_html = (body_html or "") + pixel
+            # Replace the last HTML alternative with updated body_html
+            msg.clear_content()
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+            msg.set_content(plain or "(no content)")
+            msg.add_alternative(body_html, subtype="html")
+        except Exception:
+            pass
+
+
+    
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            filename = getattr(att, "name", None)
+            content = None
+
+            # Streamlit UploadedFile or file-like object with getvalue or read
+            if hasattr(att, "getvalue"):
+                content = att.getvalue()
+            elif hasattr(att, "read"):
+                try:
+                    att.seek(0)
+                except Exception:
+                    pass
+                content = att.read()
+            # Dict form: {"name": ..., "data": bytes} or {"path": ...}
+            elif isinstance(att, dict):
+                filename = att.get("name", filename or "file")
+                if "data" in att and att["data"] is not None:
+                    content = att["data"]
+                elif "content" in att and att["content"] is not None:
+                    val = att["content"]
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
+                elif "path" in att:
+                    import os
+                    path = att["path"]
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(path)
+            # Raw bytes
+            elif isinstance(att, (bytes, bytearray)):
+                content = bytes(att)
+            # String path
+            elif isinstance(att, str):
+                import os
+                if os.path.exists(att):
+                    with open(att, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(att)
+
+            if content is None:
+                raise ValueError("Unsupported attachment type")
+
+            if not filename:
+                filename = "attachment.bin"
+
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -844,7 +912,7 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
         raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
@@ -876,14 +944,82 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     if body_html:
         msg.add_alternative(body_html, subtype="html")
 
+    # Optional read receipts
+    if add_read_receipts:
+        # These headers work only if recipient mail server honors them
+        msg["Disposition-Notification-To"] = cfg["from_addr"]
+        msg["Return-Receipt-To"] = cfg["from_addr"]
+
+    # Optional tracking pixel
+    if tracking_pixel_url and body_html:
+        try:
+            import uuid, urllib.parse as _u
+            tid = tracking_id or str(uuid.uuid4())
+            qp = {"id": tid, "to": ",".join(to_list)}
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            body_html = (body_html or "") + pixel
+            # Replace the last HTML alternative with updated body_html
+            msg.clear_content()
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+            msg.set_content(plain or "(no content)")
+            msg.add_alternative(body_html, subtype="html")
+        except Exception:
+            pass
+
+
     # Attachments
+    
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            filename = getattr(att, "name", None)
+            content = None
+
+            # Streamlit UploadedFile or file-like object with getvalue or read
+            if hasattr(att, "getvalue"):
+                content = att.getvalue()
+            elif hasattr(att, "read"):
+                try:
+                    att.seek(0)
+                except Exception:
+                    pass
+                content = att.read()
+            # Dict form: {"name": ..., "data": bytes} or {"path": ...}
+            elif isinstance(att, dict):
+                filename = att.get("name", filename or "file")
+                if "data" in att and att["data"] is not None:
+                    content = att["data"]
+                elif "content" in att and att["content"] is not None:
+                    val = att["content"]
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
+                elif "path" in att:
+                    import os
+                    path = att["path"]
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(path)
+            # Raw bytes
+            elif isinstance(att, (bytes, bytearray)):
+                content = bytes(att)
+            # String path
+            elif isinstance(att, str):
+                import os
+                if os.path.exists(att):
+                    with open(att, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(att)
+
+            if content is None:
+                raise ValueError("Unsupported attachment type")
+
+            if not filename:
+                filename = "attachment.bin"
+
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -899,10 +1035,98 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 
+
+def _normalize_extra_files(files):
+    """Normalize a list of attachments into dicts with name and raw bytes in data."""
+    out = []
+    try:
+        for f in (files or []):
+            # Already a normalized dict
+            if isinstance(f, dict):
+                name = f.get("name") or f.get("filename") or "file"
+                if "data" in f and f["data"] is not None:
+                    out.append({"name": name, "data": f["data"]})
+                    continue
+                if "content" in f and f["content"] is not None:
+                    val = f["content"]
+                    if isinstance(val, (bytes, bytearray)):
+                        out.append({"name": name, "data": bytes(val)})
+                    elif isinstance(val, str):
+                        import os
+                        if os.path.exists(val):
+                            with open(val, "rb") as fh:
+                                out.append({"name": name, "data": fh.read()})
+                        else:
+                            out.append({"name": name, "data": val.encode("utf-8")})
+                    continue
+                if "path" in f and f["path"]:
+                    import os
+                    path = f["path"]
+                    try:
+                        with open(path, "rb") as fh:
+                            out.append({"name": name or os.path.basename(path), "data": fh.read()})
+                    except Exception:
+                        pass
+                    continue
+
+            # Streamlit UploadedFile or similar
+            if hasattr(f, "getvalue"):
+                out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                continue
+            if hasattr(f, "read"):
+                try:
+                    f.seek(0)
+                except Exception:
+                    pass
+                try:
+                    data = f.read()
+                    out.append({"name": getattr(f, "name", "file"), "data": data})
+                    continue
+                except Exception:
+                    pass
+
+            # File path string
+            if isinstance(f, str):
+                import os
+                if os.path.exists(f):
+                    try:
+                        with open(f, "rb") as fh:
+                            out.append({"name": os.path.basename(f), "data": fh.read()})
+                        continue
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return out
+
+
+
+def _log_contact_outreach(entries):
+    """Append outreach log entries to data/contact_outreach_log.json"""
+    try:
+        import os, json, datetime
+        base = os.path.join(os.getcwd(), "data")
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, "contact_outreach_log.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+        timestamp = datetime.datetime.utcnow().isoformat()+"Z"
+        for e in entries or []:
+            e.setdefault("ts_utc", timestamp)
+        existing.extend(entries or [])
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2)
+        return path
+    except Exception:
+        return None
+
+
 def render_outreach_tools():
     import streamlit as st
     import streamlit.components.v1 as components
-
     # ---------- Helpers ----------
     def _normalize_sel_attachments(sel_atts):
         """Return a list of dicts with just 'name' for display when attachments in the generated item are names/dicts."""
@@ -919,15 +1143,63 @@ def render_outreach_tools():
             pass
         return out
 
-    def _normalize_extra_files(files):
-        """Return a list of dicts with 'name' and raw 'data' from Streamlit UploadedFile objects."""
+    
         out = []
         try:
             for f in (files or []):
-                try:
+                # Already-normalized dict: pass through or convert
+                if isinstance(f, dict):
+                    name = f.get("name") or f.get("filename") or "file"
+                    if "data" in f and f["data"] is not None:
+                        out.append({"name": name, "data": f["data"]})
+                    elif "content" in f and f["content"] is not None:
+                        val = f["content"]
+                        if isinstance(val, (bytes, bytearray)):
+                            out.append({"name": name, "data": bytes(val)})
+                        elif isinstance(val, str):
+                            # If looks like a path, try to read from disk
+                            import os
+                            if os.path.exists(val):
+                                with open(val, "rb") as fh:
+                                    out.append({"name": name, "data": fh.read()})
+                            else:
+                                out.append({"name": name, "data": val.encode("utf-8")})
+                    elif "path" in f and f["path"]:
+                        import os
+                        path = f["path"]
+                        try:
+                            with open(path, "rb") as fh:
+                                out.append({"name": name or os.path.basename(path), "data": fh.read()})
+                        except Exception:
+                            pass
+                    continue
+
+                # Streamlit UploadedFile or similar
+                if hasattr(f, "getvalue"):
                     out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                except Exception:
-                    pass
+                    continue
+                if hasattr(f, "read"):
+                    try:
+                        f.seek(0)
+                    except Exception:
+                        pass
+                    try:
+                        data = f.read()
+                        out.append({"name": getattr(f, "name", "file"), "data": data})
+                        continue
+                    except Exception:
+                        pass
+
+                # File path
+                if isinstance(f, str):
+                    import os
+                    if os.path.exists(f):
+                        try:
+                            with open(f, "rb") as fh:
+                                out.append({"name": os.path.basename(f), "data": fh.read()})
+                            continue
+                        except Exception:
+                            pass
         except Exception:
             pass
         return out
@@ -974,6 +1246,107 @@ def render_outreach_tools():
         with top_l:
             st.markdown("### ✉️ Outreach")
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
+        with st.container(border=True):
+            mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
+
+
+    
+    # ---- Contacts Outreach ----
+    if mode == "Contacts":
+        with st.container(border=True):
+            st.markdown("#### Contacts")
+            # Read receipts + tracking pixel options
+            with st.expander("Delivery & Tracking options", expanded=False):
+                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
+                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
+            # Load contacts from CSV
+            col_c1, col_c2 = st.columns([2,1])
+            with col_c1:
+                search = st.text_input("Search contacts", key="outreach_contact_search")
+            with col_c2:
+                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
+            contacts = []
+            import os, csv
+            # Prefer uploaded CSV
+            if uploaded is not None:
+                try:
+                    txt = uploaded.getvalue().decode("utf-8", errors="ignore")
+                    for row in csv.DictReader(txt.splitlines()):
+                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
+                        if em:
+                            contacts.append({"name": nm, "email": em})
+                except Exception:
+                    pass
+            else:
+                # Try default data/contacts.csv
+                try:
+                    path = os.path.join(os.getcwd(), "data", "contacts.csv")
+                    if os.path.exists(path):
+                        with open(path, "r", encoding="utf-8") as f:
+                            for row in csv.DictReader(f):
+                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
+                                if em:
+                                    contacts.append({"name": nm, "email": em})
+                except Exception:
+                    pass
+
+            # Filter by search
+            s = (search or "").lower().strip()
+            if s:
+                contacts = [c for c in contacts if s in (c.get("name","")+c.get("email","")).lower()]
+
+            # Options
+            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
+            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
+
+            subj = st.text_input("Subject", key="outreach_contact_subject")
+            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
+            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
+
+            if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
+                emails = []
+                label_to_email = {}
+                for c, lbl in zip(contacts, labels):
+                    label_to_email[lbl] = c["email"]
+                for lbl in selected:
+                    em = label_to_email.get(lbl)
+                    if em:
+                        emails.append(em)
+                if not emails:
+                    st.warning("Select at least one contact.")
+                elif not subj or not body:
+                    st.warning("Subject and body are required.")
+                else:
+                    # Normalize files
+                    atts = _normalize_extra_files(c_files)
+                    # Tracking id per batch
+                    import uuid
+                    batch_id = str(uuid.uuid4())
+                    failures = []
+                    sent = 0
+                    for em in emails:
+                        try:
+                            send_outreach_email(
+                                ACTIVE_USER, [em], subj, body,
+                                cc_addrs=None, bcc_addrs=None, attachments=atts,
+                                add_read_receipts=want_rr, tracking_pixel_url=(pixel_url or None),
+                                tracking_id=batch_id + "::" + em
+                            )
+                            sent += 1
+                        except Exception as e:
+                            failures.append((em, str(e)))
+                    # Log
+                    _log_contact_outreach([{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
+                    if failures:
+                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + "; ".join([f"{a} ({b})" for a,b in failures]))
+                    else:
+                        st.success(f"Sent {sent} / {len(emails)}")
+        # Stop rendering vendor section if Contacts mode
+        return
+
+
         with top_r:
             pass
 
