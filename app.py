@@ -925,7 +925,13 @@ def render_outreach_tools():
         try:
             for f in (files or []):
                 try:
-                    out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                    # Prefer .getvalue(), but fall back to .read() if needed
+                    data = None
+                    if hasattr(f, 'getvalue'):
+                        data = f.getvalue()
+                    elif hasattr(f, 'read'):
+                        data = f.read()
+                    out.append({"name": getattr(f, "name", "file"), "data": data or b""})
                 except Exception:
                     pass
         except Exception:
@@ -1020,7 +1026,7 @@ def render_outreach_tools():
                 st.markdown(f"**Quote Due:** {due_disp}")
 
             # Attachments uploader (REQUIRED) placed below Quote Due
-            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+            extra_files = st.file_uploader("Attachments (optional)", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
@@ -1028,9 +1034,7 @@ def render_outreach_tools():
             # Generate preview button
             if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
                 files = st.session_state.get(SKEY_ATTACH) or []
-                if not files:
-                    st.warning("Please upload at least one attachment before generating the preview.")
-                else:
+                if True:
                     # Build display names from generated attachments + uploaded files
                     gen_names = _normalize_sel_attachments(sel.get("attachments"))
                     try:
@@ -1055,9 +1059,7 @@ def render_outreach_tools():
             with actions2[1]:
                 if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
-                    if not files:
-                        st.warning("Please upload at least one attachment before sending.")
-                    else:
+                    if True:
                         try:
                             merged_atts = _normalize_sel_attachments(sel.get("attachments")) + _normalize_extra_files(files)
                             _send_email(
@@ -1075,9 +1077,7 @@ def render_outreach_tools():
             with actions2[2]:
                 if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
-                    if not files:
-                        st.warning("Please upload at least one attachment before mass sending.")
-                    else:
+                    if True:
                         mb_all = st.session_state.get("mail_bodies") or []
                         sent = 0
                         failures = []
@@ -1126,12 +1126,7 @@ def render_outreach_tools():
                                  f"{snap['quote_due']}</div>")
 
             
-            # Attachments uploader (positioned below Quote Due)
-            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
-                                           key=ns_key("outreach::extra_files"))
-            if extra_files is not None:
-                st.session_state[SKEY_ATTACH] = extra_files
-
+            # Attachment uploader removed here to avoid duplicates; use the one under 'Choose Generated Email'.
             # Body
             body_html = (snap.get("body_html") or "").strip() or "<p><i>(No body content)</i></p>"
 
