@@ -949,50 +949,22 @@ def render_outreach_tools():
             except Exception as e:
                 st.error(f"Save failed: {e}")
 
-    st.markdown("### Quick Outreach Composer")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.text_input("To", key=ns_key("outreach::mail_to"), placeholder="name@example.com; a@b.com")
-        st.text_input("CC", key=ns_key("outreach::mail_cc"))
-        st.text_input("BCC", key=ns_key("outreach::mail_bcc"))
-        st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-    with col2:
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=220, placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1:
-        if st.button("Preview email", use_container_width=True, key=ns_key("outreach::compose_preview_btn")):
-            atts = []
-            try:
-                for f in (files or []):
-                    try:
-                        atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            st.session_state[ns_key("outreach::mail_preview_data")] = {
-                "to": st.session_state.get(ns_key("outreach::mail_to"), ""),
-                "cc": st.session_state.get(ns_key("outreach::mail_cc"), ""),
-                "bcc": st.session_state.get(ns_key("outreach::mail_bcc"), ""),
-                "subject": st.session_state.get(ns_key("outreach::mail_subj"), ""),
-                "body_html": st.session_state.get(ns_key("outreach::mail_body"), ""),
-                "attachments": atts,
-            }
-    with c2:
-        if st.button("Send email", use_container_width=True, key=ns_key("outreach::compose_send_btn")):
-            try:
-                preview = st.session_state.get(ns_key("outreach::mail_preview_data")) or {
-                    "to": st.session_state.get(ns_key("outreach::mail_to"), ""),
-                    "cc": st.session_state.get(ns_key("outreach::mail_cc"), ""),
-                    "bcc": st.session_state.get(ns_key("outreach::mail_bcc"), ""),
-                    "subject": st.session_state.get(ns_key("outreach::mail_subj"), ""),
-                    "body_html": st.session_state.get(ns_key("outreach::mail_body"), ""),
-                    "attachments": [],
-                }
-                # If no preview attachments captured yet, harvest from uploader
-                if not preview.get("attachments"):
+    with st.expander("Quick Outreach Composer", expanded=False):
+        st.caption("Compose an email to prospects or COs. Fill the fields below and preview before sending.")
+            st.markdown("### Quick Outreach Composer")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_input("To", key=ns_key("outreach::mail_to"), placeholder="name@example.com; a@b.com")
+                st.text_input("CC", key=ns_key("outreach::mail_cc"))
+                st.text_input("BCC", key=ns_key("outreach::mail_bcc"))
+                st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+            with col2:
+                body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=220, placeholder="<p>Hello.</p>")
+                files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        
+            c1, c2, c3 = st.columns([1,1,2])
+            with c1:
+                if st.button("Preview email", use_container_width=True, key=ns_key("outreach::compose_preview_btn")):
                     atts = []
                     try:
                         for f in (files or []):
@@ -1002,31 +974,61 @@ def render_outreach_tools():
                                 pass
                     except Exception:
                         pass
-                    preview["attachments"] = atts
-
-                # Convert attachments for send
-                mem_files = []
-                for a in preview.get("attachments") or []:
-                    mem_files.append((a.get("name") or "file", a.get("data") or b""))
-
-                send_outreach_email(
-                    ACTIVE_USER,
-                    preview.get("to", ""),
-                    preview.get("subject", ""),
-                    preview.get("body_html", ""),
-                    cc_addrs=preview.get("cc", ""),
-                    bcc_addrs=preview.get("bcc", ""),
-                    attachments=mem_files
-                )
-                st.success("Email sent.")
-                st.session_state[ns_key("outreach::mail_preview_data")] = None
-            except Exception as e:
-                st.error(f"Failed to send: {e}")
-
-    # Live preview panel (single instance)
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
-    if preview:
-        import streamlit.components.v1 as components
+                    st.session_state[ns_key("outreach::mail_preview_data")] = {
+                        "to": st.session_state.get(ns_key("outreach::mail_to"), ""),
+                        "cc": st.session_state.get(ns_key("outreach::mail_cc"), ""),
+                        "bcc": st.session_state.get(ns_key("outreach::mail_bcc"), ""),
+                        "subject": st.session_state.get(ns_key("outreach::mail_subj"), ""),
+                        "body_html": st.session_state.get(ns_key("outreach::mail_body"), ""),
+                        "attachments": atts,
+                    }
+            with c2:
+                if st.button("Send email", use_container_width=True, key=ns_key("outreach::compose_send_btn")):
+                    try:
+                        preview = st.session_state.get(ns_key("outreach::mail_preview_data")) or {
+                            "to": st.session_state.get(ns_key("outreach::mail_to"), ""),
+                            "cc": st.session_state.get(ns_key("outreach::mail_cc"), ""),
+                            "bcc": st.session_state.get(ns_key("outreach::mail_bcc"), ""),
+                            "subject": st.session_state.get(ns_key("outreach::mail_subj"), ""),
+                            "body_html": st.session_state.get(ns_key("outreach::mail_body"), ""),
+                            "attachments": [],
+                        }
+                        # If no preview attachments captured yet, harvest from uploader
+                        if not preview.get("attachments"):
+                            atts = []
+                            try:
+                                for f in (files or []):
+                                    try:
+                                        atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                            preview["attachments"] = atts
+        
+                        # Convert attachments for send
+                        mem_files = []
+                        for a in preview.get("attachments") or []:
+                            mem_files.append((a.get("name") or "file", a.get("data") or b""))
+        
+                        send_outreach_email(
+                            ACTIVE_USER,
+                            preview.get("to", ""),
+                            preview.get("subject", ""),
+                            preview.get("body_html", ""),
+                            cc_addrs=preview.get("cc", ""),
+                            bcc_addrs=preview.get("bcc", ""),
+                            attachments=mem_files
+                        )
+                        st.success("Email sent.")
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+        
+            # Live preview panel (single instance)
+            preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+            if preview:
+                import streamlit.components.v1 as components
         st.markdown("#### Preview")
         st.caption(f"To: {preview.get('to','')}  |  CC: {preview.get('cc','')}  |  BCC: {preview.get('bcc','')}")
         st.text(f"Subject: {preview.get('subject','')}")
