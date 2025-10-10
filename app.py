@@ -855,7 +855,7 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=_coerce_attachments(None), bcc_addrs=_coerce_attachments(None), attachments=_coerce_attachments(None)):
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
         raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
