@@ -923,7 +923,7 @@ def render_outreach_tools():
     st.session_state.setdefault(ns_key("outreach::attachments"), [])
     st.session_state.setdefault(ns_key("outreach::preview"), None)
 
-    st.markdown("### Quick Outreach Composer")
+    st.markdown("### Outreach")
 
     c1, c2 = st.columns([2,1])
     with c1:
