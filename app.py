@@ -905,7 +905,7 @@ def render_outreach_tools():
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("mail_body"), height=200)
+        body = st.text_area("Message (HTML supported)", key=ns_key("mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
         files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("mail_files"))
         if st.button("Send email", use_container_width=True, key=ns_key("mail_send_btn")):
@@ -3058,6 +3058,50 @@ if st.session_state.get("mail_bodies"):
             sent += 1
         st.success(f"Processed {sent} messages")
 
+
+# --- SAM Watch scoring helper ---
+def score_opportunity(row, keywords=None, watched_naics=None):
+    try:
+        import pandas as pd
+        score = 0
+        kw = [k.strip().lower() for k in (keywords or []) if k.strip()]
+        title = str(row.get("title","")).lower()
+        agency = str(row.get("agency",""))
+        naics = str(row.get("naics",""))
+        typ = str(row.get("type",""))
+        # Days until due
+        due = row.get("response_due")
+        days_to_due = None
+        if pd.notna(due) and str(due):
+            try:
+                days_to_due = (pd.to_datetime(due) - pd.Timestamp.now(tz="UTC")).days
+            except Exception:
+                days_to_due = None
+        # Keyword match boosts
+        if kw:
+            hits = sum(1 for k in kw if k and k in title)
+            score += 15 * min(hits, 3)
+        # Preferred notice types
+        if typ in {"Combined Synopsis/Solicitation","Solicitation"}:
+            score += 10
+        # Due soon sweet spot
+        if days_to_due is not None:
+            if 2 <= days_to_due <= 14:
+                score += 25
+            elif 0 <= days_to_due < 2:
+                score += 10
+            elif days_to_due > 30:
+                score += 5
+        # NAICS match
+        if watched_naics and (naics in set(watched_naics) or any(n in (naics or "") for n in watched_naics)):
+            score += 20
+        # Agency familiarity light boost if seen before
+        if agency:
+            score += 5
+        return int(score)
+    except Exception:
+        return 0
+
 # === Moved up: opportunity helpers to avoid NameError during SAM Watch ===
 
 def _ensure_opportunity_columns():
@@ -3176,6 +3220,160 @@ def save_opportunities(df, default_assignee=None):
     return inserted, updated
 
 
+
+# ---- SAM history table bootstrap ----
+def _ensure_sam_history():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""create table if not exists sam_history(
+        id integer primary key autoincrement,
+        ts_utc text,
+        user text,
+        action text,        -- e.g., 'fetch','insert','update','save_to_pipeline','proposal_prep','digest_sent'
+        sam_notice_id text,
+        title text,
+        agency text,
+        naics text,
+        response_due text,
+        score integer default 0
+    )""")
+    conn.commit()
+    return conn
+
+
+# ---- Live SAM monitor ----
+def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_digest: bool = False, min_score_digest: int = 70):
+    """
+    Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
+    used in SAM Watch and insert new rows into opportunities. Optionally email a digest.
+    """
+    try:
+        _ensure_sam_history()
+        key_last = f"sam_last_run_{ACTIVE_USER}"
+        last_run = get_setting(key_last, "")
+        now_utc = pd.Timestamp.utcnow()
+        do_run = run_now
+        if not do_run:
+            if last_run:
+                try:
+                    last = pd.to_datetime(last_run)
+                    do_run = (now_utc - last).total_seconds() >= hours_interval*3600
+                except Exception:
+                    do_run = True
+            else:
+                do_run = True
+
+        if not do_run:
+            return {"ok": True, "skipped": True}
+
+        # Load defaults for this user
+        _defaults_key = f"sam_default_filters_{ACTIVE_USER}"
+        try:
+            _raw = get_setting(_defaults_key, "")
+            _saved = json.loads(_raw) if _raw else {}
+        except Exception:
+            _saved = {}
+
+        min_days = int(_saved.get("min_days", 3))
+        posted_from_days = int(_saved.get("posted_from_days", 30))
+        active_only = bool(_saved.get("active_only", True))
+        keyword = str(_saved.get("keyword", ""))
+
+        # Build filters
+        conn = get_db()
+        naics = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+        posted_to = pd.Timestamp.utcnow().date()
+        posted_from = (posted_to - pd.Timedelta(days=posted_from_days)).isoformat()
+
+        info, df = sam_search(naics, keyword, posted_from, str(posted_to), active_only=active_only, min_days=min_days, limit=150)
+
+        # Insert/update into pipeline table
+        new_rows, upd_rows = save_opportunities(df, default_assignee=ACTIVE_USER if ACTIVE_USER else "") if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
+
+        # Log history
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("insert into sam_history(ts_utc,user,action,sam_notice_id,title,agency,naics,response_due,score) values(?,?,?,?,?,?,?,?,?)",
+                    (str(now_utc), ACTIVE_USER, "fetch", "", "", "", "", "", 0))
+        conn.commit()
+
+        # Optional digest email
+        if email_digest and isinstance(df, pd.DataFrame) and not df.empty:
+            _df2 = df.copy()
+            _kw = [w for w in (keyword.split() if keyword else []) if w]
+            _df2["Score"] = _df2.apply(lambda r: score_opportunity(r, _kw, naics), axis=1)
+            best = _df2[_df2["Score"]>=int(min_score_digest)].sort_values("Score", ascending=False).head(10)
+            if not best.empty and USER_EMAILS.get(ACTIVE_USER, ""):
+                lines = ["Top SAM results (auto digest)"]
+                for _, r in best.iterrows():
+                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
+                try:
+                    send_outreach_email(ACTIVE_USER, USER_EMAILS.get(ACTIVE_USER), "SAM Watch: Daily digest", "<br>".join(lines))
+                    cur.execute("insert into sam_history(ts_utc,user,action) values(?,?,?)", (str(now_utc), ACTIVE_USER, "digest_sent"))
+                    conn.commit()
+                except Exception as _e:
+                    pass
+
+        set_setting(key_last, str(now_utc))
+        return {"ok": True, "inserted": int(new_rows), "updated": int(upd_rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+    # ---- Auto proposal prep from SAM row ----
+    def build_proposal_md_from_row(row: dict) -> str:
+        title = str(row.get("title",""))
+        agency = str(row.get("agency",""))
+        sol = str(row.get("sam_notice_id",""))
+        due = str(row.get("response_due",""))
+        naics = str(row.get("naics",""))
+        url = str(row.get("url",""))
+        company = get_setting("company_name", "ELA Management LLC")
+        uei = get_setting("uei", "")
+        cage = get_setting("cage", "")
+        phone = get_setting("company_phone", "")
+        email = USER_EMAILS.get(ACTIVE_USER, get_setting("company_email",""))
+        summary = str(row.get("description",""))[:1200]
+
+        md = f"""# {company} – Proposal Draft
+**Opportunity:** {title}
+**Agency:** {agency}  
+**Solicitation #:** {sol}  
+**NAICS:** {naics}  
+**Response Due:** {due}  
+**URL:** {url}
+
+## Cover Letter
+Dear Contracting Officer,
+
+{company} is pleased to submit our response to **{title}** with **{agency}**. We are a small business with relevant past performance and a robust project management framework to ensure quality, timeliness, and cost control.
+
+## Technical Approach
+- Project management methodology to coordinate staffing, scheduling, and quality checks
+- Compliance with all federal, state, and local regulations
+- Quality Assurance plan aligned to solicitation requirements
+
+## Management Plan
+- Key personnel and supervision structure
+- Communication cadence and reporting
+- Risk mitigation and continuity of operations
+
+## Relevant Past Performance
+- Insert your top 3 contracts matching scope and size
+
+## Pricing Notes
+- Pricing workbook attached separately
+- Assumptions and clarifications kept minimal
+
+## Contact
+**UEI:** {uei}  
+**CAGE:** {cage}  
+**Phone:** {phone}  
+**Email:** {email}
+
+*Auto-generated from SAM Watch listing. Please replace placeholders before submission.*
+"""
+        return md
+
 with legacy_tabs[4]:
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
@@ -3183,18 +3381,60 @@ with legacy_tabs[4]:
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
 
+    auto_on = st.checkbox("Enable auto-monitor", value=bool(get_setting(f"sam_auto_{ACTIVE_USER}", "true") != "false"))
+    interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
+    digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
+    digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=70, step=5)
+    if st.button("Save monitor settings"):
+        set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
+        set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
+        set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
+        set_setting(f"sam_digestmin_{ACTIVE_USER}", str(int(digest_min)))
+        st.success("Saved monitor settings")
+
+    # Kick the monitor if interval elapsed
+    try:
+        if auto_on:
+            _res = sam_live_monitor(False, int(interval_hours), digest, int(digest_min))
+            if _res and _res.get("ok") and not _res.get("skipped"):
+                st.info(f"Auto-monitor: inserted {_res.get('inserted',0)}, updated {_res.get('updated',0)}")
+    except Exception as _e_mon:
+        st.caption(f"[Monitor note: {_e_mon}]")
+
+# --- Per-user default filters
+_defaults_key = f"sam_default_filters_{ACTIVE_USER}"
+try:
+    _raw = get_setting(_defaults_key, "")
+    _saved_defaults = json.loads(_raw) if _raw else {}
+except Exception:
+    _saved_defaults = {}
+
+
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        min_days = st.number_input("Minimum days until due", min_value=0, step=1, value=3)
-        posted_from_days = st.number_input("Posted window (days back)", min_value=1, step=1, value=30)
-        active_only = st.checkbox("All active opportunities", value=True)
+        min_days = st.number_input("Minimum days until due", min_value=0, step=1, value=int(_saved_defaults.get('min_days', 3)))
+        posted_from_days = st.number_input("Posted window (days back)", min_value=1, step=1, value=int(_saved_defaults.get('posted_from_days', 30)))
+        active_only = st.checkbox("All active opportunities", value=bool(_saved_defaults.get('active_only', True)))
     with col2:
-        keyword = st.text_input("Keyword", value="")
+        keyword = st.text_input("Keyword", value=str(_saved_defaults.get('keyword','')))
         notice_types = st.multiselect("Notice types", options=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"], default=["Combined Synopsis/Solicitation","Solicitation"])
     with col3:
         diag = st.checkbox("Show diagnostics", value=False)
         raw = st.checkbox("Show raw API text (debug)", value=False)
         assignee_default = st.selectbox("Default assignee", ["","Quincy","Charles","Collin"], index=(['','Quincy','Charles','Collin'].index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in ['Quincy','Charles','Collin'] else 0))
+        st.markdown("**Defaults**")
+        if st.button("Save as my default"):
+            set_setting(_defaults_key, json.dumps({
+                'min_days': int(min_days),
+                'posted_from_days': int(posted_from_days),
+                'active_only': bool(active_only),
+                'keyword': str(keyword or '')
+            }))
+            st.success("Saved your defaults")
+        if st.button("Reset my default"):
+            set_setting(_defaults_key, "")
+            st.info("Cleared your saved defaults")
 
     cA, cB, cC = st.columns(3)
 
@@ -3203,6 +3443,9 @@ with legacy_tabs[4]:
         # Fallback in case the number_input did not run in this branch
 
         pages_to_fetch = st.session_state.get("pages_to_fetch", 3)
+        email_top = st.checkbox("Email me the top results", value=False)
+        min_score_email = st.number_input("Min score to email", min_value=0, max_value=100, value=70, step=5)
+        email_to_self = st.text_input("Send to (your email)", value=USER_EMAILS.get(ACTIVE_USER, ""))
 
         if st.button("Run search now"):
             df, info = sam_search(
@@ -3212,9 +3455,28 @@ with legacy_tabs[4]:
             )
             st.session_state["sam_results_df"] = df
             st.session_state["sam_results_info"] = info
+            # ## Email top results
+            try:
+                if email_top and isinstance(df, pd.DataFrame) and not df.empty and email_to_self:
+                    _df2 = df.copy()
+                    _df2["Score"] = _df2.apply(lambda r: score_opportunity(r, _kw if ' _kw' in locals() else (keyword.split() if keyword else []), codes if isinstance(codes, list) else []), axis=1)
+                    _df2 = _df2.sort_values("Score", ascending=False)
+                    best = _df2[_df2["Score"]>=int(min_score_email)].head(10)
+                    if not best.empty:
+                        lines = ["Top SAM results (auto)"]
+                        for _, r in best.iterrows():
+                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
+                        try:
+                            send_outreach_email(ACTIVE_USER, email_to_self, "SAM Watch: Top matches", "<br>".join(lines))
+                            st.info(f"Emailed {len(best)} matches to {email_to_self}")
+                        except Exception as _e_mail:
+                            st.caption(f"[Email note: {_e_mail}]")
+            except Exception as _e_email:
+                st.caption(f"[Email block note: {_e_email}]")
             if diag:
                 st.write("Diagnostics:", info)
                 st.code(f"naics={','.join(codes[:20])} | keyword={keyword or ''} | postedFrom={info.get('filters',{}).get('postedFrom')} -> postedTo={info.get('filters',{}).get('postedTo')} | min_days={min_days} | limit=150", language="text")
+            # Optional: email top results once computed below after scoring
             if raw:
                 st.code((info or {}).get("raw_preview","") or "", language="json")
 
@@ -3235,6 +3497,34 @@ with legacy_tabs[4]:
         if "Save" not in grid_df.columns:
             grid_df["Save"] = False
 
+        # Compute Score
+        _kw = [w for w in (keyword.split() if isinstance(keyword, str) else []) if w]
+        try:
+            watched = codes if isinstance(codes, list) else []
+        except Exception:
+            watched = []
+        grid_df["Score"] = grid_df.apply(lambda r: score_opportunity(r, _kw, watched), axis=1)
+        # Sort by Score desc then due date asc
+        if "response_due" in grid_df.columns:
+            try:
+                _dt = pd.to_datetime(grid_df["response_due"], errors="coerce")
+                grid_df = grid_df.assign(_due=_dt).sort_values(["Score","_due"], ascending=[False, True]).drop(columns=["_due"])
+            except Exception:
+                grid_df = grid_df.sort_values(["Score"], ascending=[False])
+        else:
+            grid_df = grid_df.sort_values(["Score"], ascending=[False])
+
+        with st.expander("Quick select options"):
+            n_top = st.number_input("Select top N by score", min_value=1, max_value=max(1, min(50, len(grid_df))), value=min(5, len(grid_df)))
+            if st.button("Mark top N for Save"):
+                try:
+                    top_idx = grid_df.sort_values("Score", ascending=False).head(int(n_top)).index
+                    df.loc[top_idx, "Save"] = True
+                    grid_df.loc[top_idx, "Save"] = True
+                    st.success(f"Selected {int(n_top)} rows")
+                except Exception as e:
+                    st.warning(f"Could not select top rows: {e}")
+
         edited = st.data_editor(
             grid_df,
             column_config={
@@ -3252,6 +3542,33 @@ with legacy_tabs[4]:
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+            # Proposal drafts for selected
+            if len(save_sel) > 0:
+                st.markdown("#### Auto Proposal Prep")
+                for _i, _r in save_sel.iterrows():
+                    _md = build_proposal_md_from_row(_r)
+                    _bytes = md_to_docx_bytes_rich(_md, title=str(_r.get('title','')))
+                    st.download_button("Prep Proposal DOCX: " + str(_r.get('sam_notice_id','') or _r.get('title',''))[:40], data=_bytes, file_name=f"proposal_{str(_r.get('sam_notice_id','') or _i)}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                    try:
+                        cur = get_db().cursor()
+                        cur.execute("insert into sam_history(ts_utc,user,action,sam_notice_id,title,agency,naics,response_due,score) values(?,?,?,?,?,?,?,?,?)",
+                                    (str(pd.Timestamp.utcnow()), ACTIVE_USER, "proposal_prep", str(_r.get('sam_notice_id','')), str(_r.get('title','')), str(_r.get('agency','')), str(_r.get('naics','')), str(_r.get('response_due','')), int(_r.get('Score',0))))
+                        get_db().commit()
+                    except Exception:
+                        pass
+            if len(save_sel) > 0:
+                try:
+                    st.markdown("#### Prep outreach drafts for CO (email placeholders)")
+                    if st.button("Create outreach drafts in Outreach tab"):
+                        bods = []
+                        for _, r in save_sel.iterrows():
+                            subj = f"Inquiry: {str(r.get('title',''))[:60]}"
+                            body = f"<p>Hello Contracting Officer,</p><p>We reviewed <strong>{str(r.get('title',''))}</strong> at {str(r.get('agency',''))}. We have relevant past performance and would like to confirm points of contact and any site-visit details.</p><p>Regards,<br>{get_setting('company_name','ELA Management LLC')}</p>"
+                            bods.append({"to":"","subject":subj,"body":body,"vendor_id":0})
+                        st.session_state['mail_bodies'] = bods
+                        st.success("Drafts prepared — open the Outreach tab to review and send.")
+                except Exception as _e_prep:
+                    st.caption(f"[CO outreach prep note: {_e_prep}]")
     else:
         st.info("No active results yet. Click **Run search now**.")
 
@@ -3288,6 +3605,25 @@ with legacy_tabs[4]:
 # (moved) RFP Analyzer call will be added after definition
 
 
+
+
+# --- Analytics & History ---
+with st.expander("SAM Analytics"):
+    conn = get_db()
+    try:
+        hist = pd.read_sql_query("select * from sam_history order by ts_utc desc", conn)
+        st.dataframe(hist.head(200))
+        # Simple aggregates
+        st.write("Total fetches:", int((hist["action"]=="fetch").sum()) if "action" in hist else 0)
+        st.write("Proposals prepped:", int((hist["action"]=="proposal_prep").sum()) if "action" in hist else 0)
+        # Monthly new opportunities (approx: use fetch counts as proxy)
+        if not hist.empty and "ts_utc" in hist.columns:
+            _h = hist.copy(); _h["month"] = pd.to_datetime(_h["ts_utc"], errors="coerce").dt.to_period("M").astype(str)
+            agg = _h.groupby(["month","action"]).size().reset_index(name="n")
+            st.write("Activity by month")
+            st.dataframe(agg.sort_values(["month","action"]))
+    except Exception as _e_ana:
+        st.caption(f"[Analytics note: {_e_ana}]")
 with legacy_tabs[6]:
     st.subheader("Capability statement builder")
     company = get_setting("company_name", "ELA Management LLC")
