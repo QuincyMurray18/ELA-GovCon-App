@@ -902,6 +902,32 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 def render_outreach_tools():
     import streamlit as st
     import streamlit.components.v1 as components
+    # Robust local sender that tries multiple implementations
+    def _send_email(user, to, subject, body_html, cc="", bcc="", attachments=None):
+        last_err = None
+        funcs = [
+            lambda: send_outreach_email(user, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments),
+            lambda: outreach_send_from_active_user(to, subject, body_html, cc=cc, bcc=bcc, attachments=attachments),
+        ]
+        # Optional fallbacks if project exposes different names
+        optional = [
+            'send_outreach_message', 'send_gmail_message', 'send_mail', 'outreach_send'
+        ]
+        for fn in funcs:
+            try:
+                return fn()
+            except Exception as e:
+                last_err = e
+        # Try optional names reflectively
+        g = globals()
+        for name in optional:
+            if name in g and callable(g[name]):
+                try:
+                    return g[name](user, to, subject, body_html, cc, bcc, attachments)
+                except Exception as e:
+                    last_err = e
+        raise last_err or RuntimeError("No sending function available")
+
 
     # ---------- Stable session keys ----------
     SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"
@@ -982,7 +1008,27 @@ def render_outreach_tools():
                 }
                 st.success("Preview loaded below.")
 
-    # ---------- Preview (Gmail-like card) ----------
+    
+            send_cols = st.columns([1, 1, 6])
+            with send_cols[0]:
+                if st.button("Send this generated email", key=ns_key("outreach::main_send_now"), use_container_width=True):
+                    try:
+                        _send_email(
+                            ACTIVE_USER,
+                            sel.get("to",""),
+                            sel.get("subject",""),
+                            sel.get("body",""),
+                            cc=sel.get("cc",""),
+                            bcc=sel.get("bcc",""),
+                            attachments=sel.get("attachments")
+                        )
+                        st.success("Email sent.")
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+            with send_cols[1]:
+                if st.button("Close main preview", key=ns_key("outreach::close_main_prev_top"), use_container_width=True):
+                    st.session_state[SKEY_PREVIEW] = None
+# ---------- Preview (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
         st.markdown("#### Preview")
@@ -1030,26 +1076,15 @@ def render_outreach_tools():
             with a1:
                 if st.button("Send email", key=ns_key("outreach::send_from_main_preview"), use_container_width=True):
                     try:
-                        # Prefer new function, fallback to legacy
-                        try:
-                            send_outreach_email(
-                                ACTIVE_USER,
-                                snap.get("to",""),
-                                snap.get("subject",""),
-                                snap.get("body_html",""),
-                                cc_addrs=snap.get("cc",""),
-                                bcc_addrs=snap.get("bcc",""),
-                                attachments=None
-                            )
-                        except Exception:
-                            outreach_send_from_active_user(
-                                snap.get("to",""),
-                                snap.get("subject",""),
-                                snap.get("body_html",""),
-                                cc=snap.get("cc",""),
-                                bcc=snap.get("bcc",""),
-                                attachments=None
-                            )
+                        _send_email(
+                            ACTIVE_USER,
+                            snap.get("to",""),
+                            snap.get("subject",""),
+                            snap.get("body_html",""),
+                            cc=snap.get("cc",""),
+                            bcc=snap.get("bcc",""),
+                            attachments=snap.get("attachments")
+                        )
                         st.success("Email sent.")
                         st.session_state[SKEY_PREVIEW] = None
                     except Exception as e:
