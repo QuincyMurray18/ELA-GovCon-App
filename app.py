@@ -550,13 +550,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     for att in attachments:
         try:
             content = att.getvalue()
-            msg.add_attachment(
-    content,
-    maintype="application",
-    subtype="octet-stream",
-    filename=att.name
-)
-
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
             raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
 
@@ -887,13 +881,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     for att in attachments:
         try:
             content = att.getvalue()
-            msg.add_attachment(
-    content,
-    maintype="application",
-    subtype="octet-stream",
-    filename=att.name
-)
-
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
             raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
 
