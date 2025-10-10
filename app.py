@@ -549,12 +549,35 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            # Streamlit UploadedFile
+            if hasattr(att, "getvalue") and hasattr(att, "name"):
+                content = att.getvalue()
+                if content:
+                    msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=getattr(att, "name", "attachment"))
+                continue
+            # Dicts: {"name": ..., "data"/"content": ...}
+            if isinstance(att, dict):
+                fname = att.get("name") or att.get("filename") or "attachment"
+                data = att.get("data") if att.get("data") is not None else att.get("content")
+                if data:
+                    msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=fname)
+                continue
+            # String path
+            if isinstance(att, str):
+                import os
+                try:
+                    with open(att, "rb") as f:
+                        msg.add_attachment(f.read(), maintype="application", subtype="octet-stream", filename=os.path.basename(att))
+                except Exception:
+                    pass
+                continue
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
-
-    all_rcpts = to_list + cc_list + bcc_list
+            try:
+                import streamlit as st
+                st.warning(f"Skipping attachment due to error: {e}")
+            except Exception:
+                pass
+all_rcpts = to_list + cc_list + bcc_list
 
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
@@ -880,12 +903,35 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            # Streamlit UploadedFile
+            if hasattr(att, "getvalue") and hasattr(att, "name"):
+                content = att.getvalue()
+                if content:
+                    msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=getattr(att, "name", "attachment"))
+                continue
+            # Dicts: {"name": ..., "data"/"content": ...}
+            if isinstance(att, dict):
+                fname = att.get("name") or att.get("filename") or "attachment"
+                data = att.get("data") if att.get("data") is not None else att.get("content")
+                if data:
+                    msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=fname)
+                continue
+            # String path
+            if isinstance(att, str):
+                import os
+                try:
+                    with open(att, "rb") as f:
+                        msg.add_attachment(f.read(), maintype="application", subtype="octet-stream", filename=os.path.basename(att))
+                except Exception:
+                    pass
+                continue
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
-
-    all_rcpts = to_list + cc_list + bcc_list
+            try:
+                import streamlit as st
+                st.warning(f"Skipping attachment due to error: {e}")
+            except Exception:
+                pass
+all_rcpts = to_list + cc_list + bcc_list
 
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
