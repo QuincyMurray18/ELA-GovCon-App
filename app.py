@@ -905,18 +905,10 @@ def render_outreach_tools():
 
     # ---------- Stable session keys ----------
     SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"
-    SKEY_TO     = f"{ACTIVE_USER}::outreach::to"
-    SKEY_CC     = f"{ACTIVE_USER}::outreach::cc"
-    SKEY_BCC    = f"{ACTIVE_USER}::outreach::bcc"
-    SKEY_SUBJ   = f"{ACTIVE_USER}::outreach::subj"
-    SKEY_BODY   = f"{ACTIVE_USER}::outreach::body"
-    SKEY_FILES  = f"{ACTIVE_USER}::outreach::files"
     SKEY_MPREV_SHOW = f"{ACTIVE_USER}::outreach::main_preview_show"
 
     st.session_state.setdefault(SKEY_PREVIEW, None)
     st.session_state.setdefault(SKEY_MPREV_SHOW, True)
-    for k in (SKEY_TO, SKEY_CC, SKEY_BCC, SKEY_SUBJ, SKEY_BODY):
-        st.session_state.setdefault(k, "")
 
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
 
@@ -927,45 +919,15 @@ def render_outreach_tools():
             st.markdown("### ✉️ Outreach")
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with top_r:
-            a1, a2, a3 = st.columns([1,1,1])
+            a1, a2 = st.columns([1,1])
             with a1:
-                if st.button("Preview draft", key=ns_key("outreach::hdr_preview_btn"), use_container_width=True):
-                    st.session_state[SKEY_PREVIEW] = {
-                        "to": st.session_state.get(SKEY_TO, ""),
-                        "cc": st.session_state.get(SKEY_CC, ""),
-                        "bcc": st.session_state.get(SKEY_BCC, ""),
-                        "subject": st.session_state.get(SKEY_SUBJ, ""),
-                        "body_html": st.session_state.get(SKEY_BODY, ""),
-                        "attachments": [],
-                        "from_addr": from_addr,
-                    }
-            with a2:
-                if st.button("Clear", key=ns_key("outreach::hdr_preview_clear"), use_container_width=True):
+                if st.button("Clear", key=ns_key("outreach::hdr_clear_all"), use_container_width=True):
                     st.session_state[SKEY_PREVIEW] = None
-                    st.session_state[SKEY_TO] = ""
-                    st.session_state[SKEY_CC] = ""
-                    st.session_state[SKEY_BCC] = ""
-                    st.session_state[SKEY_SUBJ] = ""
-                    st.session_state[SKEY_BODY] = ""
-            with a3:
-                if st.button("Send snapshot", key=ns_key("outreach::hdr_send_btn"), use_container_width=True):
-                    prev = st.session_state.get(SKEY_PREVIEW) or {}
-                    try:
-                        send_outreach_email(
-                            ACTIVE_USER,
-                            prev.get("to",""),
-                            prev.get("subject",""),
-                            prev.get("body_html",""),
-                            cc_addrs=prev.get("cc",""),
-                            bcc_addrs=prev.get("bcc",""),
-                            attachments=None
-                        )
-                        st.success("Email sent.")
-                        st.session_state[SKEY_PREVIEW] = None
-                    except Exception as e:
-                        st.error(f"Failed to send: {e}")
+            with a2:
+                if st.button("Close preview", key=ns_key("outreach::hdr_close_prev"), use_container_width=True):
+                    st.session_state[SKEY_PREVIEW] = None
 
-    # ---- Account: App Password (restored) ----
+    # ---- Account: App Password (stay visible) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
@@ -977,134 +939,124 @@ def render_outreach_tools():
 
     st.divider()
 
-    # ---------- Main two-column layout ----------
-    left, right = st.columns([7,8], gap="large")
+    # ---------- Main Outreach (Choose & Preview) ----------
+    with st.container(border=True):
+        st.markdown("#### Main Outreach")
+        mb = st.session_state.get("mail_bodies") or []
+        if not mb:
+            st.info("Generate emails to preview them here.", icon="ℹ️")
+        else:
+            idx = st.number_input("Choose a generated email", min_value=1, max_value=len(mb), value=1, step=1, key=ns_key("outreach::main_idx"))
+            sel = mb[int(idx)-1]
+            # Minimal readout
+            st.caption(f"To: {sel.get('to','')}")
+            st.caption(f"Subject: {sel.get('subject','')}")
 
-    # LEFT: Composer
-    with left:
-        with st.container(border=True):
-            st.markdown("#### Compose")
-            st.text_input("To", key=SKEY_TO)
-            cols_addr = st.columns(2)
-            with cols_addr[0]:
-                st.text_input("Cc", key=SKEY_CC)
-            with cols_addr[1]:
-                st.text_input("Bcc", key=SKEY_BCC)
+            # Preview button snapshots a Gmail-like payload
+            if st.button("Preview selected email", key=ns_key("outreach::main_preview_btn")):
+                # attachments support: list of dicts or names if present
+                atts = sel.get("attachments") or []
+                # Normalize to list of dicts with 'name'
+                norm_atts = []
+                try:
+                    for a in atts:
+                        if isinstance(a, dict) and ("name" in a or "filename" in a):
+                            nm = a.get("name") or a.get("filename") or "attachment"
+                            norm_atts.append({"name": nm})
+                        elif isinstance(a, str):
+                            norm_atts.append({"name": a})
+                except Exception:
+                    norm_atts = []
 
-            st.text_input("Subject", key=SKEY_SUBJ)
-            st.text_area("Message (HTML)", key=SKEY_BODY, height=220, placeholder="<p>Hello...</p>")
+                st.session_state[SKEY_PREVIEW] = {
+                    "to": sel.get("to",""),
+                    "cc": sel.get("cc",""),
+                    "bcc": sel.get("bcc",""),
+                    "subject": sel.get("subject",""),
+                    "body_html": sel.get("body",""),
+                    "from_addr": from_addr,
+                    # Extra meta
+                    "scope_summary": sel.get("scope_summary") or sel.get("scope") or "",
+                    "quote_due": sel.get("quote_due") or sel.get("due") or "",
+                    "attachments": norm_atts,
+                }
+                st.success("Preview loaded below.")
 
-            files = st.file_uploader("Attachments (optional)", type=None, accept_multiple_files=True, key=SKEY_FILES)
+    # ---------- Preview (Gmail-like card) ----------
+    snap = st.session_state.get(SKEY_PREVIEW)
+    with st.container(border=True):
+        st.markdown("#### Preview")
+        if not snap:
+            st.info("Select a generated email above and click Preview.", icon="ℹ️")
+        else:
+            # Header block similar to Gmail
+            hdr_lines = []
+            if snap.get("from_addr"): hdr_lines.append(f"<div><b>From:</b> {snap['from_addr']}</div>")
+            if snap.get("to"):        hdr_lines.append(f"<div><b>To:</b> {snap['to']}</div>")
+            if snap.get("cc"):        hdr_lines.append(f"<div><b>Cc:</b> {snap['cc']}</div>")
+            if snap.get("bcc"):       hdr_lines.append(f"<div><b>Bcc:</b> {snap['bcc']}</div>")
+            if snap.get("subject"):   hdr_lines.append(f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
 
-            act1, act2 = st.columns(2)
-            with act1:
-                if st.button("Preview", key=ns_key("outreach::mail_preview_btn"), use_container_width=True):
-                    atts = []
+            # Meta row: Scope Summary & Quote Due
+            meta_bits = []
+            if snap.get("scope_summary"):
+                meta_bits.append(f"<div style='display:inline-block;border:1px solid #eee;padding:4px 8px;border-radius:8px;margin-right:8px;'><b>Scope:</b> {snap['scope_summary']}</div>")
+            if snap.get("quote_due"):
+                meta_bits.append(f"<div style='display:inline-block;border:1px solid #eee;padding:4px 8px;border-radius:8px;'><b>Quote due:</b> {snap['quote_due']}</div>")
+
+            # Body
+            body_html = (snap.get("body_html") or "").strip()
+            if not body_html:
+                body_html = "<p><i>(No body content)</i></p>"
+
+            # Attachments list
+            atts_html = ""
+            atts = snap.get("attachments") or []
+            if atts:
+                items = "".join([f"<li>{(a.get('name') if isinstance(a,dict) else str(a))}</li>" for a in atts])
+                atts_html = f"<div style='margin-top:8px;'><b>Attachments:</b><ul style='margin:6px 0 0 20px;'>{items}</ul></div>"
+
+            components.html(f"""
+                <div style="border:1px solid #ddd;border-radius:8px;padding:14px;">
+                    <div style="margin-bottom:8px;">{''.join(hdr_lines)}</div>
+                    <div style="margin-bottom:8px;">{''.join(meta_bits)}</div>
+                    <div style="border:1px solid #eee;padding:10px;border-radius:6px;">{body_html}</div>
+                    {atts_html}
+                </div>
+            """, height=500, scrolling=True)
+
+            # Actions
+            a1, a2 = st.columns(2)
+            with a1:
+                if st.button("Send email", key=ns_key("outreach::send_from_main_preview"), use_container_width=True):
                     try:
-                        for f in (files or []):
-                            try:
-                                atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                            except Exception:
-                                pass
-                    except Exception:
-                        atts = []
-                    st.session_state[SKEY_PREVIEW] = {
-                        "to": st.session_state.get(SKEY_TO, ""),
-                        "cc": st.session_state.get(SKEY_CC, ""),
-                        "bcc": st.session_state.get(SKEY_BCC, ""),
-                        "subject": st.session_state.get(SKEY_SUBJ, ""),
-                        "body_html": st.session_state.get(SKEY_BODY, ""),
-                        "attachments": atts,
-                        "from_addr": from_addr,
-                    }
-            with act2:
-                if st.button("Send", key=ns_key("outreach::mail_send_btn"), use_container_width=True):
-                    try:
-                        send_outreach_email(
-                            ACTIVE_USER,
-                            st.session_state.get(SKEY_TO, ""),
-                            st.session_state.get(SKEY_SUBJ, ""),
-                            st.session_state.get(SKEY_BODY, ""),
-                            cc_addrs=st.session_state.get(SKEY_CC, ""),
-                            bcc_addrs=st.session_state.get(SKEY_BCC, ""),
-                            attachments=files
-                        )
+                        # Prefer new function, fallback to legacy
+                        try:
+                            send_outreach_email(
+                                ACTIVE_USER,
+                                snap.get("to",""),
+                                snap.get("subject",""),
+                                snap.get("body_html",""),
+                                cc_addrs=snap.get("cc",""),
+                                bcc_addrs=snap.get("bcc",""),
+                                attachments=None
+                            )
+                        except Exception:
+                            outreach_send_from_active_user(
+                                snap.get("to",""),
+                                snap.get("subject",""),
+                                snap.get("body_html",""),
+                                cc=snap.get("cc",""),
+                                bcc=snap.get("bcc",""),
+                                attachments=None
+                            )
                         st.success("Email sent.")
+                        st.session_state[SKEY_PREVIEW] = None
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
-
-    # RIGHT: Tabs for Compose vs Main Outreach previews
-    with right:
-        with st.container(border=True):
-            st.markdown("#### Preview")
-            tabs = st.tabs(["Compose preview", "Main Outreach"])
-
-            # Tab 1: Compose snapshot preview (only when a snapshot exists)
-            with tabs[0]:
-                snap = st.session_state.get(SKEY_PREVIEW)
-                if not snap:
-                    st.info("Click Preview to see your composed email here.", icon="ℹ️")
-                else:
-                    meta = []
-                    if snap.get("from_addr"): meta.append(f"**From:** {snap['from_addr']}")
-                    if snap.get("to"):        meta.append(f"**To:** {snap['to']}")
-                    if snap.get("cc"):        meta.append(f"**Cc:** {snap['cc']}")
-                    if snap.get("bcc"):       meta.append(f"**Bcc:** {snap['bcc']}")
-                    if snap.get("subject"):   meta.append(f"**Subject:** {snap['subject']}")
-                    if meta:
-                        st.markdown("<br>".join(meta), unsafe_allow_html=True)
-
-                    _html = (snap.get("body_html") or "").strip()
-                    if not _html:
-                        st.info("Type on the left and click Preview.", icon="ℹ️")
-                    else:
-                        components.html(
-                            f'<div style="border:1px solid #ddd;padding:12px;margin-top:6px;">{_html}</div>',
-                            height=340, scrolling=True
-                        )
-
-                    p1, p2 = st.columns(2)
-                    with p1:
-                        if st.button("Send from preview", key=ns_key("outreach::mail_preview_confirm"), use_container_width=True):
-                            try:
-                                send_outreach_email(
-                                    ACTIVE_USER,
-                                    snap.get("to",""),
-                                    snap.get("subject",""),
-                                    snap.get("body_html",""),
-                                    cc_addrs=snap.get("cc",""),
-                                    bcc_addrs=snap.get("bcc",""),
-                                    attachments=None
-                                )
-                                st.success("Email sent.")
-                                st.session_state[SKEY_PREVIEW] = None
-                            except Exception as e:
-                                st.error(f"Failed to send: {e}")
-                    with p2:
-                        if st.button("Close preview", key=ns_key("outreach::mail_preview_close"), use_container_width=True):
-                            st.session_state[SKEY_PREVIEW] = None
-
-            # Tab 2: Main Outreach preview (passive, for generated emails)
-            with tabs[1]:
-                if not st.session_state.get(SKEY_MPREV_SHOW, True):
-                    st.info("Main Outreach preview hidden.", icon="ℹ️")
-                    if st.button("Show main preview", key=ns_key("outreach::show_main_prev"), use_container_width=True):
-                        st.session_state[SKEY_MPREV_SHOW] = True
-                else:
-                    mb = st.session_state.get("mail_bodies") or []
-                    if not mb:
-                        st.info("Generate emails to preview them here.", icon="ℹ️")
-                    else:
-                        idx = st.number_input("Choose a generated email", min_value=1, max_value=len(mb), value=1, step=1)
-                        sel = mb[int(idx)-1]
-                        st.caption(f"**To:** {sel.get('to','')}")
-                        st.caption(f"**Subject:** {sel.get('subject','')}")
-                        components.html(
-                            f'<div style="border:1px solid #ddd;padding:12px;margin-top:6px;">{sel.get("body","")}</div>',
-                            height=340, scrolling=True
-                        )
-                        if st.button("Close main preview", key=ns_key("outreach::close_main_prev"), use_container_width=True):
-                            st.session_state[SKEY_MPREV_SHOW] = False
+            with a2:
+                if st.button("Close preview", key=ns_key("outreach::close_main_preview"), use_container_width=True):
+                    st.session_state[SKEY_PREVIEW] = None
 
 def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
