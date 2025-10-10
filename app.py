@@ -3888,6 +3888,7 @@ with legacy_tabs[10]:
 
 
 with legacy_tabs[11]:
+    st.subheader("Proposal export and drafts")
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
 
@@ -5634,9 +5635,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     return out.getvalue()
 
 
-
-with legacy_tabs[8]:
-    st.subheader("Proposal export and drafts")
 
 
 
