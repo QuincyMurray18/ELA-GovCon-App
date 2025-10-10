@@ -915,7 +915,7 @@ def render_outreach_tools():
     # Top controls: Preview current draft and Clear preview (single instance)
     c_top1, c_top2, _ = st.columns([1,1,2])
     with c_top1:
-        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
+        if st.button("Preview current draft", key="outreach::preview_btn",key=ns_key("outreach::hdr_preview_btn")):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
@@ -935,11 +935,11 @@ def render_outreach_tools():
                 "to": to, "cc": cc, "bcc": bcc, "subject": subj, "body_html": body, "attachments": atts
             }
     with c_top2:
-        if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
+        if st.button("Clear preview", key="outreach::clear_preview_btn",key=ns_key("outreach::hdr_preview_clear")):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     # Credentials manager
-    with st.expander("Set/Update my Gmail App Password", expanded=False):
+    with st.expander("Set or Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
         app_pw = st.text_input("Gmail App Password (16 characters, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
