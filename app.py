@@ -976,6 +976,234 @@ def render_outreach_tools():
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with top_r:
             pass
+
+    # ---- Attachments: Global uploader (available before generation) ----
+    with st.container(border=True):
+        st.markdown("#### Attachments (optional)")
+        extra_files = st.file_uploader("Upload files to include when sending", type=None, accept_multiple_files=True,
+                                       key=ns_key("outreach::extra_files"))
+        if extra_files is not None:
+            st.session_state[SKEY_ATTACH] = extra_files
+
+    # ---- Account: App Password (still here) ----
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
+            try:
+                set_user_smtp_app_password(ACTIVE_USER, pw)
+                st.success("Saved")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
+
+    st.divider()
+    
+    # ---------- Choose Generated Email & Attachments (required) ----------
+    with st.container(border=True):
+        st.markdown("#### Choose Generated Email")
+        mb = st.session_state.get("mail_bodies") or []
+        if not mb:
+            st.info("Generate emails to select one for preview.", icon="ℹ️")
+        else:
+            idx = st.number_input("Select one", min_value=1, max_value=len(mb), value=len(mb), step=1,
+                                  key=ns_key("outreach::pick_idx"))
+            sel = mb[int(idx)-1]
+
+            # Show key fields from the generated email
+            st.caption(f"**To:** {sel.get('to','')}")
+            st.caption(f"**Subject:** {sel.get('subject','')}")
+            scope_disp = sel.get("scope_summary") or sel.get("scope") or ""
+            due_disp = sel.get("quote_due") or sel.get("due") or ""
+            meta_cols = st.columns(2)
+            with meta_cols[0]:
+                st.markdown(f"**Scope Summary:** {scope_disp}")
+            with meta_cols[1]:
+                st.markdown(f"**Quote Due:** {due_disp}")
+
+            # Attachments uploader (REQUIRED) placed below Quote Due
+            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+                                           key=ns_key("outreach::extra_files"))
+            if extra_files is not None:
+                st.session_state[SKEY_ATTACH] = extra_files
+
+            # Generate preview button
+            if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
+                files = st.session_state.get(SKEY_ATTACH) or []
+                if not files:
+                    st.warning("Please upload at least one attachment before generating the preview.")
+                else:
+                    # Build display names from generated attachments + uploaded files
+                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
+                    try:
+                        upload_names = [{"name": getattr(f, "name", "file")} for f in files]
+                    except Exception:
+                        upload_names = []
+                    st.session_state[SKEY_PREVIEW] = {
+                        "to": sel.get("to",""),
+                        "cc": sel.get("cc",""),
+                        "bcc": sel.get("bcc",""),
+                        "subject": sel.get("subject",""),
+                        "body_html": sel.get("body",""),
+                        "from_addr": USER_EMAILS.get(ACTIVE_USER, ""),
+                        "scope_summary": scope_disp,
+                        "quote_due": due_disp,
+                        "attachments": (gen_names or []) + (upload_names or [])
+                    }
+                    st.success("Preview generated below.")
+
+    
+            actions2 = st.columns([1, 2, 2, 5])
+            with actions2[1]:
+                if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
+                    files = st.session_state.get(SKEY_ATTACH) or []
+                    if not files:
+                        st.warning("Please upload at least one attachment before sending.")
+                    else:
+                        try:
+                            merged_atts = _normalize_sel_attachments(sel.get("attachments")) + _normalize_extra_files(files)
+                            _send_email(
+                                ACTIVE_USER,
+                                sel.get("to",""),
+                                sel.get("subject",""),
+                                sel.get("body",""),
+                                cc=sel.get("cc",""),
+                                bcc=sel.get("bcc",""),
+                                attachments=merged_atts
+                            )
+                            st.success("Selected email sent.")
+                        except Exception as e:
+                            st.error(f"Failed to send selected: {e}")
+            with actions2[2]:
+                if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
+                    files = st.session_state.get(SKEY_ATTACH) or []
+                    if not files:
+                        st.warning("Please upload at least one attachment before mass sending.")
+                    else:
+                        mb_all = st.session_state.get("mail_bodies") or []
+                        sent = 0
+                        failures = []
+                        for i, itm in enumerate(mb_all, start=1):
+                            try:
+                                merged_atts = _normalize_sel_attachments(itm.get("attachments")) + _normalize_extra_files(files)
+                                _send_email(
+                                    ACTIVE_USER,
+                                    itm.get("to",""),
+                                    itm.get("subject",""),
+                                    itm.get("body",""),
+                                    cc=itm.get("cc",""),
+                                    bcc=itm.get("bcc",""),
+                                    attachments=merged_atts
+                                )
+                                sent += 1
+                            except Exception as e:
+                                failures.append((i, itm.get("subject",""), str(e)))
+                        if failures:
+                            st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join([f"#{i} {subj} ({err})" for i, subj, err in failures]))
+                        else:
+                            st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
+    snap = st.session_state.get(SKEY_PREVIEW)
+    with st.container(border=True):
+        st.markdown("#### Preview")
+        if not snap:
+            st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
+        else:
+            # Header block similar to Gmail
+            hdr_lines = []
+            if snap.get("from_addr"): hdr_lines.append(f"<div><b>From:</b> {snap['from_addr']}</div>")
+            if snap.get("to"):        hdr_lines.append(f"<div><b>To:</b> {snap['to']}</div>")
+            if snap.get("cc"):        hdr_lines.append(f"<div><b>Cc:</b> {snap['cc']}</div>")
+            if snap.get("bcc"):       hdr_lines.append(f"<div><b>Bcc:</b> {snap['bcc']}</div>")
+            if snap.get("subject"):   hdr_lines.append(f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
+
+            # Meta row: Scope Summary & Quote Due
+            meta_bits = []
+            if snap.get("scope_summary"):
+                meta_bits.append("<div style='display:inline-block;border:1px solid #eee;"
+                                 "padding:4px 8px;border-radius:8px;margin-right:8px;'><b>Scope:</b> "
+                                 f"{snap['scope_summary']}</div>")
+            if snap.get("quote_due"):
+                meta_bits.append("<div style='display:inline-block;border:1px solid #eee;"
+                                 "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
+                                 f"{snap['quote_due']}</div>")
+
+            
+            # Attachments uploader (positioned below Quote Due)
+            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+                                           key=ns_key("outreach::extra_files"))
+            if extra_files is not None:
+                st.session_state[SKEY_ATTACH] = extra_files
+
+            # Body
+            body_html = (snap.get("body_html") or "").strip() or "<p><i>(No body content)</i></p>"
+
+            # Attachments display
+            atts_html = ""
+            atts = snap.get("attachments") or []
+            if atts:
+                items = "".join([f"<li>{(a.get('name') if isinstance(a,dict) else str(a))}</li>" for a in atts])
+                atts_html = ("<div style='margin-top:8px;'><b>Attachments:</b>"
+                             f"<ul style='margin:6px 0 0 20px;'>{items}</ul></div>")
+
+            components.html(f"""
+                <div style="border:1px solid #ddd;border-radius:8px;padding:14px;">
+                    <div style="margin-bottom:8px;">{''.join(hdr_lines)}</div>
+                    <div style="margin-bottom:8px;">{''.join(meta_bits)}</div>
+                    <div style="border:1px solid #eee;padding:10px;border-radius:6px;">{body_html}</div>
+                    {atts_html}
+                </div>
+            """, height=520, scrolling=True)
+
+            # Actions under the preview
+            a1, a2 = st.columns(2)
+            with a1:
+                if st.button("Send email", key=ns_key("outreach::send_from_preview"), use_container_width=True):
+                    try:
+                        _send_email(
+                            ACTIVE_USER,
+                            snap.get("to",""),
+                            snap.get("subject",""),
+                            snap.get("body_html",""),
+                            cc=snap.get("cc",""),
+                            bcc=snap.get("bcc",""),
+                            attachments=st.session_state.get(SKEY_ATTACH) or []
+                        )
+                        st.success("Email sent.")
+                        st.session_state[SKEY_PREVIEW] = None
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+            with a2:
+                if st.button("Close preview", key=ns_key("outreach::close_preview"), use_container_width=True):
+                    st.session_state[SKEY_PREVIEW] = None
+
+def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    key = lambda k: f"{ACTIVE_USER}::outreach::{k}"
+    st.session_state[key("to")] = to or ""
+    st.session_state[key("cc")] = cc or ""
+    st.session_state[key("bcc")] = bcc or ""
+    st.session_state[key("subj")] = subject or ""
+    st.session_state[key("body")] = html or ""
+    st.session_state[key("preview")] = {
+        "to": to or "",
+        "cc": cc or "",
+        "bcc": bcc or "",
+        "subject": subject or "",
+        "body_html": html or "",
+        "attachments": [],
+        "from_addr": from_addr,
+    }
+
+    st.subheader("Email – Outreach")
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    if not from_addr:
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+    else:
+        st.caption(f"From: {from_addr}")
+
+    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
+
+    hc1, hc2, hc3 = st.columns([1,1,2])
+    with hc1:
+        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
