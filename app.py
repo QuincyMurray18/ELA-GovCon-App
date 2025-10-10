@@ -1180,14 +1180,6 @@ def render_outreach_tools():
         with top_r:
             pass
 
-    # ---- Attachments: Global uploader (available before generation) ----
-    with st.container(border=True):
-        st.markdown("#### Attachments (optional)")
-        extra_files = st.file_uploader("Upload files to include when sending", type=None, accept_multiple_files=True,
-                                       key=ns_key("outreach::extra_files"))
-        if extra_files is not None:
-            st.session_state[SKEY_ATTACH] = extra_files
-
     # ---- Account: App Password (still here) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
