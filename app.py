@@ -3676,6 +3676,7 @@ with legacy_tabs[3]:
         if False:
             pass
         st.session_state["mail_bodies"] = []
+        picks = st.session_state.get('picks', [])  # safe default if selection not set
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
             to_addr = row.get("email","")
