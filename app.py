@@ -926,7 +926,7 @@ def render_outreach_tools():
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("mail_subj"))
-        body = st.text_area("Message (HTML supported)
+        body = st.text_area("Message (HTML supported)")
 
         # Live preview for single email
         _ela_prev_live = st.checkbox("Live preview", value=True, help="See a rendered preview before sending")
