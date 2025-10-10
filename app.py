@@ -979,9 +979,9 @@ def render_outreach_tools():
 
     # ---- Attachments: Global uploader (available before generation) ----
     with st.container(border=True):
-        st.markdown("#### Attachments (optional)")
+        st.markdown("#### ")
         extra_files = st.file_uploader("Upload files to include when sending", type=None, accept_multiple_files=True,
-                                       key=ns_key("outreach::extra_files"))
+                                       key=ns_key("outreach::extra_files", label_visibility="collapsed"))
         if extra_files is not None:
             st.session_state[SKEY_ATTACH] = extra_files
 
@@ -1020,7 +1020,7 @@ def render_outreach_tools():
                 st.markdown(f"**Quote Due:** {due_disp}")
 
             # Attachments uploader (REQUIRED) placed below Quote Due
-            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+            extra_files = st.file_uploader("Attachments (required, label_visibility="collapsed")", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
@@ -1127,7 +1127,7 @@ def render_outreach_tools():
 
             
             # Attachments uploader (positioned below Quote Due)
-            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+            extra_files = st.file_uploader("Attachments (required, label_visibility="collapsed")", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
@@ -1238,7 +1238,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files", label_visibility="collapsed"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1376,7 +1376,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files", label_visibility="collapsed"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1495,7 +1495,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files", label_visibility="collapsed"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1622,7 +1622,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files", label_visibility="collapsed"))
         if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
                 send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
@@ -4330,7 +4330,7 @@ Certifications Small Business"""
         issues, est_pages = _validate_text_for_guardrails(cap_md, page_limit=2, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
             st.warning("Before export, fix these items: " + "; ".join(issues))
-        logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
+        logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload", label_visibility="collapsed")
         _logo = logo_file.read() if logo_file else None
         docx_bytes = md_to_docx_bytes_rich(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
         st.download_button("Export Capability Statement (DOCX)", data=docx_bytes, file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -4363,7 +4363,7 @@ with legacy_tabs[7]:
         issues, est_pages = _validate_text_for_guardrails(wp_md, page_limit=4, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
             st.warning("Before export, fix these items: " + "; ".join(issues))
-        wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
+        wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload", label_visibility="collapsed")
         _wp_logo = wp_logo_file.read() if wp_logo_file else None
         wp_bytes = md_to_docx_bytes_rich(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
         st.download_button("Export White Paper (DOCX)", data=wp_bytes, file_name="White_Paper.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -4382,7 +4382,7 @@ with legacy_tabs[8]:
 
 with legacy_tabs[9]:
     st.subheader("Auto extract key details")
-    up = st.file_uploader("Upload solicitation or PWS", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="auto_up")
+    up = st.file_uploader("Upload solicitation or PWS", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="auto_up", label_visibility="collapsed")
     if up and st.button("Extract"):
         combined = "\n\n".join(read_doc(f) for f in up)
         chunks = chunk_text(combined)
@@ -4397,7 +4397,7 @@ with legacy_tabs[9]:
 
 with legacy_tabs[10]:
     st.subheader("Ask questions over the uploaded docs")
-    up2 = st.file_uploader("Upload PDFs or DOCX", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="qna_up")
+    up2 = st.file_uploader("Upload PDFs or DOCX", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="qna_up", label_visibility="collapsed")
     q = st.text_input("Your question")
     if up2 and q and st.button("Answer"):
         combined = "\n\n".join(read_doc(f) for f in up2)
@@ -4436,7 +4436,7 @@ with legacy_tabs[11]:
             st.caption(f"Session #{session_id} — {cur_title}")
 
             # File uploads for this chat session
-            up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT)", type=["pdf","docx","doc","txt"],
+            up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT, label_visibility="collapsed")", type=["pdf","docx","doc","txt"],
                                         accept_multiple_files=True, key=f"chat_up_{session_id}")
             if up_files and st.button("Add files to this chat"):
                 added = 0
@@ -4622,7 +4622,7 @@ with legacy_tabs[__tabs_base + 1]:
     opp_sel = st.selectbox("Link checklist to opportunity", options=opp_opt, index=0, key="lm_opp_sel")
     opp_id_val = int(opp_sel.split(":")[0]) if opp_sel else None
 
-    up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up")
+    up = st.file_uploader("Upload solicitation files", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="lm_up", label_visibility="collapsed")
     if up and st.button("Generate checklist"):
         items = []
         for f in up:
@@ -5432,7 +5432,7 @@ with st.sidebar:
         for c in keep: cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
         conn.commit(); st.success("Saved NAICS watch list")
 
-    naics_csv = st.file_uploader("Import NAICS CSV (column 'code')", type=["csv"])
+    naics_csv = st.file_uploader("Import NAICS CSV (column 'code', label_visibility="collapsed")", type=["csv"])
     if naics_csv and st.button("Import NAICS from CSV"):
         df_in = pd.read_csv(naics_csv)
         if "code" in df_in.columns:
@@ -5513,7 +5513,7 @@ def render_rfp_analyzer():
         st.caption(f"RFP thread #{session_id}  {cur_title}")
 
         # File uploader with persistence
-        uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}")
+        uploads = st.file_uploader("Upload RFP files PDF DOCX TXT", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key=f"rfp_up_{session_id}", label_visibility="collapsed")
         if uploads and st.button("Add files to RFP thread"):
             added = 0
             for up in uploads:
