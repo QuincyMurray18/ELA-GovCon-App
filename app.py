@@ -898,7 +898,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 
-    ns = ns_key(\"outreach\")
+    ns = ns_key("outreach")
     _container = st.container()
     with _container:
 
@@ -2566,7 +2566,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
     # Margins/spacing advisory
     if margins_in is not None and (margins_in < 0.5 or margins_in > 1.5):
-        warnings.append(f"Margin {margins_in}\" may violate standard 1\" requirement.")
+        warnings.append(f"Margin {margins_in}" may violate standard 1" requirement.")
 
     if line_spacing is not None and (line_spacing < 1.0 or line_spacing > 2.0):
         warnings.append(f"Line spacing {line_spacing} looks unusual.")
