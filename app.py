@@ -677,8 +677,21 @@ if _active and _selected and _selected != _active:
 
 
 # --- Namespaced session state helpers ---
+
+# --- Unified Streamlit key helper (namespaced + duplicate-safe) ---
+try:
+    _NS_KEY_COUNTS
+except NameError:
+    _NS_KEY_COUNTS = {}
 def ns_key(key: str) -> str:
-    return f"{ACTIVE_USER}::{key}"
+    base = f"{ACTIVE_USER}::{key}"
+    # increment and deduplicate within a single run
+    c = _NS_KEY_COUNTS.get(base, 0) + 1
+    _NS_KEY_COUNTS[base] = c
+    if c == 1:
+        return base
+    return f"{base}__dup{c}"
+
 
 class SessionNS:
     def __init__(self, user: str):
