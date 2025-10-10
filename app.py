@@ -1127,103 +1127,6 @@ def _log_contact_outreach(entries):
 def render_outreach_tools():
     import streamlit as st
     import streamlit.components.v1 as components
-
-    
-    # ---- Contacts Outreach ----
-    if mode == "Contacts":
-        with st.container(border=True):
-            st.markdown("#### Contacts")
-            # Read receipts + tracking pixel options
-            with st.expander("Delivery & Tracking options", expanded=False):
-                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
-                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
-            # Load contacts from CSV
-            col_c1, col_c2 = st.columns([2,1])
-            with col_c1:
-                search = st.text_input("Search contacts", key="outreach_contact_search")
-            with col_c2:
-                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
-            contacts = []
-            import os, csv
-            # Prefer uploaded CSV
-            if uploaded is not None:
-                try:
-                    txt = uploaded.getvalue().decode("utf-8", errors="ignore")
-                    for row in csv.DictReader(txt.splitlines()):
-                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
-                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
-                        if em:
-                            contacts.append({"name": nm, "email": em})
-                except Exception:
-                    pass
-            else:
-                # Try default data/contacts.csv
-                try:
-                    path = os.path.join(os.getcwd(), "data", "contacts.csv")
-                    if os.path.exists(path):
-                        with open(path, "r", encoding="utf-8") as f:
-                            for row in csv.DictReader(f):
-                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
-                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
-                                if em:
-                                    contacts.append({"name": nm, "email": em})
-                except Exception:
-                    pass
-
-            # Filter by search
-            s = (search or "").lower().strip()
-            if s:
-                contacts = [c for c in contacts if s in (c.get("name","")+c.get("email","")).lower()]
-
-            # Options
-            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
-            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
-
-            subj = st.text_input("Subject", key="outreach_contact_subject")
-            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
-            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
-
-            if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
-                emails = []
-                label_to_email = {}
-                for c, lbl in zip(contacts, labels):
-                    label_to_email[lbl] = c["email"]
-                for lbl in selected:
-                    em = label_to_email.get(lbl)
-                    if em:
-                        emails.append(em)
-                if not emails:
-                    st.warning("Select at least one contact.")
-                elif not subj or not body:
-                    st.warning("Subject and body are required.")
-                else:
-                    # Normalize files
-                    atts = _normalize_extra_files(c_files)
-                    # Tracking id per batch
-                    import uuid
-                    batch_id = str(uuid.uuid4())
-                    failures = []
-                    sent = 0
-                    for em in emails:
-                        try:
-                            send_outreach_email(
-                                ACTIVE_USER, [em], subj, body,
-                                cc_addrs=None, bcc_addrs=None, attachments=atts,
-                                add_read_receipts=want_rr, tracking_pixel_url=(pixel_url or None),
-                                tracking_id=batch_id + "::" + em
-                            )
-                            sent += 1
-                        except Exception as e:
-                            failures.append((em, str(e)))
-                    # Log
-                    _log_contact_outreach([{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
-                    if failures:
-                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + "; ".join([f"{a} ({b})" for a,b in failures]))
-                    else:
-                        st.success(f"Sent {sent} / {len(emails)}")
-        # Stop rendering vendor section if Contacts mode
-        return
-
     # ---------- Helpers ----------
     def _normalize_sel_attachments(sel_atts):
         """Return a list of dicts with just 'name' for display when attachments in the generated item are names/dicts."""
@@ -1345,6 +1248,105 @@ def render_outreach_tools():
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with st.container(border=True):
             mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
+
+
+    
+    # ---- Contacts Outreach ----
+    if mode == "Contacts":
+        with st.container(border=True):
+            st.markdown("#### Contacts")
+            # Read receipts + tracking pixel options
+            with st.expander("Delivery & Tracking options", expanded=False):
+                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
+                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
+            # Load contacts from CSV
+            col_c1, col_c2 = st.columns([2,1])
+            with col_c1:
+                search = st.text_input("Search contacts", key="outreach_contact_search")
+            with col_c2:
+                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
+            contacts = []
+            import os, csv
+            # Prefer uploaded CSV
+            if uploaded is not None:
+                try:
+                    txt = uploaded.getvalue().decode("utf-8", errors="ignore")
+                    for row in csv.DictReader(txt.splitlines()):
+                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
+                        if em:
+                            contacts.append({"name": nm, "email": em})
+                except Exception:
+                    pass
+            else:
+                # Try default data/contacts.csv
+                try:
+                    path = os.path.join(os.getcwd(), "data", "contacts.csv")
+                    if os.path.exists(path):
+                        with open(path, "r", encoding="utf-8") as f:
+                            for row in csv.DictReader(f):
+                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
+                                if em:
+                                    contacts.append({"name": nm, "email": em})
+                except Exception:
+                    pass
+
+            # Filter by search
+            s = (search or "").lower().strip()
+            if s:
+                contacts = [c for c in contacts if s in (c.get("name","")+c.get("email","")).lower()]
+
+            # Options
+            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
+            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
+
+            subj = st.text_input("Subject", key="outreach_contact_subject")
+            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
+            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
+
+            if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
+                emails = []
+                label_to_email = {}
+                for c, lbl in zip(contacts, labels):
+                    label_to_email[lbl] = c["email"]
+                for lbl in selected:
+                    em = label_to_email.get(lbl)
+                    if em:
+                        emails.append(em)
+                if not emails:
+                    st.warning("Select at least one contact.")
+                elif not subj or not body:
+                    st.warning("Subject and body are required.")
+                else:
+                    # Normalize files
+                    atts = _normalize_extra_files(c_files)
+                    # Tracking id per batch
+                    import uuid
+                    batch_id = str(uuid.uuid4())
+                    failures = []
+                    sent = 0
+                    for em in emails:
+                        try:
+                            send_outreach_email(
+                                ACTIVE_USER, [em], subj, body,
+                                cc_addrs=None, bcc_addrs=None, attachments=atts,
+                                add_read_receipts=want_rr, tracking_pixel_url=(pixel_url or None),
+                                tracking_id=batch_id + "::" + em
+                            )
+                            sent += 1
+                        except Exception as e:
+                            failures.append((em, str(e)))
+                    # Log
+                    _log_contact_outreach([{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
+                    if failures:
+                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + "; ".join([f"{a} ({b})" for a,b in failures]))
+                    else:
+                        st.success(f"Sent {sent} / {len(emails)}")
+        # Stop rendering vendor section if Contacts mode
+        return
+
+
         with top_r:
             pass
 
