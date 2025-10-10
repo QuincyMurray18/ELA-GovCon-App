@@ -960,10 +960,12 @@ def render_outreach_tools():
     # ---------- Stable session keys ----------
     SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"             # snapshot for the Gmail-style preview card
     SKEY_ATTACH  = f"{ACTIVE_USER}::outreach::extra_attachments"   # extra attachments uploaded by user (UploadedFile list)
+    SKEY_LASTSIG = f"{ACTIVE_USER}::outreach::last_loaded_sig"
 
     st.session_state.setdefault(SKEY_PREVIEW, None)
     st.session_state.setdefault(SKEY_ATTACH, [])
 
+    st.session_state.setdefault(SKEY_LASTSIG, "")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
 
     # ---------- Header ----------
@@ -1001,6 +1003,29 @@ def render_outreach_tools():
                 st.error(f"Failed to save: {e}")
 
     st.divider()
+    
+    # ---- Auto-load the latest generated email into preview (if new) ----
+    mb = st.session_state.get("mail_bodies") or []
+    if mb:
+        sel = mb[-1]  # latest generated
+        body = sel.get("body","") or ""
+        sig = f"{sel.get('to','')}|{sel.get('subject','')}|{len(body)}|{len(mb)}"
+        if not st.session_state.get(SKEY_PREVIEW) or st.session_state.get(SKEY_LASTSIG) != sig:
+            # Build preview snapshot with generated attachments (names only)
+            norm_atts = _normalize_sel_attachments(sel.get("attachments"))
+            st.session_state[SKEY_PREVIEW] = {
+                "to": sel.get("to",""),
+                "cc": sel.get("cc",""),
+                "bcc": sel.get("bcc",""),
+                "subject": sel.get("subject",""),
+                "body_html": body,
+                "from_addr": USER_EMAILS.get(ACTIVE_USER, ""),
+                "scope_summary": sel.get("scope_summary") or sel.get("scope") or "",
+                "quote_due": sel.get("quote_due") or sel.get("due") or "",
+                "attachments": norm_atts or [],   # display-only names
+            }
+            st.session_state[SKEY_LASTSIG] = sig
+
     # ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
@@ -1026,6 +1051,13 @@ def render_outreach_tools():
                 meta_bits.append("<div style='display:inline-block;border:1px solid #eee;"
                                  "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
                                  f"{snap['quote_due']}</div>")
+
+            
+            # Attachments uploader (positioned below Quote Due)
+            extra_files = st.file_uploader("Attachments (optional)", type=None, accept_multiple_files=True,
+                                           key=ns_key("outreach::extra_files"))
+            if extra_files is not None:
+                st.session_state[SKEY_ATTACH] = extra_files
 
             # Body
             body_html = (snap.get("body_html") or "").strip() or "<p><i>(No body content)</i></p>"
