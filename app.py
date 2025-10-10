@@ -30,6 +30,52 @@ def _strip_markdown_to_plain(txt: str) -> str:
     return s
 
 import os, re, io, json, sqlite3, time
+
+def _robust_extract_file_bytes(obj):
+    """
+    Return (filename, bytes) for attachment-like objects:
+    - Streamlit UploadedFile (has .getvalue()/.name)
+    - dict with {"name": ..., "data"/"content": ...}
+    - string file path
+    - bytes (returns default filename)
+    - tuple(name, bytes)
+    """
+    try:
+        # Streamlit UploadedFile
+        if hasattr(obj, "getvalue") and hasattr(obj, "name"):
+            data = obj.getvalue()
+            return getattr(obj, "name", "attachment"), data
+        # Dict forms
+        if isinstance(obj, dict):
+            name = obj.get("name") or obj.get("filename") or "attachment"
+            data = obj.get("data", None)
+            if data is None:
+                data = obj.get("content", None)
+            if isinstance(data, str):
+                # if someone passed a path in 'content'
+                try:
+                    with open(data, "rb") as f:
+                        return name, f.read()
+                except Exception:
+                    pass
+            return name, data
+        # Path
+        if isinstance(obj, str):
+            import os
+            try:
+                with open(obj, "rb") as f:
+                    return os.path.basename(obj), f.read()
+            except Exception:
+                return os.path.basename(obj), None
+        # Tuple(name, bytes)
+        if isinstance(obj, tuple) and len(obj) == 2:
+            return obj[0], obj[1]
+        # Raw bytes
+        if isinstance(obj, (bytes, bytearray)):
+            return "attachment", bytes(obj)
+    except Exception:
+        return "attachment", None
+    return "attachment", None
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
@@ -549,8 +595,32 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+for att in attachments:
+            _fname, _bytes = _robust_extract_file_bytes(att)
+for att in attachments:
+            if _bytes:
+for att in attachments:
+                _fname, _bytes = _robust_extract_file_bytes(att)
+                if _bytes:
+                    msg.add_attachment(_bytes, maintype="application", subtype="octet-stream", filename=_fname)
+for att in attachments:
+            else:
+for att in attachments:
+                pass
+for att in attachments:
+        except Exception:
+for att in attachments:
+            try:
+for att in attachments:
+                import streamlit as st
+for att in attachments:
+                st.warning("Skipping one attachment due to read error.")
+for att in attachments:
+            except Exception:
+for att in attachments:
+                pass
+for att in attachments:
+        content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
             raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
 
@@ -880,8 +950,32 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+for att in attachments:
+            _fname, _bytes = _robust_extract_file_bytes(att)
+for att in attachments:
+            if _bytes:
+for att in attachments:
+                _fname, _bytes = _robust_extract_file_bytes(att)
+                if _bytes:
+                    msg.add_attachment(_bytes, maintype="application", subtype="octet-stream", filename=_fname)
+for att in attachments:
+            else:
+for att in attachments:
+                pass
+for att in attachments:
+        except Exception:
+for att in attachments:
+            try:
+for att in attachments:
+                import streamlit as st
+for att in attachments:
+                st.warning("Skipping one attachment due to read error.")
+for att in attachments:
+            except Exception:
+for att in attachments:
+                pass
+for att in attachments:
+        content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
             raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
 
@@ -1053,7 +1147,7 @@ def render_outreach_tools():
     
             actions2 = st.columns([1, 2, 2, 5])
             with actions2[1]:
-                if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
+                if st.empty()  # [Removed] send selected now button, use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
                         st.warning("Please upload at least one attachment before sending.")
@@ -3703,9 +3797,9 @@ with legacy_tabs[3]:
             if reply_to:
                 msg['Reply-To'] = reply_to
             msg.attach(MIMEText(body, 'plain'))
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
                 server.sendmail(from_addr, [to_addr], msg.as_string())
 
         def _send_via_gmail(to_addr, subject, body):
