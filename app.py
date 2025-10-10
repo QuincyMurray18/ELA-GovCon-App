@@ -1260,76 +1260,45 @@ def render_outreach_tools():
                 want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
                 pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
             
-# Load contacts from DB
-conn = get_db()
-import pandas as pd
-try:
-    df_db = pd.read_sql_query("""
-        select id, name, org, role, email, phone, source, notes, created_at
-        from contacts
-        where coalesce(email,'') <> ''
-        order by created_at desc
-    """, conn)
-except Exception as e:
-    st.error(f"Failed to load contacts from DB: {e}")
-    df_db = pd.DataFrame(columns=['id','name','org','role','email','phone','source','notes','created_at'])
+            # Load contacts from DB
+            conn = get_db()
+            import pandas as pd
+            try:
+                df_db = pd.read_sql_query("""
+                    select id, name, org, role, email, phone, source, notes, created_at
+                    from contacts
+                    where coalesce(email,'') <> ''
+                    order by created_at desc
+                """, conn)
+            except Exception as e:
+                st.error(f"Failed to load contacts from DB: {e}")
+                df_db = pd.DataFrame(columns=['id','name','org','role','email','phone','source','notes','created_at'])
 
-contacts = df_db.to_dict("records")
+            contacts = df_db.to_dict("records")
 
-# Optional import to DB from CSV
-uploaded = st.file_uploader("Optional import contacts CSV", type=["csv"], key="outreach_contacts_csv")
-if uploaded is not None:
-    import csv, io
-    reader = csv.DictReader(io.StringIO(uploaded.getvalue().decode("utf-8", errors="ignore")))
-    cur = conn.cursor()
-    rows_added = 0
-    for row in reader:
-        nm = (row.get("name") or row.get("Name") or row.get("full_name") or "").strip()
-        em = (row.get("email") or row.get("Email") or row.get("mail") or "").strip()
-        if em:
-            cur.execute(
-                """insert into contacts(name, org, role, email, phone, source, notes)
-                   values (?, ?, ?, ?, ?, ?, ?)""",
-                (nm, row.get("org") or "", row.get("role") or "", em,
-                 row.get("phone") or "", "CSV import", row.get("notes") or "")
-            )
-            rows_added += 1
-    conn.commit()
-    st.success(f"Imported {rows_added} contacts from CSV")
-    st.rerun()
-
-            col_c1, col_c2 = st.columns([2,1])
-            with col_c1:
-                search = st.text_input("Search contacts", key="outreach_contact_search")
-            with col_c2:
-                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
-            contacts = []
-            import os, csv
-            # Prefer uploaded CSV
+            # Optional import to DB from CSV
+            uploaded = st.file_uploader("Optional import contacts CSV", type=["csv"], key="outreach_contacts_csv")
             if uploaded is not None:
-                try:
-                    txt = uploaded.getvalue().decode("utf-8", errors="ignore")
-                    for row in csv.DictReader(txt.splitlines()):
-                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
-                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
-                        if em:
-                            contacts.append({"name": nm, "email": em})
-                except Exception:
-                    pass
-            else:
-                # Try default data/contacts.csv
-                try:
-                    path = os.path.join(os.getcwd(), "data", "contacts.csv")
-                    if os.path.exists(path):
-                        with open(path, "r", encoding="utf-8") as f:
-                            for row in csv.DictReader(f):
-                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
-                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
-                                if em:
-                                    contacts.append({"name": nm, "email": em})
-                except Exception:
-                    pass
+                import csv, io
+                reader = csv.DictReader(io.StringIO(uploaded.getvalue().decode("utf-8", errors="ignore")))
+                cur = conn.cursor()
+                rows_added = 0
+                for row in reader:
+                    nm = (row.get("name") or row.get("Name") or row.get("full_name") or "").strip()
+                    em = (row.get("email") or row.get("Email") or row.get("mail") or "").strip()
+                    if em:
+                        cur.execute(
+                            """insert into contacts(name, org, role, email, phone, source, notes)
+                               values (?, ?, ?, ?, ?, ?, ?)""",
+                            (nm, row.get("org") or "", row.get("role") or "", em,
+                             row.get("phone") or "", "CSV import", row.get("notes") or "")
+                        )
+                        rows_added += 1
+                conn.commit()
+                st.success(f"Imported {rows_added} contacts from CSV")
+                st.rerun()
 
+            search = st.text_input("Search contacts", key="outreach_contact_search")
             # Filter by search
             s = (search or "").lower().strip()
             if s:
