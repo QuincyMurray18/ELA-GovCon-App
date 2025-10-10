@@ -514,8 +514,18 @@ def get_user_mail_config(user: str):
         "password": pw,
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
-
 def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None):
+    # Normalize recipient lists and attachments
+    def _to_list(x):
+        if not x:
+            return []
+        if isinstance(x, str):
+            return [s.strip() for s in x.split(',') if s.strip()]
+        return list(x)
+    to_list = _to_list(to_addrs)
+    cc_list = _to_list(cc_addrs)
+    bcc_list = _to_list(bcc_addrs)
+    attachments = _coerce_attachments(attachments) if attachments else []
     attachments = _coerce_attachments(attachments) if attachments else []
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
