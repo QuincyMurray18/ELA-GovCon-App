@@ -970,22 +970,16 @@ def render_outreach_tools():
     with left:
         with st.container(border=True):
             st.markdown("#### Compose")
-            st.text_input("To", key=ns_key("outreach::mail_to"), value=st.session_state.get(SKEY_TO, ""), on_change=lambda: None)
-            st.session_state[SKEY_TO] = st.session_state.get(ns_key("outreach::mail_to"))
+            st.text_input("To", key=SKEY_TO)
             cols_addr = st.columns(2)
             with cols_addr[0]:
-                st.text_input("Cc", key=ns_key("outreach::mail_cc"), value=st.session_state.get(SKEY_CC, ""), on_change=lambda: None)
-                st.session_state[SKEY_CC] = st.session_state.get(ns_key("outreach::mail_cc"))
+                st.text_input("Cc", key=SKEY_CC)
             with cols_addr[1]:
-                st.text_input("Bcc", key=ns_key("outreach::mail_bcc"), value=st.session_state.get(SKEY_BCC, ""), on_change=lambda: None)
-                st.session_state[SKEY_BCC] = st.session_state.get(ns_key("outreach::mail_bcc"))
+                st.text_input("Bcc", key=SKEY_BCC)
 
-            st.text_input("Subject", key=ns_key("outreach::mail_subj"), value=st.session_state.get(SKEY_SUBJ, ""), on_change=lambda: None)
-            st.session_state[SKEY_SUBJ] = st.session_state.get(ns_key("outreach::mail_subj"))
+            st.text_input("Subject", key=SKEY_SUBJ)
 
-            st.text_area("Message (HTML)", key=ns_key("outreach::mail_body"),
-                         value=st.session_state.get(SKEY_BODY, ""), height=220, placeholder="<p>Hello...</p>")
-            st.session_state[SKEY_BODY] = st.session_state.get(ns_key("outreach::mail_body"))
+            st.text_area("Message (HTML)", key=SKEY_BODY, height=220, placeholder="<p>Hello...</p>")
 
             files = st.file_uploader("Attachments (optional)", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
@@ -1042,29 +1036,7 @@ def render_outreach_tools():
                         height=220, scrolling=True
                     )
                 with cload:
-                    if st.button("Load into preview"):
-                        try:
-                            load_outreach_preview(
-                                to=sel.get("to",""),
-                                subject=sel.get("subject",""),
-                                html=sel.get("body","")
-                            )
-                            st.success("Loaded into the preview.")
-                        except NameError:
-                            st.session_state[SKEY_TO] = sel.get("to","")
-                            st.session_state[SKEY_SUBJ] = sel.get("subject","")
-                            st.session_state[SKEY_BODY] = sel.get("body","")
-                            st.session_state[SKEY_PREVIEW] = {
-                                "to": st.session_state[SKEY_TO],
-                                "cc": st.session_state[SKEY_CC],
-                                "bcc": st.session_state[SKEY_BCC],
-                                "subject": st.session_state[SKEY_SUBJ],
-                                "body_html": st.session_state[SKEY_BODY],
-                                "attachments": [],
-                                "from_addr": from_addr,
-                            }
-                            st.success("Loaded into the preview.")
-
+                    st.caption("Auto-loaded to preview")
     # RIGHT: Always-visible preview
     with right:
         with st.container(border=True):
