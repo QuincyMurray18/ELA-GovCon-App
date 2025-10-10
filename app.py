@@ -9,7 +9,7 @@ def _strip_markdown_to_plain(txt: str) -> str:
     import re as _re
     s = txt
     # Remove code fences but keep inner text
-    s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
+    s = _re.sub(r"```(.*?)```", r"", s, flags=_re.DOTALL)
     # Inline code backticks
     s = s.replace("`", "")
     # Bold/italic markers
@@ -898,7 +898,6 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 
-\1
     ns = ns_key(\"outreach\")
     _container = st.container()
     with _container:
