@@ -1,7 +1,5 @@
 # ===== app.py =====
 
-import mimetypes
-
 def _strip_markdown_to_plain(txt: str) -> str:
     """
     Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
@@ -123,7 +121,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
     _render_markdown_to_docx(doc, md_text)
-    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.read()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 
 def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
@@ -157,7 +155,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
     _render_markdown_to_docx(doc, md_text)
-    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.read()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 
 # ===== Improved Markdown rendering helpers =====
@@ -319,7 +317,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
     out = io.BytesIO()
     doc.save(out)
     out.seek(0)
-    return out.read()
+    return out.getvalue()
 
 # ===== end Improved Markdown rendering helpers =====
 
@@ -389,7 +387,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
             flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
         flush_bullets(); flush_numbers(); doc.add_paragraph(line)
     flush_bullets(); flush_numbers()
-    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.read()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                      margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
@@ -458,7 +456,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
             flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
         flush_bullets(); flush_numbers(); doc.add_paragraph(line)
     flush_bullets(); flush_numbers()
-    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.read()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 # ===== end DOCX helpers =====
 
 
@@ -551,7 +549,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.read()
+            content = att.getvalue()
             msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
             raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
@@ -641,7 +639,7 @@ def _do_login():
             pin = st.text_input("PIN", type="password", key="login_pin_input")
             pin_ok = _verify_pin(user, pin)
 
-        if False:
+        if st.button("Sign in", use_container_width=True, key="login_btn"):
             if pin_ok:
                 st.session_state["active_user"] = user
                 st.session_state.setdefault("private_mode", True)
@@ -660,7 +658,7 @@ with st.sidebar:
     # Show current user and offer Sign out
     if st.session_state.get("active_user"):
         st.caption(f"Signed in as {st.session_state['active_user']}")
-        if False:
+        if st.button("Sign out", use_container_width=True, key="logout_btn"):
             # Clear login and PIN and force re-run back to login screen
             st.session_state.pop("active_user", None)
             st.session_state.pop("login_pin_input", None)
@@ -672,7 +670,7 @@ _active = st.session_state.get("active_user")
 if _active and _selected and _selected != _active:
     with st.sidebar:
         st.warning(f"You selected {_selected}. To switch from {_active}, click below then sign in.")
-        if False:
+        if st.button(f"Switch to {_selected}", use_container_width=True, key="switch_user_btn"):
             st.session_state.pop("active_user", None)  # this will trigger the login stop above on next run
             st.session_state.pop("login_pin_input", None)
             st.rerun()
@@ -730,7 +728,7 @@ with st.sidebar:
         curr = st.text_input("Current PIN", type="password", key="pin_cur")
         new1 = st.text_input("New PIN", type="password", key="pin_new1")
         new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
-        if False:
+        if st.button("Update PIN", use_container_width=True, key="pin_update_btn"):
             if not _verify_pin(ACTIVE_USER, curr or ''):
                 st.error("Current PIN is incorrect.")
             elif not new1 or len(new1) < 4 or len(new1) > 12:
@@ -777,7 +775,7 @@ def write_or_queue(label, commit_fn):
         st.success(f"Saved to team. [{label}]")
 
 with st.sidebar:
-    if False:
+    if st.button("Publish my changes", use_container_width=True, key="publish_btn"):
         errs = publish_changes()
         if not errs:
             st.success("All your private changes are now published to the team data.")
@@ -882,7 +880,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.read()
+            content = att.getvalue()
             msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
         except Exception as e:
             raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
@@ -927,7 +925,7 @@ def render_outreach_tools():
         try:
             for f in (files or []):
                 try:
-                    out.append({"name": getattr(f, "name", "file"), "data": f.read()})
+                    out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                 except Exception:
                     pass
         except Exception:
@@ -990,7 +988,7 @@ def render_outreach_tools():
     # ---- Account: App Password (still here) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if False:
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             try:
                 set_user_smtp_app_password(ACTIVE_USER, pw)
                 st.success("Saved")
@@ -1028,7 +1026,7 @@ def render_outreach_tools():
                 st.session_state[SKEY_ATTACH] = extra_files
 
             # Generate preview button
-            if False:
+            if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
                 files = st.session_state.get(SKEY_ATTACH) or []
                 if not files:
                     st.warning("Please upload at least one attachment before generating the preview.")
@@ -1055,7 +1053,7 @@ def render_outreach_tools():
     
             actions2 = st.columns([1, 2, 2, 5])
             with actions2[1]:
-                if False:
+                if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
                         st.warning("Please upload at least one attachment before sending.")
@@ -1075,7 +1073,7 @@ def render_outreach_tools():
                         except Exception as e:
                             st.error(f"Failed to send selected: {e}")
             with actions2[2]:
-                if False:
+                if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
                         st.warning("Please upload at least one attachment before mass sending.")
@@ -1117,8 +1115,6 @@ def render_outreach_tools():
             if snap.get("subject"):   hdr_lines.append(f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
 
             # Meta row: Scope Summary & Quote Due
-            # Optional attachments below Quote Due
-            outreach_attachments = st.file_uploader('Attachments (optional)', accept_multiple_files=True, key='outreach_attachments')
             meta_bits = []
             if snap.get("scope_summary"):
                 meta_bits.append("<div style='display:inline-block;border:1px solid #eee;"
@@ -1159,7 +1155,7 @@ def render_outreach_tools():
             # Actions under the preview
             a1, a2 = st.columns(2)
             with a1:
-                if False:
+                if st.button("Send email", key=ns_key("outreach::send_from_preview"), use_container_width=True):
                     try:
                         _send_email(
                             ACTIVE_USER,
@@ -1175,7 +1171,7 @@ def render_outreach_tools():
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
             with a2:
-                if False:
+                if st.button("Close preview", key=ns_key("outreach::close_preview"), use_container_width=True):
                     st.session_state[SKEY_PREVIEW] = None
 
 def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
@@ -1207,7 +1203,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     hc1, hc2, hc3 = st.columns([1,1,2])
     with hc1:
-        if False:
+        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
@@ -1224,13 +1220,13 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 "from_addr": from_addr,
             }
     with hc2:
-        if False:
+        if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
         app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if False:
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
@@ -1246,12 +1242,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         c1, c2 = st.columns(2)
         with c1:
-            if False:
+            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
                 atts = []
                 try:
                     for f in (files or []):
                         try:
-                            atts.append({"name": getattr(f, "name", "file"), "data": f.read()})
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                         except Exception:
                             pass
                 except Exception:
@@ -1266,7 +1262,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     "from_addr": from_addr,
                 }
         with c2:
-            if False:
+            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
                     send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
@@ -1302,7 +1298,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         cc1, cc2, _ = st.columns([1,1,2])
         with cc1:
-            if False:
+            if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
                 class _MemFile:
                     def __init__(self, name, data):
                         self.name = name
@@ -1327,7 +1323,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
         with cc2:
-            if False:
+            if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
                 st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
@@ -1341,7 +1337,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     # === Header-level controls ===
     hc1, hc2, hc3 = st.columns([1,1,2])
     with hc1:
-        if False:
+        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
             # Pull current draft values from session, even if the composer expander is closed
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
@@ -1360,13 +1356,13 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 "from_addr": from_addr,
             }
     with hc2:
-        if False:
+        if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
         app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if False:
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
@@ -1384,13 +1380,13 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         c1, c2 = st.columns(2)
         with c1:
-            if False:
+            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
                 # Snapshot current fields (including attachments) for a pixel-accurate preview
                 atts = []
                 try:
                     for f in (files or []):
                         try:
-                            atts.append({"name": getattr(f, "name", "file"), "data": f.read()})
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                         except Exception:
                             pass
                 except Exception:
@@ -1405,7 +1401,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     "from_addr": from_addr,
                 }
         with c2:
-            if False:
+            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
                     send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
@@ -1447,7 +1443,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
             cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
-                if False:
+                if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
                     class _MemFile:
                         def __init__(self, name, data):
                             self.name = name
@@ -1472,7 +1468,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
             with cc2:
-                if False:
+                if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
                     st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
@@ -1483,7 +1479,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
         app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if False:
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
@@ -1503,7 +1499,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         c1, c2 = st.columns(2)
         with c1:
-            if False:
+            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
                 # Store a snapshot of the compose fields in session so a rerun preserves the preview
                 # For attachments, store name and raw bytes so we can reconstruct file-like objects later.
                 atts = []
@@ -1512,7 +1508,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                         try:
                             atts.append({
                                 "name": getattr(f, "name", "file"),
-                                "data": f.read()
+                                "data": f.getvalue()
                             })
                         except Exception:
                             pass
@@ -1528,7 +1524,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     "from_addr": from_addr,
                 }
         with c2:
-            if False:
+            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
                     send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
@@ -1575,7 +1571,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             # Confirm send buttons
             cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
-                if False:
+                if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
                     # Rebuild simple in memory files compatible with send_outreach_email expectations
                     class _MemFile:
                         def __init__(self, name, data):
@@ -1602,7 +1598,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
             with cc2:
-                if False:
+                if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
                     st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
@@ -1613,7 +1609,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
         app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
-        if False:
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
@@ -1627,7 +1623,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
         files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-        if False:
+        if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
                 send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                 st.success("Email sent.")
@@ -2648,7 +2644,7 @@ def to_xlsx_bytes(df_dict):
     with pd.ExcelWriter(bio, engine="xlsxwriter") as w:
         for name, df in df_dict.items():
             df.to_excel(w, index=False, sheet_name=name[:31])
-    return bio.read()
+    return bio.getvalue()
 
 
 
@@ -2828,7 +2824,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
     bio = io.BytesIO()
     doc.save(bio)
     bio.seek(0)
-    return bio.read()
+    return bio.getvalue()
     # Basic content checks
     if not body:
         issues.append("No content assembled for export.")
@@ -3341,7 +3337,7 @@ with legacy_tabs[0]:
         },
         use_container_width=True, num_rows="dynamic", key="opp_grid"
     )
-    if False:
+    if st.button("Save pipeline changes"):
         cur = conn.cursor()
         # Make a copy of the original grid if present; else derive from filtered df
         try:
@@ -3430,7 +3426,8 @@ with legacy_tabs[0]:
 
                 grid_tasks = st.data_editor(df_tasks, use_container_width=True, num_rows="dynamic", key="tasks_grid")
 
-                if False:
+                if st.button("Save tasks"):
+
                     cur = conn.cursor()
 
                     for _, r in grid_tasks.iterrows():
@@ -3468,7 +3465,7 @@ with legacy_tabs[1]:
 
     with colA:
 
-        if False:
+        if st.button("Google Places import"):
             results, info = google_places_search(f"{trade} small business", loc, int(radius_miles*1609.34))
             st.session_state["vendor_results"] = results or []
             st.session_state["vendor_info"] = info or {}
@@ -3600,7 +3597,7 @@ with legacy_tabs[2]:
     conn = get_db()
     df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
-    if False:
+    if st.button("Save contacts"):
         cur = conn.cursor()
         for _, r in grid.iterrows():
             if pd.isna(r["id"]):
@@ -3635,7 +3632,7 @@ with legacy_tabs[3]:
     colA, colB, colC, colD = st.columns([1,1,1,2])
 
     with colA:
-        if False:
+        if st.button("Update selected", key="tpl_btn_update"):
             _conn = get_db()
             _conn.execute(
                 """
@@ -3654,7 +3651,7 @@ with legacy_tabs[3]:
 
     with colB:
         new_name = st.text_input("New name", value="", placeholder="e.g., RFQ Follow-up", key="tpl_new_name")
-        if False:
+        if st.button("Save as new", key="tpl_btn_save_new") and new_name.strip():
             _conn = get_db()
             _conn.execute(
                 """
@@ -3673,10 +3670,20 @@ with legacy_tabs[3]:
 
     with colC:
         confirm_del = st.checkbox("Confirm delete", key="tpl_confirm_delete")
-        if False:
-            pass
+        if st.button("Delete selected", key="tpl_btn_delete", help="Requires confirm") and confirm_del:
+            _conn = get_db()
+            _conn.execute("DELETE FROM email_templates WHERE name=?", (pick_t,))
+            _conn.commit()
+            st.warning(f"Deleted '{pick_t}'")
+            st.rerun()
+
+    with colD:
+        st.caption("Tips: Use placeholders like {company}, {scope}, {due}.")
+    picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
+    scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
+    due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
+    if st.button("Generate emails"):
         st.session_state["mail_bodies"] = []
-        picks = st.session_state.get('picks', [])  # safe default if selection not set
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
             to_addr = row.get("email","")
@@ -4046,7 +4053,7 @@ with legacy_tabs[4]:
     interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
     digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
     digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=70, step=5)
-    if False:
+    if st.button("Save monitor settings"):
         set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
         set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
         set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
@@ -4085,7 +4092,7 @@ except Exception:
         raw = st.checkbox("Show raw API text (debug)", value=False)
         assignee_default = st.selectbox("Default assignee", ["","Quincy","Charles","Collin"], index=(['','Quincy','Charles','Collin'].index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in ['Quincy','Charles','Collin'] else 0))
         st.markdown("**Defaults**")
-        if False:
+        if st.button("Save as my default"):
             set_setting(_defaults_key, json.dumps({
                 'min_days': int(min_days),
                 'posted_from_days': int(posted_from_days),
@@ -4093,7 +4100,7 @@ except Exception:
                 'keyword': str(keyword or '')
             }))
             st.success("Saved your defaults")
-        if False:
+        if st.button("Reset my default"):
             set_setting(_defaults_key, "")
             st.info("Cleared your saved defaults")
 
@@ -4108,7 +4115,7 @@ except Exception:
         min_score_email = st.number_input("Min score to email", min_value=0, max_value=100, value=70, step=5)
         email_to_self = st.text_input("Send to (your email)", value=USER_EMAILS.get(ACTIVE_USER, ""))
 
-        if False:
+        if st.button("Run search now"):
             df, info = sam_search(
                 codes, min_days=min_days, limit=150,
                 keyword=keyword or None, posted_from_days=int(posted_from_days),
@@ -4177,7 +4184,7 @@ except Exception:
 
         with st.expander("Quick select options"):
             n_top = st.number_input("Select top N by score", min_value=1, max_value=max(1, min(50, len(grid_df))), value=min(5, len(grid_df)))
-            if False:
+            if st.button("Mark top N for Save"):
                 try:
                     top_idx = grid_df.sort_values("Score", ascending=False).head(int(n_top)).index
                     df.loc[top_idx, "Save"] = True
@@ -4199,7 +4206,7 @@ except Exception:
         save_sel = edited[edited.get("Save", False)==True] if "Save" in edited.columns else edited.iloc[0:0]
         st.caption(f"Selected to save: {len(save_sel)} of {len(edited)}")
 
-        if False:
+        if st.button("Save selected to pipeline"):
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
@@ -4220,7 +4227,7 @@ except Exception:
             if len(save_sel) > 0:
                 try:
                     st.markdown("#### Prep outreach drafts for CO (email placeholders)")
-                    if False:
+                    if st.button("Create outreach drafts in Outreach tab"):
                         bods = []
                         for _, r in save_sel.iterrows():
                             subj = f"Inquiry: {str(r.get('title',''))[:60]}"
@@ -4234,7 +4241,7 @@ except Exception:
         st.info("No active results yet. Click **Run search now**.")
 
     with cB:
-        if False:
+        if st.button("Broad test (keyword only)"):
             kw = keyword.strip() or "janitorial"
             df, info = sam_search(
                 [], min_days=0, limit=100, keyword=kw, posted_from_days=60,
@@ -4245,7 +4252,7 @@ except Exception:
             st.success(f"Test search complete for keyword: {kw}")
 
     with cC:
-        if False:
+        if st.button("Test SAM key only"):
             try:
                 today_us = _us_date(datetime.utcnow().date())
                 test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json", "postedFrom": today_us, "postedTo": today_us}
@@ -4298,7 +4305,7 @@ with legacy_tabs[6]:
     c1, c2, c3 = st.columns([1,1,2])
 
     with c1:
-        if False:
+        if st.button("Generate one page", key="btn_cap_generate_capability_builder"):
             system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
             prompt = f"""Company {company}
 Tagline {tagline}
@@ -4312,7 +4319,7 @@ Certifications Small Business"""
             st.session_state["capability_md"] = cap_md
 
     with c2:
-        if False:
+        if st.button("Clear draft", key="btn_cap_clear_capability_builder"):
             st.session_state.pop("capability_md", None)
 
     cap_md = st.session_state.get("capability_md", "")
@@ -4339,13 +4346,13 @@ with legacy_tabs[7]:
 
     col_w1, col_w2, col_w3 = st.columns([1,1,2])
     with col_w1:
-        if False:
+        if st.button("Draft white paper", key="btn_wp_draft_whitepaper_builder"):
             system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
             prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
             wp_md = llm(system, prompt, max_tokens=1400)
             st.session_state["whitepaper_md"] = wp_md
     with col_w2:
-        if False:
+        if st.button("Clear white paper draft", key="btn_wp_clear_whitepaper_builder"):
             st.session_state.pop("whitepaper_md", None)
 
     wp_md = st.session_state.get("whitepaper_md", "")
@@ -4414,7 +4421,7 @@ with legacy_tabs[11]:
     if pick == "➤ New chat":
         default_title = f"Chat {datetime.now().strftime('%b %d %I:%M %p')}"
         new_title = st.text_input("New chat title", value=default_title)
-        if False:
+        if st.button("Start chat"):
             conn.execute("insert into chat_sessions(title) values(?)", (new_title,))
             conn.commit()
             st.rerun()
@@ -4594,7 +4601,7 @@ with legacy_tabs[__tabs_base + 0]:
         # Email reminders via Microsoft Graph
         st.markdown("#### Send email reminders")
         to_addr = st.text_input("Send reminders to email", value="")
-        if False:
+        if st.button("Email reminders for items due today"):
             if to_addr:
                 body_lines = ["The following items are due today:"]
                 for _, r in due_today.iterrows():
@@ -4721,7 +4728,7 @@ with legacy_tabs[__tabs_base + 2]:
             for para in row[2].split("\n\n"):
                 doc.add_paragraph(_strip_markdown_to_plain(para))
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
-            st.download_button("Download RFQ.docx", data=bio.read(), file_name="RFQ.docx",
+            st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 with legacy_tabs[__tabs_base + 3]:
@@ -4795,7 +4802,7 @@ with legacy_tabs[__tabs_base + 3]:
             limit_rows = st.number_input("Max awards to pull", min_value=10, step=10, value=200, key="md_limit")
             want_calc = st.checkbox("Also pull GSA CALC labor rates", value=False, key="md_calc")
 
-        if False:
+        if st.button("Fetch market data", key="md_fetch"):
             from datetime import datetime as _dt, timedelta as _td
             date_to = _dt.utcnow().date().strftime("%Y-%m-%d")
             date_from = (_dt.utcnow().date() - _td(days=int(lookback_months)*30)).strftime("%Y-%m-%d")
@@ -4898,7 +4905,7 @@ with legacy_tabs[__tabs_base + 3]:
                             _apply_sqft = st.number_input("Use sqft to apply median $ per sqft", min_value=0, step=1000, value=0, key="md_apply_sqft")
                             if _apply_sqft and _apply_sqft > 0 and _med_sqft:
                                 _hint = float(_apply_sqft) * float(_med_sqft)
-                                if False:
+                                if st.button("Set base cost from benchmark median", key="md_bench_setbase"):
                                     st.session_state["pricing_base_cost"] = float(_hint)
                                     st.success(f"Base cost set to ${_hint:,.2f} from benchmark median. Recalculate above.")
     
@@ -4921,7 +4928,7 @@ with legacy_tabs[__tabs_base + 3]:
                             if not _vals.empty:
                                 _med = float(_vals.median())
                                 st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
-                                if False:
+                                if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
                                     st.session_state["pricing_base_cost"] = _med * float(sqft)
                                     st.success(f"Base cost set to ${st.session_state['pricing_base_cost']:,.2f} from implied $/sqft median. Recalculate above.")
 
@@ -5356,7 +5363,7 @@ with st.sidebar:
     company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
     home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX"))
     default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial"))
-    if False:
+    if st.button("Save configuration"):
         set_setting("company_name", company_name); set_setting("home_loc", home_loc); set_setting("default_trade", default_trade)
         st.success("Saved")
 
@@ -5366,14 +5373,14 @@ with st.sidebar:
     st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
     st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
-    if False:
+    if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
     
     # Company identifiers (ELA Management LLC)
     st.subheader("Company identifiers")
     st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
 
-    if False:
+    if st.button("Test SAM key"):
         try:
             today_us = _us_date(datetime.utcnow().date())
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
@@ -5398,7 +5405,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Request failed: {e}")
 
-    if False:
+    if st.button("Test Google Places key"):
         vendors, info = google_places_search("janitorial small business", get_setting("home_loc","Houston, TX"), 30000)
         st.write("Places diagnostics:", info); st.write("Sample results:", vendors[:3])
 
@@ -5412,14 +5419,14 @@ with st.sidebar:
     new_code = st.text_input("Add a single NAICS code")
     col_n1, col_n2 = st.columns(2)
     with col_n1:
-        if False:
+        if st.button("Add code"):
             val = (new_code or "").strip()
             if val:
                 conn.execute("insert or ignore into naics_watch(code,label) values(?,?)", (val, val)); conn.commit(); st.success(f"Added {val}")
     with col_n2:
-        if False:
+        if st.button("Clear all saved codes"):
             conn.execute("delete from naics_watch"); conn.commit(); st.success("Cleared saved codes")
-    if False:
+    if st.button("Save NAICS list"):
         keep = sorted(set([c.strip() for c in st.session_state.naics_watch if str(c).strip()]))
         cur = conn.cursor(); cur.execute("delete from naics_watch")
         for c in keep: cur.execute("insert into naics_watch(code,label) values(?,?)", (c, c))
@@ -5457,11 +5464,11 @@ with st.sidebar:
             conn.commit(); st.success("Goals updated")
     colq1, colq2 = st.columns(2)
     with colq1:
-        if False:
+        if st.button("Log new bid"):
             conn.execute("update goals set bids_submitted = bids_submitted + 1 where id=?", (goal_id,)); conn.commit(); st.success("Bid logged")
     with colq2:
         add_amt = st.number_input("Add award amount", min_value=0.0, step=1000.0, value=0.0, key="award_add_amt")
-        if False:
+        if st.button("Log award"):
             if add_amt > 0:
                 conn.execute("update goals set revenue_won = revenue_won + ? where id=?", (float(add_amt), goal_id)); conn.commit()
                 st.success(f"Award logged for ${add_amt:,.0f}")
@@ -5488,7 +5495,7 @@ def render_rfp_analyzer():
         if pick == "➤ New RFP thread":
             default_title = f"RFP {datetime.now().strftime('%b %d %I:%M %p')}"
             new_title = st.text_input("Thread title", value=default_title)
-            if False:
+            if st.button("Start RFP thread"):
                 conn.execute("insert into rfp_sessions(title) values(?)", (new_title,))
                 conn.commit()
                 st.rerun()
@@ -5528,7 +5535,7 @@ def render_rfp_analyzer():
             st.caption("Attached files")
             st.dataframe(files_df.rename(columns={"chars":"chars_of_text"}), use_container_width=True)
             del_id = st.number_input("Delete attachment by ID", min_value=0, step=1, value=0, key=f"rfp_del_{session_id}")
-            if False:
+            if st.button("Delete selected RFP file"):
                 if del_id > 0:
                     conn.execute("delete from rfp_files where id=?", (int(del_id),))
                     conn.commit()
@@ -5584,16 +5591,16 @@ def render_rfp_analyzer():
         colA, colB, colC, colD = st.columns(4)
         qa = None
         with colA:
-            if False:
+            if st.button("Compliance matrix"):
                 qa = "Produce a compliance matrix that lists every shall must or required item and where it appears."
         with colB:
-            if False:
+            if st.button("Evaluation factors"):
                 qa = "Summarize the evaluation factors and their relative importance and scoring approach."
         with colC:
-            if False:
+            if st.button("Submission checklist"):
                 qa = "Create a submission checklist with page limits fonts file naming addresses and exact submission method with dates and times quoted."
         with colD:
-            if False:
+            if st.button("Grade my draft"):
                 qa = "Grade the following draft against the RFP requirements and give a fix list. If draft text is empty just outline what a strong section must contain."
 
         # Free form follow up like chat
@@ -5943,7 +5950,7 @@ def render_proposal_builder():
             if not fname.lower().endswith(".docx"):
                 fname += ".docx"
 
-            st.download_button("Download Proposal DOCX", data=bio.read(), file_name=fname,
+            st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         st.markdown("### Drafts")
@@ -6145,7 +6152,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     out = io.BytesIO()
     doc.save(out)
     out.seek(0)
-    return out.read()
+    return out.getvalue()
 
 
 
@@ -6378,7 +6385,7 @@ try:
                         _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
                     with qa2:
                         _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
-                    if False:
+                    if st.button("New in this stage", key=f"quick_new_btn_{i}"):
                         if _new_title.strip():
                             create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
                             st.success("Deal created")
@@ -6401,7 +6408,7 @@ try:
                         with km1:
                             new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
                         with km2:
-                            if False:
+                            if st.button("Save", key=f"save_{row['id']}"):
                                 changes = {}
                                 if new_owner != (row["owner"] or ""):
                                     changes["owner"] = new_owner or None
@@ -6420,7 +6427,7 @@ try:
         # Danger zone
         with st.expander("Danger zone: delete a deal"):
             del_id = st.number_input("Deal ID to delete", min_value=1, step=1, value=1)
-            if False:
+            if st.button("Delete deal"):
                 if delete_deal(int(del_id)):
                     st.warning(f"Deleted deal {int(del_id)}.")
                     st.rerun()
@@ -6641,7 +6648,7 @@ def mount_compliance_assistant():
     with st.expander("Proposal Compliance Assistant", expanded=False):
         sow = st.text_area("Paste Solicitation or SOW text", height=200, key="co_sow_text")
         draft = st.text_area("Paste Proposal Draft text", height=200, key="co_draft_text")
-        if False:
+        if st.button("Run Compliance Check"):
             result = compliance_assess(draft, sow)
             st.write("Flesch Kincaid grade:", result["fk_grade"])
             st.write("Missing sections:", result["missing_sections"] or "None")
@@ -6651,9 +6658,9 @@ def mount_compliance_assistant():
                 for r, m in result["risks"]:
                     st.write(f"- {r}: {m}")
             st.write("Evaluator style scores:", result["scores"])
-        if False:
+        if st.button("Suggest Outline from SOW"):
             st.code(propose_outline_with_mirrored_terms(sow), language="markdown")
-        if False:
+        if st.button("Clean Placeholders in Draft"):
             st.text_area("Cleaned Draft", clean_placeholders(draft), height=200, key="co_cleaned_draft_out")
 
 # Attempt to mount automatically if Streamlit is present
@@ -6662,95 +6669,3 @@ try:
 #     mount_compliance_assistant()
 except Exception:
     pass
-
-# ==== ELA Outreach Helpers (appended) ====
-def _ela_build_email_message(from_addr, to_addr, subject, body_html=None, body_text=None, attachments=None, reply_to=None):
-    msg = EmailMessage()
-    msg["From"] = from_addr
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    if reply_to:
-        msg["Reply-To"] = reply_to
-    if body_html and body_text:
-        msg.set_content(body_text)
-        msg.add_alternative(body_html, subtype="html")
-    elif body_html:
-        # ensure text part exists for clients that don't render HTML
-        import re as _re
-        fallback = _re.sub(r"<[^>]+>", "", body_html or "") or ""
-        msg.set_content(fallback)
-        msg.add_alternative(body_html, subtype="html")
-    elif body_text:
-        msg.set_content(body_text)
-    else:
-        msg.set_content("")
-    if attachments:
-        for att in attachments:
-            try:
-                filename = getattr(att, "name", None) or getattr(att, "filename", None) or "attachment"
-                content = att.read() if hasattr(att, "read") else att if isinstance(att, (bytes, bytearray)) else None
-                if content is None:
-                    continue
-                ctype, encoding = mimetypes.guess_type(filename)
-                if ctype is None:
-                    maintype, subtype = "application", "octet-stream"
-                else:
-                    maintype, subtype = ctype.split("/", 1)
-                msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
-            except Exception:
-                # skip problematic attachment but continue sending others
-                pass
-    return msg
-
-def _ela_smtp_send_batch(smtp_host, smtp_port, smtp_user, smtp_pass, use_tls, messages):
-    import smtplib, ssl
-    sent = 0
-    errors = []
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.starttls(context=context)
-                if smtp_user and smtp_pass:
-                    server.login(smtp_user, smtp_pass)
-                for m in messages:
-                    try:
-                        server.send_message(m)
-                        sent += 1
-                    except Exception as e:
-                        errors.append(str(e))
-        else:
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                if smtp_user and smtp_pass:
-                    server.login(smtp_user, smtp_pass)
-                for m in messages:
-                    try:
-                        server.send_message(m)
-                        sent += 1
-                    except Exception as e:
-                        errors.append(str(e))
-    except Exception as e:
-        errors.append(str(e))
-    return sent, errors
-
-def _ela_send_outreach_drafts(email_config, drafts, attachments):
-    smtp_host = email_config.get("smtp_host", "smtp.gmail.com")
-    smtp_port = int(email_config.get("smtp_port", 587))
-    smtp_user = email_config.get("smtp_user") or email_config.get("user")
-    smtp_pass = email_config.get("smtp_pass") or email_config.get("password")
-    use_tls = bool(email_config.get("use_tls", True))
-    from_addr = email_config.get("smtp_from") or smtp_user
-    reply_to = email_config.get("smtp_reply_to")
-
-    messages = []
-    for d in drafts:
-        to_addr = d.get("to")
-        subject = d.get("subject", "")
-        body_html = d.get("body_html")
-        body_text = d.get("body_text")
-        if not body_text and body_html:
-            import re as _re
-            body_text = _re.sub(r"<[^>]+>", "", body_html or "")
-        msg = _ela_build_email_message(from_addr, to_addr, subject, body_html=body_html, body_text=body_text, attachments=attachments, reply_to=reply_to)
-        messages.append(msg)
-    return _ela_smtp_send_batch(smtp_host, smtp_port, smtp_user, smtp_pass, use_tls, messages)
