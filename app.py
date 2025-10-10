@@ -1067,9 +1067,7 @@ def render_outreach_tools():
                         st.error(f"Failed to send: {e}")
             with cc2:
                 if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[SKEY_PREVIEW] = Nonedef outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
-    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
-# === End Outreach Email block (moved) ===
+                    st.session_state[SKEY_PREVIEW] = None
 
 
 
