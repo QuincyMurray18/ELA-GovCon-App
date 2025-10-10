@@ -883,8 +883,139 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 # --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
+
 def render_outreach_tools():
     st.subheader("Email – Outreach")
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    if not from_addr:
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+    else:
+        st.caption(f"From: {from_addr}")
+
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("save_app_pw")):
+            set_user_smtp_app_password(ACTIVE_USER, app_pw)
+            st.success("Saved. You can now send emails from the Outreach composer.")
+
+    # Preview state
+    st.session_state.setdefault(ns_key("mail_preview_data"), None)
+
+    with st.expander("Quick Outreach Composer", expanded=False):
+        to = st.text_input("To (comma-separated)",
+                           key=ns_key("mail_to"),
+                           placeholder="recipient@example.com, another@domain.com")
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("mail_bcc"))
+        subj = st.text_input("Subject", key=ns_key("mail_subj"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("mail_body"), height=200,
+                            placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("mail_files"))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Preview email", use_container_width=True, key=ns_key("mail_preview_btn")):
+                # Store a snapshot of the compose fields in session so a rerun preserves the preview
+                # For attachments, store name and raw bytes so we can reconstruct file-like objects later.
+                atts = []
+                try:
+                    for f in (files or []):
+                        try:
+                            atts.append({
+                                "name": getattr(f, "name", "file"),
+                                "data": f.getvalue()
+                            })
+                        except Exception:
+                            pass
+                except Exception:
+                    atts = []
+                st.session_state[ns_key("mail_preview_data")] = {
+                    "to": to or "",
+                    "cc": cc or "",
+                    "bcc": bcc or "",
+                    "subject": subj or "",
+                    "body_html": body or "",
+                    "attachments": atts,
+                    "from_addr": from_addr,
+                }
+        with c2:
+            if st.button("Send email", use_container_width=True, key=ns_key("mail_send_btn")):
+                try:
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    st.success("Email sent.")
+                    for k in ["mail_to","mail_cc","mail_bcc","mail_subj","mail_body","mail_files"]:
+                        NS.pop(k, None)
+                except Exception as e:
+                    st.error(f"Failed to send: {e}")
+
+    # If a preview has been requested, render it exactly like the HTML body will appear.
+    preview = st.session_state.get(ns_key("mail_preview_data"))
+    if preview:
+        import streamlit.components.v1 as components
+
+        with st.container(border=True):
+            st.markdown("#### Email preview")
+            # Header preview
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
+            if preview.get("to"):
+                st.markdown(f"**To:** {preview['to']}")
+            if preview.get("cc"):
+                st.markdown(f"**Cc:** {preview['cc']}")
+            if preview.get("bcc"):
+                st.markdown(f"**Bcc:** {preview['bcc']}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
+
+            # Render the HTML body using a component so styles and tags are honored
+            html = preview.get("body_html") or ""
+            components.html(
+                f"""
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
+                    {html}
+                </div>
+                """,
+                height=400,
+                scrolling=True,
+            )
+
+            # Show attachment list if any
+            atts = preview.get("attachments") or []
+            if atts:
+                names = [a.get("name","file") for a in atts]
+                st.caption("Attachments: " + ", ".join(names))
+
+            # Confirm send buttons
+            cc1, cc2, cc3 = st.columns([1,1,2])
+            with cc1:
+                if st.button("Send this email", key=ns_key("mail_preview_confirm")):
+                    # Rebuild simple in memory files compatible with send_outreach_email expectations
+                    class _MemFile:
+                        def __init__(self, name, data):
+                            self.name = name
+                            self._data = data
+                        def getvalue(self):
+                            return self._data
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                    try:
+                        send_outreach_email(
+                            ACTIVE_USER,
+                            preview.get("to",""),
+                            preview.get("subject",""),
+                            preview.get("body_html",""),
+                            cc_addrs=preview.get("cc",""),
+                            bcc_addrs=preview.get("bcc",""),
+                            attachments=mem_files
+                        )
+                        st.success("Email sent.")
+                        st.session_state[ns_key("mail_preview_data")] = None
+                        # Clear compose fields
+                        for k in ["mail_to","mail_cc","mail_bcc","mail_subj","mail_body","mail_files"]:
+                            NS.pop(k, None)
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+            with cc2:
+                if st.button("Close preview", key=ns_key("mail_preview_close")):
+                    st.session_state[ns_key("mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
         st.caption("No email configured for this user. Only Charles and Collin are set up.")
