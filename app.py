@@ -898,7 +898,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
 
-def render_outreach_tools():
+\1
+    ns = ns_key(\"outreach\")
+    _container = st.container()
+    with _container:
+
 
     # Render-once guard to prevent duplicate UI when function is called multiple times
     if st.session_state.get("__rendered::outreach"):
@@ -1078,8 +1082,8 @@ def render_outreach_tools():
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
-    # === Quick Outreach Composer ===
-    with st.expander("Quick Outreach Composer", expanded=False):
+    # === Quick Outreach Composer [hidden duplicate] ===
+    with st.expander("Quick Outreach Composer [hidden duplicate]", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
@@ -1198,7 +1202,7 @@ def render_outreach_tools():
     # Preview state
     st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
 
-    with st.expander("Quick Outreach Composer", expanded=False):
+    with st.expander("Quick Outreach Composer [hidden duplicate]", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
@@ -1325,7 +1329,7 @@ def render_outreach_tools():
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
-    with st.expander("Quick Outreach Composer", expanded=False):
+    with st.expander("Quick Outreach Composer [hidden duplicate]", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
