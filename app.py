@@ -1130,19 +1130,19 @@ def render_outreach_tools():
 
     
     # ---- Contacts Outreach ----
-    if st.session_state.get(ns_key("outreach::mode")) == "Contacts":
+    if mode == "Contacts":
         with st.container(border=True):
             st.markdown("#### Contacts")
             # Read receipts + tracking pixel options
             with st.expander("Delivery & Tracking options", expanded=False):
-                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key=ns_key("outreach::rr"))
-                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key=ns_key("outreach::pixel_url"))
+                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
+                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
             # Load contacts from CSV
             col_c1, col_c2 = st.columns([2,1])
             with col_c1:
-                search = st.text_input("Search contacts", key=ns_key("outreach::contact_search"))
+                search = st.text_input("Search contacts", key="outreach_contact_search")
             with col_c2:
-                uploaded = st.file_uploader("", type=["csv"], key=ns_key("outreach::contacts_csv"))
+                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
             contacts = []
             import os, csv
             # Prefer uploaded CSV
@@ -1177,13 +1177,13 @@ def render_outreach_tools():
 
             # Options
             labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
-            selected = st.multiselect("Recipients", labels, key=ns_key("outreach::contact_sel"))
+            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
 
-            subj = st.text_input("Subject", key=ns_key("outreach::contact_subject"))
-            body = st.text_area("Body (HTML allowed)", key=ns_key("outreach::contact_body"), height=220)
-            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::contact_files"))
+            subj = st.text_input("Subject", key="outreach_contact_subject")
+            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
+            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
 
-            if st.button("Send to selected contacts", use_container_width=True, key=ns_key("outreach::contact_send")):
+            if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
                 emails = []
                 label_to_email = {}
                 for c, lbl in zip(contacts, labels):
@@ -1344,7 +1344,7 @@ def render_outreach_tools():
             st.markdown("### ✉️ Outreach")
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with st.container(border=True):
-            mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key=ns_key("outreach::mode"))
+            mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
         with top_r:
             pass
 
