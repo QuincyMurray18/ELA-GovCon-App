@@ -546,13 +546,58 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     if body_html:
         msg.add_alternative(body_html, subtype="html")
 
+    
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            filename = getattr(att, "name", None)
+            content = None
+
+            # Streamlit UploadedFile or file-like object with getvalue or read
+            if hasattr(att, "getvalue"):
+                content = att.getvalue()
+            elif hasattr(att, "read"):
+                try:
+                    att.seek(0)
+                except Exception:
+                    pass
+                content = att.read()
+            # Dict form: {"name": ..., "data": bytes} or {"path": ...}
+            elif isinstance(att, dict):
+                filename = att.get("name", filename or "file")
+                if "data" in att and att["data"] is not None:
+                    content = att["data"]
+                elif "content" in att and att["content"] is not None:
+                    val = att["content"]
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
+                elif "path" in att:
+                    import os
+                    path = att["path"]
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(path)
+            # Raw bytes
+            elif isinstance(att, (bytes, bytearray)):
+                content = bytes(att)
+            # String path
+            elif isinstance(att, str):
+                import os
+                if os.path.exists(att):
+                    with open(att, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(att)
+
+            if content is None:
+                raise ValueError("Unsupported attachment type")
+
+            if not filename:
+                filename = "attachment.bin"
+
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -877,13 +922,58 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
         msg.add_alternative(body_html, subtype="html")
 
     # Attachments
+    
     attachments = attachments or []
     for att in attachments:
         try:
-            content = att.getvalue()
-            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=att.name)
+            filename = getattr(att, "name", None)
+            content = None
+
+            # Streamlit UploadedFile or file-like object with getvalue or read
+            if hasattr(att, "getvalue"):
+                content = att.getvalue()
+            elif hasattr(att, "read"):
+                try:
+                    att.seek(0)
+                except Exception:
+                    pass
+                content = att.read()
+            # Dict form: {"name": ..., "data": bytes} or {"path": ...}
+            elif isinstance(att, dict):
+                filename = att.get("name", filename or "file")
+                if "data" in att and att["data"] is not None:
+                    content = att["data"]
+                elif "content" in att and att["content"] is not None:
+                    val = att["content"]
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
+                elif "path" in att:
+                    import os
+                    path = att["path"]
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(path)
+            # Raw bytes
+            elif isinstance(att, (bytes, bytearray)):
+                content = bytes(att)
+            # String path
+            elif isinstance(att, str):
+                import os
+                if os.path.exists(att):
+                    with open(att, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(att)
+
+            if content is None:
+                raise ValueError("Unsupported attachment type")
+
+            if not filename:
+                filename = "attachment.bin"
+
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(f"Failed to attach {getattr(att,'name','file')}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -919,15 +1009,63 @@ def render_outreach_tools():
             pass
         return out
 
-    def _normalize_extra_files(files):
-        """Return a list of dicts with 'name' and raw 'data' from Streamlit UploadedFile objects."""
+    
         out = []
         try:
             for f in (files or []):
-                try:
+                # Already-normalized dict: pass through or convert
+                if isinstance(f, dict):
+                    name = f.get("name") or f.get("filename") or "file"
+                    if "data" in f and f["data"] is not None:
+                        out.append({"name": name, "data": f["data"]})
+                    elif "content" in f and f["content"] is not None:
+                        val = f["content"]
+                        if isinstance(val, (bytes, bytearray)):
+                            out.append({"name": name, "data": bytes(val)})
+                        elif isinstance(val, str):
+                            # If looks like a path, try to read from disk
+                            import os
+                            if os.path.exists(val):
+                                with open(val, "rb") as fh:
+                                    out.append({"name": name, "data": fh.read()})
+                            else:
+                                out.append({"name": name, "data": val.encode("utf-8")})
+                    elif "path" in f and f["path"]:
+                        import os
+                        path = f["path"]
+                        try:
+                            with open(path, "rb") as fh:
+                                out.append({"name": name or os.path.basename(path), "data": fh.read()})
+                        except Exception:
+                            pass
+                    continue
+
+                # Streamlit UploadedFile or similar
+                if hasattr(f, "getvalue"):
                     out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
-                except Exception:
-                    pass
+                    continue
+                if hasattr(f, "read"):
+                    try:
+                        f.seek(0)
+                    except Exception:
+                        pass
+                    try:
+                        data = f.read()
+                        out.append({"name": getattr(f, "name", "file"), "data": data})
+                        continue
+                    except Exception:
+                        pass
+
+                # File path
+                if isinstance(f, str):
+                    import os
+                    if os.path.exists(f):
+                        try:
+                            with open(f, "rb") as fh:
+                                out.append({"name": os.path.basename(f), "data": fh.read()})
+                            continue
+                        except Exception:
+                            pass
         except Exception:
             pass
         return out
