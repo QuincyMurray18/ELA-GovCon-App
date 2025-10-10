@@ -977,14 +977,6 @@ def render_outreach_tools():
         with top_r:
             pass
 
-    # ---- Attachments: Global uploader (available before generation) ----
-    with st.container(border=True):
-        st.markdown("#### Attachments (optional)")
-        extra_files = st.file_uploader("Upload files to include when sending", type=None, accept_multiple_files=True,
-                                       key=ns_key("outreach::extra_files"))
-        if extra_files is not None:
-            st.session_state[SKEY_ATTACH] = extra_files
-
     # ---- Account: App Password (still here) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
@@ -3597,55 +3589,24 @@ with legacy_tabs[2]:
     conn = get_db()
     df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
-    if st.button("Save contacts", key="contacts_save_btn"):
-        import pandas as pd
-        try:
-            cur = conn.cursor()
-            saved_new, saved_upd, errs = 0, 0, 0
-            # Ensure grid is a DataFrame
-            if not isinstance(grid, pd.DataFrame):
-                grid = pd.DataFrame(grid)
-            for _, r in grid.fillna("").iterrows():
-                try:
-                    rid = r.get("id")
-                    name = str(r.get("name","")).strip()
-                    org = str(r.get("org","")).strip()
-                    role = str(r.get("role","")).strip()
-                    email = str(r.get("email","")).strip()
-                    phone = str(r.get("phone","")).strip()
-                    source = str(r.get("source","")).strip()
-                    notes = str(r.get("notes","")).strip()
-                    if rid in ("", None) or (isinstance(rid, float) and pd.isna(rid)):
-                        cur.execute("""insert into contacts(name,org,role,email,phone,source,notes) values(?,?,?,?,?,?,?)""",
-                                    (name, org, role, email, phone, source, notes))
-                        saved_new += 1
-                    else:
-                        cur.execute("""update contacts set name=?, org=?, role=?, email=?, phone=?, source=?, notes=? where id=?""",
-                                    (name, org, role, email, phone, source, notes, int(rid)))
-                        saved_upd += 1
-                except Exception:
-                    errs += 1
-            conn.commit()
-            if errs:
-                st.warning(f"Saved {saved_new} new, {saved_upd} updated. {errs} row(s) failed.")
+    if st.button("Save contacts"):
+        cur = conn.cursor()
+        for _, r in grid.iterrows():
+            if pd.isna(r["id"]):
+                cur.execute("""insert into contacts(name,org,role,email,phone,source,notes) values(?,?,?,?,?,?,?)""",
+                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"]))
             else:
-                st.success(f"Saved {saved_new} new, {saved_upd} updated.")
-            # Refresh table
-            try:
-                import streamlit as st
-                st.rerun()
-            except Exception:
-                pass
-        except Exception as e:
-            st.error(f"Failed to save: {e}")
+                cur.execute("""update contacts set name=?, org=?, role=?, email=?, phone=?, source=?, notes=? where id=?""",
+                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
+        conn.commit(); st.success("Saved")
 
-    with legacy_tabs[3]:
-        st.subheader("Outreach and mail merge")
-        st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
-        
-        # Render Outreach tools here (moved from sidebar)
-        render_outreach_tools()
-    
+with legacy_tabs[3]:
+    st.subheader("Outreach and mail merge")
+    st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
+
+    # Render Outreach tools here (moved from sidebar)
+    render_outreach_tools()
+
     conn = get_db(); df_v = pd.read_sql_query("select * from vendors", conn)
 
 
