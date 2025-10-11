@@ -4559,7 +4559,7 @@ with legacy_tabs[4]:
 
         st.info('No active results yet. Click **Run search now**.')
 
-    st.subheader("SAM.gov auto search with attachments")
+    st.subheader("SAM Watch: Auto Search + Attachments + Saved Searches")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
     conn = get_db()
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
@@ -7317,3 +7317,25 @@ def _clean_placeholders(text: str) -> str:
     # Tidy blank lines
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
+
+
+# --- Robust placeholder and artifact cleaner for proposal exports ---
+import re as _re_clean
+
+def _clean_placeholders(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    t = text
+    t = _re_clean.sub(r"\[[^\]]*?INSERT[^\]]*\]", "", t, flags=_re_clean.IGNORECASE)
+    t = _re_clean.sub(r"\[[^\]]*?PLACEHOLDER[^\]]*\]", "", t, flags=_re_clean.IGNORECASE)
+    t = _re_clean.sub(r"\{[^}]*?(INSERT|TBD|PLACEHOLDER)[^}]*\}", "", t, flags=_re_clean.IGNORECASE)
+    t = _re_clean.sub(r"<[^>]*?(INSERT|TBD|PLACEHOLDER)[^>]*>", "", t, flags=_re_clean.IGNORECASE)
+    t = _re_clean.sub(r"\(\([^)]*?(INSERT|TBD|PLACEHOLDER)[^)]*\)\)", "", t, flags=_re_clean.IGNORECASE)
+    t = _re_clean.sub(r"\b(INSERT|TBD|TO BE DETERMINED|LOREM IPSUM|FILL ME|PLACEHOLDER)\b[:\-]*", "", t, flags=_re_clean.IGNORECASE)
+    t = _re_clean.sub(r"\n?_{3,}\n?", "\n", t)
+    t = _re_clean.sub(r"\.{4,}", "", t)
+    t = _re_clean.sub(r"<<[^>]*>>", "", t)
+    t = _re_clean.sub(r"\n{3,}", "\n\n", t)
+    t = "\n".join(line.rstrip() for line in t.splitlines())
+    return t
+
