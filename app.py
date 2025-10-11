@@ -7788,49 +7788,79 @@ try:
         try:
             _df_preview = _st.session_state.get("sam_results_df", None)
             if isinstance(_df_preview, _pd.DataFrame) and not _df_preview.empty:
-                
-                _st.caption("Latest fetched results (not saved to DB yet). Use the section below to add selected items to the Pipeline.")
+                # Build interactive grid with Save checkbox and a Link column
+                _grid_df = _df_preview.copy()
 
-                # Make a light preview with common columns if they exist
-                cols_pref = [c for c in ["solicitationNumber","title","agency","posted","response_due","type","naics","set_aside","url"] if c in _df_preview.columns]
-                _df_disp = _df_preview[cols_pref].copy() if cols_pref else _df_preview.copy()
+                # If there is a 'type' column, keep the common notice types (same behavior as before)
+                if "type" in _grid_df.columns:
+                    _grid_df = _grid_df[_grid_df["type"].isin({"Combined Synopsis/Solicitation","Solicitation"})].copy() if not _grid_df.empty else _grid_df
 
-                # Normalize URL column name
-                url_candidates = [c for c in ["url","URL","link","Link","notice_url","solicitation_url"] if c in _df_disp.columns]
-                _url_col = url_candidates[0] if url_candidates else None
+                # Normalize a URL column and build a Link column for display
+                _url_candidates = [c for c in ["url","URL","link","Link","notice_url","solicitation_url"] if c in _grid_df.columns]
+                _url_col = _url_candidates[0] if _url_candidates else None
+                if _url_col and "Link" not in _grid_df.columns:
+                    _grid_df["Link"] = _grid_df[_url_col]
+                if "Save" not in _grid_df.columns:
+                    _grid_df["Save"] = False
 
+                # Compute Score using existing helper (if available)
+                _kw = [w for w in (_st.session_state.get("sam_keyword","").split() if isinstance(_st.session_state.get("sam_keyword",""), str) else []) if w]
                 try:
-                    # Prefer native clickable links if Streamlit supports LinkColumn
-                    if _url_col:
-                        from streamlit import column_config as _cc  # type: ignore
-                        _conf = {}
-                        # If a title exists, show the title as text and provide an "Open" link column
-                        if "title" in _df_disp.columns:
-                            _conf[_url_col] = _cc.LinkColumn("Open notice", display_text="Open")
-                        else:
-                            _conf[_url_col] = _cc.LinkColumn("Notice URL")
-                        _st.dataframe(_df_disp, use_container_width=True, height=420, column_config=_conf, hide_index=True)
-                    else:
-                        _st.dataframe(_df_disp, use_container_width=True, height=420, hide_index=True)
+                    _conn_sc = get_db()
+                    _codes_sc = _pd.read_sql_query("select code from naics_watch order by code", _conn_sc)["code"].tolist()
                 except Exception:
-                    # Fallback: render markdown table with clickable links
-                    if _url_col:
-                        _df_md = _df_disp.copy()
-                        def _mk(a, u):
-                            try:
-                                return f"[{a}]({u})" if (isinstance(u, str) and u.startswith("http")) else a
-                            except Exception:
-                                return a
-                        if "title" in _df_md.columns:
-                            _df_md["title"] = [_mk(t, u) for t, u in zip(_df_md.get("title"), _df_md.get(_url_col))]
-                        else:
-                            # if no title, just convert url column to markdown link
-                            _df_md[_url_col] = [f"[Open]({u})" if isinstance(u, str) and u.startswith("http") else u for u in _df_md.get(_url_col)]
-                        _st.markdown(_df_md.to_markdown(index=False), unsafe_allow_html=True)
-                    else:
-                        _st.dataframe(_df_disp, use_container_width=True, height=420, hide_index=True)
+                    _codes_sc = []
+                try:
+                    _grid_df["Score"] = _grid_df.apply(lambda r: score_opportunity(r, _kw, _codes_sc), axis=1)
+                except Exception:
+                    pass  # if scoring utility not present, skip
+
+                # Sort by score desc then due date asc when possible
+                if "response_due" in _grid_df.columns:
+                    try:
+                        _dt = _pd.to_datetime(_grid_df["response_due"], errors="coerce")
+                        _grid_df = _grid_df.assign(_due=_dt).sort_values(["Score","_due"], ascending=[False, True]).drop(columns=["_due"], errors="ignore")
+                    except Exception:
+                        _grid_df = _grid_df.sort_values(["Score"], ascending=[False]) if "Score" in _grid_df.columns else _grid_df
+
+                _st.caption("Latest fetched results (not saved to DB yet). Check 'Save' then click 'Save selected to pipeline'.")
+                try:
+                    from streamlit import column_config as _cc  # type: ignore
+                    _conf = {"Link": _cc.LinkColumn("Link", display_text="Open in SAM")} if "Link" in _grid_df.columns else {}
+                    _edited = _st.data_editor(
+                        _grid_df,
+                        column_config=_conf,
+                        use_container_width=True,
+                        num_rows="fixed",
+                        key="sam_watch_grid"
+                    )
+                except Exception:
+                    # Fallback without column_config support
+                    _edited = _st.data_editor(
+                        _grid_df,
+                        use_container_width=True,
+                        num_rows="fixed",
+                        key="sam_watch_grid"
+                    )
+
+                _to_save = _edited[_edited.get("Save", False)==True] if "Save" in _edited.columns else _edited.iloc[0:0]
+                _st.caption(f"Selected to save: {len(_to_save)} of {len(_edited)}")
+
+                if _st.button("Save selected to pipeline"):
+                    _clean = _to_save.drop(columns=[c for c in ["Save","Link"] if c in _to_save.columns], errors="ignore")
+                    try:
+                        _st.session_state["__ALLOW_PIPELINE_WRITE"] = True
+                    except Exception:
+                        pass
+                    _ins, _upd = save_opportunities(_clean, default_assignee=_st.session_state.get("assignee_default",""))
+                    _st.success(f"Saved to pipeline — inserted {_ins}, updated {_upd}.")
+                    try:
+                        _st.session_state["__ALLOW_PIPELINE_WRITE"] = False
+                    except Exception:
+                        pass
         except Exception as _e_preview:
             _st.warning(f"[SAM Watch preview error: {_e_preview}]")
+                
         try:
             conn = get_db(); cur = conn.cursor()
             rows = cur.execute("""
