@@ -472,6 +472,43 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
+# === ELA bootstrap: widget-key + state safety ===
+try:
+    import streamlit as st  # ensure st alias exists
+except Exception:
+    pass
+
+# Initialize selection state once
+if hasattr(st, "session_state"):
+    if "save_sel" not in st.session_state:
+        st.session_state["save_sel"] = set()
+
+    # Provide a safe alias `save_sel` if code references it directly
+    try:
+        save_sel  # noqa: F821
+    except NameError:
+        save_sel = st.session_state.get("save_sel", set())
+
+    # Auto-unique keys for selectbox if missing to prevent duplicate widget ID errors
+    if not hasattr(st, "_orig_selectbox"):
+        try:
+            st._orig_selectbox = st.selectbox
+
+            def _auto_key_selectbox(label, *args, key=None, **kwargs):
+                # If caller didn't supply a key, create a deterministic counter-based key
+                if key is None:
+                    counter_key = "_auto_sb_counter"
+                    st.session_state[counter_key] = st.session_state.get(counter_key, 0) + 1
+                    key = f"auto_sb_{st.session_state[counter_key]}"
+                return st._orig_selectbox(label, *args, key=key, **kwargs)
+
+            st.selectbox = _auto_key_selectbox
+        except Exception:
+            # If patching fails, keep original behavior
+            pass
+# === end bootstrap ===
+
+
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
@@ -3808,8 +3845,15 @@ with legacy_tabs[0]:
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
             df_opp[_col] = _default
-    if "url" in df_opp.columns and "Link" not in df_opp.columns:
-        df_opp["Link"] = df_opp["url"]
+    import re as _re
+    if "Link" not in df_opp.columns and "notes" in df_opp.columns:
+        def _extract_url(_s):
+            try:
+                m = _re.search(r"(https?://\S+)", str(_s))
+                return m.group(1).rstrip("),.;]") if m else ""
+            except Exception:
+                return ""
+        df_opp["Link"] = df_opp["notes"].apply(_extract_url)
 
     assignees = ["","Quincy","Charles","Collin"]
     f1, f2 = st.columns(2)
@@ -3835,6 +3879,11 @@ with legacy_tabs[0]:
         use_container_width=True, num_rows="dynamic", key="opp_grid"
     )
     if st.button("Save pipeline changes"):
+        # Drop non-DB column before persisting
+        try:
+            edit.drop(columns=['Link'], inplace=True, errors='ignore')
+        except Exception:
+            pass
         cur = conn.cursor()
         # Make a copy of the original grid if present; else derive from filtered df
         try:
@@ -7895,3 +7944,81 @@ except Exception as _e_ui:
         pass
 
 # === [END MERGE UI] ===
+
+
+# === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
+try:
+    with tabs[TAB['Deals']]:
+        st.subheader("Deals")
+        conn = get_db()
+        try:
+            df_deals = pd.read_sql_query("select * from opportunities order by COALESCE(due_date, posted) asc, posted desc", conn)
+        except Exception:
+            df_deals = pd.DataFrame()
+
+        # Ensure expected cols
+        for _col, _default in {"assignee":"", "status":"New", "notes":""}.items():
+            if _col not in df_deals.columns:
+                df_deals[_col] = _default
+
+        # Build Link from first URL in notes
+        import re as _re_deals
+        def _extract_url_deals(_s):
+            try:
+                m = _re_deals.search(r"(https?://\S+)", str(_s))
+                return m.group(1).rstrip("),.;]") if m else ""
+            except Exception:
+                return ""
+        df_deals["Link"] = df_deals.get("notes", pd.Series("", index=df_deals.index)).apply(_extract_url_deals)
+
+        # Optional filters
+        c1, c2 = st.columns(2)
+        with c1:
+            _assignees = [""] + sorted([x for x in df_deals.get("assignee", pd.Series()).dropna().unique().tolist() if x])
+            a_filter = st.selectbox("Filter by assignee", _assignees, index=0)
+        with c2:
+            s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
+        try:
+            if a_filter:
+                df_deals = df_deals[df_deals["assignee"].fillna("")==a_filter]
+            if s_filter:
+                df_deals = df_deals[df_deals["status"].fillna("")==s_filter]
+        except Exception:
+            pass
+
+        edit_deals = st.data_editor(
+            df_deals,
+            column_config={
+                "status": st.column_config.SelectboxColumn("status", options=["New","Reviewing","Bidding","Submitted"]),
+                "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
+            },
+            use_container_width=True, num_rows="dynamic", key="deals_grid"
+        )
+
+        if st.button("Save Deals updates"):
+            # Do not persist the derived Link column
+            try:
+                edit_deals = edit_deals.drop(columns=["Link"], errors="ignore")
+            except Exception:
+                pass
+
+            # Persist minimal safe fields back to opportunities by id
+            try:
+                cur = conn.cursor()
+                if "id" in edit_deals.columns:
+                    for _, r in edit_deals.iterrows():
+                        try:
+                            cur.execute(
+                                "update opportunities set assignee=?, status=?, notes=? where id=?",
+                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"]))
+                            )
+                        except Exception:
+                            continue
+                    conn.commit()
+                    st.success("Deals saved.")
+                else:
+                    st.info("No ID column found; cannot save changes.")
+            except Exception as _e_deals_save:
+                st.warning(f"[Deals save note: {_e_deals_save}]")
+except Exception as _e_deals_tab:
+    st.caption(f"[Deals tab init note: {_e_deals_tab}]")
