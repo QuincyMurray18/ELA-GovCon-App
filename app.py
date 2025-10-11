@@ -3525,6 +3525,29 @@ TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 LEGACY_ORDER = [
     "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
 ]
+
+# --- Compatibility shim for renamed/removed tabs ---
+try:
+    _TAB_ALIAS = {'Deadlines': 'Deals'}
+    # Build index for current tabs
+    _TAB_INDEX = {label: idx for idx, label in enumerate(tabs)} if isinstance(tabs, list) else dict(tabs)
+    # Ensure TAB exists and includes aliases
+    if 'TAB' in globals() and isinstance(TAB, dict):
+        for _old, _new in _TAB_ALIAS.items():
+            if _new in _TAB_INDEX and _old not in TAB:
+                TAB[_old] = _TAB_INDEX[_new]
+    else:
+        TAB = _TAB_INDEX
+    # Normalize legacy order with aliases; drop labels that don't exist (e.g., Pipeline if removed from UI)
+    _normalized = []
+    for _lbl in LEGACY_ORDER:
+        _cur = _TAB_ALIAS.get(_lbl, _lbl)
+        if _cur in TAB:
+            _normalized.append(_cur)
+    LEGACY_ORDER = _normalized
+except Exception as _e_compat:
+    pass
+
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
