@@ -4601,7 +4601,7 @@ except Exception:
         posted_from_days = st.number_input("Posted window (days back)", min_value=1, step=1, value=int(_saved_defaults.get('posted_from_days', 30)))
         active_only = st.checkbox("All active opportunities", value=bool(_saved_defaults.get('active_only', True)))
     with col2:
-        keyword = st.text_input("Keyword", value=str(_saved_defaults.get('keyword','')))
+        keyword = st.text_input("Keyword", value=str(_saved_defaults.get('keyword', '')), key="sam_keyword")
         notice_types = st.multiselect("Notice types", options=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"], default=["Combined Synopsis/Solicitation","Solicitation"])
     with col3:
         diag = st.checkbox("Show diagnostics", value=False)
@@ -4861,7 +4861,7 @@ except Exception as _e_sync:
         cA, cB, cC = st.columns(3)
     with cB:
         if st.button("Broad test (keyword only)"):
-            kw = keyword.strip() or "janitorial"
+            kw = (st.session_state.get("sam_keyword", "") or "").strip() or "janitorial"
             df, info = sam_search(
                 [], min_days=0, limit=100, keyword=kw, posted_from_days=60,
                 notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
