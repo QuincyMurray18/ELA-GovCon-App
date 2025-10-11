@@ -2475,7 +2475,107 @@ def sam_search(
 
 
 
-# ---- Hoisted helper implementations (duplicate for early use) ----
+# ---- Hoisted helper implementations (duplicate for e# === SAM Watch → Contacts auto sync helpers ===
+
+def _contacts_upsert(name: str = "", org: str = "", role: str = "", email: str = "", phone: str = "", source: str = "", notes: str = "") -> tuple:
+    # Insert or light update into contacts.
+    # Returns (action, id) where action is "insert" or "update".
+    # Upsert rule prefers email match. If no email then uses name and org.
+    try:
+        conn = get_db(); cur = conn.cursor()
+    except Exception:
+        return ("error", None)
+
+    email = (email or "").strip()
+    name = (name or "").strip()
+    org = (org or "").strip()
+    role = (role or "").strip()
+    phone = (phone or "").strip()
+    source = (source or "SAM.gov").strip() or "SAM.gov"
+    notes = (notes or "").strip()
+
+    row = None
+    try:
+        if email:
+            row = cur.execute("select id from contacts where lower(ifnull(email,'')) = lower(?) limit 1", (email,)).fetchone()
+        if not row and (name and org):
+            row = cur.execute("select id from contacts where lower(ifnull(name,''))=lower(?) and lower(ifnull(org,''))=lower(?) limit 1", (name, org)).fetchone()
+    except Exception:
+        row = None
+
+    if row:
+        cid = int(row[0])
+        try:
+            cur.execute(
+                "update contacts set name=coalesce(nullif(?, ''), name), org=coalesce(nullif(?, ''), org), role=coalesce(nullif(?, ''), role), email=coalesce(nullif(?, ''), email), phone=coalesce(nullif(?, ''), phone), source=coalesce(nullif(?, ''), source), notes=case when ifnull(notes,'')='' then ? else notes end where id=?",
+                (name, org, role, email, phone, source, notes, cid)
+            )
+            conn.commit()
+        except Exception:
+            pass
+        return ("update", cid)
+
+    try:
+        cur.execute(
+            "insert into contacts(name, org, role, email, phone, source, notes) values(?,?,?,?,?,?,?)",
+            (name, org, role, email, phone, source, notes)
+        )
+        conn.commit()
+        return ("insert", cur.lastrowid)
+    except Exception:
+        return ("error", None)
+
+
+def _extract_contacts_from_sam_row(r) -> list:
+    # Best effort extraction of POC and CO from a SAM Watch DataFrame row.
+    # Returns list of dicts suitable for _contacts_upsert.
+    def _g(keys):
+        for k in keys:
+            try:
+                v = r.get(k)
+            except Exception:
+                v = None
+            if v not in (None, float("nan")):
+                s = str(v).strip()
+                if s:
+                    return s
+        return ""
+
+    import re
+    agency = _g(["agency", "office", "department", "organization"]) or ""
+
+    poc_name = _g(["poc_name", "primary_poc_name", "pointOfContact", "primaryPointOfContact", "contact_name"]) or ""
+    poc_email = _g(["poc_email", "primary_poc_email", "pointOfContactEmail", "contact_email"]) or ""
+    poc_phone = _g(["poc_phone", "primary_poc_phone", "pointOfContactPhone", "contact_phone"]) or ""
+
+    co_name = _g(["co_name", "contracting_officer", "contractingOfficer", "buyer_name"]) or ""
+    co_email = _g(["co_email", "contracting_officer_email", "buyer_email"]) or ""
+    co_phone = _g(["co_phone", "contracting_officer_phone", "buyer_phone"]) or ""
+
+    blob = _g(["description", "summary", "text", "body"]) or ""
+    emails = []
+    if blob:
+        emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob)
+
+    out = []
+    if poc_email or poc_name or poc_phone:
+        out.append({"name": poc_name, "org": agency, "role": "POC", "email": poc_email, "phone": poc_phone, "source": "SAM.gov"})
+    if co_email or co_name or co_phone:
+        out.append({"name": co_name, "org": agency, "role": "CO", "email": co_email, "phone": co_phone, "source": "SAM.gov"})
+
+    if not any(c.get("email") for c in out) and emails:
+        out.append({"name": "", "org": agency, "role": "POC", "email": emails[0], "phone": "", "source": "SAM.gov", "notes": "from description"})
+
+    seen = set(); dedup = []
+    for c in out:
+        key = (c.get("email") or c.get("name"), c.get("org"))
+        if key in seen:
+            continue
+        seen.add(key); dedup.append(c)
+    return dedup
+
+
+arly use) ----
 def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
     """
     Google Places Text Search + Details (phone + website).
@@ -4575,7 +4675,32 @@ except Exception:
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
-            # Proposal drafts for selected
+            # === Auto add POCs and COs to Contacts after saving to pipeline ===
+try:
+    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
+        added, updated = 0, 0
+        for _, _r in save_sel.iterrows():
+            for c in _extract_contacts_from_sam_row(_r):
+                act, _ = _contacts_upsert(
+                    name=c.get("name",""), org=c.get("org",""), role=c.get("role",""),
+                    email=c.get("email",""), phone=c.get("phone",""),
+                    source=c.get("source","SAM.gov"), notes=c.get("notes","")
+                )
+                if act == "insert":
+                    added += 1
+                elif act == "update":
+                    updated += 1
+        if added or updated:
+            try:
+                st.toast(f"Contacts synced from SAM Watch added {added} updated {updated}")
+            except Exception:
+                st.caption(f"Contacts synced from SAM Watch added {added} updated {updated}")
+except Exception as _e_sync:
+    try:
+        st.caption(f"[Contacts sync note: {_e_sync}]")
+    except Exception:
+        pass
+# Proposal drafts for selected
             if len(save_sel) > 0:
                 st.markdown("#### Auto Proposal Prep")
                 for _i, _r in save_sel.iterrows():
