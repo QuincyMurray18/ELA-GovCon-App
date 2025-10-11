@@ -3505,62 +3505,14 @@ def _render_saved_vendors_manager(_container=None):
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 
 TAB_LABELS = [
-    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deals"
+    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
 ]
 tabs = st.tabs(TAB_LABELS)
-
-st.markdown(
-    """
-    <style>
-    /* Hide the Pipeline tab (2nd tab) visually, keep code intact */
-    div[role="tablist"] > *:nth-child(2) { display: none !important; }
-    div[role="tablist"] button[role="tab"]:nth-child(2) { display: none !important; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
     "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
 ]
-
-# --- Compatibility shim for renamed/removed tabs ---
-try:
-    _TAB_ALIAS = {'Deadlines': 'Deals'}
-    # Build index for current tabs
-    _TAB_INDEX = {label: idx for idx, label in enumerate(tabs)} if isinstance(tabs, list) else dict(tabs)
-    # Ensure TAB exists and includes aliases
-    if 'TAB' in globals() and isinstance(TAB, dict):
-        for _old, _new in _TAB_ALIAS.items():
-            if _new in _TAB_INDEX and _old not in TAB:
-                TAB[_old] = _TAB_INDEX[_new]
-    else:
-        TAB = _TAB_INDEX
-    # Normalize legacy order with aliases; drop labels that don't exist (e.g., Pipeline if removed from UI)
-    _normalized = []
-    for _lbl in LEGACY_ORDER:
-        _cur = _TAB_ALIAS.get(_lbl, _lbl)
-        if _cur in TAB:
-            _normalized.append(_cur)
-    LEGACY_ORDER = _normalized
-except Exception as _e_compat:
-    pass
-
-
-# --- Additional guard: drop labels whose resolved index isn't present in `tabs` ---
-try:
-    _valid_keys = set(tabs.keys()) if isinstance(tabs, dict) else set(range(len(tabs)))
-    _filtered = []
-    for _lbl in LEGACY_ORDER:
-        _idx = TAB.get(_lbl, None)
-        if _idx in _valid_keys:
-            _filtered.append(_lbl)
-    LEGACY_ORDER = _filtered
-except Exception as _e_guard:
-    pass
-
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
@@ -5313,7 +5265,7 @@ def _lpta_note(total_price, budget_hint=None):
 __tabs_base = 13  # 'Deadlines' tab index
 
 with legacy_tabs[__tabs_base + 0]:
-    st.subheader("Deals")
+    st.subheader("Deadline tracker")
     conn = get_db()
     colA, colB = st.columns(2)
     with colA:
