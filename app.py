@@ -7797,15 +7797,15 @@ try:
     with tabs[TAB['SAM Watch']]:
         _st.header("SAM Watch")
         _st.subheader("Filters")
-        
-        # Load saved default for Set-Aside to set the selectbox index correctly
         try:
             _saved_defaults_list = _sam_get_saved_filters()
             _saved_sa = (_saved_defaults_list[0] or {}).get("setAside", "Any") if _saved_defaults_list else "Any"
         except Exception:
             _saved_sa = "Any"
+        
         _sa_default_idx = 1 if _saved_sa == "Total Small Business" else 0
-with _st.form("simple_filters", clear_on_submit=False):
+        
+        with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
             with c1:
                 kw = _st.text_input("Keywords", value="janitorial")
