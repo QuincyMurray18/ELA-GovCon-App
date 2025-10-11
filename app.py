@@ -7666,11 +7666,23 @@ except NameError:
 
 
 
+
 # === [MERGE UI] SAM Watch — Minimal UI ===
 try:
     import streamlit as _st
     import json as _json
     _ = tabs; _ = TAB
+
+    def _mk_filter(kw, naics_csv, set_aside, notice, min_due, active_only):
+        return {
+            "name": "Default",
+            "keywords": kw.strip(),
+            "naics": [s.strip() for s in naics_csv.split(",") if s.strip()],
+            "setAside": "Total Small Business" if set_aside == "Total Small Business" else "",
+            "noticeType": "Combined Synopsis/Solicitation,Solicitation" if notice != "Any" else "",
+            "active": "true" if active_only else "false",
+            "minDueDays": int(min_due)
+        }
 
     with tabs[TAB['SAM Watch']]:
         _st.header("SAM Watch")
@@ -7695,17 +7707,7 @@ try:
             save_search = _st.form_submit_button("Save as default")
 
         if save_search:
-            # Save a single simple filter as the only saved search
-            filt = {
-                "name": "Default",
-                "keywords": kw.strip(),
-                "naics": [s.strip() for s in naics.split(",") if s.strip()],
-                "setAside": "Total Small Business" if set_aside == "Total Small Business" else "",
-                "noticeType": "Combined Synopsis/Solicitation,Solicitation" if notice != "Any" else "",
-                "active": "true" if active_only else "false",
-                "minDueDays": int(min_due)
-            }
-            _sam_set_saved_filters([filt])
+            _sam_set_saved_filters([_mk_filter(kw, naics, set_aside, notice, min_due, active_only)])
             _st.success("Default filter saved")
 
         # Section 2: Actions
@@ -7714,10 +7716,18 @@ try:
         with colA:
             if _st.button("Pull data", use_container_width=True):
                 imported_total = 0
+                debug_infos = []
                 for flt in _sam_get_saved_filters():
-                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
+                    # Show what we're actually sending
+                    df, info = sam_search_v3(flt, limit=100)
+                    debug_infos.append(info)
+                    if info.get("ok"):
+                        # Import only when ok
+                        n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
+                        imported_total += int(n or 0)
                 _st.success(f"Imported {imported_total}")
+                with _st.expander("Debug: last request details", expanded=False):
+                    _st.write(debug_infos[-1] if debug_infos else {"note":"no filters found"})
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -7734,6 +7744,22 @@ try:
                 _st.success("Checklist ready")
             else:
                 _st.warning("Enter Opp ID")
+
+        # Broad Pull fallback
+        _st.markdown(" ")
+        if _st.button("Broad Pull (no filters)", help="Uses empty keywords/NAICS, active=true, minDueDays=0 to test connectivity."):
+            flt = {"name":"broad","keywords":"","naics":[],"setAside":"","noticeType":"","active":"true","minDueDays":0}
+            df, info = sam_search_v3(flt, limit=20)
+            _st.write({"ok": info.get("ok"), "count": info.get("count"), "params": info.get("params"), **{k:v for k,v in info.items() if k not in ("params","ok","count")}})
+            if info.get("ok") and info.get("count",0)>0:
+                _st.success(f"Broad Pull returned {info.get('count')} items (showing up to 20 below).")
+                try:
+                    import pandas as _pd
+                    _st.dataframe(df.head(20), use_container_width=True, hide_index=True)
+                except Exception:
+                    pass
+            else:
+                _st.warning("Broad Pull returned 0 items or failed. Check API key and network.")
 
         # Section 3: Snapshot
         _st.subheader("Snapshot")
@@ -7761,9 +7787,18 @@ try:
         except Exception as _e_t:
             _st.caption(f"[table note: {_e_t}]")
 
-except Exception:
-    pass
+        # Environment hints
+        _st.caption("Note: Ensure SAM_API_KEY is set in your environment or settings.")
+
+except Exception as _e_ui:
+    # Surface the exception minimally to help debug
+    try:
+        import streamlit as _st
+        _st.warning(f\"[SAM Watch UI note: {_e_ui}]\")
+    except Exception:
+        pass
 # === [END MERGE UI] ===
+
 
 
 
