@@ -7441,78 +7441,128 @@ except NameError:
         except Exception:
             pass
 
-    def sam_search_v3(filters: dict, limit: int = 100):
-        if not 'SAM_API_KEY' in globals() or not SAM_API_KEY:
-            return _pd.DataFrame(), {"ok": False, "reason": "missing_key"}
-        base = "https://api.sam.gov/opportunities/v3/search"
-        today = _dt.utcnow().date()
-        min_days = int(filters.get("minDueDays", 3) or 0)
-        min_due_date = today + _td(days=min_days)
+    
+def sam_search_v3(filters: dict, limit: int = 100):
+    """
+    Re-implemented to call the public Get Opportunities API v2 with required date params.
+    Docs: https://open.gsa.gov/api/get-opportunities-public-api/
+    Required: postedFrom and postedTo in MM/dd/yyyy, range <= 1 year.
+    Param mapping:
+      - keywords -> title
+      - naics (list) -> ncode (one at a time; if list >1 we'll iterate)
+      - setAside -> typeOfSetAside (string, optional)
+      - noticeType -> ptype (k=Combined, o=Solicitation, r=Sources Sought, etc.) when provided
+      - status -> 'active' when active_only selected
+    """
+    import pandas as _pd
+    from datetime import datetime as _dt, timedelta as _td
+    import requests as _requests
 
+    if not ('SAM_API_KEY' in globals() and SAM_API_KEY):
+        return _pd.DataFrame(), {"ok": False, "reason": "missing_key"}
+
+    # Build base params with required postedFrom/postedTo (default last 30 days)
+    today = _dt.utcnow().date()
+    posted_from = filters.get("postedFrom") or (today - _td(days=30)).strftime("%m/%d/%Y")
+    posted_to = filters.get("postedTo") or today.strftime("%m/%d/%Y")
+
+    def _one_call(single_naics: str | None):
         params = {
             "api_key": SAM_API_KEY,
+            "postedFrom": posted_from,
+            "postedTo": posted_to,
             "limit": str(int(limit)),
-            "response": "json",
-            "sort": "-publishedDate",
-            "active": str(filters.get("active","true")).lower()
+            "offset": "0",
         }
-        if filters.get("noticeType"):
-            params["noticeType"] = filters["noticeType"]
-        if filters.get("setAside"):
-            params["setAsideFilter"] = filters["setAside"]
+        # Title/keywords
         if filters.get("keywords"):
-            params["keywords"] = filters["keywords"]
-        if filters.get("postedFrom"):
-            params["postedFrom"] = filters["postedFrom"]
-        if filters.get("postedTo"):
-            params["postedTo"] = filters["postedTo"]
-        if filters.get("naics"):
-            params["naics"] = ",".join(filters["naics"][:20])
+            params["title"] = filters["keywords"]
+        # NAICS single code
+        if single_naics:
+            params["ncode"] = single_naics
+        # Set-aside
+        if filters.get("setAside"):
+            params["typeOfSetAside"] = filters["setAside"]
+        # Notice type mapping (accept direct ptype string or common names)
+        ptype = None
+        if filters.get("noticeType"):
+            # If caller passed CSV of human names, map common ones
+            val = str(filters["noticeType"]).lower()
+            if "combined" in val:
+                ptype = "k"
+            elif "solicitation" in val:
+                ptype = "o"
+            elif "sources" in val:
+                ptype = "r"
+            elif "special" in val:
+                ptype = "s"
+            elif "award" in val:
+                ptype = "a"
+        if ptype:
+            params["ptype"] = ptype
+        # Status (active / inactive / archived). We'll default to active when 'active' truthy.
+        active_flag = str(filters.get("active","true")).lower() == "true"
+        if active_flag:
+            params["status"] = "active"
 
+        base = "https://api.sam.gov/opportunities/v2/search"
         try:
-            hdrs = {"X-Api-Key": SAM_API_KEY}
-            r = _requests.get(base, params=params, headers=hdrs, timeout=45)
-            status = r.status_code
-            js = r.json() if r.headers.get("Content-Type","").startswith("application/json") else {}
-            if status != 200:
-                msg = (js.get("message") or (js.get("error") or {}).get("message") or r.text)[:400]
-                return _pd.DataFrame(), {"ok": False, "status": status, "message": msg}
-            items = js.get("opportunitiesData", []) or []
+            r = _requests.get(base, params=params, timeout=45)
+            js = r.json() if "application/json" in r.headers.get("Content-Type","") else {}
+            if r.status_code != 200:
+                return _pd.DataFrame(), {"ok": False, "status": r.status_code, "message": (js.get("message") or r.text)[:400], "params": params}
+            # v2 response schema fields
+            items = js.get("opportunitiesData", []) or js.get("data", []) or []
             rows = []
             for opp in items:
-                due_str = opp.get("responseDeadLine") or ""
-                try:
-                    d = _parse_sam_date(due_str)
-                except Exception:
-                    d = due_str
-                d_dt = d if isinstance(d, _dt) else None
-                try:
-                    due_ok = (d_dt is None) or (d_dt.date() >= min_due_date)
-                except Exception:
-                    due_ok = True
-                if not due_ok:
-                    continue
-                docs = opp.get("documents", []) or []
-                rows.append({
-                    "sam_notice_id": opp.get("noticeId"),
-                    "title": opp.get("title"),
-                    "agency": opp.get("organizationName"),
-                    "naics": ",".join(opp.get("naicsCodes", [])),
-                    "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-                    "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
-                    "response_due": due_str,
-                    "posted": opp.get("publishedDate",""),
-                    "type": opp.get("type",""),
-                    "set_aside": ",".join(opp.get("typeOfSetAside","") if isinstance(opp.get("typeOfSetAside"), list) else [opp.get("typeOfSetAside","")]).strip(","),
-                    "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-                    "attachments_json": _json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
-                })
-            df = _pd.DataFrame(rows)
-            return df, {"ok": True, "count": len(df), "params": params}
-        except Exception as e:
-            return _pd.DataFrame(), {"ok": False, "reason": "exception", "detail": str(e)[:400]}
+                # Handle both snake/camel variations in docs
+                title = opp.get("title") or opp.get("Title")
+                sol = opp.get("solicitationNumber") or opp.get("solnum") or opp.get("noticeid")
+                agency = opp.get("fullParentPathName") or opp.get("organizationName")
+                posted = opp.get("postedDate") or opp.get("publishedDate")
+                due = opp.get("reponseDeadLine") or opp.get("responseDeadLine") or ""
+                naics = opp.get("naicsCode") or ""
+                psc = opp.get("classificationCode") or ""
+                url = f"https://sam.gov/opp/{opp.get('noticeid') or opp.get('noticeId')}/view"
 
-    def import_sam_to_db(filters: dict, stage_on_insert: str = "No Contact Made"):
+                rows.append({
+                    "sam_notice_id": opp.get("noticeid") or opp.get("noticeId") or sol,
+                    "title": title,
+                    "agency": agency,
+                    "naics": naics,
+                    "psc": psc,
+                    "place_of_performance": "",
+                    "response_due": due,
+                    "posted": posted,
+                    "type": opp.get("type") or opp.get("baseType"),
+                    "set_aside": opp.get("setAside") or opp.get("setAsideCode") or "",
+                    "url": url,
+                    "attachments_json": "[]"
+                })
+            return _pd.DataFrame(rows), {"ok": True, "count": len(rows), "params": params}
+        except Exception as e:
+            return _pd.DataFrame(), {"ok": False, "reason": "exception", "detail": str(e)[:400], "params": params}
+
+    # If multiple NAICS, iterate and concat
+    naics_list = filters.get("naics") or []
+    if isinstance(naics_list, list) and len(naics_list) > 1:
+        frames = []
+        total = 0
+        for code in naics_list:
+            df, info = _one_call(code)
+            if info.get("ok") and not df.empty:
+                frames.append(df)
+                total += len(df)
+        if frames:
+            import pandas as _pd
+            df_all = _pd.concat(frames).drop_duplicates(subset=["sam_notice_id"])
+            return df_all, {"ok": True, "count": len(df_all), "note": f"aggregated from {len(frames)} NAICS", "postedFrom": posted_from, "postedTo": posted_to}
+        else:
+            return _pd.DataFrame(), {"ok": True, "count": 0, "note": "no results across NAICS", "postedFrom": posted_from, "postedTo": posted_to}
+    else:
+        code = naics_list[0] if isinstance(naics_list, list) and naics_list else None
+        return _one_call(code)
+def import_sam_to_db(filters: dict, stage_on_insert: str = "No Contact Made"):
         df, info = sam_search_v3(filters, limit=200)
         if not info.get("ok"):
             return 0, info
