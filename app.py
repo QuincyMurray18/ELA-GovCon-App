@@ -577,7 +577,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             pass
 
 
-    
+
     attachments = attachments or []
     for att in attachments:
         try:
@@ -976,7 +976,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
 
     # Attachments
-    
+
     attachments = attachments or []
     for att in attachments:
         try:
@@ -1151,7 +1151,7 @@ def render_outreach_tools():
             pass
         return out
 
-    
+
         out = []
         try:
             for f in (files or []):
@@ -1258,7 +1258,7 @@ def render_outreach_tools():
             mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
 
 
-    
+
     # ---- Contacts Outreach ----
     if mode == "Contacts":
         with st.container(border=True):
@@ -1369,7 +1369,7 @@ def render_outreach_tools():
                 st.error(f"Failed to save: {e}")
 
     st.divider()
-    
+
     # ---------- Choose Generated Email & Attachments (required) ----------
     with st.container(border=True):
         st.markdown("#### Choose Generated Email")
@@ -1423,7 +1423,7 @@ def render_outreach_tools():
                     }
                     st.success("Preview generated below.")
 
-    
+
             actions2 = st.columns([1, 2, 2, 5])
             with actions2[1]:
                 if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
@@ -1498,7 +1498,7 @@ def render_outreach_tools():
                                  "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
                                  f"{snap['quote_due']}</div>")
 
-            
+
             # Attachments uploader (positioned below Quote Due)
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
@@ -4522,10 +4522,10 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
 
         md = f"""# {company} – Proposal Draft
 **Opportunity:** {title}
-**Agency:** {agency}  
-**Solicitation #:** {sol}  
-**NAICS:** {naics}  
-**Response Due:** {due}  
+**Agency:** {agency}
+**Solicitation #:** {sol}
+**NAICS:** {naics}
+**Response Due:** {due}
 **URL:** {url}
 
 ## Cover Letter
@@ -4551,9 +4551,9 @@ Dear Contracting Officer,
 - Assumptions and clarifications kept minimal
 
 ## Contact
-**UEI:** {uei}  
-**CAGE:** {cage}  
-**Phone:** {phone}  
+**UEI:** {uei}
+**CAGE:** {cage}
+**Phone:** {phone}
 **Email:** {email}
 
 *Auto-generated from SAM Watch listing. Please replace placeholders before submission.*
@@ -4567,7 +4567,7 @@ with legacy_tabs[4]:
 
         st.info('No active results yet. Click **Run search now**.')
 
-    
+
     with st.expander("Saved Searches", expanded=True):
         cols = st.columns([2,2,2,2,1,1])
         with cols[0]: ss_name = st.text_input("Name", key="ss_name")
@@ -4827,7 +4827,7 @@ except Exception:
     info = st.session_state.get("sam_results_info", {}) or {}
     if info and not info.get("ok", True):
         st.error(f"SAM API error: {info}")
-    
+
     elif isinstance(df, pd.DataFrame) and not df.empty:
         # Hard client-side filter (belt-and-suspenders)
         allowed_types = {"Combined Synopsis/Solicitation", "Solicitation"}
@@ -5606,7 +5606,7 @@ with legacy_tabs[__tabs_base + 3]:
                                 if st.button("Set base cost from benchmark median", key="md_bench_setbase"):
                                     st.session_state["pricing_base_cost"] = float(_hint)
                                     st.success(f"Base cost set to ${_hint:,.2f} from benchmark median. Recalculate above.")
-    
+
                     st.dataframe(_df[["award_id","recipient","agency","start","end","amount","term_months","monthly_spend"]].head(50), use_container_width=True)
 
                     with st.expander("Implied $/sqft/year calculator", expanded=False):
@@ -6073,7 +6073,7 @@ with st.sidebar:
     st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
     if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
-    
+
     # Company identifiers (ELA Management LLC)
     st.subheader("Company identifiers")
     st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
@@ -6369,7 +6369,7 @@ def render_proposal_builder():
         session_id = parse_pick_id(pick)
         if session_id is None:
             st.info("Select a valid session to continue.")
-            
+
 
         st.markdown("**Attach past performance to include**")
         df_pp = get_past_performance_df()
@@ -6612,7 +6612,7 @@ def render_proposal_builder():
                 st.warning("Proceeding with export:")
                 for x in issues:
                     st.markdown(f"- {x}")
-                
+
 
             doc = Document()
             for section in doc.sections:
@@ -6679,7 +6679,7 @@ def render_proposal_builder():
             conn.commit()
             st.success("Drafts saved.")
 
-        
+
     except Exception as e:
         st.error(f"Proposal Builder error: {e}")
 
@@ -7419,49 +7419,27 @@ def _clean_placeholders(text: str) -> str:
     return t
 
 
-# === [MERGE] Backend: SAM v3 integration & helpers (2025-10-10) ===
+# === [MERGE] Backend: SAM search v2 and helpers (final) ===
 try:
     _ = sam_search_v3
+    _SAM_SEARCH_DEFINED = True
 except NameError:
-    import requests as _requests
-    from datetime import datetime as _dt, timedelta as _td
-    import json as _json
-    import pandas as _pd
+    _SAM_SEARCH_DEFINED = False
 
-    def _sam_get_saved_filters():
-        try:
-            raw = get_setting("sam_saved_filters","")
-            return _json.loads(raw) if raw else []
-        except Exception:
-            return []
+import json as _json
+import pandas as _pd
+import requests as _requests
+from datetime import datetime as _dt, timedelta as _td
 
-    def _sam_set_saved_filters(filters_list):
-        try:
-            set_setting("sam_saved_filters", _json.dumps(filters_list))
-        except Exception:
-            pass
-
-    
 def sam_search_v3(filters: dict, limit: int = 100):
     """
-    Re-implemented to call the public Get Opportunities API v2 with required date params.
-    Docs: https://open.gsa.gov/api/get-opportunities-public-api/
-    Required: postedFrom and postedTo in MM/dd/yyyy, range <= 1 year.
-    Param mapping:
-      - keywords -> title
-      - naics (list) -> ncode (one at a time; if list >1 we'll iterate)
-      - setAside -> typeOfSetAside (string, optional)
-      - noticeType -> ptype (k=Combined, o=Solicitation, r=Sources Sought, etc.) when provided
-      - status -> 'active' when active_only selected
+    Public Get Opportunities API v2 with required dates.
+    postedFrom and postedTo are MM/dd/YYYY. Defaults to last 30 days.
+    Maps: keywords->title, naics list->ncode one at a time, setAside->typeOfSetAside, noticeType->ptype.
     """
-    import pandas as _pd
-    from datetime import datetime as _dt, timedelta as _td
-    import requests as _requests
-
     if not ('SAM_API_KEY' in globals() and SAM_API_KEY):
         return _pd.DataFrame(), {"ok": False, "reason": "missing_key"}
 
-    # Build base params with required postedFrom/postedTo (default last 30 days)
     today = _dt.utcnow().date()
     posted_from = filters.get("postedFrom") or (today - _td(days=30)).strftime("%m/%d/%Y")
     posted_to = filters.get("postedTo") or today.strftime("%m/%d/%Y")
@@ -7474,144 +7452,117 @@ def sam_search_v3(filters: dict, limit: int = 100):
             "limit": str(int(limit)),
             "offset": "0",
         }
-        # Title/keywords
         if filters.get("keywords"):
             params["title"] = filters["keywords"]
-        # NAICS single code
         if single_naics:
             params["ncode"] = single_naics
-        # Set-aside
         if filters.get("setAside"):
             params["typeOfSetAside"] = filters["setAside"]
-        # Notice type mapping (accept direct ptype string or common names)
-        ptype = None
         if filters.get("noticeType"):
-            # If caller passed CSV of human names, map common ones
-            val = str(filters["noticeType"]).lower()
-            if "combined" in val:
-                ptype = "k"
-            elif "solicitation" in val:
-                ptype = "o"
-            elif "sources" in val:
-                ptype = "r"
-            elif "special" in val:
-                ptype = "s"
-            elif "award" in val:
-                ptype = "a"
-        if ptype:
-            params["ptype"] = ptype
-        # Status (active / inactive / archived). We'll default to active when 'active' truthy.
-        active_flag = str(filters.get("active","true")).lower() == "true"
-        if active_flag:
+            v = str(filters["noticeType"]).lower()
+            p = None
+            if "combined" in v: p = "k"
+            elif "solicitation" in v: p = "o"
+            elif "sources" in v: p = "r"
+            elif "special" in v: p = "s"
+            elif "award" in v: p = "a"
+            if p: params["ptype"] = p
+        if str(filters.get("active","true")).lower() == "true":
             params["status"] = "active"
 
         base = "https://api.sam.gov/opportunities/v2/search"
-        try:
-            r = _requests.get(base, params=params, timeout=45)
-            js = r.json() if "application/json" in r.headers.get("Content-Type","") else {}
-            if r.status_code != 200:
-                return _pd.DataFrame(), {"ok": False, "status": r.status_code, "message": (js.get("message") or r.text)[:400], "params": params}
-            # v2 response schema fields
-            items = js.get("opportunitiesData", []) or js.get("data", []) or []
-            rows = []
-            for opp in items:
-                # Handle both snake/camel variations in docs
-                title = opp.get("title") or opp.get("Title")
-                sol = opp.get("solicitationNumber") or opp.get("solnum") or opp.get("noticeid")
-                agency = opp.get("fullParentPathName") or opp.get("organizationName")
-                posted = opp.get("postedDate") or opp.get("publishedDate")
-                due = opp.get("reponseDeadLine") or opp.get("responseDeadLine") or ""
-                naics = opp.get("naicsCode") or ""
-                psc = opp.get("classificationCode") or ""
-                url = f"https://sam.gov/opp/{opp.get('noticeid') or opp.get('noticeId')}/view"
+        r = _requests.get(base, params=params, timeout=45)
+        js = r.json() if "application/json" in r.headers.get("Content-Type","") else {}
+        if r.status_code != 200:
+            return _pd.DataFrame(), {"ok": False, "status": r.status_code, "message": (js.get("message") or r.text)[:400], "params": params}
 
-                rows.append({
-                    "sam_notice_id": opp.get("noticeid") or opp.get("noticeId") or sol,
-                    "title": title,
-                    "agency": agency,
-                    "naics": naics,
-                    "psc": psc,
-                    "place_of_performance": "",
-                    "response_due": due,
-                    "posted": posted,
-                    "type": opp.get("type") or opp.get("baseType"),
-                    "set_aside": opp.get("setAside") or opp.get("setAsideCode") or "",
-                    "url": url,
-                    "attachments_json": "[]"
-                })
-            return _pd.DataFrame(rows), {"ok": True, "count": len(rows), "params": params}
-        except Exception as e:
-            return _pd.DataFrame(), {"ok": False, "reason": "exception", "detail": str(e)[:400], "params": params}
+        items = js.get("opportunitiesData", []) or js.get("data", []) or []
+        rows = []
+        for opp in items:
+            title = opp.get("title") or opp.get("Title")
+            sol = opp.get("solicitationNumber") or opp.get("solnum") or opp.get("noticeid")
+            agency = opp.get("fullParentPathName") or opp.get("organizationName")
+            posted = opp.get("postedDate") or opp.get("publishedDate")
+            due = opp.get("reponseDeadLine") or opp.get("responseDeadLine") or ""
+            naics = opp.get("naicsCode") or ""
+            psc = opp.get("classificationCode") or ""
+            nid = opp.get("noticeid") or opp.get("noticeId") or sol
+            url = f"https://sam.gov/opp/{nid}/view"
 
-    # If multiple NAICS, iterate and concat
+            rows.append({
+                "sam_notice_id": nid,
+                "title": title,
+                "agency": agency,
+                "naics": naics,
+                "psc": psc,
+                "place_of_performance": "",
+                "response_due": due,
+                "posted": posted,
+                "type": opp.get("type") or opp.get("baseType"),
+                "set_aside": opp.get("setAside") or opp.get("setAsideCode") or "",
+                "url": url,
+                "attachments_json": "[]"
+            })
+        return _pd.DataFrame(rows), {"ok": True, "count": len(rows), "params": params}
+
     naics_list = filters.get("naics") or []
     if isinstance(naics_list, list) and len(naics_list) > 1:
         frames = []
-        total = 0
         for code in naics_list:
-            df, info = _one_call(code)
-            if info.get("ok") and not df.empty:
+            df, _ = _one_call(code)
+            if not df.empty:
                 frames.append(df)
-                total += len(df)
         if frames:
-            import pandas as _pd
             df_all = _pd.concat(frames).drop_duplicates(subset=["sam_notice_id"])
-            return df_all, {"ok": True, "count": len(df_all), "note": f"aggregated from {len(frames)} NAICS", "postedFrom": posted_from, "postedTo": posted_to}
-        else:
-            return _pd.DataFrame(), {"ok": True, "count": 0, "note": "no results across NAICS", "postedFrom": posted_from, "postedTo": posted_to}
+            return df_all, {"ok": True, "count": len(df_all)}
+        return _pd.DataFrame(), {"ok": True, "count": 0}
     else:
         code = naics_list[0] if isinstance(naics_list, list) and naics_list else None
         return _one_call(code)
-def import_sam_to_db(filters: dict, stage_on_insert: str = "No Contact Made"):
-        df, info = sam_search_v3(filters, limit=200)
-        if not info.get("ok"):
-            return 0, info
-        try:
-            conn = get_db(); cur = conn.cursor()
-            inserted = 0
-            for _, r in df.iterrows():
-                nid = r.get("sam_notice_id")
-                if not nid:
-                    continue
-                exists = cur.execute("select id from opportunities where sam_notice_id=? limit 1", (nid,)).fetchone()
-                if exists:
-                    continue
-                cur.execute("""insert into opportunities
-                    (sam_notice_id, title, agency, naics, psc, place_of_performance, response_due, posted, type, url, attachments_json, status)
-                    values(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (r.get("sam_notice_id"), r.get("title"), r.get("agency"), r.get("naics"), r.get("psc"),
-                     r.get("place_of_performance"), r.get("response_due"), r.get("posted"), r.get("type"),
-                     r.get("url"), r.get("attachments_json"), stage_on_insert))
-                inserted += 1
-            conn.commit()
-            if inserted > 0:
-                try:
-                    _send_team_alert(f"New SAM opportunities imported: {inserted}")
-                except Exception:
-                    pass
-            return inserted, info
-        except Exception as e:
-            return 0, {"ok": False, "reason": "db_error", "detail": str(e)[:300]}
 
-    def _send_team_alert(msg: str):
-        try:
-            addrs = [
-                USER_EMAILS.get("Quincy",""),
-                USER_EMAILS.get("Charles",""),
-                USER_EMAILS.get("Collin",""),
-            ]
-            addrs = [a for a in addrs if a]
-            if not addrs:
-                return
-            subj = "ELA Bid Alert"
-            body = f"""<p>{msg}</p><p>Open the app to review in Pipeline.</p>"""
-            for a in addrs:
-                try:
-                    send_outreach_email("Charles", a, subj, body)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+def _sam_get_saved_filters():
+    try:
+        raw = get_setting("sam_saved_filters","")
+        return _json.loads(raw) if raw else []
+    except Exception:
+        return []
+
+def _sam_set_saved_filters(filters_list):
+    try:
+        set_setting("sam_saved_filters", _json.dumps(filters_list))
+    except Exception:
+        pass
+
+def import_sam_to_db(filters: dict, stage_on_insert: str = "No Contact Made"):
+    df, info = sam_search_v3(filters, limit=200)
+    if not info.get("ok"):
+        return 0, info
+    try:
+        conn = get_db(); cur = conn.cursor()
+        inserted = 0
+        for _, r in df.iterrows():
+            nid = r.get("sam_notice_id")
+            if not nid:
+                continue
+            exists = cur.execute("select id from opportunities where sam_notice_id=? limit 1", (nid,)).fetchone()
+            if exists:
+                continue
+            cur.execute("""insert into opportunities
+                (sam_notice_id, title, agency, naics, psc, place_of_performance, response_due, posted, type, url, attachments_json, status)
+                values(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (r.get("sam_notice_id"), r.get("title"), r.get("agency"), r.get("naics"), r.get("psc"),
+                 r.get("place_of_performance"), r.get("response_due"), r.get("posted"), r.get("type"),
+                 r.get("url"), r.get("attachments_json"), stage_on_insert))
+            inserted += 1
+        conn.commit()
+        if inserted > 0:
+            try:
+                _send_team_alert(f"New SAM opportunities imported: {inserted}")
+            except Exception:
+                pass
+        return inserted, info
+    except Exception as e:
+        return 0, {"ok": False, "reason": "db_error", "detail": str(e)[:300]}
 
 try:
     _ = proposal_quick_quote
@@ -7710,17 +7661,33 @@ except NameError:
             conn.commit()
         except Exception:
             pass
+
+def _send_team_alert(msg: str):
+    try:
+        addrs = [
+            USER_EMAILS.get("Quincy",""),
+            USER_EMAILS.get("Charles",""),
+            USER_EMAILS.get("Collin",""),
+        ]
+        addrs = [a for a in addrs if a]
+        if not addrs:
+            return
+        subj = "ELA Bid Alert"
+        body = f"<p>{msg}</p><p>Open the app to review in Pipeline.</p>"
+        for a in addrs:
+            try:
+                send_outreach_email("Charles", a, subj, body)
+            except Exception:
+                pass
+    except Exception:
+        pass
 # === [END MERGE] Backend ===
 
 
 
-
-
-
-# === [MERGE UI] SAM Watch — Minimal UI ===
+# === [MERGE UI] SAM Watch — Minimal UI (final) ===
 try:
     import streamlit as _st
-    import json as _json
     _ = tabs; _ = TAB
 
     def _mk_filter(kw, naics_csv, set_aside, notice, min_due, active_only):
@@ -7737,7 +7704,6 @@ try:
     with tabs[TAB['SAM Watch']]:
         _st.header("SAM Watch")
 
-        # Section 1: Filters
         _st.subheader("Filters")
         with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
@@ -7760,24 +7726,15 @@ try:
             _sam_set_saved_filters([_mk_filter(kw, naics, set_aside, notice, min_due, active_only)])
             _st.success("Default filter saved")
 
-        # Section 2: Actions
         _st.subheader("Actions")
         colA, colB, colC, colD = _st.columns([1,1,1,1])
         with colA:
             if _st.button("Pull data", use_container_width=True):
                 imported_total = 0
-                debug_infos = []
                 for flt in _sam_get_saved_filters():
-                    # Show what we're actually sending
-                    df, info = sam_search_v3(flt, limit=100)
-                    debug_infos.append(info)
-                    if info.get("ok"):
-                        # Import only when ok
-                        n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                        imported_total += int(n or 0)
+                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
+                    imported_total += int(n or 0)
                 _st.success(f"Imported {imported_total}")
-                with _st.expander("Debug: last request details", expanded=False):
-                    _st.write(debug_infos[-1] if debug_infos else {"note":"no filters found"})
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -7795,23 +7752,6 @@ try:
             else:
                 _st.warning("Enter Opp ID")
 
-        # Broad Pull fallback
-        _st.markdown(" ")
-        if _st.button("Broad Pull (no filters)", help="Uses empty keywords/NAICS, active=true, minDueDays=0 to test connectivity."):
-            flt = {"name":"broad","keywords":"","naics":[],"setAside":"","noticeType":"","active":"true","minDueDays":0}
-            df, info = sam_search_v3(flt, limit=20)
-            _st.write({"ok": info.get("ok"), "count": info.get("count"), "params": info.get("params"), **{k:v for k,v in info.items() if k not in ("params","ok","count")}})
-            if info.get("ok") and info.get("count",0)>0:
-                _st.success(f"Broad Pull returned {info.get('count')} items (showing up to 20 below).")
-                try:
-                    import pandas as _pd
-                    _st.dataframe(df.head(20), use_container_width=True, hide_index=True)
-                except Exception:
-                    pass
-            else:
-                _st.warning("Broad Pull returned 0 items or failed. Check API key and network.")
-
-        # Section 3: Snapshot
         _st.subheader("Snapshot")
         try:
             conn = get_db()
@@ -7837,11 +7777,7 @@ try:
         except Exception as _e_t:
             _st.caption(f"[table note: {_e_t}]")
 
-        # Environment hints
-        _st.caption("Note: Ensure SAM_API_KEY is set in your environment or settings.")
-
 except Exception as _e_ui:
-    # Surface the exception minimally to help debug
     try:
         import streamlit as _st
         _st.warning(f"[SAM Watch UI note: {_e_ui}]")
@@ -7849,43 +7785,3 @@ except Exception as _e_ui:
         pass
 # === [END MERGE UI] ===
 
-
-
-
-
-
-# === [MERGE UI] Pipeline — 1-click Controls (no tab moves) ===
-try:
-    import streamlit as _st
-    _ = tabs; _ = TAB
-    with tabs[TAB['SAM Watch']]:
-        _st.divider()
-        _st.markdown("### SAM Automation Controls")
-        col1, col2, col3, col4 = _st.columns([1,1,1,1])
-        with col1:
-            if _st.button("Pull SAM Data", use_container_width=True):
-                imported_total = 0
-                for flt in _sam_get_saved_filters():
-                    n, info = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
-                _st.success(f"Imported {imported_total} new opportunities.")
-        with col2:
-            opp_id_for_actions = _st.number_input("Opp ID", min_value=0, step=1, value=0)
-        with col3:
-            if _st.button("Generate Quote", use_container_width=True) and opp_id_for_actions:
-                path = proposal_quick_quote(int(opp_id_for_actions))
-                if path:
-                    _st.success(f"Draft created: {path}")
-                else:
-                    _st.warning("Could not create draft. Check Opp ID.")
-        with col4:
-            if _st.button("Submit Package", use_container_width=True) and opp_id_for_actions:
-                ok = proposal_submit_package(int(opp_id_for_actions))
-                if ok:
-                    _st.success("Marked Submitted.")
-                else:
-                    _st.error("Failed to update.")
-        _st.caption("Tip: Use SAM Watch to maintain your saved searches. This panel only triggers actions.")
-except Exception:
-    pass
-# === [END MERGE UI] ===
