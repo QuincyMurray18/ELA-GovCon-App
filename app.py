@@ -3125,9 +3125,9 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
     issues = []
 
     # Basic placeholder checks
-    if _re.search(r'\bINSERT\b', text, flags=_re.IGNORECASE):
+    if _re.search(r'\\bINSERT\\b', text) or _re.search(r'\\[[^\\]]*(insert|placeholder|tbd)[^\\]]*\\]', text, flags=_re.IGNORECASE):
         issues.append("Placeholder text 'INSERT' detected. Remove before export.")
-    if _re.search(r'\bTBD\b|\bTODO\b', text, flags=_re.IGNORECASE):
+    if _re.search(r'\\bTBD\\b|\\bTODO\\b', text):
         issues.append("Unresolved 'TBD/TODO' placeholders present.")
     if "<>" in text or "[ ]" in text:
         issues.append("Bracket placeholders found. Replace with final content.")
@@ -4375,6 +4375,51 @@ def _ensure_sam_history():
 
 
 # ---- Live SAM monitor ----
+
+# --- Saved searches schema & helpers (injected) ---
+def _ensure_sam_saved_searches_schema():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("""create table if not exists sam_saved_searches(
+            id integer primary key,
+            name text unique,
+            params_json text,
+            updated_at text
+        )""")
+        conn.commit()
+    except Exception as e:
+        pass
+
+def sam_saved_searches_upsert(name: str, params: dict):
+    _ensure_sam_saved_searches_schema()
+    import json, datetime
+    now = datetime.datetime.utcnow().isoformat()
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("insert into sam_saved_searches(name, params_json, updated_at) values(?,?,?) on conflict(name) do update set params_json=excluded.params_json, updated_at=excluded.updated_at", (name, json.dumps(params), now))
+        conn.commit()
+    except Exception:
+        try:
+            cur.execute("update sam_saved_searches set params_json=?, updated_at=? where name=?", (json.dumps(params), now, name))
+            conn.commit()
+        except Exception:
+            pass
+
+def sam_saved_searches_list():
+    _ensure_sam_saved_searches_schema()
+    try:
+        conn = get_db()
+        df = pd.read_sql_query("select id, name, params_json, updated_at from sam_saved_searches order by updated_at desc", conn)
+        rows = []
+        for _, r in df.iterrows():
+            try:
+                params = json.loads(r['params_json']) if r['params_json'] else {}
+            except Exception:
+                params = {}
+            rows.append({"id": int(r['id']), "name": r['name'], "params": params, "updated_at": r['updated_at']})
+        return rows
+    except Exception:
+        return []
 def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_digest: bool = False, min_score_digest: int = 70):
     """
     Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
@@ -4574,6 +4619,85 @@ except Exception:
         if st.button("Reset my default"):
             set_setting(_defaults_key, "")
             st.info("Cleared your saved defaults")
+
+        # --- Saved Searches manager ---
+        st.markdown("### Saved Searches")
+        _ensure_sam_saved_searches_schema()
+        _ss_list = sam_saved_searches_list()
+        if _ss_list:
+            names = [f"{row['name']} (updated {row['updated_at'][:10]})" for row in _ss_list]
+            pick_idx = st.selectbox("Choose a saved search", list(range(len(names))), format_func=lambda i: names[i] if names else "", key="sam_ss_pick")
+            chosen = _ss_list[pick_idx] if _ss_list else None
+        else:
+            st.caption("No saved searches yet.")
+            chosen = None
+
+        with st.expander("Create or update a saved search"):
+            ss_name = st.text_input("Search name", value="")
+            ss_keyword = st.text_input("Keyword(s) for this saved search", value=str(keyword or ""))
+            ss_naics = st.text_input("NAICS list (comma separated)", value="")
+            ss_notice = st.multiselect("Notice types", options=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"], default=["Combined Synopsis/Solicitation","Solicitation"], key="sam_ss_notice")
+            ss_min_days = st.number_input("Min days until due", min_value=0, step=1, value=int(min_days))
+            ss_posted_from_days = st.number_input("Look-back window (days since posted)", min_value=1, step=1, value=int(posted_from_days))
+            if st.button("Save search"):
+                params = {
+                    "keyword": ss_keyword.strip(),
+                    "naics_list": [s.strip() for s in ss_naics.split(",") if s.strip()],
+                    "notice_types": ",".join(ss_notice),
+                    "min_days": int(ss_min_days),
+                    "posted_from_days": int(ss_posted_from_days),
+                    "active": "true" if active_only else "false",
+                    "limit": 100
+                }
+                sam_saved_searches_upsert(ss_name.strip(), params)
+                st.success(f"Saved search '{ss_name.strip()}'")
+
+        if chosen:
+            st.markdown("#### Run selected saved search")
+            if st.button("Run & Ingest to Pipeline"):
+                _df, _info = sam_search(
+                    naics_list=chosen['params'].get('naics_list') or [],
+                    min_days=int(chosen['params'].get('min_days', 3)),
+                    limit=int(chosen['params'].get('limit', 100)),
+                    keyword=chosen['params'].get('keyword') or None,
+                    posted_from_days=int(chosen['params'].get('posted_from_days', 30)),
+                    notice_types=chosen['params'].get('notice_types', "Combined Synopsis/Solicitation,Solicitation"),
+                    active=chosen['params'].get('active', "true")
+                )
+                st.dataframe(_df.head(50), use_container_width=True)
+                if not _df.empty:
+                    _added, _updated = 0, 0
+                    for _, r in _df.iterrows():
+                        action, _id = _opportunities_upsert(
+                            title=str(r.get("title","")),
+                            agency=str(r.get("agency","")),
+                            naics=str(r.get("naics","")),
+                            response_due=str(r.get("response_due","")),
+                            url=str(r.get("url","")),
+                            data=r.to_dict()
+                        )
+                        if action == "insert": _added += 1
+                        elif action == "update": _updated += 1
+                    st.success(f"Ingested to pipeline: added {_added}, updated {_updated}")
+
+        # --- Auto-ingest scheduler ---
+        st.markdown("### Auto-ingest")
+        toggle_auto = st.checkbox("Enable background auto-ingest (every N hours)", value=bool(get_setting("sam_auto_ingest_enabled","")=="1"))
+        every_hours = st.slider("Frequency (hours)", min_value=1, max_value=24, value=int(get_setting("sam_auto_ingest_hours","3") or 3))
+        email_digest = st.checkbox("Email a digest when new matches found", value=bool(get_setting("sam_auto_ingest_email","")=="1"))
+        min_score = st.slider("Min score for digest", min_value=0, max_value=100, value=int(get_setting("sam_auto_ingest_min_score","70") or 70))
+        if st.button("Save auto-ingest settings"):
+            set_setting("sam_auto_ingest_enabled", "1" if toggle_auto else "0")
+            set_setting("sam_auto_ingest_hours", str(every_hours))
+            set_setting("sam_auto_ingest_email", "1" if email_digest else "0")
+            set_setting("sam_auto_ingest_min_score", str(min_score))
+            st.success("Saved auto-ingest settings.")
+            # Optionally trigger a run now
+            if st.checkbox("Run one cycle now"):
+                _r = sam_live_monitor(run_now=True, hours_interval=int(every_hours), email_digest=bool(email_digest), min_score_digest=int(min_score))
+                st.write(_r)
+
+
 
     cA, cB, cC = st.columns(3)
 
@@ -7164,3 +7288,32 @@ try:
 #     mount_compliance_assistant()
 except Exception:
     pass
+
+# --- Placeholder cleaner (injected) ---
+def _clean_placeholders(text: str) -> str:
+    """Remove obvious template placeholders without touching normal words.
+    Rules:
+      - Remove bracketed placeholders like [INSERT ...], {PLACEHOLDER}, <TBD>, ((TODO))
+      - Remove isolated ALL-CAPS tokens commonly used as placeholders (INSERT, TBD, TODO)
+      - Collapse multiple spaces to one
+    """
+    import re
+    if not text:
+        return text
+    out = text
+    # Remove bracketed placeholders of common bracket styles
+    out = re.sub(r"\[[^\]]*(?i:(insert|placeholder|tbd|todo))[^\]]*\]", "", out)
+    out = re.sub(r"\{[^\}]*?(?i:(insert|placeholder|tbd|todo))[^\}]*\}", "", out)
+    out = re.sub(r"<[^>]*?(?i:(insert|placeholder|tbd|todo))[^>]*?>", "", out)
+    out = re.sub(r"\(\([^\)]*?(?i:(insert|placeholder|tbd|todo))[^\)]*?\)\)", "", out)
+    # Remove standalone ALL-CAPS tokens
+    out = re.sub(r"(?m)^\s*\b(INSERT|TBD|TODO)\b\s*:?.*$", "", out)
+    # Remove repeated underscores or lines of underscores
+    out = re.sub(r"_{3,}", "", out)
+    # Clean up lingering 'lorem ipsum'
+    out = re.sub(r"(?i)lorem ipsum[\s\S]*?(?=\n\n|$)", "", out)
+    # Collapse spaces
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    # Tidy blank lines
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
