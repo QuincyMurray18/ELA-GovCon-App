@@ -7800,11 +7800,9 @@ try:
                                 skipped += 1
                                 continue
                             notes = f"Imported from SAM Watch on selection. URL: {url}"
-                            add_deal(
+                            create_deal(
                                 title=title,
                                 stage="No Contact Made",
-                                source="SAM Watch",
-                                url=url,
                                 owner=None,
                                 amount=None,
                                 notes=notes,
