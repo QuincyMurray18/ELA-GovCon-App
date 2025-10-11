@@ -3505,13 +3505,25 @@ def _render_saved_vendors_manager(_container=None):
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 
 TAB_LABELS = [
-    'SAM Watch', 'Deals', 'RFP Analyzer', 'L&M Checklist', 'Past...', 'White Paper Builder', 'Contacts', 'Data Export', 'Deals'
+    "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deals"
 ]
 tabs = st.tabs(TAB_LABELS)
+
+st.markdown(
+    """
+    <style>
+    /* Hide the Pipeline tab (2nd tab) visually, keep code intact */
+    div[role="tablist"] > *:nth-child(2) { display: none !important; }
+    div[role="tablist"] button[role="tab"]:nth-child(2) { display: none !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
-    'Deals', 'Subcontractor Finder', 'Contacts', 'Outreach', 'SAM Watch', 'Ask the doc', 'Chat Assistant', 'Proposal Builder', 'Deals', 'L&M Checklist', 'RFP Analyzer', 'RFQ Generator', 'Pricing Calculator', 'Past Performance', 'Quote Comparison', 'Win Probability'
+    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
 ]
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
@@ -5265,7 +5277,7 @@ def _lpta_note(total_price, budget_hint=None):
 __tabs_base = 13  # 'Deadlines' tab index
 
 with legacy_tabs[__tabs_base + 0]:
-    st.subheader("Deadline tracker")
+    st.subheader("Deals")
     conn = get_db()
     colA, colB = st.columns(2)
     with colA:
@@ -6964,7 +6976,7 @@ def delete_deal(id_: int):
 
 # === Deals (CRM Pipeline) tab ===
 try:
-    with tabs[TAB['Deals']]:
+    with legacy_tabs[13]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
 
@@ -7696,6 +7708,18 @@ def _send_team_alert(msg: str):
 # === [MERGE UI] SAM Watch — Minimal UI (final) ===
 try:
     import streamlit as _st
+    # Helper to build a stable selection key even if ACTIVE_USER is missing
+    def _sam_sel_key(_rid: int) -> str:
+        try:
+            _au = ACTIVE_USER
+        except Exception:
+            try:
+                import streamlit as __st
+                _au = __st.session_state.get("active_user") or "anon"
+            except Exception:
+                _au = "anon"
+        return f"{_au}::sam_sel_{_rid}"
+
     _ = tabs; _ = TAB
 
     def _mk_filter(kw, naics_csv, set_aside, notice, min_due, active_only):
@@ -7772,7 +7796,7 @@ try:
             if _st.button("Submit package", use_container_width=True) and opp_id:
                 ok = proposal_submit_package(int(opp_id))
                 _st.success("Submitted") if ok else _st.error("Update failed")
-                _st.subheader("Select opportunities to add to Deals Pipeline")
+                _st.subheader("Select opportunities to add to Pipeline")
         
         try:
             conn = get_db(); cur = conn.cursor()
@@ -7794,8 +7818,8 @@ try:
                         with c1:
                             _st.checkbox(
                                 "",
-                                key=f"{ACTIVE_USER}::sam_sel_{rid}",
-                                value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
+                                key=_sam_sel_key(rid),
+                                value=_st.session_state.get(_sam_sel_key(rid), False)
                             )
                         with c2:
                             link_md = f"[{title}]({url})"
@@ -7809,10 +7833,10 @@ try:
                                 unsafe_allow_html=True
                             )
 
-                submitted = _st.form_submit_button("➕ Add Selected to Deals Pipeline", use_container_width=True)
+                submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
 
             if submitted:
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
+                chosen_ids = [rid for rid in row_ids if _st.session_state.get(_sam_sel_key(rid), False)]
                 if not chosen_ids:
                     _st.info("No rows selected.")
                 else:
@@ -7845,7 +7869,7 @@ try:
                     _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
                     # Clear only the ones we just added to avoid accidental re-use
                     for rid in chosen_ids:
-                        _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
+                        _st.session_state.pop(_sam_sel_key(rid), None)
             else:
                 if not rows:
                     _st.caption("No opportunities found with links.")
