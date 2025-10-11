@@ -7702,116 +7702,113 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
-                _st.header("SAM Watch")
-
-        _st.subheader("Filters")
-        with _st.form("simple_filters", clear_on_submit=False):
-            c1, c2, c3 = _st.columns([2,2,2])
-            with c1:
-                kw = _st.text_input("Keywords", value="janitorial")
-            with c2:
-                naics = _st.text_input("NAICS list", value="561720, 238220")
-            with c3:
-                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=1)
-            c4, c5, c6 = _st.columns([2,2,2])
-            with c4:
-                notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
-            with c5:
-                min_due = _st.number_input("Min days until due", min_value=0, value=3, step=1)
-            with c6:
-                active_only = _st.checkbox("Active only", value=True)
-            save_search = _st.form_submit_button("Save as default")
-
-        if save_search:
-            _sam_set_saved_filters([_mk_filter(kw, naics, set_aside, notice, min_due, active_only)])
-            _st.success("Default filter saved")
-
-        _st.subheader("Actions")
-        colA, colB, colC, colD = _st.columns([1,1,1,1])
-        with colA:
-            if _st.button("Pull data", use_container_width=True):
-                imported_total = 0
-                for flt in _sam_get_saved_filters():
-                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
-                _st.success(f"Imported {imported_total}")
-        with colB:
-            opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
-        with colC:
-            if _st.button("Generate quote", use_container_width=True) and opp_id:
-                p = proposal_quick_quote(int(opp_id))
-                _st.success("Draft created" if p else "Draft failed")
-        with colD:
-            if _st.button("Submit package", use_container_width=True) and opp_id:
-                ok = proposal_submit_package(int(opp_id))
-                _st.success("Submitted") if ok else _st.error("Update failed")
-
-        # --- [SAM Watch] Selection UI: hyperlinks + checkboxes + Add to Pipeline ---
-        _st.subheader("Select opportunities to add to Pipeline")
-        try:
-            conn = get_db(); cur = conn.cursor()
-            rows = cur.execute("""
-                select id, title, agency, response_due, url, posted
-                from opportunities
-                where coalesce(url,'') != ''
-                order by date(posted) desc, id desc
-                limit 200
-            """).fetchall()
-
-            row_ids = []
-            if rows:
-                for rid, title, agency, due, url, posted in rows:
-                    row_ids.append(rid)
-                    c1, c2 = _st.columns([0.08, 0.92])
+                                _st.header("SAM Watch")
+                _st.subheader("Filters")
+                with _st.form("simple_filters", clear_on_submit=False):
+                    c1, c2, c3 = _st.columns([2,2,2])
                     with c1:
-                        _st.checkbox("", key=f"sam_sel_{rid}", value=_st.session_state.get(f"sam_sel_{rid}", False))
+                        kw = _st.text_input("Keywords", value="janitorial")
                     with c2:
-                        link_md = f"[{title}]({url})"
-                        meta = " | ".join(filter(None, [
-                            f"Agency: {agency}" if agency else "",
-                            f"Due: {due}" if due else "",
-                            f"Posted: {posted}" if posted else ""
-                        ]))
-                        _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
+                        naics = _st.text_input("NAICS list", value="561720, 238220")
+                    with c3:
+                        set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=1)
+                    c4, c5, c6 = _st.columns([2,2,2])
+                    with c4:
+                        notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
+                    with c5:
+                        min_due = _st.number_input("Min days until due", min_value=0, value=3, step=1)
+                    with c6:
+                        active_only = _st.checkbox("Active only", value=True)
+                    save_search = _st.form_submit_button("Save as default")
 
-                if _st.button("➕ Add Selected to Pipeline", key="btn_add_selected_pipeline", use_container_width=True):
-                    chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
-                    if not chosen_ids:
-                        _st.info("No rows selected.")
+                if save_search:
+                    _sam_set_saved_filters([_mk_filter(kw, naics, set_aside, notice, min_due, active_only)])
+                    _st.success("Default filter saved")
+
+                _st.subheader("Actions")
+                colA, colB, colC, colD = _st.columns([1,1,1,1])
+                with colA:
+                    if _st.button("Pull data", use_container_width=True):
+                        imported_total = 0
+                        for flt in _sam_get_saved_filters():
+                            n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
+                            imported_total += int(n or 0)
+                        _st.success(f"Imported {imported_total}")
+                with colB:
+                    opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
+                with colC:
+                    if _st.button("Generate quote", use_container_width=True) and opp_id:
+                        p = proposal_quick_quote(int(opp_id))
+                        _st.success("Draft created" if p else "Draft failed")
+                with colD:
+                    if _st.button("Submit package", use_container_width=True) and opp_id:
+                        ok = proposal_submit_package(int(opp_id))
+                        _st.success("Submitted") if ok else _st.error("Update failed")
+
+                _st.subheader("Select opportunities to add to Pipeline")
+                try:
+                    conn = get_db(); cur = conn.cursor()
+                    rows = cur.execute("""
+                        select id, title, agency, response_due, url, posted
+                        from opportunities
+                        where coalesce(url,'') != ''
+                        order by date(posted) desc, id desc
+                        limit 200
+                    """).fetchall()
+
+                    row_ids = []
+                    if rows:
+                        for rid, title, agency, due, url, posted in rows:
+                            row_ids.append(rid)
+                            c1, c2 = _st.columns([0.08, 0.92])
+                            with c1:
+                                _st.checkbox("", key=f"sam_sel_{rid}", value=_st.session_state.get(f"sam_sel_{rid}", False))
+                            with c2:
+                                link_md = f"[{title}]({url})"
+                                meta = " | ".join(filter(None, [
+                                    f"Agency: {agency}" if agency else "",
+                                    f"Due: {due}" if due else "",
+                                    f"Posted: {posted}" if posted else ""
+                                ]))
+                                _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
+
+                        if _st.button("➕ Add Selected to Pipeline", key="btn_add_selected_pipeline", use_container_width=True):
+                            chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
+                            if not chosen_ids:
+                                _st.info("No rows selected.")
+                            else:
+                                added, skipped = 0, 0
+                                for rid, title, agency, due, url, posted in [r for r in rows if r[0] in chosen_ids]:
+                                    try:
+                                        c2 = conn.cursor()
+                                        exists = c2.execute(
+                                            "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
+                                            (title, str(due) if due else None)
+                                        ) .fetchone()
+                                        if exists:
+                                            skipped += 1
+                                            continue
+                                    except Exception:
+                                        pass
+                                    notes = f"SAM: {url}" if url else None
+                                    try:
+                                        create_deal(
+                                            title=title,
+                                            stage="No Contact Made",
+                                            owner=None,
+                                            amount=None,
+                                            notes=notes,
+                                            agency=agency,
+                                            due_date=str(due) if due else None
+                                        )
+                                        added += 1
+                                    except Exception as _e_add:
+                                        _st.warning(f"Could not add '{title}': {_e_add}")
+                                _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
                     else:
-                        added, skipped = 0, 0
-                        for rid, title, agency, due, url, posted in [r for r in rows if r[0] in chosen_ids]:
-                            try:
-                                c2 = conn.cursor()
-                                exists = c2.execute(
-                                    "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
-                                    (title, str(due) if due else None)
-                                ).fetchone()
-                                if exists:
-                                    skipped += 1
-                                    continue
-                            except Exception:
-                                pass
-                            notes = f"SAM: {url}" if url else None
-                            try:
-                                create_deal(
-                                    title=title,
-                                    stage="No Contact Made",
-                                    owner=None,
-                                    amount=None,
-                                    notes=notes,
-                                    agency=agency,
-                                    due_date=str(due) if due else None
-                                )
-                                added += 1
-                            except Exception as _e_add:
-                                _st.warning(f"Could not add '{title}': {_e_add}")
-                        _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
-            else:
-                _st.caption("No opportunities found with links.")
-        except Exception as _e_sel:
-            _st.warning(f"[Selection UI note: {_e_sel}]")
-        # --- [END SAM Watch Selection UI] ---
+                        _st.caption("No opportunities found with links.")
+                except Exception as _e_sel:
+                    _st.warning(f"[Selection UI note: {_e_sel}]")
 
 except Exception as _e_ui:
     try:
