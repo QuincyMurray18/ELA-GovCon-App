@@ -7760,11 +7760,17 @@ try:
         colA, colB, colC, colD = _st.columns([1,1,1,1])
         with colA:
             if _st.button("Pull data", use_container_width=True):
-                imported_total = 0
+                import pandas as _pd
+                loaded = []
                 for flt in _sam_get_saved_filters():
-                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
-                _st.success(f"Imported {imported_total}")
+                    df, info = sam_search_v3(flt, limit=200)
+                    if isinstance(df, _pd.DataFrame) and not df.empty:
+                        loaded.append(df)
+                if loaded:
+                    _st.session_state["sam_results_df"] = _pd.concat(loaded, ignore_index=True)
+                    _st.success(f"Loaded {_st.session_state['sam_results_df'].shape[0]} opportunities (not saved).")
+                else:
+                    _st.info("No opportunities found.")
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
