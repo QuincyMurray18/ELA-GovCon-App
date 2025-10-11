@@ -7783,5 +7783,57 @@ except Exception as _e_ui:
         _st.warning(f"[SAM Watch UI note: {_e_ui}]")
     except Exception:
         pass
+
+
+# --- [SAM Watch] Selection UI: hyperlinks + checkboxes + Add to Pipeline ---
+try:
+    import streamlit as _st
+    _st.markdown("### Select opportunities to add to Pipeline")
+    conn = get_db()
+    cur = conn.cursor()
+    rows = cur.execute("""
+        select id, title, agency, response_due, url, posted
+        from opportunities
+        where coalesce(url,'') != ''
+        order by date(posted) desc, id desc
+        limit 200
+    """).fetchall()
+
+    selected = []
+    if rows:
+        for rid, title, agency, due, url, posted in rows:
+            c1, c2 = _st.columns([0.08, 0.92])
+            with c1:
+                if _st.checkbox("", key=f"sam_sel_{rid}"):
+                    selected.append((rid, title, agency, due, url))
+            with c2:
+                link_md = f"[{title}]({url})"
+                meta = " | ".join([
+                    f"Agency: {agency}" if agency else "",
+                    f"Due: {due}" if due else "",
+                    f"Posted: {posted}" if posted else ""
+                ])
+                meta = meta.strip(" |")
+                _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
+        if _st.button("➕ Add Selected to Pipeline", use_container_width=True):
+            added = 0
+            for _, title, agency, due, url in selected:
+                notes = f"SAM: {url}" if url else None
+                try:
+                    create_deal(title=title, stage="No Contact Made", owner=None, amount=None, notes=notes, agency=agency, due_date=str(due) if due else None)
+                    added += 1
+                except Exception as _e_add:
+                    _st.warning(f"Could not add '{title}': {_e_add}")
+            _st.success(f"Added {added} deal(s) to Pipeline.")
+    else:
+        _st.caption("No opportunities found with links.")
+except Exception as _e_sel:
+    try:
+        import streamlit as _st
+        _st.warning(f"[Selection UI note: {_e_sel}]")
+    except Exception:
+        pass
+# --- [END SAM Watch Selection UI] ---
+
 # === [END MERGE UI] ===
 
