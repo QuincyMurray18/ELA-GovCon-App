@@ -3821,9 +3821,20 @@ with legacy_tabs[0]:
     assignees = ["","Quincy","Charles","Collin"]
     f1, f2 = st.columns(2)
     with f1:
-        a_filter = st.selectbox("Filter by assignee", assignees, index=(assignees.index(st.session_state.get(\'active_profile\',\'\')) if st.session_state.get(\'active_profile\',\'\') in assignees else 0), key="opp_assignee_filter") if st.session_state.get('active_profile','') in assignees else 0))
+        a_filter = st.selectbox(
+            "Filter by assignee",
+            assignees,
+            index=(assignees.index(st.session_state.get('active_profile', ''))
+                   if st.session_state.get('active_profile', '') in assignees else 0),
+            key="opp_assignee_filter"
+        )
     with f2:
-        s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0, key="opp_status_filter")
+        s_filter = st.selectbox(
+            "Filter by status",
+            ["","New","Reviewing","Bidding","Submitted"],
+            index=0,
+            key="opp_status_filter"
+        )
     try:
         if a_filter:
             df_opp = df_opp[df_opp["assignee"].fillna("")==a_filter]
