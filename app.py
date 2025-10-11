@@ -7783,6 +7783,20 @@ try:
                 _st.success("Submitted") if ok else _st.error("Update failed")
 
                 _st.subheader("Select opportunities to add to Pipeline")
+
+        # Preview the most recent SAM fetch (not yet saved to DB)
+        try:
+            _df_preview = _st.session_state.get("sam_results_df", None)
+            if isinstance(_df_preview, _pd.DataFrame) and not _df_preview.empty:
+                _st.caption("Latest fetched results (not saved to DB yet). Use the section below to add selected items to the Pipeline.")
+                # Make a light preview with common columns if they exist
+                cols_pref = [c for c in ["solicitationNumber","title","agency","posted","response_due","type","naics","set_aside","url"] if c in _df_preview.columns]
+                if cols_pref:
+                    _st.dataframe(_df_preview[cols_pref], use_container_width=True, height=420)
+                else:
+                    _st.dataframe(_df_preview, use_container_width=True, height=420)
+        except Exception as _e_preview:
+            _st.warning(f"[SAM Watch preview error: {_e_preview}]")
         try:
             conn = get_db(); cur = conn.cursor()
             rows = cur.execute("""
