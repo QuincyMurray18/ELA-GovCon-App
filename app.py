@@ -3548,6 +3548,19 @@ try:
 except Exception as _e_compat:
     pass
 
+
+# --- Additional guard: drop labels whose resolved index isn't present in `tabs` ---
+try:
+    _valid_keys = set(tabs.keys()) if isinstance(tabs, dict) else set(range(len(tabs)))
+    _filtered = []
+    for _lbl in LEGACY_ORDER:
+        _idx = TAB.get(_lbl, None)
+        if _idx in _valid_keys:
+            _filtered.append(_lbl)
+    LEGACY_ORDER = _filtered
+except Exception as _e_guard:
+    pass
+
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
