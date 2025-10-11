@@ -7794,7 +7794,7 @@ except Exception as _e_ui:
     # Surface the exception minimally to help debug
     try:
         import streamlit as _st
-        _st.warning(f\"[SAM Watch UI note: {_e_ui}]\")
+        _st.warning(f"[SAM Watch UI note: {_e_ui}]")
     except Exception:
         pass
 # === [END MERGE UI] ===
