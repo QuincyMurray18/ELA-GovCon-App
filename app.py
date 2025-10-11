@@ -7795,23 +7795,42 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
+
+        # Load saved defaults for SAM Watch filters
+        try:
+            _saved_filters = _sam_get_saved_filters()
+        except Exception:
+            _saved_filters = []
+        _sf = _saved_filters[0] if _saved_filters else {}
+        _default_kw = _sf.get("keywords", "janitorial")
+        try:
+            _default_naics = ", ".join(_sf.get("naics", ["561720", "238220"])) if isinstance(_sf.get("naics"), list) else (_sf.get("naics") or "561720, 238220")
+        except Exception:
+            _default_naics = "561720, 238220"
+        _default_set_aside = "Total Small Business" if _sf.get("setAside") == "Total Small Business" else "Any"
+        _default_notice = "Combined Synopsis/Solicitation" if _sf.get("noticeType") else "Any"
+        try:
+            _default_min_due = int(_sf.get("minDueDays", 3))
+        except Exception:
+            _default_min_due = 3
+        _default_active = True if str(_sf.get("active", "true")).lower() == "true" else False
         _st.header("SAM Watch")
         _st.subheader("Filters")
         with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
             with c1:
-                kw = _st.text_input("Keywords", value="janitorial")
+                kw = _st.text_input("Keywords", value=_default_kw)
             with c2:
-                naics = _st.text_input("NAICS list", value="561720, 238220")
+                naics = _st.text_input("NAICS list", value=_default_naics)
             with c3:
-                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=1)
+                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=["Any", "Total Small Business"].index(_default_set_aside))
             c4, c5, c6 = _st.columns([2,2,2])
             with c4:
-                notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
+                notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=(1 if _default_notice=="Combined Synopsis/Solicitation" else (2 if _default_notice=="Solicitation" else 0)))
             with c5:
-                min_due = _st.number_input("Min days until due", min_value=0, value=3, step=1)
+                min_due = _st.number_input("Min days until due", min_value=0, value=int(_default_min_due), step=1)
             with c6:
-                active_only = _st.checkbox("Active only", value=True)
+                active_only = _st.checkbox("Active only", value=_default_active)
             save_search = _st.form_submit_button("Save as default")
 
         if save_search:
