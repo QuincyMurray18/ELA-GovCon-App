@@ -3741,7 +3741,7 @@ except Exception as _e_qc:
 
 # Win Probability tab body (last-1)
 try:
-    with tabs[TAB['SAM Watch']]:
+    with legacy_tabs[-1]:
         st.subheader("Win Probability")
         conn = get_db()
         df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -3776,7 +3776,7 @@ except Exception as _e_win:
     st.caption(f"[Win Probability tab init note: {_e_win}]")
 # === End injected ===
 
-with tabs[TAB['SAM Watch']]:
+with legacy_tabs[-1]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -3853,7 +3853,7 @@ with tabs[TAB['SAM Watch']]:
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
-with tabs[TAB['SAM Watch']]:
+with legacy_tabs[-1]:
 
     # Analytics mini-dashboard
     try:
@@ -3878,7 +3878,7 @@ with tabs[TAB['SAM Watch']]:
         st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
-with tabs[TAB['SAM Watch']]:
+with legacy_tabs[-1]:
 
     if globals().get("__ctx_pipeline", False):
 
