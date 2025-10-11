@@ -4508,6 +4508,7 @@ Dear Contracting Officer,
         return md
 
 with legacy_tabs[4]:
+    st.session_state["__in_sam_watch_tab__"] = True
     st.subheader("SAM.gov auto search with attachments")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
     conn = get_db()
@@ -4728,6 +4729,7 @@ except Exception as _e_sync:
 # [disabled to fix indentation]                 except Exception as _e_prep:
 # [disabled to fix indentation]                     st.caption(f"[CO outreach prep note: {_e_prep}]")
     else:
+        if st.session_state.get("__in_sam_watch_tab__", False):
         st.info("No active results yet. Click **Run search now**.")
 
         cA, cB, cC = st.columns(3)
@@ -4767,6 +4769,8 @@ except Exception as _e_sync:
 
 
 # --- Analytics & History ---
+    st.session_state["__in_sam_watch_tab__"] = False
+
 with legacy_tabs[4]:
     with st.expander("SAM Analytics"):
         conn = get_db()
