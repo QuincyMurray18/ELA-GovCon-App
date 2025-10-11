@@ -7760,9 +7760,14 @@ try:
             if rows:
                 for rid, title, agency, due, url, posted in rows:
                     row_ids.append(rid)
+
                     c1, c2 = _st.columns([0.08, 0.92])
                     with c1:
-                        _st.checkbox("", key=f"{ACTIVE_USER}::sam_sel_{rid}", value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False))
+                        _st.checkbox(
+                            "",
+                            key=f"{ACTIVE_USER}::sam_sel_{rid}",
+                            value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
+                        )
                     with c2:
                         link_md = f"[{title}]({url})"
                         meta = " | ".join(filter(None, [
@@ -7770,7 +7775,10 @@ try:
                             f"Due: {due}" if due else "",
                             f"Posted: {posted}" if posted else ""
                         ]))
-                        _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
+                        _st.markdown(
+                            link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""),
+                            unsafe_allow_html=True
+                        )
 
                 if _st.button("➕ Add Selected to Pipeline", key="btn_add_selected_pipeline", use_container_width=True):
                     chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
@@ -7784,17 +7792,16 @@ try:
                                 exists = c2.execute(
                                     "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
                                     (title, str(due) if due else None)
-                                ) .fetchone()
+                                ).fetchone()
                                 if exists:
                                     skipped += 1
                                     continue
-                            except Exception:
-                                pass
-                            notes = f"SAM: {url}" if url else None
-                            try:
-                                create_deal(
+                                notes = f"Imported from SAM Watch on selection. URL: {url}"
+                                add_deal(
                                     title=title,
                                     stage="No Contact Made",
+                                    source="SAM Watch",
+                                    url=url,
                                     owner=None,
                                     amount=None,
                                     notes=notes,
@@ -7805,7 +7812,9 @@ try:
                             except Exception as _e_add:
                                 _st.warning(f"Could not add '{title}': {_e_add}")
                         _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
-                        for rid in chosen_ids: st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
+                        for rid in chosen_ids:
+                            _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
+
             else:
                 _st.caption("No opportunities found with links.")
         except Exception as _e_sel:
@@ -7826,4 +7835,3 @@ except Exception as _e_ui:
 
 
 # === [END MERGE UI] ===
-
