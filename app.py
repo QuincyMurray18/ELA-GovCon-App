@@ -3776,7 +3776,7 @@ except Exception as _e_win:
     st.caption(f"[Win Probability tab init note: {_e_win}]")
 # === End injected ===
 
-with legacy_tabs[0]:
+with legacy_tabs[-1]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -3853,7 +3853,7 @@ with legacy_tabs[0]:
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
-with legacy_tabs[0]:
+with legacy_tabs[-1]:
 
     # Analytics mini-dashboard
     try:
@@ -3878,7 +3878,7 @@ with legacy_tabs[0]:
         st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
-with legacy_tabs[0]:
+with legacy_tabs[-1]:
 
     if globals().get("__ctx_pipeline", False):
 
@@ -7701,9 +7701,9 @@ except NameError:
     _CTX_INJECTED_PIPELINE_UI = True
     try:
         import streamlit as _st
-        with legacy_tabs[0]:
+        with legacy_tabs[-1]:
             _st.divider()
-            _st.markdown("### SAM Saved Searches")
+            _st.markdown("### SAM Watch — Saved Searches")
             saved = _sam_get_saved_filters()
             with _st.expander("Manage saved searches", expanded=False):
                 raw = _st.text_area("JSON editor", value=json.dumps(saved, indent=2), height=220, help="One or more filter dicts. See example in code block.")
