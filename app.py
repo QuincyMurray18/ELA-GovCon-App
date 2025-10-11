@@ -4724,15 +4724,7 @@ except Exception:
         assignee_default = st.selectbox("Default assignee", ["","Quincy","Charles","Collin"], index=(['','Quincy','Charles','Collin'].index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in ['Quincy','Charles','Collin'] else 0))
         st.markdown("**Defaults**")
         if st.button("Save as my default"):
-            set_setting(_defaults_key, json.dumps({
-                'min_days': int(min_days),
-                'posted_from_days': int(posted_from_days),
-                'active_only': bool(active_only),
-                'keyword': str(keyword or '')
-                ,
-                'notice_types': notice_types
-            }))
-            st.success("Saved your defaults")
+            set_setting(_defaults_key, json.dumps({'min_days': int(min_days), 'posted_from_days': int(posted_from_days), 'active_only': bool(active_only), 'keyword': str(keyword or ''), 'notice_types': list(notice_types)}))st.success("Saved your defaults")
         if st.button("Reset my default"):
             set_setting(_defaults_key, "")
             st.info("Cleared your saved defaults")
@@ -7765,29 +7757,18 @@ try:
         with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
             with c1:
-                
-            # Load saved defaults (first saved filter if exists)
-            _saved_list = _sam_get_saved_filters()
-            _def = _saved_list[0] if isinstance(_saved_list, list) and len(_saved_list) > 0 else {}
-            _def_kw = _def.get("keywords", "janitorial")
-            _def_naics = _def.get("naics", "561720, 238220")
-            _def_set_aside = _def.get("set_aside", "Total Small Business")
-            _def_notice = _def.get("notice", "Combined Synopsis/Solicitation")
-            _def_min_due = int(_def.get("min_due_days", 3))
-            _def_active = bool(_def.get("active_only", True))
-
-            kw = _st.text_input("Keywords", value=_def_kw)
+                kw = _st.text_input("Keywords", value="janitorial")
             with c2:
-                naics = _st.text_input("NAICS list", value=_def_naics)
+                naics = _st.text_input("NAICS list", value="561720, 238220")
             with c3:
-                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=(["Any","Total Small Business"].index(_def_set_aside) if _def.get("set_aside") in ["Any","Total Small Business"] else 1))
+                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=1)
             c4, c5, c6 = _st.columns([2,2,2])
             with c4:
-                notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=(["Any","Combined Synopsis/Solicitation","Solicitation"].index(_def_notice) if _def.get("notice") in ["Any","Combined Synopsis/Solicitation","Solicitation"] else 1))
+                notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
             with c5:
-                min_due = _st.number_input("Min days until due", min_value=0, value=int(_def_min_due), step=1)
+                min_due = _st.number_input("Min days until due", min_value=0, value=3, step=1)
             with c6:
-                active_only = _st.checkbox("Active only", value=_def_active)
+                active_only = _st.checkbox("Active only", value=True)
             save_search = _st.form_submit_button("Save as default")
 
         if save_search:
