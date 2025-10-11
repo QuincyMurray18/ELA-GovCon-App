@@ -4555,7 +4555,7 @@ Dear Contracting Officer,
 with legacy_tabs[4]:
     # Show a helper tip only inside SAM Watch when no results have been loaded
 
-    if not st.session_state.get('sam_results_df'):
+    if ('sam_results_df' not in st.session_state) or (st.session_state['sam_results_df'] is None) or (hasattr(st.session_state['sam_results_df'], 'empty') and st.session_state['sam_results_df'].empty):
 
         st.info('No active results yet. Click **Run search now**.')
 
