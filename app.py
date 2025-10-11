@@ -7766,8 +7766,8 @@ try:
                         with c1:
                             _st.checkbox(
                                 "",
-                                key=f"{ACTIVE_USER}::sam_sel_{rid}",
-                                value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
+                                key=f"sam_sel_{rid}",
+                                value=_st.session_state.get(f"sam_sel_{rid}", False)
                             )
                         with c2:
                             link_md = f"[{title}]({url})"
@@ -7784,7 +7784,7 @@ try:
                 submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
 
             if submitted:
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
+                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
                 if not chosen_ids:
                     _st.info("No rows selected.")
                 else:
@@ -7817,7 +7817,7 @@ try:
                     _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
                     # Clear only the ones we just added to avoid accidental re-use
                     for rid in chosen_ids:
-                        _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
+                        _st.session_state.pop(f"sam_sel_{rid}", None)
             else:
                 if not rows:
                     _st.caption("No opportunities found with links.")
