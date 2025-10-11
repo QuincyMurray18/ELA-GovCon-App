@@ -3505,12 +3505,13 @@ def _render_saved_vendors_manager(_container=None):
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
 
 TAB_LABELS = [
-    "SAM Watch","RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
+    'SAM Watch', 'Deals', 'RFP Analyzer', 'L&M Checklist', 'Past...', 'White Paper Builder', 'Contacts', 'Data Export', 'Deals'
 ]
 tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
-LEGACY_ORDER = ["Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
+LEGACY_ORDER = [
+    'Deals', 'Subcontractor Finder', 'Contacts', 'Outreach', 'SAM Watch', 'Ask the doc', 'Chat Assistant', 'Proposal Builder', 'Deals', 'L&M Checklist', 'RFP Analyzer', 'RFQ Generator', 'Pricing Calculator', 'Past Performance', 'Quote Comparison', 'Win Probability'
 ]
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
@@ -6963,7 +6964,7 @@ def delete_deal(id_: int):
 
 # === Deals (CRM Pipeline) tab ===
 try:
-    with legacy_tabs[13]:
+    with tabs[TAB['Deals']]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
 
