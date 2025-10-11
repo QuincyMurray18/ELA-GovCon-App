@@ -3511,15 +3511,14 @@ tabs = st.tabs(TAB_LABELS)
 
 # --- UI-only hide of 'Pipeline' tab (keep backend & indices intact) ---
 try:
-    _pipeline_idx = TAB_LABELS.index("Pipeline") + 1  # nth-child is 1-based
-    st.markdown(f"""
-    <style>
-    .stTabs [role="tablist"] button:nth-child({_pipeline_idx}) { display: none !important; }
-    </style>
-    """, unsafe_allow_html=True)
-except ValueError:
-    # 'Pipeline' label not present — nothing to hide
+    if "Pipeline" in TAB_LABELS:
+        _pipeline_idx = TAB_LABELS.index("Pipeline") + 1  # nth-child is 1-based
+        _css = "<style>\n.stTabs [role='tablist'] button:nth-child(" + str(_pipeline_idx) + ") { display: none !important; }\n</style>"
+        st.markdown(_css, unsafe_allow_html=True)
+except Exception:
+    # Do not fail rendering if anything goes wrong
     pass
+   pass
 
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
