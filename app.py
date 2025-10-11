@@ -7788,13 +7788,47 @@ try:
         try:
             _df_preview = _st.session_state.get("sam_results_df", None)
             if isinstance(_df_preview, _pd.DataFrame) and not _df_preview.empty:
+                
                 _st.caption("Latest fetched results (not saved to DB yet). Use the section below to add selected items to the Pipeline.")
+
                 # Make a light preview with common columns if they exist
                 cols_pref = [c for c in ["solicitationNumber","title","agency","posted","response_due","type","naics","set_aside","url"] if c in _df_preview.columns]
-                if cols_pref:
-                    _st.dataframe(_df_preview[cols_pref], use_container_width=True, height=420)
-                else:
-                    _st.dataframe(_df_preview, use_container_width=True, height=420)
+                _df_disp = _df_preview[cols_pref].copy() if cols_pref else _df_preview.copy()
+
+                # Normalize URL column name
+                url_candidates = [c for c in ["url","URL","link","Link","notice_url","solicitation_url"] if c in _df_disp.columns]
+                _url_col = url_candidates[0] if url_candidates else None
+
+                try:
+                    # Prefer native clickable links if Streamlit supports LinkColumn
+                    if _url_col:
+                        from streamlit import column_config as _cc  # type: ignore
+                        _conf = {}
+                        # If a title exists, show the title as text and provide an "Open" link column
+                        if "title" in _df_disp.columns:
+                            _conf[_url_col] = _cc.LinkColumn("Open notice", display_text="Open")
+                        else:
+                            _conf[_url_col] = _cc.LinkColumn("Notice URL")
+                        _st.dataframe(_df_disp, use_container_width=True, height=420, column_config=_conf, hide_index=True)
+                    else:
+                        _st.dataframe(_df_disp, use_container_width=True, height=420, hide_index=True)
+                except Exception:
+                    # Fallback: render markdown table with clickable links
+                    if _url_col:
+                        _df_md = _df_disp.copy()
+                        def _mk(a, u):
+                            try:
+                                return f"[{a}]({u})" if (isinstance(u, str) and u.startswith("http")) else a
+                            except Exception:
+                                return a
+                        if "title" in _df_md.columns:
+                            _df_md["title"] = [_mk(t, u) for t, u in zip(_df_md.get("title"), _df_md.get(_url_col))]
+                        else:
+                            # if no title, just convert url column to markdown link
+                            _df_md[_url_col] = [f"[Open]({u})" if isinstance(u, str) and u.startswith("http") else u for u in _df_md.get(_url_col)]
+                        _st.markdown(_df_md.to_markdown(index=False), unsafe_allow_html=True)
+                    else:
+                        _st.dataframe(_df_disp, use_container_width=True, height=420, hide_index=True)
         except Exception as _e_preview:
             _st.warning(f"[SAM Watch preview error: {_e_preview}]")
         try:
