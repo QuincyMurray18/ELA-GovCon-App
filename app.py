@@ -7691,7 +7691,7 @@ except Exception:
 try:
     import streamlit as _st
     _ = tabs; _ = TAB
-    with tabs[TAB['Pipeline']]:
+    with tabs[TAB['SAM Watch']]:
         _st.divider()
         _st.markdown("### SAM Automation Controls")
         col1, col2, col3, col4 = _st.columns([1,1,1,1])
