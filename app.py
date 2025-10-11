@@ -7762,7 +7762,7 @@ try:
                     row_ids.append(rid)
                     c1, c2 = _st.columns([0.08, 0.92])
                     with c1:
-                        _st.checkbox("", key=f"sam_sel_{rid}", value=_st.session_state.get(f"sam_sel_{rid}", False))
+                        _st.checkbox("", key=f"{ACTIVE_USER}::sam_sel_{rid}", value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False))
                     with c2:
                         link_md = f"[{title}]({url})"
                         meta = " | ".join(filter(None, [
@@ -7773,7 +7773,7 @@ try:
                         _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
 
                 if _st.button("➕ Add Selected to Pipeline", key="btn_add_selected_pipeline", use_container_width=True):
-                    chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
+                    chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
                     if not chosen_ids:
                         _st.info("No rows selected.")
                     else:
@@ -7805,6 +7805,7 @@ try:
                             except Exception as _e_add:
                                 _st.warning(f"Could not add '{title}': {_e_add}")
                         _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
+                        for rid in chosen_ids: st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
             else:
                 _st.caption("No opportunities found with links.")
         except Exception as _e_sel:
