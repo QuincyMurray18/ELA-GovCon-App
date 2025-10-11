@@ -4296,7 +4296,14 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=None):
+def save_opportunities(df, default_assignee=""):
+    try:
+        import streamlit as st
+        if not st.session_state.get("__ALLOW_PIPELINE_WRITE", False):
+            return (0, 0)
+    except Exception:
+        pass
+
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
@@ -4474,7 +4481,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         info, df = sam_search(naics, keyword, posted_from, str(posted_to), active_only=active_only, min_days=min_days, limit=150)
 
         # Insert/update into pipeline table
-        new_rows, upd_rows = save_opportunities(df, default_assignee=ACTIVE_USER if ACTIVE_USER else "") if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
+        new_rows, upd_rows = (0, 0)  # disabled auto-save; user must add via selection if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
 
         # Log history
         conn = get_db(); cur = conn.cursor()
@@ -4628,8 +4635,13 @@ with legacy_tabs[4]:
                             to_save = df_run.copy()
                             if "Link" in to_save.columns:
                                 to_save = to_save.drop(columns=["Link"])
+                            st.session_state["__ALLOW_PIPELINE_WRITE"] = True
                             ins, upd = save_opportunities(to_save, default_assignee=st.session_state.get("assignee_default",""))
                             st.success(f"Ingested {len(df_run)}. New {ins}, updated {upd}.")
+                            try:
+                                st.session_state["__ALLOW_PIPELINE_WRITE"] = False
+                            except Exception:
+                                pass
                             st.session_state["sam_results_df"] = df_run
                         else:
                             st.info("No results to ingest.")
@@ -4881,12 +4893,20 @@ except Exception:
         st.caption(f"Selected to save: {len(save_sel)} of {len(edited)}")
 
         if st.button("Save selected to pipeline"):
+            try:
+                st.session_state["__ALLOW_PIPELINE_WRITE"] = True
+            except Exception:
+                pass
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+            try:
+                st.session_state["__ALLOW_PIPELINE_WRITE"] = False
+            except Exception:
+                pass
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 try:
-    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
+    if ('save_sel' in locals()) and isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
         added, updated = 0, 0
         for _, _r in save_sel.iterrows():
             for c in _extract_contacts_from_sam_row(_r):
@@ -5992,7 +6012,7 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=None):
+def save_opportunities(df, default_assignee=""):
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
@@ -6915,6 +6935,13 @@ def list_deals(stage: str | None = None, q: str | None = None):
     return pd.DataFrame(rows, columns=cols)
 
 def create_deal(title: str, stage: str, owner: str | None, amount: float | None, notes: str | None, agency: str | None, due_date: str | None):
+    try:
+        import streamlit as st
+        if not st.session_state.get("__ALLOW_PIPELINE_WRITE", False):
+            return 0
+    except Exception:
+        pass
+
     conn = get_db()
     ensure_deals_table(conn)
     cur = conn.cursor()
@@ -7003,6 +7030,10 @@ try:
             new_notes = st.text_area("Notes", height=80, placeholder="Key details, next actions...")
             submitted = st.form_submit_button("Create deal")
             if submitted:
+                try:
+                    _st.session_state["__ALLOW_PIPELINE_WRITE"] = True
+                except Exception:
+                    pass
                 if not new_title.strip():
                     st.warning("Please enter a title.")
                 else:
@@ -7729,11 +7760,17 @@ try:
         colA, colB, colC, colD = _st.columns([1,1,1,1])
         with colA:
             if _st.button("Pull data", use_container_width=True):
-                imported_total = 0
+                import pandas as _pd
+                loaded = []
                 for flt in _sam_get_saved_filters():
-                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
-                _st.success(f"Imported {imported_total}")
+                    df, info = sam_search_v3(flt, limit=200)
+                    if isinstance(df, _pd.DataFrame) and not df.empty:
+                        loaded.append(df)
+                if loaded:
+                    _st.session_state["sam_results_df"] = _pd.concat(loaded, ignore_index=True)
+                    _st.success(f"Loaded {_st.session_state['sam_results_df'].shape[0]} opportunities (not saved).")
+                else:
+                    _st.info("No opportunities found.")
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -7748,27 +7785,13 @@ try:
                 _st.subheader("Select opportunities to add to Pipeline")
         try:
             conn = get_db(); cur = conn.cursor()
-            import pandas as _pd
-            df_session = _st.session_state.get("sam_results_df")
-            if isinstance(df_session, _pd.DataFrame) and not df_session.empty:
-                _tmp_rows = []
-                for _i, _r in df_session.iterrows():
-                    _title = _r.get("title") or _r.get("Title")
-                    _agency = _r.get("agency") or _r.get("Agency")
-                    _due = _r.get("response_due") or _r.get("Response Due")
-                    _url = _r.get("url") or _r.get("URL") or _r.get("Url")
-                    _posted = _r.get("posted") or _r.get("Posted") or _r.get("Published")
-                    _rid = f"new_{_i}"
-                    _tmp_rows.append((_rid, _title, _agency, _due, _url, _posted))
-                rows = _tmp_rows
-            else:
-                rows = cur.execute("""
-                    select id, title, agency, response_due, url, posted
-                    from opportunities
-                    where coalesce(url,'') != ''
-                    order by date(posted) desc, id desc
-                    limit 200
-                """).fetchall()
+            rows = cur.execute("""
+                select id, title, agency, response_due, url, posted
+                from opportunities
+                where coalesce(url,'') != ''
+                order by date(posted) desc, id desc
+                limit 200
+            """).fetchall()
 
             # Use a form so checkbox selections and the submit happen in one transaction (avoids rerun desync).
             with _st.form("sam_watch_select_form", clear_on_submit=False):
@@ -7780,8 +7803,8 @@ try:
                         with c1:
                             _st.checkbox(
                                 "",
-                                key=f"{ACTIVE_USER}::sam_sel_{rid}",
-                                value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
+                                key=f"sam_sel_{rid}",
+                                value=_st.session_state.get(f"sam_sel_{rid}", False)
                             )
                         with c2:
                             link_md = f"[{title}]({url})"
@@ -7798,7 +7821,11 @@ try:
                 submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
 
             if submitted:
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
+                try:
+                    _st.session_state["__ALLOW_PIPELINE_WRITE"] = True
+                except Exception:
+                    pass
+                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
                 if not chosen_ids:
                     _st.info("No rows selected.")
                 else:
@@ -7814,11 +7841,9 @@ try:
                                 skipped += 1
                                 continue
                             notes = f"Imported from SAM Watch on selection. URL: {url}"
-                            add_deal(
+                            create_deal(
                                 title=title,
                                 stage="No Contact Made",
-                                source="SAM Watch",
-                                url=url,
                                 owner=None,
                                 amount=None,
                                 notes=notes,
@@ -7829,9 +7854,13 @@ try:
                         except Exception as _e_add:
                             _st.warning(f"Could not add '{title}': {_e_add}")
                     _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
+                    try:
+                        _st.session_state["__ALLOW_PIPELINE_WRITE"] = False
+                    except Exception:
+                        pass
                     # Clear only the ones we just added to avoid accidental re-use
                     for rid in chosen_ids:
-                        _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
+                        _st.session_state.pop(f"sam_sel_{rid}", None)
             else:
                 if not rows:
                     _st.caption("No opportunities found with links.")
