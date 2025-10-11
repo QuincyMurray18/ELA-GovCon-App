@@ -472,43 +472,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# === ELA bootstrap: widget-key + state safety ===
-try:
-    import streamlit as st  # ensure st alias exists
-except Exception:
-    pass
-
-# Initialize selection state once
-if hasattr(st, "session_state"):
-    if "save_sel" not in st.session_state:
-        st.session_state["save_sel"] = set()
-
-    # Provide a safe alias `save_sel` if code references it directly
-    try:
-        save_sel  # noqa: F821
-    except NameError:
-        save_sel = st.session_state.get("save_sel", set())
-
-    # Auto-unique keys for selectbox if missing to prevent duplicate widget ID errors
-    if not hasattr(st, "_orig_selectbox"):
-        try:
-            st._orig_selectbox = st.selectbox
-
-            def _auto_key_selectbox(label, *args, key=None, **kwargs):
-                # If caller didn't supply a key, create a deterministic counter-based key
-                if key is None:
-                    counter_key = "_auto_sb_counter"
-                    st.session_state[counter_key] = st.session_state.get(counter_key, 0) + 1
-                    key = f"auto_sb_{st.session_state[counter_key]}"
-                return st._orig_selectbox(label, *args, key=key, **kwargs)
-
-            st.selectbox = _auto_key_selectbox
-        except Exception:
-            # If patching fails, keep original behavior
-            pass
-# === end bootstrap ===
-
-
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
