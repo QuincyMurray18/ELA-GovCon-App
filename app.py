@@ -7803,8 +7803,6 @@ try:
                             create_deal(
                                 title=title,
                                 stage="No Contact Made",
-                                source="SAM Watch",
-                                url=url,
                                 owner=None,
                                 amount=None,
                                 notes=notes,
