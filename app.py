@@ -90,6 +90,10 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     import io
     doc = Document()
     try:
+        md_text = _clean_placeholders(md_text)
+    except Exception:
+        pass
+        pass
         section = doc.sections[0]
         section.top_margin = Inches(margins_in)
         section.bottom_margin = Inches(margins_in)
@@ -131,6 +135,10 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
     from docx.oxml.ns import qn
     import io
     doc = Document()
+    try:
+        md_text = _clean_placeholders(md_text)
+    except Exception:
+        pass
     try:
         section = doc.sections[0]
         section.top_margin = Inches(margins_in)
@@ -4559,6 +4567,77 @@ with legacy_tabs[4]:
 
         st.info('No active results yet. Click **Run search now**.')
 
+    
+    with st.expander("Saved Searches", expanded=True):
+        cols = st.columns([2,2,2,2,1,1])
+        with cols[0]: ss_name = st.text_input("Name", key="ss_name")
+        with cols[1]: ss_keyword = st.text_input("Keyword", value=str(st.session_state.get("sam_keyword","")), key="ss_keyword_builder")
+        with cols[2]: ss_naics = st.text_input("NAICS list (comma-separated)", value=st.session_state.get("naics_default",""), key="ss_naics_builder")
+        with cols[3]: ss_notice = st.multiselect("Notice types", ["Combined Synopsis/Solicitation","Solicitation","Presolicitation","Sources Sought"], default=["Combined Synopsis/Solicitation","Solicitation"], key="ss_notice_builder")
+        with cols[4]: ss_min_days = st.number_input("Min days", min_value=0, step=1, value=int(0), key="ss_min_days_builder")
+        with cols[5]: ss_posted = st.number_input("Posted within days", min_value=1, step=1, value=int(60), key="ss_posted_builder")
+        active_only = st.checkbox("Active only", value=True, key="ss_active_only_builder")
+        if st.button("Save search"):
+            _params = {
+                "keyword": ss_keyword.strip(),
+                "naics_list": [s.strip() for s in ss_naics.split(",") if s.strip()],
+                "notice_types": ",".join(ss_notice),
+                "min_days": int(ss_min_days),
+                "posted_from_days": int(ss_posted),
+                "active": "true" if active_only else "false"
+            }
+            try:
+                sam_saved_upsert(ss_name.strip(), _params, active=True)
+                st.success(f"Saved search '{ss_name}'")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
+
+        try:
+            saved = sam_saved_list()
+            if saved:
+                st.write("Saved searches:")
+                for row in saved:
+                    c1,c2,c3,c4,c5 = st.columns([2,3,2,2,2])
+                    c1.write(f"**{row['name']}**")
+                    c2.write(row.get("params",{}))
+                    if c3.button("Run", key=f"run_{row['name']}"):
+                        pars = row['params']
+                        df_run, info = sam_search(
+                            pars.get("naics_list", []),
+                            min_days=int(pars.get("min_days",0)),
+                            limit=200,
+                            keyword=pars.get("keyword",""),
+                            posted_from_days=int(pars.get("posted_from_days",60)),
+                            notice_types=pars.get("notice_types",""),
+                            active=pars.get("active","true")
+                        )
+                        st.session_state["sam_results_df"] = df_run
+                        st.success(f"Found {len(df_run)} results for '{row['name']}'")
+                    if c4.button("Run & Ingest", key=f"run_ingest_{row['name']}"):
+                        pars = row['params']
+                        df_run, info = sam_search(
+                            pars.get("naics_list", []),
+                            min_days=int(pars.get("min_days",0)),
+                            limit=200,
+                            keyword=pars.get("keyword",""),
+                            posted_from_days=int(pars.get("posted_from_days",60)),
+                            notice_types=pars.get("notice_types",""),
+                            active=pars.get("active","true")
+                        )
+                        if hasattr(df_run, "empty") and not df_run.empty:
+                            to_save = df_run.copy()
+                            if "Link" in to_save.columns:
+                                to_save = to_save.drop(columns=["Link"])
+                            ins, upd = save_opportunities(to_save, default_assignee=st.session_state.get("assignee_default",""))
+                            st.success(f"Ingested {len(df_run)}. New {ins}, updated {upd}.")
+                            st.session_state["sam_results_df"] = df_run
+                        else:
+                            st.info("No results to ingest.")
+                    if c5.button("Delete", key=f"del_{row['name']}"):
+                        sam_saved_delete(row['name'])
+                        st.warning(f"Deleted '{row['name']}'. Refresh to update list.")
+        except Exception as e:
+            st.error(f"Saved searches error: {e}")
     st.subheader("SAM Watch: Auto Search + Attachments + Saved Searches")
     st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
     conn = get_db()
@@ -7338,4 +7417,3 @@ def _clean_placeholders(text: str) -> str:
     t = _re_clean.sub(r"\n{3,}", "\n\n", t)
     t = "\n".join(line.rstrip() for line in t.splitlines())
     return t
-
