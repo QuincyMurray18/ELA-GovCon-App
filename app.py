@@ -4520,20 +4520,23 @@ with legacy_tabs[4]:
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
 
-    auto_on = st.checkbox("Enable auto-monitor", value=bool(get_setting(f"sam_auto_{ACTIVE_USER}", "true") != "false"))
-    interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
-    digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
-    digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=70, step=5)
-    if st.button("Save monitor settings"):
-        set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
-        set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
-        set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
-        set_setting(f"sam_digestmin_{ACTIVE_USER}", str(int(digest_min)))
-        st.success("Saved monitor settings")
+    manual_mode = st.checkbox("Manual Search Mode (hide automation)", value=True, help="When on: no background checks or digests — purely manual searches.")
+
+    if not manual_mode:
+        auto_on = st.checkbox("Enable auto-monitor", value=bool(get_setting(f"sam_auto_{ACTIVE_USER}", "true") != "false"))
+        interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
+        digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
+        digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=70, step=5)
+        if st.button("Save monitor settings"):
+            set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
+            set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
+            set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
+            set_setting(f"sam_digestmin_{ACTIVE_USER}", str(int(digest_min)))
+            st.success("Saved monitor settings")
 
     # Kick the monitor if interval elapsed
     try:
-        if auto_on:
+        if (not manual_mode) and auto_on:
             _res = sam_live_monitor(False, int(interval_hours), digest, int(digest_min))
             if _res and _res.get("ok") and not _res.get("skipped"):
                 st.info(f"Auto-monitor: inserted {_res.get('inserted',0)}, updated {_res.get('updated',0)}")
