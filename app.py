@@ -4886,7 +4886,7 @@ except Exception:
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 try:
-    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
+    if ('save_sel' in locals()) and isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
         added, updated = 0, 0
         for _, _r in save_sel.iterrows():
             for c in _extract_contacts_from_sam_row(_r):
@@ -7800,7 +7800,7 @@ try:
                                 skipped += 1
                                 continue
                             notes = f"Imported from SAM Watch on selection. URL: {url}"
-                            add_deal(
+                            create_deal(
                                 title=title,
                                 stage="No Contact Made",
                                 source="SAM Watch",
