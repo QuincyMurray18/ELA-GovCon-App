@@ -3967,21 +3967,25 @@ with legacy_tabs[2]:
     df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
-        
-        st.rerun()
-cur = conn.cursor()
-        for _, r in grid.iterrows():
-            if pd.isna(r["id"]):
-                cur.execute("""insert into contacts(name,org,role,email,phone,source,notes) values(?,?,?,?,?,?,?)""",
-                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"]))
-            else:
-                cur.execute("""update contacts set name=?, org=?, role=?, email=?, phone=?, source=?, notes=? where id=?""",
-                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
-        conn.commit(); st.success("Saved")
+    cur = conn.cursor()
+    for _, r in grid.iterrows():
+        if pd.isna(r["id"]):
+            cur.execute(
+                '''insert into contacts(name, org, role, email, phone, source, notes)
+                   values (?, ?, ?, ?, ?, ?, ?)''',
+                (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"])
+            )
+        else:
+            cur.execute(
+                '''update contacts
+                   set name=?, org=?, role=?, email=?, phone=?, source=?, notes=?
+                   where id=?''',
+                (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"]))
+            )
+    conn.commit()
+    st.success("Saved")
+    st.rerun()
 
-with legacy_tabs[3]:
-    st.subheader("Outreach and mail merge")
-    st.caption("Use default templates, personalize for distance, capability and past performance. Paste replies to track status.")
 
     # Render Outreach tools here (moved from sidebar)
     render_outreach_tools()
