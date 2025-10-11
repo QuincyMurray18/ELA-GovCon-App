@@ -7780,17 +7780,25 @@ try:
         if rows:
             with _st.form("sam_watch_select_form", clear_on_submit=False):
                 row_ids = []
-                for rid, title, agency, due, url, posted in rows:
+            for rid, title, agency, due, url, posted in rows:
+                c1, c2 = _st.columns([8, 2])
+                with c1:
                     _key = f"{ACTIVE_USER}::sam_sel_{rid}"
-                    _checked = bool(_st.session_state.get(_key, False))
-                    _checked = _st.checkbox(f"[{rid}] {title} — {agency}", key=_key, value=_checked)
-                    row_ids.append(rid)
-    
-                _st.session_state[f"{ACTIVE_USER}::sam_selected_ids"] = [
-                    rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
-                ]
-    
-                submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
+                    _checked_default = bool(_st.session_state.get(_key, False))
+                    _st.checkbox(f"[{rid}] {title} — {agency}", key=_key, value=_checked_default)
+                with c2:
+                    try:
+                        _st.link_button("Open", url, use_container_width=True)
+                    except Exception:
+                        if url:
+                            _st.markdown(f"[Open in SAM]({url})")
+                row_ids.append(rid)
+
+            # Persist the currently checked ids so submit reads exactly those
+            _st.session_state[f"{ACTIVE_USER}::sam_selected_ids"] = [
+                rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
+            ]
+            submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
     
             if submitted:
                 chosen_ids = list(_st.session_state.get(f"{ACTIVE_USER}::sam_selected_ids", []))
