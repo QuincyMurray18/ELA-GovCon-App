@@ -4296,14 +4296,7 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=""):
-    try:
-        import streamlit as st
-        if not st.session_state.get("__ALLOW_PIPELINE_WRITE", False):
-            return (0, 0)
-    except Exception:
-        pass
-
+def save_opportunities(df, default_assignee=None):
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
@@ -4481,7 +4474,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         info, df = sam_search(naics, keyword, posted_from, str(posted_to), active_only=active_only, min_days=min_days, limit=150)
 
         # Insert/update into pipeline table
-        new_rows, upd_rows = (0, 0)  # disabled auto-save; user must add via selection if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
+        new_rows, upd_rows = save_opportunities(df, default_assignee=ACTIVE_USER if ACTIVE_USER else "") if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
 
         # Log history
         conn = get_db(); cur = conn.cursor()
@@ -4635,13 +4628,8 @@ with legacy_tabs[4]:
                             to_save = df_run.copy()
                             if "Link" in to_save.columns:
                                 to_save = to_save.drop(columns=["Link"])
-                            st.session_state["__ALLOW_PIPELINE_WRITE"] = True
                             ins, upd = save_opportunities(to_save, default_assignee=st.session_state.get("assignee_default",""))
                             st.success(f"Ingested {len(df_run)}. New {ins}, updated {upd}.")
-                            try:
-                                st.session_state["__ALLOW_PIPELINE_WRITE"] = False
-                            except Exception:
-                                pass
                             st.session_state["sam_results_df"] = df_run
                         else:
                             st.info("No results to ingest.")
@@ -4893,20 +4881,12 @@ except Exception:
         st.caption(f"Selected to save: {len(save_sel)} of {len(edited)}")
 
         if st.button("Save selected to pipeline"):
-            try:
-                st.session_state["__ALLOW_PIPELINE_WRITE"] = True
-            except Exception:
-                pass
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
-            try:
-                st.session_state["__ALLOW_PIPELINE_WRITE"] = False
-            except Exception:
-                pass
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 try:
-    if ('save_sel' in locals()) and isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
+    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
         added, updated = 0, 0
         for _, _r in save_sel.iterrows():
             for c in _extract_contacts_from_sam_row(_r):
@@ -6012,7 +5992,7 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=""):
+def save_opportunities(df, default_assignee=None):
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
@@ -6935,13 +6915,6 @@ def list_deals(stage: str | None = None, q: str | None = None):
     return pd.DataFrame(rows, columns=cols)
 
 def create_deal(title: str, stage: str, owner: str | None, amount: float | None, notes: str | None, agency: str | None, due_date: str | None):
-    try:
-        import streamlit as st
-        if not st.session_state.get("__ALLOW_PIPELINE_WRITE", False):
-            return 0
-    except Exception:
-        pass
-
     conn = get_db()
     ensure_deals_table(conn)
     cur = conn.cursor()
@@ -7030,10 +7003,6 @@ try:
             new_notes = st.text_area("Notes", height=80, placeholder="Key details, next actions...")
             submitted = st.form_submit_button("Create deal")
             if submitted:
-                try:
-                    _st.session_state["__ALLOW_PIPELINE_WRITE"] = True
-                except Exception:
-                    pass
                 if not new_title.strip():
                     st.warning("Please enter a title.")
                 else:
@@ -7760,17 +7729,11 @@ try:
         colA, colB, colC, colD = _st.columns([1,1,1,1])
         with colA:
             if _st.button("Pull data", use_container_width=True):
-                import pandas as _pd
-                loaded = []
+                imported_total = 0
                 for flt in _sam_get_saved_filters():
-                    df, info = sam_search_v3(flt, limit=200)
-                    if isinstance(df, _pd.DataFrame) and not df.empty:
-                        loaded.append(df)
-                if loaded:
-                    _st.session_state["sam_results_df"] = _pd.concat(loaded, ignore_index=True)
-                    _st.success(f"Loaded {_st.session_state['sam_results_df'].shape[0]} opportunities (not saved).")
-                else:
-                    _st.info("No opportunities found.")
+                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
+                    imported_total += int(n or 0)
+                _st.success(f"Imported {imported_total}")
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -7783,84 +7746,6 @@ try:
                 _st.success("Submitted") if ok else _st.error("Update failed")
 
                 _st.subheader("Select opportunities to add to Pipeline")
-
-        # Preview the most recent SAM fetch (not yet saved to DB)
-        try:
-            _df_preview = _st.session_state.get("sam_results_df", None)
-            if isinstance(_df_preview, _pd.DataFrame) and not _df_preview.empty:
-                # Build interactive grid with Save checkbox and a Link column
-                _grid_df = _df_preview.copy()
-
-                # If there is a 'type' column, keep the common notice types (same behavior as before)
-                if "type" in _grid_df.columns:
-                    _grid_df = _grid_df[_grid_df["type"].isin({"Combined Synopsis/Solicitation","Solicitation"})].copy() if not _grid_df.empty else _grid_df
-
-                # Normalize a URL column and build a Link column for display
-                _url_candidates = [c for c in ["url","URL","link","Link","notice_url","solicitation_url"] if c in _grid_df.columns]
-                _url_col = _url_candidates[0] if _url_candidates else None
-                if _url_col and "Link" not in _grid_df.columns:
-                    _grid_df["Link"] = _grid_df[_url_col]
-                if "Save" not in _grid_df.columns:
-                    _grid_df["Save"] = False
-
-                # Compute Score using existing helper (if available)
-                _kw = [w for w in (_st.session_state.get("sam_keyword","").split() if isinstance(_st.session_state.get("sam_keyword",""), str) else []) if w]
-                try:
-                    _conn_sc = get_db()
-                    _codes_sc = _pd.read_sql_query("select code from naics_watch order by code", _conn_sc)["code"].tolist()
-                except Exception:
-                    _codes_sc = []
-                try:
-                    _grid_df["Score"] = _grid_df.apply(lambda r: score_opportunity(r, _kw, _codes_sc), axis=1)
-                except Exception:
-                    pass  # if scoring utility not present, skip
-
-                # Sort by score desc then due date asc when possible
-                if "response_due" in _grid_df.columns:
-                    try:
-                        _dt = _pd.to_datetime(_grid_df["response_due"], errors="coerce")
-                        _grid_df = _grid_df.assign(_due=_dt).sort_values(["Score","_due"], ascending=[False, True]).drop(columns=["_due"], errors="ignore")
-                    except Exception:
-                        _grid_df = _grid_df.sort_values(["Score"], ascending=[False]) if "Score" in _grid_df.columns else _grid_df
-
-                _st.caption("Latest fetched results (not saved to DB yet). Check 'Save' then click 'Save selected to pipeline'.")
-                try:
-                    from streamlit import column_config as _cc  # type: ignore
-                    _conf = {"Link": _cc.LinkColumn("Link", display_text="Open in SAM")} if "Link" in _grid_df.columns else {}
-                    _edited = _st.data_editor(
-                        _grid_df,
-                        column_config=_conf,
-                        use_container_width=True,
-                        num_rows="fixed",
-                        key="sam_watch_grid"
-                    )
-                except Exception:
-                    # Fallback without column_config support
-                    _edited = _st.data_editor(
-                        _grid_df,
-                        use_container_width=True,
-                        num_rows="fixed",
-                        key="sam_watch_grid"
-                    )
-
-                _to_save = _edited[_edited.get("Save", False)==True] if "Save" in _edited.columns else _edited.iloc[0:0]
-                _st.caption(f"Selected to save: {len(_to_save)} of {len(_edited)}")
-
-                if _st.button("Save selected to pipeline"):
-                    _clean = _to_save.drop(columns=[c for c in ["Save","Link"] if c in _to_save.columns], errors="ignore")
-                    try:
-                        _st.session_state["__ALLOW_PIPELINE_WRITE"] = True
-                    except Exception:
-                        pass
-                    _ins, _upd = save_opportunities(_clean, default_assignee=_st.session_state.get("assignee_default",""))
-                    _st.success(f"Saved to pipeline — inserted {_ins}, updated {_upd}.")
-                    try:
-                        _st.session_state["__ALLOW_PIPELINE_WRITE"] = False
-                    except Exception:
-                        pass
-        except Exception as _e_preview:
-            _st.warning(f"[SAM Watch preview error: {_e_preview}]")
-                
         try:
             conn = get_db(); cur = conn.cursor()
             rows = cur.execute("""
@@ -7881,8 +7766,8 @@ try:
                         with c1:
                             _st.checkbox(
                                 "",
-                                key=f"sam_sel_{rid}",
-                                value=_st.session_state.get(f"sam_sel_{rid}", False)
+                                key=f"{ACTIVE_USER}::sam_sel_{rid}",
+                                value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
                             )
                         with c2:
                             link_md = f"[{title}]({url})"
@@ -7899,11 +7784,7 @@ try:
                 submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
 
             if submitted:
-                try:
-                    _st.session_state["__ALLOW_PIPELINE_WRITE"] = True
-                except Exception:
-                    pass
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
+                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
                 if not chosen_ids:
                     _st.info("No rows selected.")
                 else:
@@ -7919,9 +7800,11 @@ try:
                                 skipped += 1
                                 continue
                             notes = f"Imported from SAM Watch on selection. URL: {url}"
-                            create_deal(
+                            add_deal(
                                 title=title,
                                 stage="No Contact Made",
+                                source="SAM Watch",
+                                url=url,
                                 owner=None,
                                 amount=None,
                                 notes=notes,
@@ -7932,13 +7815,9 @@ try:
                         except Exception as _e_add:
                             _st.warning(f"Could not add '{title}': {_e_add}")
                     _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
-                    try:
-                        _st.session_state["__ALLOW_PIPELINE_WRITE"] = False
-                    except Exception:
-                        pass
                     # Clear only the ones we just added to avoid accidental re-use
                     for rid in chosen_ids:
-                        _st.session_state.pop(f"sam_sel_{rid}", None)
+                        _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
             else:
                 if not rows:
                     _st.caption("No opportunities found with links.")
