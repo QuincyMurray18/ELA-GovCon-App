@@ -3500,6 +3500,132 @@ TAB_LABELS = [
     "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
 ]
 tabs = st.tabs(TAB_LABELS)
+
+# === Primary SAM Watch renderer (manual search always visible) ===
+def _render_sam_watch_primary():
+    try:
+        st.session_state["_sam_watch_rendered"] = True
+    except Exception:
+        pass
+
+    st.subheader("SAM Watch")
+    st.caption("Manual search and save to Pipeline. Automation settings are below.")
+
+    conn = get_db()
+    try:
+        codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    except Exception:
+        codes = []
+    st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
+
+    # ---- Manual search controls
+    with st.container(border=True):
+        st.markdown("### Manual search")
+        cols = st.columns(4)
+        with cols[0]:
+            keyword = st.text_input("Keyword (optional)", key="sam_manual_kw")
+        with cols[1]:
+            posted_from_days = st.number_input("Posted within (days)", min_value=1, max_value=365, value=14, step=1, key="sam_manual_posted")
+        with cols[2]:
+            min_days = st.number_input("Min days until due", min_value=0, max_value=60, value=3, step=1, key="sam_manual_mindays")
+        with cols[3]:
+            pages_to_fetch = st.number_input("Pages to fetch", min_value=1, max_value=10, value=3, step=1, key="sam_manual_pages")
+
+        run_col, save_defaults_col = st.columns([1,1])
+        with run_col:
+            if st.button("Run search now", type="primary", key="sam_manual_run"):
+                try:
+                    df, info = sam_search(
+                        codes, min_days=int(min_days), limit=int(pages_to_fetch)*50,
+                        keyword=keyword or None, posted_from_days=int(posted_from_days),
+                        notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
+                    )
+                    st.session_state["sam_results_df"] = df
+                    st.session_state["sam_results_info"] = info
+                    st.success(f"Found {0 if not isinstance(df, pd.DataFrame) else len(df)} opportunities.")
+                except Exception as e:
+                    st.error(f"Search failed: {e}")
+
+        with save_defaults_col:
+            if st.button("Save as my default", key="sam_manual_save_defaults"):
+                try:
+                    set_setting(f"sam_default_filters_{ACTIVE_USER}", json.dumps({
+                        'min_days': int(min_days),
+                        'posted_from_days': int(posted_from_days),
+                        'active_only': True,
+                        'keyword': str(keyword or '')
+                    }))
+                    st.success("Saved your defaults")
+                except Exception as e:
+                    st.error(f"Could not save defaults: {e}")
+
+    # ---- Results grid
+    df = st.session_state.get("sam_results_df")
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        st.markdown("### Results")
+        grid_df = df.copy()
+        if "Save" not in grid_df.columns:
+            grid_df["Save"] = False
+
+        # Score column
+        _kw = [w for w in (keyword.split() if isinstance(keyword, str) else []) if w]
+        try:
+            watched = codes if isinstance(codes, list) else []
+        except Exception:
+            watched = []
+        try:
+            grid_df["Score"] = grid_df.apply(lambda r: score_opportunity(r, _kw, watched), axis=1)
+        except Exception:
+            pass
+
+        # Light tidy
+        display_cols = [c for c in grid_df.columns if c in ("Score","title","agency","naics","response_due","url","Save")]
+        if display_cols:
+            grid_df = grid_df[display_cols + [c for c in grid_df.columns if c not in display_cols]]
+
+        st.dataframe(grid_df, use_container_width=True, hide_index=True)
+
+        c1, c2 = st.columns([1,1])
+        with c1:
+            assignee = st.text_input("Assign to", value=ACTIVE_USER, key="sam_manual_assignee")
+        with c2:
+            save_btn = st.button("Save checked to Pipeline", key="sam_manual_save")
+
+        if save_btn:
+            try:
+                # Persist rows with Save==True
+                sel = df.copy()
+                if "Save" in sel.columns:
+                    sel = sel[sel["Save"] == True]
+                inserted = 0
+                for _, r in sel.iterrows():
+                    _ = insert_opportunity_from_sam(r, assignee=assignee)
+                    inserted += 1
+                st.success(f"Saved {inserted} items to Pipeline.")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+    else:
+        st.info("No results yet. Use **Run search now** to fetch opportunities.")
+
+    # ---- Automation settings (moved under an expander to avoid hiding manual UI)
+    with st.expander("Automation settings"):
+        auto_on = st.checkbox("Enable auto-monitor", value=bool(get_setting(f"sam_auto_{ACTIVE_USER}", "true") != "false"))
+        interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
+        digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
+        digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=int(get_setting(f"sam_digestmin_{ACTIVE_USER}", "70") or 70), step=5)
+        if st.button("Save monitor settings", key="sam_manual_save_monitor"):
+            set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
+            set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
+            set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
+            set_setting(f"sam_digestmin_{ACTIVE_USER}", str(int(digest_min)))
+            st.success("Saved monitor settings")
+
+# Call the primary renderer inside the real SAM Watch tab index so it always shows
+try:
+    with tabs[TAB["SAM Watch"]]:
+        _render_sam_watch_primary()
+except Exception as _sam_err:
+    st.caption(f"[SAM Watch render note: {_sam_err}]")
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
@@ -4507,7 +4633,8 @@ Dear Contracting Officer,
 """
         return md
 
-with legacy_tabs[4]:
+if not st.session_state.get('_sam_watch_rendered'):
+    with legacy_tabs[4]:
     # Show a helper tip only inside SAM Watch when no results have been loaded
 
     if not st.session_state.get('sam_results_df'):
@@ -4520,23 +4647,20 @@ with legacy_tabs[4]:
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
 
-    manual_mode = st.checkbox("Manual Search Mode (hide automation)", value=True, help="When on: no background checks or digests — purely manual searches.")
-
-    if not manual_mode:
-        auto_on = st.checkbox("Enable auto-monitor", value=bool(get_setting(f"sam_auto_{ACTIVE_USER}", "true") != "false"))
-        interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
-        digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
-        digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=70, step=5)
-        if st.button("Save monitor settings"):
-            set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
-            set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
-            set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
-            set_setting(f"sam_digestmin_{ACTIVE_USER}", str(int(digest_min)))
-            st.success("Saved monitor settings")
+    auto_on = st.checkbox("Enable auto-monitor", value=bool(get_setting(f"sam_auto_{ACTIVE_USER}", "true") != "false"))
+    interval_hours = st.number_input("Auto-monitor every (hours)", min_value=1, max_value=24, value=int(get_setting(f"sam_interval_{ACTIVE_USER}", "3") or 3))
+    digest = st.checkbox("Send daily digest email", value=bool(get_setting(f"sam_digest_{ACTIVE_USER}", "true") != "false"))
+    digest_min = st.number_input("Digest min score", min_value=0, max_value=100, value=70, step=5)
+    if st.button("Save monitor settings"):
+        set_setting(f"sam_auto_{ACTIVE_USER}", "true" if auto_on else "false")
+        set_setting(f"sam_interval_{ACTIVE_USER}", str(int(interval_hours)))
+        set_setting(f"sam_digest_{ACTIVE_USER}", "true" if digest else "false")
+        set_setting(f"sam_digestmin_{ACTIVE_USER}", str(int(digest_min)))
+        st.success("Saved monitor settings")
 
     # Kick the monitor if interval elapsed
     try:
-        if (not manual_mode) and auto_on:
+        if auto_on:
             _res = sam_live_monitor(False, int(interval_hours), digest, int(digest_min))
             if _res and _res.get("ok") and not _res.get("skipped"):
                 st.info(f"Auto-monitor: inserted {_res.get('inserted',0)}, updated {_res.get('updated',0)}")
@@ -4774,7 +4898,8 @@ except Exception as _e_sync:
 
 
 # --- Analytics & History ---
-with legacy_tabs[4]:
+if not st.session_state.get('_sam_watch_rendered'):
+    with legacy_tabs[4]:
     with st.expander("SAM Analytics"):
         conn = get_db()
         try:
