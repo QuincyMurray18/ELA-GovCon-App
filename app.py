@@ -6925,6 +6925,14 @@ def create_deal(title: str, stage: str, owner: str | None, amount: float | None,
     conn.commit()
     return cur.lastrowid
 
+
+def add_deal(title: str, stage: str = "No Contact Made", owner: str | None = None,
+             amount: float | None = None, notes: str | None = None,
+             agency: str | None = None, due_date: str | None = None,
+             source: str | None = None, url: str | None = None):
+    """Backward-compatible wrapper used by SAM Watch selection.
+    Ignores source/url for now but keeps signature stable."""
+    return create_deal(title, stage, owner, amount, notes, agency, due_date)
 def update_deal(id_: int, **fields):
     if not fields: return False
     conn = get_db()
@@ -7725,15 +7733,35 @@ try:
             _sam_set_saved_filters([_mk_filter(kw, naics, set_aside, notice, min_due, active_only)])
             _st.success("Default filter saved")
 
+        
         _st.subheader("Actions")
         colA, colB, colC, colD = _st.columns([1,1,1,1])
         with colA:
             if _st.button("Pull data", use_container_width=True):
-                imported_total = 0
-                for flt in _sam_get_saved_filters():
-                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
-                _st.success(f"Imported {imported_total}")
+                loaded_rows = []
+                try:
+                    import hashlib
+                    for flt in _sam_get_saved_filters():
+                        df, info = sam_search_v3(flt, limit=200)
+                        if info.get("ok") and not df.empty:
+                            for _, r in df.iterrows():
+                                try:
+                                    nid = str(r.get("sam_notice_id") or "")
+                                    rid = int(hashlib.sha1(nid.encode("utf-8")).hexdigest(), 16) % 1000000000
+                                except Exception:
+                                    rid = int(_rand_id())
+                                loaded_rows.append((
+                                    rid,
+                                    r.get("title"),
+                                    r.get("agency"),
+                                    r.get("response_due"),
+                                    r.get("url"),
+                                    r.get("posted"),
+                                ))
+                    _st.session_state["sam_watch_loaded_rows"] = loaded_rows
+                    _st.success(f"Loaded {len(loaded_rows)} opportunities (not saved)")
+                except Exception as _e_pull:
+                    _st.error(f"Pull failed: {_e_pull}")
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -7744,18 +7772,18 @@ try:
             if _st.button("Submit package", use_container_width=True) and opp_id:
                 ok = proposal_submit_package(int(opp_id))
                 _st.success("Submitted") if ok else _st.error("Update failed")
-
                 _st.subheader("Select opportunities to add to Pipeline")
+        
         try:
             conn = get_db(); cur = conn.cursor()
-            rows = cur.execute("""
+            _rows_db = cur.execute("""
                 select id, title, agency, response_due, url, posted
                 from opportunities
                 where coalesce(url,'') != ''
                 order by date(posted) desc, id desc
                 limit 200
             """).fetchall()
-
+            rows = _st.session_state.get("sam_watch_loaded_rows") or _rows_db
             # Use a form so checkbox selections and the submit happen in one transaction (avoids rerun desync).
             with _st.form("sam_watch_select_form", clear_on_submit=False):
                 row_ids = []
