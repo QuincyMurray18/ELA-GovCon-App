@@ -7786,19 +7786,20 @@ except Exception as _e_ui:
 
 
 
+
 # --- [SAM Watch] Selection UI: hyperlinks + checkboxes + Add to Pipeline ---
 try:
     import streamlit as _st
     _st.markdown("### Select opportunities to add to Pipeline")
     conn = get_db()
     cur = conn.cursor()
-    rows = cur.execute(\"""
+    rows = cur.execute("""
         select id, title, agency, response_due, url, posted
         from opportunities
         where coalesce(url,'') != ''
         order by date(posted) desc, id desc
         limit 200
-    \""").fetchall()
+    """).fetchall()
 
     row_ids = []
     if rows:
@@ -7816,8 +7817,8 @@ try:
                 ])
                 meta = meta.strip(" |")
                 _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
+
         if _st.button("➕ Add Selected to Pipeline", use_container_width=True):
-            # Recompute selection from session state to avoid accidental 'select all'
             chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
             if not chosen_ids:
                 _st.info("No rows selected.")
@@ -7825,7 +7826,6 @@ try:
                 added = 0
                 skipped = 0
                 for rid, title, agency, due, url, *_ in [r for r in rows if r[0] in chosen_ids]:
-                    # Skip if a deal with same title and due_date already exists
                     try:
                         c2 = conn.cursor()
                         exists = c2.execute(
@@ -7839,7 +7839,15 @@ try:
                         pass
                     notes = f"SAM: {url}" if url else None
                     try:
-                        create_deal(title=title, stage="No Contact Made", owner=None, amount=None, notes=notes, agency=agency, due_date=str(due) if due else None)
+                        create_deal(
+                            title=title,
+                            stage="No Contact Made",
+                            owner=None,
+                            amount=None,
+                            notes=notes,
+                            agency=agency,
+                            due_date=str(due) if due else None
+                        )
                         added += 1
                     except Exception as _e_add:
                         _st.warning(f"Could not add '{title}': {_e_add}")
@@ -7853,6 +7861,7 @@ except Exception as _e_sel:
     except Exception:
         pass
 # --- [END SAM Watch Selection UI] ---
+
 
 
 # === [END MERGE UI] ===
