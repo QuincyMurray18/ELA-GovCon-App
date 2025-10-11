@@ -6956,7 +6956,7 @@ def delete_deal(id_: int):
 
 # === Deals (CRM Pipeline) tab ===
 try:
-    with legacy_tabs[13]:
+    with tabs[TAB['Pipeline']]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
 
