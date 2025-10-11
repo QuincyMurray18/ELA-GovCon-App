@@ -4730,6 +4730,7 @@ except Exception as _e_sync:
     else:
         st.info("No active results yet. Click **Run search now**.")
 
+        cA, cB, cC = st.columns(3)
     with cB:
         if st.button("Broad test (keyword only)"):
             kw = keyword.strip() or "janitorial"
