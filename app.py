@@ -4296,7 +4296,7 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=None):
+def save_opportunities(df, default_assignee=""):
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
@@ -4474,7 +4474,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         info, df = sam_search(naics, keyword, posted_from, str(posted_to), active_only=active_only, min_days=min_days, limit=150)
 
         # Insert/update into pipeline table
-        new_rows, upd_rows = save_opportunities(df, default_assignee=ACTIVE_USER if ACTIVE_USER else "") if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
+        new_rows, upd_rows = (0, 0)  # disabled auto-save; user must add via selection if isinstance(df, pd.DataFrame) and not df.empty else (0,0)
 
         # Log history
         conn = get_db(); cur = conn.cursor()
@@ -5992,7 +5992,7 @@ def _to_sqlite_value(v):
             return json.dumps(v)
         return v
 
-def save_opportunities(df, default_assignee=None):
+def save_opportunities(df, default_assignee=""):
     """Upsert into opportunities and handle legacy schemas gracefully."""
     if df is None or getattr(df, "empty", True):
         return 0, 0
