@@ -7907,3 +7907,81 @@ except Exception as _e_ui:
         pass
 
 # === [END MERGE UI] ===
+
+
+# === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
+try:
+    with tabs[TAB['Deals']]:
+        st.subheader("Deals")
+        conn = get_db()
+        try:
+            df_deals = pd.read_sql_query("select * from opportunities order by COALESCE(due_date, posted) asc, posted desc", conn)
+        except Exception:
+            df_deals = pd.DataFrame()
+
+        # Ensure expected cols
+        for _col, _default in {"assignee":"", "status":"New", "notes":""}.items():
+            if _col not in df_deals.columns:
+                df_deals[_col] = _default
+
+        # Build Link from first URL in notes
+        import re as _re_deals
+        def _extract_url_deals(_s):
+            try:
+                m = _re_deals.search(r"(https?://\S+)", str(_s))
+                return m.group(1).rstrip("),.;]") if m else ""
+            except Exception:
+                return ""
+        df_deals["Link"] = df_deals.get("notes", pd.Series("", index=df_deals.index)).apply(_extract_url_deals)
+
+        # Optional filters
+        c1, c2 = st.columns(2)
+        with c1:
+            _assignees = [""] + sorted([x for x in df_deals.get("assignee", pd.Series()).dropna().unique().tolist() if x])
+            a_filter = st.selectbox("Filter by assignee", _assignees, index=0)
+        with c2:
+            s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
+        try:
+            if a_filter:
+                df_deals = df_deals[df_deals["assignee"].fillna("")==a_filter]
+            if s_filter:
+                df_deals = df_deals[df_deals["status"].fillna("")==s_filter]
+        except Exception:
+            pass
+
+        edit_deals = st.data_editor(
+            df_deals,
+            column_config={
+                "status": st.column_config.SelectboxColumn("status", options=["New","Reviewing","Bidding","Submitted"]),
+                "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
+            },
+            use_container_width=True, num_rows="dynamic", key="deals_grid"
+        )
+
+        if st.button("Save Deals updates"):
+            # Do not persist the derived Link column
+            try:
+                edit_deals = edit_deals.drop(columns=["Link"], errors="ignore")
+            except Exception:
+                pass
+
+            # Persist minimal safe fields back to opportunities by id
+            try:
+                cur = conn.cursor()
+                if "id" in edit_deals.columns:
+                    for _, r in edit_deals.iterrows():
+                        try:
+                            cur.execute(
+                                "update opportunities set assignee=?, status=?, notes=? where id=?",
+                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"]))
+                            )
+                        except Exception:
+                            continue
+                    conn.commit()
+                    st.success("Deals saved.")
+                else:
+                    st.info("No ID column found; cannot save changes.")
+            except Exception as _e_deals_save:
+                st.warning(f"[Deals save note: {_e_deals_save}]")
+except Exception as _e_deals_tab:
+    st.caption(f"[Deals tab init note: {_e_deals_tab}]")
