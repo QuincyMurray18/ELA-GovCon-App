@@ -3776,7 +3776,7 @@ except Exception as _e_win:
     st.caption(f"[Win Probability tab init note: {_e_win}]")
 # === End injected ===
 
-with legacy_tabs[-1]:
+with legacy_tabs[0]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
     df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
@@ -3853,7 +3853,7 @@ with legacy_tabs[-1]:
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
-with legacy_tabs[-1]:
+with legacy_tabs[0]:
 
     # Analytics mini-dashboard
     try:
@@ -3878,7 +3878,7 @@ with legacy_tabs[-1]:
         st.caption(f"[Analytics dash note: {_e_dash}]")
 
 
-with legacy_tabs[-1]:
+with legacy_tabs[0]:
 
     if globals().get("__ctx_pipeline", False):
 
@@ -6956,7 +6956,7 @@ def delete_deal(id_: int):
 
 # === Deals (CRM Pipeline) tab ===
 try:
-    with tabs[TAB['Pipeline']]:
+    with legacy_tabs[13]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
 
@@ -7418,21 +7418,17 @@ def _clean_placeholders(text: str) -> str:
     t = "\n".join(line.rstrip() for line in t.splitlines())
     return t
 
-# === SAM v3 integration & Saved Filters (merged on 2025-10-10) ===
+
+# === [MERGE] Backend: SAM v3 integration & helpers (2025-10-10) ===
 try:
     _ = sam_search_v3
 except NameError:
     import requests as _requests
     from datetime import datetime as _dt, timedelta as _td
     import json as _json
+    import pandas as _pd
 
     def _sam_get_saved_filters():
-        """Saved filters live in settings as JSON under key 'sam_saved_filters'.
-        Example:
-        [
-          {"name":"Janitorial small", "naics":["561720"], "keywords":"janitorial", "noticeType":"Combined Synopsis/Solicitation,Solicitation", "setAside":"Total Small Business", "valueMin":25000, "valueMax":5000000, "active":"true"}
-        ]
-        """
         try:
             raw = get_setting("sam_saved_filters","")
             return _json.loads(raw) if raw else []
@@ -7446,15 +7442,8 @@ except NameError:
             pass
 
     def sam_search_v3(filters: dict, limit: int = 100):
-        """Light wrapper for SAM.gov Search API v3 (opportunities).
-        filters supports keys: naics (list), keywords (str), noticeType (csv),
-        setAside (csv or str), postedFrom, postedTo (MM/dd/YYYY), active, minDueDays.
-        Returns DataFrame of normalized rows + info dict.
-        """
-        import pandas as _pd
-        if not SAM_API_KEY:
+        if not 'SAM_API_KEY' in globals() or not SAM_API_KEY:
             return _pd.DataFrame(), {"ok": False, "reason": "missing_key"}
-
         base = "https://api.sam.gov/opportunities/v3/search"
         today = _dt.utcnow().date()
         min_days = int(filters.get("minDueDays", 3) or 0)
@@ -7464,9 +7453,9 @@ except NameError:
             "api_key": SAM_API_KEY,
             "limit": str(int(limit)),
             "response": "json",
-            "sort": "-publishedDate"
+            "sort": "-publishedDate",
+            "active": str(filters.get("active","true")).lower()
         }
-        params["active"] = str(filters.get("active","true")).lower()
         if filters.get("noticeType"):
             params["noticeType"] = filters["noticeType"]
         if filters.get("setAside"):
@@ -7496,19 +7485,13 @@ except NameError:
                     d = _parse_sam_date(due_str)
                 except Exception:
                     d = due_str
-                try:
-                    d_dt = d if isinstance(d, _dt) else None
-                except Exception:
-                    d_dt = None
-                due_ok = True
+                d_dt = d if isinstance(d, _dt) else None
                 try:
                     due_ok = (d_dt is None) or (d_dt.date() >= min_due_date)
                 except Exception:
-                    pass
-
+                    due_ok = True
                 if not due_ok:
                     continue
-
                 docs = opp.get("documents", []) or []
                 rows.append({
                     "sam_notice_id": opp.get("noticeId"),
@@ -7527,11 +7510,9 @@ except NameError:
             df = _pd.DataFrame(rows)
             return df, {"ok": True, "count": len(df), "params": params}
         except Exception as e:
-            import pandas as _pd
             return _pd.DataFrame(), {"ok": False, "reason": "exception", "detail": str(e)[:400]}
 
     def import_sam_to_db(filters: dict, stage_on_insert: str = "No Contact Made"):
-        """Import SAM v3 results into opportunities. De-duplicates by sam_notice_id."""
         df, info = sam_search_v3(filters, limit=200)
         if not info.get("ok"):
             return 0, info
@@ -7540,7 +7521,7 @@ except NameError:
             inserted = 0
             for _, r in df.iterrows():
                 nid = r.get("sam_notice_id")
-                if not nid: 
+                if not nid:
                     continue
                 exists = cur.execute("select id from opportunities where sam_notice_id=? limit 1", (nid,)).fetchone()
                 if exists:
@@ -7563,7 +7544,6 @@ except NameError:
             return 0, {"ok": False, "reason": "db_error", "detail": str(e)[:300]}
 
     def _send_team_alert(msg: str):
-        """Email the team when new bids are added or stage changes happen."""
         try:
             addrs = [
                 USER_EMAILS.get("Quincy",""),
@@ -7583,9 +7563,6 @@ except NameError:
         except Exception:
             pass
 
-
-
-# === Proposal Prefill + 1-click Flow (Generate Quote / Submit Package) ===
 try:
     _ = proposal_quick_quote
 except NameError:
@@ -7595,17 +7572,13 @@ except NameError:
             row = conn.execute("select * from opportunities where id=?", (int(opp_id),)).fetchone()
             if not row:
                 return {}
-            try:
-                info = conn.execute("PRAGMA table_info(opportunities)").fetchall()
-                colnames = [c[1] for c in info]
-                return dict(zip(colnames, row))
-            except Exception:
-                return {}
+            info = conn.execute("PRAGMA table_info(opportunities)").fetchall()
+            colnames = [c[1] for c in info]
+            return dict(zip(colnames, row))
         except Exception:
             return {}
 
     def proposal_quick_quote(opp_id: int) -> str:
-        """Create a minimal proposal draft with placeholders prefilled from opp row and save to drafts."""
         opp = _get_opp(opp_id)
         if not opp:
             return ""
@@ -7652,7 +7625,6 @@ INSERT
         return path
 
     def proposal_submit_package(opp_id: int) -> bool:
-        """Mark as Submitted and add a closing task."""
         try:
             conn = get_db()
             conn.execute("update opportunities set status=? where id=?", ("Submitted", int(opp_id)))
@@ -7666,9 +7638,6 @@ INSERT
         except Exception:
             return False
 
-
-
-# === Proposal Checklist utilities ===
 try:
     _ = ensure_default_checklist
 except NameError:
@@ -7691,70 +7660,65 @@ except NameError:
             conn.commit()
         except Exception:
             pass
+# === [END MERGE] Backend ===
 
 
 
-# === UI: SAM Saved Searches + Pull/Generate/Submit buttons ===
+# === [MERGE UI] SAM Watch — Saved Searches (Settings-only UI) ===
 try:
-    _CTX_INJECTED_PIPELINE_UI
-except NameError:
-    _CTX_INJECTED_PIPELINE_UI = True
-    try:
-        import streamlit as _st
-        with tabs[TAB['SAM Watch']]:
-            _st.divider()
-            _st.markdown("### SAM Watch — Saved Searches")
-            saved = _sam_get_saved_filters()
-            with _st.expander("Manage saved searches", expanded=False):
-                raw = _st.text_area("JSON editor", value=json.dumps(saved, indent=2), height=220, help="One or more filter dicts. See example in code block.")
-                if _st.button("Save searches"):
-                    try:
-                        data = json.loads(raw)
-                        _sam_set_saved_filters(data)
-                        _st.success("Saved searches updated.")
-                    except Exception as e:
-                        _st.error(f"Invalid JSON: {e}")
+    import streamlit as _st
+    _ = tabs; _ = TAB
+    with tabs[TAB['SAM Watch']]:
+        _st.divider()
+        _st.markdown("### SAM Watch — Saved Searches")
+        saved = _sam_get_saved_filters()
+        with _st.expander("Manage saved searches", expanded=False):
+            raw = _st.text_area("JSON editor", value=json.dumps(saved, indent=2), height=220, help="One or more filter dicts. See example in code block.")
+            if _st.button("Save SAM searches"):
+                try:
+                    data = json.loads(raw)
+                    _sam_set_saved_filters(data)
+                    _st.success("Saved searches updated.")
+                except Exception as e:
+                    _st.error(f"Invalid JSON: {e}")
+except Exception:
+    pass
+# === [END MERGE UI] ===
 
-            colp1, colp2, colp3 = _st.columns([1,1,1])
-            with colp1:
-                if _st.button("Pull SAM Data", use_container_width=True):
-                    imported_total = 0
-                    for flt in _sam_get_saved_filters():
-                        n, info = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                        imported_total += int(n or 0)
-                    _st.success(f"Imported {imported_total} new opportunities.")
-            with colp2:
-                opp_id_for_actions = _st.number_input("Selected Opp ID", min_value=0, step=1, value=0)
-            with colp3:
-                if _st.button("Generate Quote", use_container_width=True) and opp_id_for_actions:
-                    path = proposal_quick_quote(int(opp_id_for_actions))
-                    if path:
-                        _st.success(f"Draft created: {path}")
-                    else:
-                        _st.warning("Could not create draft. Check Opp ID.")
 
-            colp4, colp5 = _st.columns([1,1])
-            with colp4:
-                if _st.button("Submit Package", use_container_width=True) and opp_id_for_actions:
-                    ok = proposal_submit_package(int(opp_id_for_actions))
-                    if ok:
-                        _st.success("Marked Submitted.")
-                    else:
-                        _st.error("Failed to update.")
-            with colp5:
-                if _st.button("Ensure Checklist", use_container_width=True) and opp_id_for_actions:
-                    ensure_default_checklist(int(opp_id_for_actions))
-                    _st.success("Checklist seeded. See L&M Checklist tab.")
 
-            _st.markdown("### Weekly Automation Targets (tracking)")
-            try:
-                conn = get_db()
-                total_week = conn.execute("select count(*) from opportunities where date(posted) >= date('now','-7 day')").fetchone()[0]
-                submitted = conn.execute("select count(*) from opportunities where status='Submitted'").fetchone()[0]
-                _st.metric("New opportunities (7d)", total_week)
-                _st.metric("Submitted (total)", submitted)
-            except Exception as _e_m:
-                _st.caption(f"[metrics note: {_e_m}]")
-    except Exception as _e_ui:
-        pass
-
+# === [MERGE UI] Pipeline — 1-click Controls (no tab moves) ===
+try:
+    import streamlit as _st
+    _ = tabs; _ = TAB
+    with tabs[TAB['Pipeline']]:
+        _st.divider()
+        _st.markdown("### SAM Automation Controls")
+        col1, col2, col3, col4 = _st.columns([1,1,1,1])
+        with col1:
+            if _st.button("Pull SAM Data", use_container_width=True):
+                imported_total = 0
+                for flt in _sam_get_saved_filters():
+                    n, info = import_sam_to_db(flt, stage_on_insert="No Contact Made")
+                    imported_total += int(n or 0)
+                _st.success(f"Imported {imported_total} new opportunities.")
+        with col2:
+            opp_id_for_actions = _st.number_input("Opp ID", min_value=0, step=1, value=0)
+        with col3:
+            if _st.button("Generate Quote", use_container_width=True) and opp_id_for_actions:
+                path = proposal_quick_quote(int(opp_id_for_actions))
+                if path:
+                    _st.success(f"Draft created: {path}")
+                else:
+                    _st.warning("Could not create draft. Check Opp ID.")
+        with col4:
+            if _st.button("Submit Package", use_container_width=True) and opp_id_for_actions:
+                ok = proposal_submit_package(int(opp_id_for_actions))
+                if ok:
+                    _st.success("Marked Submitted.")
+                else:
+                    _st.error("Failed to update.")
+        _st.caption("Tip: Use SAM Watch to maintain your saved searches. This panel only triggers actions.")
+except Exception:
+    pass
+# === [END MERGE UI] ===
