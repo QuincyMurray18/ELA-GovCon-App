@@ -3500,60 +3500,6 @@ TAB_LABELS = [
     "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deadlines"
 ]
 tabs = st.tabs(TAB_LABELS)
-
-# === Primary SAM Watch renderer (manual search always visible) ===
-def _render_sam_watch_primary():
-    st.subheader("SAM Watch")
-    st.caption("Manual search and save to Pipeline. Automation settings are below.")
-    conn = get_db()
-    try:
-        codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
-    except Exception:
-        codes = []
-
-    with st.container():
-        st.markdown("### Manual search")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            keyword = st.text_input("Keyword (optional)", key="sam_manual_kw")
-        with c2:
-            posted_from_days = st.number_input("Posted within (days)", min_value=1, max_value=365, value=14, step=1, key="sam_manual_posted")
-        with c3:
-            min_days = st.number_input("Min days until due", min_value=0, max_value=60, value=3, step=1, key="sam_manual_mindays")
-        with c4:
-            pages_to_fetch = st.number_input("Pages to fetch", min_value=1, max_value=10, value=3, step=1, key="sam_manual_pages")
-
-        if st.button("Run search now", type="primary", key="sam_manual_run"):
-            try:
-                df, info = sam_search(
-                    codes, min_days=int(min_days), limit=int(pages_to_fetch)*50,
-                    keyword=keyword or None, posted_from_days=int(posted_from_days),
-                    notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
-                )
-                st.session_state["sam_results_df"] = df
-                st.session_state["sam_results_info"] = info
-                st.success(f"Found {0 if not isinstance(df, pd.DataFrame) else len(df)} opportunities.")
-            except Exception as e:
-                st.error(f"Search failed: {e}")
-
-    df = st.session_state.get("sam_results_df")
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        st.markdown("### Results")
-        grid_df = df.copy()
-        st.dataframe(grid_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No results yet. Use **Run search now** to fetch opportunities.")
-
-    with st.expander("Automation settings"):
-        st.caption("Use your existing automation controls here.")
-        # We intentionally defer to existing automation code elsewhere
-
-# Always render in the SAM Watch tab
-try:
-    with tabs[TAB["SAM Watch"]]:
-        _render_sam_watch_primary()
-except Exception as _sam_err:
-    st.caption(f"[SAM Watch render note: {_sam_err}]")
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
@@ -4561,8 +4507,7 @@ Dear Contracting Officer,
 """
         return md
 
-if not st.session_state.get('_sam_watch_rendered'):
-    with legacy_tabs[4]:
+with legacy_tabs[4]:
     # Show a helper tip only inside SAM Watch when no results have been loaded
 
     if not st.session_state.get('sam_results_df'):
@@ -4826,8 +4771,7 @@ except Exception as _e_sync:
 
 
 # --- Analytics & History ---
-if not st.session_state.get('_sam_watch_rendered'):
-    with legacy_tabs[4]:
+with legacy_tabs[4]:
     with st.expander("SAM Analytics"):
         conn = get_db()
         try:
