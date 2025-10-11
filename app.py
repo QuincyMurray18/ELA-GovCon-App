@@ -4857,7 +4857,7 @@ except Exception:
             grid_df = grid_df.sort_values(["Score"], ascending=[False])
 
         with st.expander("Quick select options"):
-            n_top = st.number_input("Select top N by score", min_value=1, max_value=max(1, min(50, len(grid_df))), value=min(5, len(grid_df)))
+            n_top = st.number_input("Select top N by score", min_value=max(1, min(50, len(grid_df))), value=min(5, len(grid_df)))
             if st.button("Mark top N for Save"):
                 try:
                     top_idx = grid_df.sort_values("Score", ascending=False).head(int(n_top)).index
@@ -4876,35 +4876,44 @@ except Exception:
             num_rows="fixed",
             key="sam_watch_grid"
         )
-        # Save only selected rows
-        save_sel = edited[edited.get("Save", False)==True] if "Save" in edited.columns else edited.iloc[0:0]
-        st.caption(f"Selected to save: {len(save_sel)} of {len(edited)}")
+
+        # Strict selection: only rows explicitly marked Save==True
+        if isinstance(edited, pd.DataFrame):
+            save_sel = edited[edited["Save"] == True] if "Save" in edited.columns else edited.iloc[0:0]
+        else:
+            save_sel = None
+        st.caption(f"Selected to save: {len(save_sel) if isinstance(save_sel, pd.DataFrame) else 0} of {len(edited) if hasattr(edited,'__len__') else 0}")
 
         if st.button("Save selected to pipeline"):
-            to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
-            ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
-            st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
-            # === Auto add POCs and COs to Contacts after saving to pipeline ===
-try:
-    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
-        added, updated = 0, 0
-        for _, _r in save_sel.iterrows():
-            for c in _extract_contacts_from_sam_row(_r):
-                act, _ = _contacts_upsert(
-                    name=c.get("name",""), org=c.get("org",""), role=c.get("role",""),
-                    email=c.get("email",""), phone=c.get("phone",""),
-                    source=c.get("source","SAM.gov"), notes=c.get("notes","")
-                )
-                if act == "insert":
-                    added += 1
-                elif act == "update":
-                    updated += 1
-        if added or updated:
-            try:
-                st.toast(f"Contacts synced from SAM Watch added {added} updated {updated}")
-            except Exception:
-                st.caption(f"Contacts synced from SAM Watch added {added} updated {updated}")
-except Exception as _e_sync:
+            if save_sel is None or len(save_sel) == 0:
+                st.info("No rows selected.")
+            else:
+                to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
+                ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
+                st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+
+                # Auto add POCs/COs to Contacts after saving
+                try:
+                    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
+                        added, updated = 0, 0
+                        for _, _r in save_sel.iterrows():
+                            for c in _extract_contacts_from_sam_row(_r):
+                                act, _ = _contacts_upsert(
+                                    name=c.get("name",""), org=c.get("org",""), role=c.get("role",""),
+                                    email=c.get("email",""), phone=c.get("phone",""),
+                                    source=c.get("source","SAM.gov"), notes=c.get("notes","")
+                                )
+                                if act == "insert":
+                                    added += 1
+                                elif act == "update":
+                                    updated += 1
+                        if added or updated:
+                            try:
+                                st.toast(f"Contacts synced from SAM Watch added {added} updated {updated}")
+                            except Exception:
+                                st.caption(f"Contacts synced from SAM Watch added {added} updated {updated}")
+                except Exception as _e_sync:
+                    st.warning(f"[SAM Watch contact sync note: {_e_sync}]")
     try:
         st.caption(f"[Contacts sync note: {_e_sync}]")
     except Exception:
@@ -7745,46 +7754,46 @@ try:
                 ok = proposal_submit_package(int(opp_id))
                 _st.success("Submitted") if ok else _st.error("Update failed")
 
-                _st.subheader("Select opportunities to add to Pipeline")
-        try:
-            conn = get_db(); cur = conn.cursor()
-            rows = cur.execute("""
-                select id, title, agency, response_due, url, posted
-                from opportunities
-                where coalesce(url,'') != ''
-                order by date(posted) desc, id desc
-                limit 200
-            """).fetchall()
-
-            # Use a form so checkbox selections and the submit happen in one transaction (avoids rerun desync).
+                
+    # --- SAM Watch selection helpers ---
+    def _sam_toggle_sel(_rid: int, _key: str):
+        _list_key = f"{ACTIVE_USER}::sam_selected_ids"
+        current = _st.session_state.get(_list_key, [])
+        is_checked = bool(_st.session_state.get(_key, False))
+        if is_checked and _rid not in current:
+            current.append(_rid)
+        elif (not is_checked) and _rid in current:
+            current = [x for x in current if x != _rid]
+        _st.session_state[_list_key] = current
+    # --- end helpers ---
+    _st.subheader("Select opportunities to add to Pipeline")
+    try:
+        conn = get_db(); cur = conn.cursor()
+        rows = cur.execute("""
+            select id, title, agency, response_due, url, posted
+            from opportunities
+            where coalesce(url,'') != ''
+            order by date(posted) desc, id desc
+            limit 200
+        """).fetchall()
+    
+        if rows:
             with _st.form("sam_watch_select_form", clear_on_submit=False):
                 row_ids = []
-                if rows:
-                    for rid, title, agency, due, url, posted in rows:
-                        row_ids.append(rid)
-                        c1, c2 = _st.columns([0.08, 0.92])
-                        with c1:
-                            _st.checkbox(
-                                "",
-                                key=f"{ACTIVE_USER}::sam_sel_{rid}",
-                                value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
-                            )
-                        with c2:
-                            link_md = f"[{title}]({url})"
-                            meta = " | ".join(filter(None, [
-                                f"Agency: {agency}" if agency else "",
-                                f"Due: {due}" if due else "",
-                                f"Posted: {posted}" if posted else ""
-                            ]))
-                            _st.markdown(
-                                link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""),
-                                unsafe_allow_html=True
-                            )
-
+                for rid, title, agency, due, url, posted in rows:
+                    _key = f"{ACTIVE_USER}::sam_sel_{rid}"
+                    _checked = bool(_st.session_state.get(_key, False))
+                    _checked = _st.checkbox(f"[{rid}] {title} — {agency}", key=_key, value=_checked)
+                    row_ids.append(rid)
+    
+                _st.session_state[f"{ACTIVE_USER}::sam_selected_ids"] = [
+                    rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
+                ]
+    
                 submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
-
+    
             if submitted:
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
+                chosen_ids = list(_st.session_state.get(f"{ACTIVE_USER}::sam_selected_ids", []))
                 if not chosen_ids:
                     _st.info("No rows selected.")
                 else:
@@ -7799,6 +7808,7 @@ try:
                             if exists:
                                 skipped += 1
                                 continue
+    
                             notes = f"Imported from SAM Watch on selection. URL: {url}"
                             create_deal(
                                 title=title,
@@ -7810,18 +7820,25 @@ try:
                                 due_date=str(due) if due else None
                             )
                             added += 1
-                        except Exception as _e_add:
-                            _st.warning(f"Could not add '{title}': {_e_add}")
-                    _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
+                        except Exception as e:
+                            _st.warning(f"Could not add '{title}': {e}")
+    
+                    _st.success(f"Added {added} deal(s). Skipped {skipped}.")
+    
                     # Clear only the ones we just added to avoid accidental re-use
                     for rid in chosen_ids:
                         _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
-            else:
-                if not rows:
-                    _st.caption("No opportunities found with links.")
-        except Exception as _e_sel:
-            _st.warning(f"[Selection UI note: {_e_sel}]")
+                    _st.session_state[f"{ACTIVE_USER}::sam_selected_ids"] = []
+        else:
+            _st.caption("No opportunities found with links.")
+    except Exception as _e_sel:
+        _st.warning(f"[Selection UI note: {_e_sel}]")
 except Exception as _e_ui:
+    try:
+        import streamlit as _st
+        _st.warning(f"[SAM Watch UI note: {_e_ui}]")
+    except Exception:
+        pass
     try:
         import streamlit as _st
         _st.warning(f"[SAM Watch UI note: {_e_ui}]")
