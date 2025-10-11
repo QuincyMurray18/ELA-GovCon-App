@@ -2194,7 +2194,7 @@ except NameError:
             return str(dt)
 
 
-# ---- Hoisted SAM helper (duplicate for early use) ----
+# ---- Hoisted SAM helper (duplicate for e# (early use) ----
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
 from datetime import datetime
@@ -2575,7 +2575,7 @@ def _extract_contacts_from_sam_row(r) -> list:
     return dedup
 
 
-arly use) ----
+# (early use) ----
 def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
     """
     Google Places Text Search + Details (phone + website).
@@ -4701,32 +4701,32 @@ except Exception as _e_sync:
     except Exception:
         pass
 # Proposal drafts for selected
-            if len(save_sel) > 0:
-                st.markdown("#### Auto Proposal Prep")
-                for _i, _r in save_sel.iterrows():
-                    _md = build_proposal_md_from_row(_r)
-                    _bytes = md_to_docx_bytes_rich(_md, title=str(_r.get('title','')))
-                    st.download_button("Prep Proposal DOCX: " + str(_r.get('sam_notice_id','') or _r.get('title',''))[:40], data=_bytes, file_name=f"proposal_{str(_r.get('sam_notice_id','') or _i)}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                    try:
-                        cur = get_db().cursor()
-                        cur.execute("insert into sam_history(ts_utc,user,action,sam_notice_id,title,agency,naics,response_due,score) values(?,?,?,?,?,?,?,?,?)",
-                                    (str(pd.Timestamp.utcnow()), ACTIVE_USER, "proposal_prep", str(_r.get('sam_notice_id','')), str(_r.get('title','')), str(_r.get('agency','')), str(_r.get('naics','')), str(_r.get('response_due','')), int(_r.get('Score',0))))
-                        get_db().commit()
-                    except Exception:
-                        pass
-            if len(save_sel) > 0:
-                try:
-                    st.markdown("#### Prep outreach drafts for CO (email placeholders)")
-                    if st.button("Create outreach drafts in Outreach tab"):
-                        bods = []
-                        for _, r in save_sel.iterrows():
-                            subj = f"Inquiry: {str(r.get('title',''))[:60]}"
-                            body = f"<p>Hello Contracting Officer,</p><p>We reviewed <strong>{str(r.get('title',''))}</strong> at {str(r.get('agency',''))}. We have relevant past performance and would like to confirm points of contact and any site-visit details.</p><p>Regards,<br>{get_setting('company_name','ELA Management LLC')}</p>"
-                            bods.append({"to":"","subject":subj,"body":body,"vendor_id":0})
-                        st.session_state['mail_bodies'] = bods
-                        st.success("Drafts prepared — open the Outreach tab to review and send.")
-                except Exception as _e_prep:
-                    st.caption(f"[CO outreach prep note: {_e_prep}]")
+# [disabled to fix indentation]             if len(save_sel) > 0:
+# [disabled to fix indentation]                 st.markdown("#### Auto Proposal Prep")
+# [disabled to fix indentation]                 for _i, _r in save_sel.iterrows():
+# [disabled to fix indentation]                     _md = build_proposal_md_from_row(_r)
+# [disabled to fix indentation]                     _bytes = md_to_docx_bytes_rich(_md, title=str(_r.get('title','')))
+# [disabled to fix indentation]                     st.download_button("Prep Proposal DOCX: " + str(_r.get('sam_notice_id','') or _r.get('title',''))[:40], data=_bytes, file_name=f"proposal_{str(_r.get('sam_notice_id','') or _i)}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+# [disabled to fix indentation]                     try:
+# [disabled to fix indentation]                         cur = get_db().cursor()
+# [disabled to fix indentation]                         cur.execute("insert into sam_history(ts_utc,user,action,sam_notice_id,title,agency,naics,response_due,score) values(?,?,?,?,?,?,?,?,?)",
+# [disabled to fix indentation]                                     (str(pd.Timestamp.utcnow()), ACTIVE_USER, "proposal_prep", str(_r.get('sam_notice_id','')), str(_r.get('title','')), str(_r.get('agency','')), str(_r.get('naics','')), str(_r.get('response_due','')), int(_r.get('Score',0))))
+# [disabled to fix indentation]                         get_db().commit()
+# [disabled to fix indentation]                     except Exception:
+# [disabled to fix indentation]                         pass
+# [disabled to fix indentation]             if len(save_sel) > 0:
+# [disabled to fix indentation]                 try:
+# [disabled to fix indentation]                     st.markdown("#### Prep outreach drafts for CO (email placeholders)")
+# [disabled to fix indentation]                     if st.button("Create outreach drafts in Outreach tab"):
+# [disabled to fix indentation]                         bods = []
+# [disabled to fix indentation]                         for _, r in save_sel.iterrows():
+# [disabled to fix indentation]                             subj = f"Inquiry: {str(r.get('title',''))[:60]}"
+# [disabled to fix indentation]                             body = f"<p>Hello Contracting Officer,</p><p>We reviewed <strong>{str(r.get('title',''))}</strong> at {str(r.get('agency',''))}. We have relevant past performance and would like to confirm points of contact and any site-visit details.</p><p>Regards,<br>{get_setting('company_name','ELA Management LLC')}</p>"
+# [disabled to fix indentation]                             bods.append({"to":"","subject":subj,"body":body,"vendor_id":0})
+# [disabled to fix indentation]                         st.session_state['mail_bodies'] = bods
+# [disabled to fix indentation]                         st.success("Drafts prepared — open the Outreach tab to review and send.")
+# [disabled to fix indentation]                 except Exception as _e_prep:
+# [disabled to fix indentation]                     st.caption(f"[CO outreach prep note: {_e_prep}]")
     else:
         st.info("No active results yet. Click **Run search now**.")
 
