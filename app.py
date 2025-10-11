@@ -3808,8 +3808,15 @@ with legacy_tabs[0]:
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
             df_opp[_col] = _default
-    if "url" in df_opp.columns and "Link" not in df_opp.columns:
-        df_opp["Link"] = df_opp["url"]
+    import re as _re
+    if "Link" not in df_opp.columns and "notes" in df_opp.columns:
+        def _extract_url(_s):
+            try:
+                m = _re.search(r"(https?://\S+)", str(_s))
+                return m.group(1).rstrip("),.;]") if m else ""
+            except Exception:
+                return ""
+        df_opp["Link"] = df_opp["notes"].apply(_extract_url)
 
     assignees = ["","Quincy","Charles","Collin"]
     f1, f2 = st.columns(2)
@@ -3835,6 +3842,11 @@ with legacy_tabs[0]:
         use_container_width=True, num_rows="dynamic", key="opp_grid"
     )
     if st.button("Save pipeline changes"):
+        # Drop non-DB column before persisting
+        try:
+            edit.drop(columns=['Link'], inplace=True, errors='ignore')
+        except Exception:
+            pass
         cur = conn.cursor()
         # Make a copy of the original grid if present; else derive from filtered df
         try:
