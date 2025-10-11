@@ -3511,8 +3511,21 @@ tabs = st.tabs(TAB_LABELS)
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
-    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deadlines", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
+    "Pipeline", "Subcontractor Finder", "Contacts", "Outreach", "SAM Watch", "RFP Analyzer", "Capability Statement", "White Paper Builder", "Data Export", "Auto extract", "Ask the doc", "Chat Assistant", "Proposal Builder", "Deals", "L&M Checklist", "RFQ Generator", "Pricing Calculator", "Past Performance", "Quote Comparison", "Win Probability"
 ]
+
+# --- Guard: normalize legacy labels and drop missing ones ---
+try:
+    _TAB_ALIAS = {'Deadlines': 'Deals'}
+    _labels = []
+    for _lbl in LEGACY_ORDER:
+        _cur = _TAB_ALIAS.get(_lbl, _lbl)
+        if isinstance(TAB, dict) and _cur in TAB:
+            _labels.append(_cur)
+    LEGACY_ORDER = _labels
+except Exception:
+    pass
+
 legacy_tabs = [tabs[TAB[label]] for label in LEGACY_ORDER]
 # === Begin injected: extra schema, helpers, and three tab bodies ===
 def _ensure_extra_schema():
