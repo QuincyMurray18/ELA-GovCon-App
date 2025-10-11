@@ -7665,197 +7665,106 @@ except NameError:
 
 
 
-# === [MERGE UI] SAM Watch — Saved Searches (Settings-only UI) ===
+
+# === [MERGE UI] SAM Watch — Minimal UI ===
 try:
     import streamlit as _st
     import json as _json
     _ = tabs; _ = TAB
 
-    def _sam_template():
-        return [
-            {
-                "name": "Janitorial small",
-                "naics": ["561720"],
-                "keywords": "janitorial OR custodial",
-                "noticeType": "Combined Synopsis/Solicitation,Solicitation",
-                "setAside": "Total Small Business",
-                "active": "true",
-                "minDueDays": 3
-            },
-            {
-                "name": "HVAC service",
-                "naics": ["238220"],
-                "keywords": "HVAC OR chiller OR air conditioning",
-                "noticeType": "Combined Synopsis/Solicitation,Solicitation",
-                "setAside": "Total Small Business",
-                "active": "true",
-                "minDueDays": 5
-            }
-        ]
-
-    def _pretty_json(obj):
-        try:
-            return _json.dumps(obj, indent=2, ensure_ascii=False)
-        except Exception:
-            return ""
-
     with tabs[TAB['SAM Watch']]:
         _st.header("SAM Watch")
-        sub_tabs = _st.tabs(["Saved Searches", "Automation"])
 
-        # Saved Searches sub-tab
-        with sub_tabs[0]:
-            _st.subheader("Saved Searches")
-            colA, colB = _st.columns([2,1])
-            with colA:
-                current = _sam_get_saved_filters()
-                default_json = _pretty_json(current if current else _sam_template())
-                with _st.form("sam_saved_searches_form", clear_on_submit=False):
-                    jtxt = _st.text_area("Saved searches JSON", value=default_json, height=280, help="One or more filter dicts. Each item must include a name. Use the template button if you are starting fresh.")
-                    c1, c2, c3 = _st.columns([1,1,1])
-                    with c1:
-                        use_template = _st.form_submit_button("Load template")
-                    with c2:
-                        validate = _st.form_submit_button("Validate")
-                    with c3:
-                        save_btn = _st.form_submit_button("Save")
+        # Section 1: Filters
+        _st.subheader("Filters")
+        with _st.form("simple_filters", clear_on_submit=False):
+            c1, c2, c3 = _st.columns([2,2,2])
+            with c1:
+                kw = _st.text_input("Keywords", value="janitorial")
+            with c2:
+                naics = _st.text_input("NAICS list", value="561720, 238220")
+            with c3:
+                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=1)
+            c4, c5, c6 = _st.columns([2,2,2])
+            with c4:
+                notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
+            with c5:
+                min_due = _st.number_input("Min days until due", min_value=0, value=3, step=1)
+            with c6:
+                active_only = _st.checkbox("Active only", value=True)
+            save_search = _st.form_submit_button("Save as default")
 
-                # Actions
-                if use_template:
-                    _st.session_state["sam_saved_json"] = _pretty_json(_sam_template())
-                    _st.experimental_rerun()
+        if save_search:
+            # Save a single simple filter as the only saved search
+            filt = {
+                "name": "Default",
+                "keywords": kw.strip(),
+                "naics": [s.strip() for s in naics.split(",") if s.strip()],
+                "setAside": "Total Small Business" if set_aside == "Total Small Business" else "",
+                "noticeType": "Combined Synopsis/Solicitation,Solicitation" if notice != "Any" else "",
+                "active": "true" if active_only else "false",
+                "minDueDays": int(min_due)
+            }
+            _sam_set_saved_filters([filt])
+            _st.success("Default filter saved")
 
-                raw = _st.session_state.get("sam_saved_json", jtxt)
-                errors = []
-                parsed = None
-                try:
-                    parsed = _json.loads(raw)
-                    if not isinstance(parsed, list):
-                        errors.append("Top-level must be a list")
-                    else:
-                        names = set()
-                        for i, it in enumerate(parsed):
-                            if not isinstance(it, dict):
-                                errors.append(f"Item {i+1} is not an object")
-                                continue
-                            if not it.get("name"):
-                                errors.append(f"Item {i+1} missing name")
-                            if "naics" in it and not isinstance(it["naics"], list):
-                                errors.append(f"Item {i+1} naics must be a list")
-                        # duplicate name check
-                        if not errors:
-                            for it in parsed:
-                                n = it.get("name")
-                                if n in names:
-                                    errors.append(f"Duplicate name: {n}")
-                                names.add(n)
-                except Exception as e:
-                    errors.append(f"JSON parse error: {e}")
+        # Section 2: Actions
+        _st.subheader("Actions")
+        colA, colB, colC, colD = _st.columns([1,1,1,1])
+        with colA:
+            if _st.button("Pull data", use_container_width=True):
+                imported_total = 0
+                for flt in _sam_get_saved_filters():
+                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
+                    imported_total += int(n or 0)
+                _st.success(f"Imported {imported_total}")
+        with colB:
+            opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
+        with colC:
+            if _st.button("Generate quote", use_container_width=True) and opp_id:
+                p = proposal_quick_quote(int(opp_id))
+                _st.success("Draft created" if p else "Draft failed")
+        with colD:
+            if _st.button("Submit package", use_container_width=True) and opp_id:
+                ok = proposal_submit_package(int(opp_id))
+                _st.success("Submitted") if ok else _st.error("Update failed")
+        if _st.button("Ensure checklist"):
+            if opp_id:
+                ensure_default_checklist(int(opp_id))
+                _st.success("Checklist ready")
+            else:
+                _st.warning("Enter Opp ID")
 
-                if validate:
-                    if errors:
-                        _st.error("Validation failed")
-                        for e in errors[:10]:
-                            _st.caption(f"• {e}")
-                    else:
-                        _st.success("Validation passed")
+        # Section 3: Snapshot
+        _st.subheader("Snapshot")
+        try:
+            conn = get_db()
+            new7 = conn.execute("select count(*) from opportunities where date(posted) >= date('now','-7 day')").fetchone()[0]
+            subm = conn.execute("select count(*) from opportunities where status='Submitted'").fetchone()[0]
+            started = conn.execute("select count(*) from opportunities where status='Proposal Started'").fetchone()[0]
+            m1, m2, m3 = _st.columns([1,1,1])
+            m1.metric("New in 7 days", new7)
+            m2.metric("Submitted", subm)
+            m3.metric("Started", started)
+        except Exception as _e_m:
+            _st.caption(f"[metrics note: {_e_m}]")
 
-                if save_btn:
-                    if errors:
-                        _st.error("Cannot save until validation passes")
-                    else:
-                        _sam_set_saved_filters(parsed)
-                        _st.success("Saved searches updated")
-
-            with colB:
-                _st.info("Tips")
-                _st.caption("• Use keywords with OR to broaden search")
-                _st.caption("• Set minDueDays to hide near due notices")
-                _st.caption("• Use setAside to target small business only")
-
-                _st.markdown("##### Quick Presets")
-                if _st.button("Janitorial preset"):
-                    _st.session_state["sam_saved_json"] = _pretty_json([_sam_template()[0]])
-                    _st.experimental_rerun()
-                if _st.button("HVAC preset"):
-                    _st.session_state["sam_saved_json"] = _pretty_json([_sam_template()[1]])
-                    _st.experimental_rerun()
-                if _st.button("All presets"):
-                    _st.session_state["sam_saved_json"] = _pretty_json(_sam_template())
-                    _st.experimental_rerun()
-
-        # Automation sub-tab
-        with sub_tabs[1]:
-            _st.subheader("Automation")
-            col1, col2 = _st.columns([3,2])
-
-            with col1:
-                _st.markdown("##### Actions")
-                with _st.form("sam_run_form", clear_on_submit=False):
-                    run_pull = _st.form_submit_button("Pull SAM data")
-                    opp_id = _st.number_input("Opportunity ID", min_value=0, step=1, value=0)
-                    c1, c2, c3 = _st.columns([1,1,1])
-                    with c1:
-                        run_quote = _st.form_submit_button("Generate quote")
-                    with c2:
-                        run_submit = _st.form_submit_button("Submit package")
-                    with c3:
-                        run_checklist = _st.form_submit_button("Ensure checklist")
-
-                if run_pull:
-                    imported_total = 0
-                    for flt in _sam_get_saved_filters():
-                        n, info = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                        imported_total += int(n or 0)
-                    _st.success(f"Imported {imported_total} new opportunities")
-
-                if run_quote and opp_id:
-                    path = proposal_quick_quote(int(opp_id))
-                    if path:
-                        _st.success(f"Draft created at {path}")
-                    else:
-                        _st.warning("Could not create draft")
-
-                if run_submit and opp_id:
-                    ok = proposal_submit_package(int(opp_id))
-                    if ok:
-                        _st.success("Marked submitted")
-                    else:
-                        _st.error("Update failed")
-
-                if run_checklist and opp_id:
-                    ensure_default_checklist(int(opp_id))
-                    _st.success("Checklist seeded")
-
-            with col2:
-                _st.markdown("##### Metrics")
-                try:
-                    conn = get_db()
-                    total_week = conn.execute("select count(*) from opportunities where date(posted) >= date('now','-7 day')").fetchone()[0]
-                    submitted = conn.execute("select count(*) from opportunities where status='Submitted'").fetchone()[0]
-                    started = conn.execute("select count(*) from opportunities where status='Proposal Started'").fetchone()[0]
-                    _st.metric("New in seven days", total_week)
-                    _st.metric("Submitted total", submitted)
-                    _st.metric("Proposal started", started)
-                except Exception as _e_m:
-                    _st.caption(f"[metrics note: {_e_m}]")
-
-                _st.markdown("##### Recent imports")
-                try:
-                    import pandas as _pd
-                    conn = get_db()
-                    rs = conn.execute("select title, agency, naics, response_due, status from opportunities order by id desc limit 25").fetchall()
-                    if rs:
-                        df = _pd.DataFrame(rs, columns=["Title","Agency","NAICS","Due","Status"])
-                        _st.dataframe(df, use_container_width=True, hide_index=True)
-                    else:
-                        _st.caption("No recent imports")
-                except Exception as _e_r:
-                    _st.caption(f"[table note: {_e_r}]")
+        try:
+            import pandas as _pd
+            conn = get_db()
+            rs = conn.execute("select title, agency, naics, response_due, status from opportunities order by id desc limit 20").fetchall()
+            if rs:
+                df = _pd.DataFrame(rs, columns=["Title","Agency","NAICS","Due","Status"])
+                _st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                _st.caption("No recent imports")
+        except Exception as _e_t:
+            _st.caption(f"[table note: {_e_t}]")
 
 except Exception:
     pass
 # === [END MERGE UI] ===
+
 
 
 
