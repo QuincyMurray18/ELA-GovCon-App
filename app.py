@@ -3518,7 +3518,6 @@ try:
 except Exception:
     # Do not fail rendering if anything goes wrong
     pass
-   pass
 
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
