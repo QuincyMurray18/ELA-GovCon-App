@@ -3821,9 +3821,9 @@ with legacy_tabs[0]:
     assignees = ["","Quincy","Charles","Collin"]
     f1, f2 = st.columns(2)
     with f1:
-        a_filter = st.selectbox("Filter by assignee", assignees, index=(assignees.index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in assignees else 0))
+        a_filter = st.selectbox("Filter by assignee", assignees, index=(assignees.index(st.session_state.get(\'active_profile\',\'\')) if st.session_state.get(\'active_profile\',\'\') in assignees else 0), key="opp_assignee_filter") if st.session_state.get('active_profile','') in assignees else 0))
     with f2:
-        s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
+        s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0, key="opp_status_filter")
     try:
         if a_filter:
             df_opp = df_opp[df_opp["assignee"].fillna("")==a_filter]
@@ -4936,9 +4936,10 @@ except Exception:
             st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 try:
-    if isinstance(save_sel, pd.DataFrame) and not save_sel.empty:
+    _ss = locals().get('save_sel', None)
+    if isinstance(_ss, pd.DataFrame) and not _ss.empty:
         added, updated = 0, 0
-        for _, _r in save_sel.iterrows():
+        for _, _r in _ss.iterrows():
             for c in _extract_contacts_from_sam_row(_r):
                 act, _ = _contacts_upsert(
                     name=c.get("name",""), org=c.get("org",""), role=c.get("role",""),
