@@ -4724,7 +4724,27 @@ except Exception:
         assignee_default = st.selectbox("Default assignee", ["","Quincy","Charles","Collin"], index=(['','Quincy','Charles','Collin'].index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in ['Quincy','Charles','Collin'] else 0))
         st.markdown("**Defaults**")
         if st.button("Save as my default"):
-            set_setting(_defaults_key, json.dumps({'min_days': int(min_days), 'posted_from_days': int(posted_from_days), 'active_only': bool(active_only), 'keyword': str(keyword or ''), 'notice_types': list(notice_types)}))st.success("Saved your defaults")
+            # Add set_aside to saved defaults if a UI variable named set_aside exists
+            try:
+                _set_aside_vals = list(set_aside)  # may be defined elsewhere in SAM Watch
+            except Exception:
+                _set_aside_vals = _saved_defaults.get("set_aside", [])
+            # Rewrite saved defaults to include set_aside if present
+            try:
+                _raw = get_setting(_defaults_key, "")
+                _cur = json.loads(_raw) if _raw else {}
+            except Exception:
+                _cur = {}
+            _cur.update({
+                'min_days': int(min_days),
+                'posted_from_days': int(posted_from_days),
+                'active_only': bool(active_only),
+                'keyword': str(keyword or ''),
+                'notice_types': list(notice_types),
+                'set_aside': list(_set_aside_vals)
+            })
+            set_setting(_defaults_key, json.dumps(_cur))
+            st.success("Saved your defaults")
         if st.button("Reset my default"):
             set_setting(_defaults_key, "")
             st.info("Cleared your saved defaults")
