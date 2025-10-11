@@ -7729,11 +7729,21 @@ try:
         colA, colB, colC, colD = _st.columns([1,1,1,1])
         with colA:
             if _st.button("Pull data", use_container_width=True):
-                imported_total = 0
+                import streamlit as st
+                import pandas as pd
+                results = []
+                total = 0
                 for flt in _sam_get_saved_filters():
-                    n, _ = import_sam_to_db(flt, stage_on_insert="No Contact Made")
-                    imported_total += int(n or 0)
-                _st.success(f"Imported {imported_total}")
+                    df, info = sam_search_v3(flt, limit=200)
+                    if info.get("ok") and isinstance(df, pd.DataFrame) and not df.empty:
+                        for col in ["title", "agency", "response_due", "url", "posted"]:
+                            if col not in df.columns:
+                                df[col] = None
+                        records = df[["title", "agency", "response_due", "url", "posted"]].to_dict("records")
+                        results.extend(records)
+                        total += len(records)
+                st.session_state["samwatch_results"] = results
+                _st.success(f"Loaded {total} opportunities (not saved)")
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -7747,80 +7757,22 @@ try:
 
                 _st.subheader("Select opportunities to add to Pipeline")
         try:
-            conn = get_db(); cur = conn.cursor()
-            rows = cur.execute("""
-                select id, title, agency, response_due, url, posted
-                from opportunities
-                where coalesce(url,'') != ''
-                order by date(posted) desc, id desc
-                limit 200
-            """).fetchall()
-
-            # Use a form so checkbox selections and the submit happen in one transaction (avoids rerun desync).
-            with _st.form("sam_watch_select_form", clear_on_submit=False):
-                row_ids = []
-                if rows:
-                    for rid, title, agency, due, url, posted in rows:
-                        row_ids.append(rid)
-                        c1, c2 = _st.columns([0.08, 0.92])
-                        with c1:
-                            _st.checkbox(
-                                "",
-                                key=f"{ACTIVE_USER}::sam_sel_{rid}",
-                                value=_st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)
-                            )
-                        with c2:
-                            link_md = f"[{title}]({url})"
-                            meta = " | ".join(filter(None, [
-                                f"Agency: {agency}" if agency else "",
-                                f"Due: {due}" if due else "",
-                                f"Posted: {posted}" if posted else ""
-                            ]))
-                            _st.markdown(
-                                link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""),
-                                unsafe_allow_html=True
-                            )
-
-                submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
-
-            if submitted:
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"{ACTIVE_USER}::sam_sel_{rid}", False)]
-                if not chosen_ids:
-                    _st.info("No rows selected.")
-                else:
-                    added, skipped = 0, 0
-                    for rid, title, agency, due, url, posted in [r for r in rows if r[0] in chosen_ids]:
-                        try:
-                            c2 = conn.cursor()
-                            exists = c2.execute(
-                                "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
-                                (title, str(due) if due else None)
-                            ).fetchone()
-                            if exists:
-                                skipped += 1
-                                continue
-                            notes = f"Imported from SAM Watch on selection. URL: {url}"
-                            add_deal(
-                                title=title,
-                                stage="No Contact Made",
-                                source="SAM Watch",
-                                url=url,
-                                owner=None,
-                                amount=None,
-                                notes=notes,
-                                agency=agency,
-                                due_date=str(due) if due else None
-                            )
-                            added += 1
-                        except Exception as _e_add:
-                            _st.warning(f"Could not add '{title}': {_e_add}")
-                    _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
-                    # Clear only the ones we just added to avoid accidental re-use
-                    for rid in chosen_ids:
-                        _st.session_state.pop(f"{ACTIVE_USER}::sam_sel_{rid}", None)
+            _rows_session = _st.session_state.get("samwatch_results") or []
+            if _rows_session:
+                rows = []
+                for i, r in enumerate(_rows_session, start=1):
+                    rid = -i  # temporary negative IDs
+                    rows.append((rid, r.get('title'), r.get('agency'), r.get('response_due'), r.get('url'), r.get('posted')))
             else:
-                if not rows:
-                    _st.caption("No opportunities found with links.")
+                conn = get_db(); cur = conn.cursor()
+                rows = cur.execute("""
+                    select id, title, agency, response_due, url, posted
+                    from opportunities
+                    where coalesce(url,'') != ''
+                    order by date(posted) desc, id desc
+                    limit 200
+                """).fetchall()
+
         except Exception as _e_sel:
             _st.warning(f"[Selection UI note: {_e_sel}]")
 except Exception as _e_ui:
@@ -7831,106 +7783,3 @@ except Exception as _e_ui:
         pass
 
 # === [END MERGE UI] ===
-
-
-
-# --- BEGIN: SAM Watch selection + pipeline helpers (patch) ---
-def _samwatch_get_selected_rows():
-    import streamlit as st
-    for key in ["sam_selected_rows", "samwatch_selected_rows", "selected_opportunities", "sam_watch_selected"]:
-        if key in st.session_state and st.session_state.get(key):
-            return st.session_state.get(key) or []
-    for key in st.session_state.keys():
-        if key.endswith("_selection") and isinstance(st.session_state.get(key), (list, tuple, set)):
-            vals = list(st.session_state.get(key))
-            if vals:
-                return vals
-    return []
-
-def _ensure_add_deal_alias(_create_deal_fn):
-    def add_deal(**kwargs):
-        return _create_deal_fn(**kwargs)
-    return add_deal
-
-def _samwatch_add_selected_to_pipeline(db_conn, create_deal_fn, default_stage="No Contact Made"):
-    import streamlit as st
-    selected = _samwatch_get_selected_rows()
-    if not selected:
-        return (0, 0)
-    cur = db_conn.cursor()
-    added = 0
-    skipped = 0
-    for row in selected:
-        if isinstance(row, dict):
-            title = row.get("Title") or row.get("title") or row.get("Notice Title") or "Untitled Opportunity"
-            sam_id = row.get("Notice ID") or row.get("NoticeID") or row.get("solicitationNumber") or row.get("ID") or row.get("notice_id")
-            link = row.get("Link") or row.get("URL") or row.get("Notice Link") or row.get("Notice URL")
-            agency = row.get("Agency") or row.get("Department/Ind. Agency") or row.get("department") or ""
-            set_aside = row.get("Set-Aside") or row.get("Set Aside") or row.get("setAside") or ""
-            due_date = row.get("Response Date") or row.get("Due Date") or row.get("dueDate") or row.get("Close Date") or None
-        else:
-            title = str(row)
-            sam_id = str(row)
-            link = ""
-            agency = ""
-            set_aside = ""
-            due_date = None
-
-        cur.execute("SELECT COUNT(1) FROM deals WHERE external_id=? OR title=?", (str(sam_id), str(title)))
-        exists = cur.fetchone()
-        exists = exists[0] if exists else 0
-        if exists:
-            skipped += 1
-            continue
-
-        payload = dict(
-            title=str(title),
-            source="SAM.gov",
-            stage=default_stage,
-            external_id=str(sam_id) if sam_id else None,
-            url=str(link) if link else None,
-            customer=str(agency) if agency else None,
-            set_aside=str(set_aside) if set_aside else None,
-            due_date=due_date
-        )
-        try:
-            create_deal_fn(**payload)
-            added += 1
-        except Exception as e:
-            try:
-                cur.execute(
-                    "INSERT INTO deals (title, stage, source, external_id, url, customer, set_aside, due_date) VALUES (?,?,?,?,?,?,?,?)",
-                    (payload["title"], payload["stage"], payload["source"], payload["external_id"], payload["url"], payload["customer"], payload["set_aside"], payload["due_date"])
-                )
-                added += 1
-            except Exception as e2:
-                st.warning(f"Could not add '{payload['title']}': {e2}")
-                continue
-
-    db_conn.commit()
-    return (added, skipped)
-# --- END: SAM Watch selection + pipeline helpers (patch) ---
-
-
-
-# --- BEGIN: add_deal alias (patch) ---
-try:
-    add_deal
-except NameError:
-    def add_deal(**kwargs):
-        return create_deal(**kwargs)
-# --- END: add_deal alias (patch) ---
-
-
-
-# --- BEGIN: SAM Watch callback (patch) ---
-def _on_add_selected_to_pipeline():
-    import streamlit as st
-    try:
-        _db = get_connection() if "get_connection" in globals() else conn
-        _create_fn = create_deal if "create_deal" in globals() else add_deal
-        _added, _skipped = _samwatch_add_selected_to_pipeline(_db, _create_fn)
-        st.success(f"Added {_added} deal(s). Skipped {_skipped} duplicate(s)")
-    except Exception as _e:
-        st.error(f"Save failed: {_e}")
-# --- END: SAM Watch callback (patch) ---
