@@ -7702,7 +7702,7 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
-        _st.header("SAM Watch")
+                _st.header("SAM Watch")
 
         _st.subheader("Filters")
         with _st.form("simple_filters", clear_on_submit=False):
@@ -7745,100 +7745,73 @@ try:
             if _st.button("Submit package", use_container_width=True) and opp_id:
                 ok = proposal_submit_package(int(opp_id))
                 _st.success("Submitted") if ok else _st.error("Update failed")
-        if _st.button("Ensure checklist"):
-            if opp_id:
-                ensure_default_checklist(int(opp_id))
-                _st.success("Checklist ready")
-            else:
-                _st.warning("Enter Opp ID")
 
-        _st.subheader("Snapshot")
+        # --- [SAM Watch] Selection UI: hyperlinks + checkboxes + Add to Pipeline ---
+        _st.subheader("Select opportunities to add to Pipeline")
         try:
-            conn = get_db()
-            new7 = conn.execute("select count(*) from opportunities where date(posted) >= date('now','-7 day')").fetchone()[0]
-            subm = conn.execute("select count(*) from opportunities where status='Submitted'").fetchone()[0]
-            started = conn.execute("select count(*) from opportunities where status='Proposal Started'").fetchone()[0]
-            m1, m2, m3 = _st.columns([1,1,1])
-            m1.metric("New in 7 days", new7)
-            m2.metric("Submitted", subm)
-            m3.metric("Started", started)
-        except Exception as _e_m:
-            _st.caption(f"[metrics note: {_e_m}]")
+            conn = get_db(); cur = conn.cursor()
+            rows = cur.execute("""
+                select id, title, agency, response_due, url, posted
+                from opportunities
+                where coalesce(url,'') != ''
+                order by date(posted) desc, id desc
+                limit 200
+            """).fetchall()
 
-        try:
-            import pandas as _pd
-            conn = get_db()
-            rs = conn.execute("select title, agency, naics, response_due, status from opportunities order by id desc limit 20").fetchall()
-            if rs:
-                df = _pd.DataFrame(rs, columns=["Title","Agency","NAICS","Due","Status"])
-                _st.dataframe(df, use_container_width=True, hide_index=True)
+            row_ids = []
+            if rows:
+                for rid, title, agency, due, url, posted in rows:
+                    row_ids.append(rid)
+                    c1, c2 = _st.columns([0.08, 0.92])
+                    with c1:
+                        _st.checkbox("", key=f"sam_sel_{rid}", value=_st.session_state.get(f"sam_sel_{rid}", False))
+                    with c2:
+                        link_md = f"[{title}]({url})"
+                        meta = " | ".join(filter(None, [
+                            f"Agency: {agency}" if agency else "",
+                            f"Due: {due}" if due else "",
+                            f"Posted: {posted}" if posted else ""
+                        ]))
+                        _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
+
+                if _st.button("➕ Add Selected to Pipeline", key="btn_add_selected_pipeline", use_container_width=True):
+                    chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
+                    if not chosen_ids:
+                        _st.info("No rows selected.")
+                    else:
+                        added, skipped = 0, 0
+                        for rid, title, agency, due, url, posted in [r for r in rows if r[0] in chosen_ids]:
+                            try:
+                                c2 = conn.cursor()
+                                exists = c2.execute(
+                                    "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
+                                    (title, str(due) if due else None)
+                                ).fetchone()
+                                if exists:
+                                    skipped += 1
+                                    continue
+                            except Exception:
+                                pass
+                            notes = f"SAM: {url}" if url else None
+                            try:
+                                create_deal(
+                                    title=title,
+                                    stage="No Contact Made",
+                                    owner=None,
+                                    amount=None,
+                                    notes=notes,
+                                    agency=agency,
+                                    due_date=str(due) if due else None
+                                )
+                                added += 1
+                            except Exception as _e_add:
+                                _st.warning(f"Could not add '{title}': {_e_add}")
+                        _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
             else:
-                _st.caption("No recent imports")
-        except Exception as _e_t:
-            _st.caption(f"[table note: {_e_t}]")
-
-# --- [SAM Watch] Selection UI: hyperlinks + checkboxes + Add to Pipeline ---
-try:
-    import streamlit as _st
-    _st.markdown("### Select opportunities to add to Pipeline")
-    conn = get_db(); cur = conn.cursor()
-    rows = cur.execute("""
-        select id, title, agency, response_due, url, posted
-        from opportunities
-        where coalesce(url,'') != ''
-        order by date(posted) desc, id desc
-        limit 200
-    """).fetchall()
-
-    row_ids = []
-    if rows:
-        for rid, title, agency, due, url, posted in rows:
-            row_ids.append(rid)
-            c1, c2 = _st.columns([0.08, 0.92])
-            with c1:
-                _st.checkbox("", key=f"sam_sel_{rid}", value=_st.session_state.get(f"sam_sel_{rid}", False))
-            with c2:
-                link_md = f"[{title}]({url})"
-                meta = " | ".join(filter(None, [f"Agency: {agency}" if agency else "", f"Due: {due}" if due else "", f"Posted: {posted}" if posted else ""]))
-                _st.markdown(link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""), unsafe_allow_html=True)
-
-        if _st.button("➕ Add Selected to Pipeline", key="btn_add_selected_pipeline", use_container_width=True):
-            chosen_ids = [rid for rid in row_ids if _st.session_state.get(f"sam_sel_{rid}", False)]
-            if not chosen_ids:
-                _st.info("No rows selected.")
-            else:
-                added = 0; skipped = 0
-                for r in rows:
-                    rid, title, agency, due, url, posted = r
-                    if rid not in chosen_ids:
-                        continue
-                    try:
-                        c2 = conn.cursor()
-                        exists = c2.execute(
-                            "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
-                            (title, str(due) if due else None)
-                        ).fetchone()
-                        if exists:
-                            skipped += 1
-                            continue
-                    except Exception:
-                        pass
-                    notes = f"SAM: {url}" if url else None
-                    try:
-                        create_deal(title=title, stage="No Contact Made", owner=None, amount=None, notes=notes, agency=agency, due_date=str(due) if due else None)
-                        added += 1
-                    except Exception as _e_add:
-                        _st.warning(f"Could not add '{title}': {_e_add}")
-                _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
-    else:
-        _st.caption("No opportunities found with links.")
-except Exception as _e_sel:
-    try:
-        import streamlit as _st
-        _st.warning(f"[Selection UI note: {_e_sel}]")
-    except Exception:
-        pass
-# --- [END SAM Watch Selection UI] ---
+                _st.caption("No opportunities found with links.")
+        except Exception as _e_sel:
+            _st.warning(f"[Selection UI note: {_e_sel}]")
+        # --- [END SAM Watch Selection UI] ---
 
 except Exception as _e_ui:
     try:
