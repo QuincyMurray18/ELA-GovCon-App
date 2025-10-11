@@ -3508,6 +3508,19 @@ TAB_LABELS = [
     "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deals"
 ]
 tabs = st.tabs(TAB_LABELS)
+
+# --- UI-only hide of 'Pipeline' tab (keep backend & indices intact) ---
+try:
+    _pipeline_idx = TAB_LABELS.index("Pipeline") + 1  # nth-child is 1-based
+    st.markdown(f"""
+    <style>
+    .stTabs [role="tablist"] button:nth-child({_pipeline_idx}) { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
+except ValueError:
+    # 'Pipeline' label not present — nothing to hide
+    pass
+
 TAB = {label: i for i, label in enumerate(TAB_LABELS)}
 # Backward-compatibility: keep legacy numeric indexing working
 LEGACY_ORDER = [
