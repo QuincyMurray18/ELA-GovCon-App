@@ -7537,7 +7537,7 @@ def sam_search_v3(filters: dict, limit: int = 100):
             params["title"] = filters["keywords"]
         if single_naics:
             params["ncode"] = single_naics
-        if filters.get("setAside") and str(filters["setAside"]).lower() != "any":
+        if filters.get("setAside"):
             params["typeOfSetAside"] = filters["setAside"]
         if filters.get("noticeType"):
             v = str(filters["noticeType"]).lower()
@@ -7788,7 +7788,7 @@ try:
             "name": "Default",
             "keywords": kw.strip(),
             "naics": [s.strip() for s in naics_csv.split(",") if s.strip()],
-            "setAside": set_aside if set_aside in ("Any","Total Small Business") else "Any",
+            "setAside": "Total Small Business" if set_aside == "Total Small Business" else "",
             "noticeType": "Combined Synopsis/Solicitation,Solicitation" if notice != "Any" else "",
             "active": "true" if active_only else "false",
             "minDueDays": int(min_due)
@@ -7797,20 +7797,6 @@ try:
     with tabs[TAB['SAM Watch']]:
         _st.header("SAM Watch")
         _st.subheader("Filters")
-        try:
-            _saved_defaults_list = _sam_get_saved_filters()
-            _saved_sa = (_saved_defaults_list[0] or {}).get("setAside", "Any") if _saved_defaults_list else "Any"
-        except Exception:
-            _saved_sa = "Any"
-        
-        _sa_default_idx = 1 if _saved_sa == "Total Small Business" else 0
-        
-        # Sync the selectbox value with saved default so widget state doesn't override index
-        try:
-            _st.session_state['sam_set_aside'] = _saved_sa
-        except Exception:
-            pass
-
         with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
             with c1:
@@ -7818,7 +7804,7 @@ try:
             with c2:
                 naics = _st.text_input("NAICS list", value="561720, 238220")
             with c3:
-                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=_sa_default_idx, key="sam_set_aside")
+                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=1)
             c4, c5, c6 = _st.columns([2,2,2])
             with c4:
                 notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
