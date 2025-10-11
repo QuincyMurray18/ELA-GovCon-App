@@ -7805,6 +7805,12 @@ try:
         
         _sa_default_idx = 1 if _saved_sa == "Total Small Business" else 0
         
+        # Sync the selectbox value with saved default so widget state doesn't override index
+        try:
+            _st.session_state['sam_set_aside'] = _saved_sa
+        except Exception:
+            pass
+
         with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
             with c1:
@@ -7812,7 +7818,7 @@ try:
             with c2:
                 naics = _st.text_input("NAICS list", value="561720, 238220")
             with c3:
-                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=_sa_default_idx)
+                set_aside = _st.selectbox("Set aside", ["Any", "Total Small Business"], index=_sa_default_idx, key="sam_set_aside")
             c4, c5, c6 = _st.columns([2,2,2])
             with c4:
                 notice = _st.selectbox("Notice type", ["Any", "Combined Synopsis/Solicitation", "Solicitation"], index=1)
