@@ -8129,7 +8129,7 @@ def samv2_migrate():
     cur = conn.cursor()
     # Opportunities
     cur.execute(
-        \"\"\"
+        """
         CREATE TABLE IF NOT EXISTS samv2_opportunities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sol_number TEXT,
@@ -8156,11 +8156,11 @@ def samv2_migrate():
             updated_at TEXT DEFAULT (datetime('now')),
             UNIQUE(sol_number, agency, notice_type) ON CONFLICT IGNORE
         )
-        \"\"\"
+        """
     )
     # Documents
     cur.execute(
-        \"\"\"
+        """
         CREATE TABLE IF NOT EXISTS samv2_docs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             opportunity_id INTEGER,
@@ -8172,22 +8172,22 @@ def samv2_migrate():
             UNIQUE(opportunity_id, url) ON CONFLICT IGNORE,
             FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
         )
-        \"\"\"
+        """
     )
     # Pipeline links
     cur.execute(
-        \"\"\"
+        """
         CREATE TABLE IF NOT EXISTS samv2_pipeline_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             opportunity_id INTEGER UNIQUE,
             deal_id TEXT,
             saved_at TEXT DEFAULT (datetime('now'))
         )
-        \"\"\"
+        """
     )
     # Alerts
     cur.execute(
-        \"\"\"
+        """
         CREATE TABLE IF NOT EXISTS samv2_alert_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT,
@@ -8198,22 +8198,22 @@ def samv2_migrate():
             notice_types TEXT,
             last_sent_at TEXT
         )
-        \"\"\"
+        """
     )
     # Pull log
     cur.execute(
-        \"\"\"
+        """
         CREATE TABLE IF NOT EXISTS samv2_pull_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             params_json TEXT,
             pulled_count INTEGER,
             created_at TEXT DEFAULT (datetime('now'))
         )
-        \"\"\"
+        """
     )
     # Proposal drafts
     cur.execute(
-        \"\"\"
+        """
         CREATE TABLE IF NOT EXISTS samv2_proposals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             opportunity_id INTEGER UNIQUE,
@@ -8222,7 +8222,7 @@ def samv2_migrate():
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
         )
-        \"\"\"
+        """
     )
     conn.commit()
     conn.close()
@@ -8304,13 +8304,13 @@ def samv2_upsert_records(records: list[dict]) -> int:
     for r in records:
         payload_hash = _sha1(r)
         cur.execute(
-            \"\"\"
+            """
             INSERT OR IGNORE INTO samv2_opportunities
             (sol_number, title, description, notice_type, agency, office, naics, psc, set_aside,
              place_of_performance, city, state, zip, country, posted_date, due_date, last_modified,
              sam_detail_url, status, payload_hash, created_at, updated_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'Active', ?, datetime('now'), datetime('now'))
-            \"\"\"
+            """
             ,
             (
                 r.get("sol_number"), r.get("title"), r.get("description"), r.get("notice_type"),
@@ -8328,11 +8328,11 @@ def samv2_upsert_records(records: list[dict]) -> int:
             ph = cur.fetchone()
             if ph and ph[0] != payload_hash:
                 cur.execute(
-                    \"\"\"UPDATE samv2_opportunities
+                    """UPDATE samv2_opportunities
                     SET title=?, description=?, naics=?, psc=?, set_aside=?, place_of_performance=?,
                         city=?, state=?, zip=?, country=?, posted_date=?, due_date=?, last_modified=?,
                         sam_detail_url=?, payload_hash=?, updated_at=datetime('now')
-                    WHERE id=?\"\"\"
+                    WHERE id=?"""
                     ,
                     (
                         r.get("title"), r.get("description"), r.get("naics"), r.get("psc"),
@@ -8373,7 +8373,7 @@ def samv2_download_attachments(opportunity_id: int) -> int:
     for did, fname, url, lpath in docs:
         if not url:
             continue
-        base = (fname or "attachment").replace("/", "_").replace("\", "_")
+        base = (fname or "attachment").replace("/", "_").replace("\\", "_")
         if not os.path.splitext(base)[1]:
             ext = os.path.splitext(url.split("?")[0])[1] or ".bin"
             base = base + ext
@@ -8473,8 +8473,7 @@ def samv2_send_email_digest(to_email: str, rows: list[tuple]) -> bool:
     for sol, title, agency, posted, due, link in rows:
         link_html = f'<a href="{link or "#"}">Open</a>' if link else "(no link)"
         items.append(f"<li><b>{title or '(Untitled)'} — {agency or 'N/A'}</b> (Sol: {sol or 'N/A'}) — Due: {due or 'N/A'} — {link_html}</li>")
-    html = "<h3>New/Updated Opportunities</h3><ul>" + "
-".join(items) + "</ul>"
+    html = "<h3>New/Updated Opportunities</h3><ul>" + "\n".join(items) + "</ul>"
     subject = "ELA Bid Alert — New/Updated Opportunities"
     if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
         if _send_via_sendgrid(to_email, subject, html):
@@ -8637,13 +8636,12 @@ def _extract_text_from_pdf(path: str) -> str:
                     chunks.append(page.extract_text() or "")
                 except Exception:
                     continue
-            return "
-".join(chunks)
+            return "\n".join(chunks)
     except Exception:
         return ""
 
 def samv2_extract_section_LM(opportunity_id: int) -> dict:
-    \"\"\"Return dict with 'L' and 'M' extracted text snippets, best-effort.\"\"\"
+    """Return dict with 'L' and 'M' extracted text snippets, best-effort."""
     conn = samv2_get_conn(); cur = conn.cursor()
     cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
     docs = cur.fetchall()
@@ -8652,8 +8650,7 @@ def samv2_extract_section_LM(opportunity_id: int) -> dict:
         if not path or not os.path.exists(path):
             continue
         if path.lower().endswith(".pdf"):
-            text_all += "
-" + _extract_text_from_pdf(path)
+            text_all += "\n" + _extract_text_from_pdf(path)
     L_text = ""
     M_text = ""
     low = text_all.lower()
@@ -8703,15 +8700,13 @@ def samv2_parse_clins_from_docs(opportunity_id: int) -> list[dict]:
     texts = ""
     for (p,) in cur.fetchall():
         if p and p.lower().endswith(".pdf"):
-            texts += "
-" + _extract_text_from_pdf(p)
+            texts += "\n" + _extract_text_from_pdf(p)
     conn.close()
     if not texts.strip():
         # fallback: try current draft's Section L
         pb = st.session_state.get("proposal_builder_payload")
         if isinstance(pb, dict):
-            texts = (pb.get("section_L") or "") + "
-" + (pb.get("section_M") or "")
+            texts = (pb.get("section_L") or "") + "\n" + (pb.get("section_M") or "")
     return samv2_parse_clins_from_text(texts)
 
 # ---- CLIN Pricing sheet (xlsx or csv)
@@ -9092,7 +9087,7 @@ def rfp_analyzer_popup(opp_row: dict):
                 rows = samv2_get_clins_from_payload() or samv2_parse_clins_from_docs(opp_row.get('id'))
                 path = samv2_build_clin_sheet(opp_row.get('id'), rows=rows, subcontractor_mode=True)
                 subj = f"Quote Request — {opp_row.get('sol_number') or opp_row.get('title')}"
-                body = f\"\"\"\
+                body = f"""
                 <p>Dear {vndr_name or 'Vendor'},</p>
                 <p>We are preparing a proposal for <b>{opp_row.get('title') or opp_row.get('sol_number')}</b> ({opp_row.get('agency')}).
                 Please review the attached CLIN Pricing Input Sheet and provide your best pricing. If possible, return by <b>{quote_due or 'TBD'}</b>.</p>
@@ -9103,7 +9098,7 @@ def rfp_analyzer_popup(opp_row: dict):
                 </ul>
                 <p>Thank you,</p>
                 <p>BD Team</p>
-                \"\"\"
+                """
                 ok = samv2_email_package(vndr_email, subj, body, [path] if path else [])
                 if ok: st.success("Quote request sent.")
                 else: st.warning("Email failed (check secrets).")
