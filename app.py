@@ -8013,21 +8013,26 @@ except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
 
 
+
 # === SAM WATCH V2 (AUTO-MERGED) START ===
-# This block was auto-merged by ChatGPT on 2025-10-12T21:32:51.698321.
-# Feature-flagged, non-invasive, safe to include alongside your existing app.
-# It adds a sidebar launcher button to open a new SAM Watch V2 interface without modifying your existing tabs.
+# This block was auto-merged by ChatGPT on 2025-10-12T21:37:00.538121.
+# Adds: attachment persistence + downloader, and email sending via SendGrid or SMTP.
 
 from __future__ import annotations
 
 import os
+import io
+import ssl
 import json
 import time
+import smtplib
 import hashlib
 import sqlite3
 import pathlib
 import traceback
 import datetime as _dt
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Third-party imports are wrapped in try/except to avoid crashing if missing
 try:
@@ -8038,7 +8043,6 @@ except Exception as _e_req:
 try:
     import streamlit as st
 except Exception as _e_st:
-    # If streamlit is not available, define a shim to avoid NameErrors in non-Streamlit contexts
     class _Shim:
         def __getattr__(self, k):
             def _f(*a, **kw):
@@ -8057,6 +8061,28 @@ try:
     SAM_API_KEY = st.secrets.get("SAM_API_KEY", None)
 except Exception:
     SAM_API_KEY = None
+
+# Email config (either SendGrid or SMTP)
+SENDGRID_API_KEY = None
+ALERTS_FROM = None
+SMTP_HOST = None
+SMTP_PORT = None
+SMTP_USER = None
+SMTP_PASS = None
+SMTP_FROM = None
+SMTP_TLS = True
+
+try:
+    SENDGRID_API_KEY = st.secrets.get("SENDGRID_API_KEY", None)
+    ALERTS_FROM = st.secrets.get("ALERTS_FROM", None)
+    SMTP_HOST = st.secrets.get("SMTP_HOST", None)
+    SMTP_PORT = st.secrets.get("SMTP_PORT", None)
+    SMTP_USER = st.secrets.get("SMTP_USER", None)
+    SMTP_PASS = st.secrets.get("SMTP_PASS", None)
+    SMTP_FROM = st.secrets.get("SMTP_FROM", None)
+    SMTP_TLS = bool(st.secrets.get("SMTP_TLS", True))
+except Exception:
+    pass
 
 # Default database path confirmed by user
 DB_PATH = "./ela.sqlite3"
@@ -8122,6 +8148,7 @@ def samv2_migrate():
             local_path TEXT,
             file_hash TEXT,
             created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(opportunity_id, url) ON CONFLICT IGNORE,
             FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
         )
         \"\"\"
@@ -8234,6 +8261,13 @@ def samv2_search(params: dict) -> list[dict]:
         _log("SAM API exception: " + str(ex))
         return []
 
+def _samv2_get_or_create_opp_id(cur, sol_number:str, agency:str, notice_type:str):
+    cur.execute("SELECT id FROM samv2_opportunities WHERE sol_number=? AND agency=? AND notice_type=?", (sol_number, agency, notice_type))
+    row = cur.fetchone()
+    if row:
+        return row[0]
+    return None
+
 def samv2_upsert_records(records: list[dict]) -> int:
     conn = samv2_get_conn()
     cur = conn.cursor()
@@ -8260,14 +8294,13 @@ def samv2_upsert_records(records: list[dict]) -> int:
         )
         if cur.rowcount > 0:
             added += 1
-        else:
-            # On conflict (exists), check for changes and update
-            cur.execute(
-                "SELECT id, payload_hash FROM samv2_opportunities WHERE sol_number=? AND agency=? AND notice_type=?",
-                (r.get("sol_number"), r.get("agency"), r.get("notice_type"))
-            )
-            row = cur.fetchone()
-            if row and row[1] != payload_hash:
+        # Determine opportunity id
+        opp_id = _samv2_get_or_create_opp_id(cur, r.get("sol_number"), r.get("agency"), r.get("notice_type"))
+        # Update if hash changed
+        if opp_id is not None:
+            cur.execute("SELECT payload_hash FROM samv2_opportunities WHERE id=?", (opp_id,))
+            ph = cur.fetchone()
+            if ph and ph[0] != payload_hash:
                 cur.execute(
                     \"\"\"
                     UPDATE samv2_opportunities
@@ -8282,20 +8315,127 @@ def samv2_upsert_records(records: list[dict]) -> int:
                         r.get("set_aside"), r.get("place_of_performance"),
                         r.get("city"), r.get("state"), r.get("zip"), r.get("country"),
                         r.get("posted_date"), r.get("due_date"), r.get("last_modified"),
-                        r.get("sam_detail_url"), payload_hash, row[0]
+                        r.get("sam_detail_url"), payload_hash, opp_id
                     )
                 )
+            # Persist attachments (if any)
+            for att in (r.get("attachments") or []):
+                try:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO samv2_docs(opportunity_id, filename, url, local_path, file_hash) VALUES(?,?,?,?,NULL)",
+                        (opp_id, att.get("name") or "attachment", att.get("url") or "", None)
+                    )
+                except Exception:
+                    pass
     conn.commit()
     conn.close()
     return added
 
-def samv2_download_attachments(opportunity_id: int):
-    # Placeholder for attachment downloading. Safe no-op if requests missing.
-    return
+def samv2_download_attachments(opportunity_id: int) -> int:
+    \"\"\"Download all recorded attachments for an opportunity. Returns number of files downloaded or verified.\"\"\"
+    if requests is None:
+        _log("Requests not available; skipping downloads.")
+        return 0
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT sol_number FROM samv2_opportunities WHERE id=?", (opportunity_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close(); return 0
+    sol = row[0] or f"opp_{opportunity_id}"
+    folder = os.path.join(DATA_DIR, sol)
+    pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
+
+    cur.execute("SELECT id, filename, url, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    docs = cur.fetchall()
+    downloaded = 0
+    for did, fname, url, lpath in docs:
+        if not url:
+            continue
+        safe_name = fname or "attachment"
+        # Make filename unique-ish
+        base = safe_name.replace("/", "_").replace("\", "_")
+        if not os.path.splitext(base)[1]:
+            # Guess extension from URL
+            ext = os.path.splitext(url.split("?")[0])[1] or ".bin"
+            base = base + ext
+        dest_path = os.path.join(folder, base)
+        # Skip if already downloaded
+        if os.path.exists(dest_path):
+            downloaded += 1
+            continue
+        try:
+            resp = requests.get(url, timeout=60)
+            if resp.status_code == 200 and resp.content:
+                with open(dest_path, "wb") as f:
+                    f.write(resp.content)
+                cur.execute("UPDATE samv2_docs SET local_path=? WHERE id=?", (dest_path, did))
+                downloaded += 1
+        except Exception as ex:
+            _log("Download error: " + str(ex))
+    conn.commit(); conn.close()
+    return downloaded
 
 # ----------------------
-# Alerts (digest-only; execution triggered in-app)
+# Email utilities
 # ----------------------
+def _send_via_sendgrid(to_email: str, subject: str, html: str) -> bool:
+    if not SENDGRID_API_KEY or not ALERTS_FROM or requests is None:
+        return False
+    try:
+        url = "https://api.sendgrid.com/v3/mail/send"
+        payload = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {"email": ALERTS_FROM},
+            "subject": subject,
+            "content": [{"type": "text/html", "value": html}],
+        }
+        headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"}
+        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+        return 200 <= r.status_code < 300
+    except Exception as ex:
+        _log("SendGrid error: " + str(ex))
+        return False
+
+def _send_via_smtp(to_email: str, subject: str, html: str) -> bool:
+    if not SMTP_HOST or not SMTP_PORT or not SMTP_FROM:
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_FROM
+        msg["To"] = to_email
+        msg.attach(MIMEText(html, "html"))
+        context = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
+            if SMTP_TLS:
+                server.starttls(context=context)
+            if SMTP_USER and SMTP_PASS:
+                server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        return True
+    except Exception as ex:
+        _log("SMTP error: " + str(ex))
+        return False
+
+def samv2_send_email_digest(to_email: str, rows: list[tuple]) -> bool:
+    if not rows:
+        return True
+    # Build a simple HTML list
+    items = []
+    for sol, title, agency, posted, due, link in rows:
+        title_safe = (title or "(Untitled)")
+        link_html = f'<a href="{link or "#"}">Open</a>' if link else "(no link)"
+        items.append(f"<li><b>{title_safe}</b> — {agency or 'N/A'} — Sol: {sol or 'N/A'} — Due: {due or 'N/A'} — {link_html}</li>")
+    html = "<h3>New/Updated Opportunities</h3><ul>" + "
+".join(items) + "</ul>"
+    subject = "ELA Bid Alert — New/Updated Opportunities"
+    # Prefer SendGrid if configured
+    if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
+        if _send_via_sendgrid(to_email, subject, html):
+            return True
+    # Fallback to SMTP
+    return _send_via_smtp(to_email, subject, html)
+
 def samv2_save_alert_rule(email: str, frequency: str, keywords: str, naics: str, set_aside: str, notice_types_csv: str):
     conn = samv2_get_conn()
     cur = conn.cursor()
@@ -8310,7 +8450,10 @@ def samv2_due_for_send(freq: str, last_sent: str | None) -> bool:
     now = _dt.datetime.utcnow()
     if not last_sent:
         return True
-    last = _dt.datetime.fromisoformat(last_sent)
+    try:
+        last = _dt.datetime.fromisoformat(last_sent)
+    except Exception:
+        return True
     delta = now - last
     if freq == "daily":
         return delta.days >= 1
@@ -8320,28 +8463,32 @@ def samv2_due_for_send(freq: str, last_sent: str | None) -> bool:
         return delta.days >= 28
     return False
 
-def samv2_run_alerts():
-    # Email sending is app-specific; we just select matching rows.
+def samv2_run_alerts(send_now: bool = True):
+    \"\"\"Prepare and optionally send digests. Returns list of (email, count_sent).\"\"\"
     conn = samv2_get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id, email, frequency, keywords, naics, set_aside, notice_types, last_sent_at FROM samv2_alert_rules")
     rules = cur.fetchall()
-    digest = []
+    results = []
     for rid, email, freq, keywords, naics, set_aside, types_csv, last_sent in rules:
         if not samv2_due_for_send(freq, last_sent):
             continue
         lookback_days = 1 if freq == "daily" else 7 if freq == "weekly" else 28
         cur.execute(
-            "SELECT sol_number, title, agency, posted_date, due_date, sam_detail_url FROM samv2_opportunities WHERE julianday('now') - julianday(COALESCE(posted_date, created_at)) <= ?",
+            "SELECT sol_number, title, agency, posted_date, due_date, sam_detail_url FROM samv2_opportunities WHERE julianday('now') - julianday(COALESCE(last_modified, posted_date, created_at)) <= ?",
             (lookback_days,)
         )
         rows = cur.fetchall()
         rows = [r for r in rows if (not keywords or (keywords.lower() in (r[1] or '').lower()))]
-        digest.append((email, rows))
-        cur.execute("UPDATE samv2_alert_rules SET last_sent_at=? WHERE id=?", (_dt.datetime.utcnow().isoformat(), rid))
+        sent_ok = True
+        if send_now and rows:
+            sent_ok = samv2_send_email_digest(email, rows)
+        if sent_ok:
+            cur.execute("UPDATE samv2_alert_rules SET last_sent_at=? WHERE id=?", (_dt.datetime.utcnow().isoformat(), rid))
+        results.append((email, len(rows)))
     conn.commit()
     conn.close()
-    return digest
+    return results
 
 # ----------------------
 # RFP Analyzer (popup)
@@ -8390,7 +8537,6 @@ def rfp_analyzer_popup(opp_row: dict):
 # ----------------------
 def render_sam_watch_v2():
     samv2_migrate()
-    st.session_state.setdefault("_samv2_sel", set())
 
     st.title("SAM Watch V2 (Preview)")
     st.caption("One-stop SAM.gov — search, analyze, save to pipeline, alerts.")
@@ -8420,24 +8566,26 @@ def render_sam_watch_v2():
                 if email:
                     samv2_save_alert_rule(email, freq, keywords, naics, set_aside if set_aside!="Any" else "", ",".join(notice_types))
                     st.success("Alert rule saved. Alerts are sent when you click 'Run Alerts' or on next scheduled run.")
-        if st.button("Run Alerts Now"):
-            digest = samv2_run_alerts()
-            st.info(f"Prepared {len(digest)} digest(s). Configure your SMTP/SendGrid in secrets to send emails.")
+        if st.button("Run Alerts Now & Send"):
+            results = samv2_run_alerts(send_now=True)
+            st.info(f"Prepared and sent digests for {len(results)} rule(s).")
 
-    colA, colB, colC = st.columns([1,1,2])
+    colA, colB, colC, colD = st.columns([1,1,1,1])
     with colA:
         run_pull = st.button("Pull SAM Data")
     with colB:
         save_selected = st.button("Save Selected to Pipeline")
     with colC:
+        run_alerts = st.button("Prepare Alerts (no send)")
+    with colD:
         st.write("")
 
     status_ph = st.empty()
 
     if run_pull:
         q = {
-            "q": keywords or None,
-            "notice_type": ",".join(notice_types),
+            "q": st.session_state.get("_samv2_kw") or None,
+            "notice_type": ",".join(st.session_state.get("_samv2_types", [])),
             "postedFrom": date_from.isoformat(),
             "postedTo": date_to.isoformat(),
         }
@@ -8447,6 +8595,10 @@ def render_sam_watch_v2():
         conn.execute("INSERT INTO samv2_pull_log(params_json, pulled_count) VALUES(?,?)", (json.dumps(q), len(recs)))
         conn.commit(); conn.close()
         status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new (others updated or deduped).")
+
+    if run_alerts:
+        results = samv2_run_alerts(send_now=False)
+        status_ph.info(f"Prepared {len(results)} digest(s). Use 'Run Alerts Now & Send' to email them.")
 
     # List grid
     st.markdown("### Results")
@@ -8463,14 +8615,14 @@ def render_sam_watch_v2():
             with st.container(border=True):
                 c1, c2 = st.columns([0.07, 0.93])
                 with c1:
-                    checked = st.checkbox("", key=f"samv2_ck_{rid}")
+                    st.checkbox("", key=f"samv2_ck_{rid}")
                 with c2:
                     st.markdown(f"**{title or '(Untitled)'}**")
                     sub = f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}"
                     st.caption(sub)
                     sub2 = f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}"
                     st.caption(sub2)
-                    link_col, btn_col1, btn_col2 = st.columns([0.5, 0.25, 0.25])
+                    link_col, btn_col1, btn_col2, btn_col3 = st.columns([0.38, 0.2, 0.22, 0.2])
                     with link_col:
                         if link:
                             st.markdown(f"[Open in SAM.gov]({link})")
@@ -8492,6 +8644,14 @@ def render_sam_watch_v2():
                                 "set_aside": sa, "naics": naics_v, "due_date": due
                             }
                             st.success("Proposal Builder prefill ready. Switch to Proposal Builder tab.")
+                    with btn_col3:
+                        if st.button("Download Attachments", key=f"dl_{rid}"):
+                            cnt = samv2_download_attachments(rid)
+                            if cnt:
+                                st.success(f"Downloaded {cnt} file(s) for {sol or title}.")
+                            else:
+                                st.warning("No downloadable attachments found.")
+
     if save_selected:
         # Only save checked ones
         conn = samv2_get_conn(); cur = conn.cursor()
@@ -8528,4 +8688,5 @@ except Exception as ex:
     _log("SAM V2 init error: " + str(ex))
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
+
 
