@@ -8015,9 +8015,10 @@ except Exception as _e_deals_tab:
 
 
 
+
 # === SAM WATCH V2 (AUTO-MERGED) START ===
-# Auto-merged by ChatGPT on 2025-10-12T21:41:46.422697
-# Adds: Proposal Builder auto-route with NAICS-based outline + compliance checklist.
+# Auto-merged by ChatGPT on 2025-10-12T21:53:05.312661
+# Adds: Section L/M extraction, Proposal DOCX export, Win Probability scoring.
 
 from __future__ import annotations
 
@@ -8035,6 +8036,7 @@ import datetime as _dt
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# Optional libs
 try:
     import requests
 except Exception:
@@ -8049,6 +8051,17 @@ except Exception:
                 return None
             return _f
     st = _Shim()
+
+# Optional PDF/DOCX tools
+try:
+    import PyPDF2
+except Exception:
+    PyPDF2 = None
+
+try:
+    import docx  # python-docx
+except Exception:
+    docx = None
 
 ENABLE_SAM_WATCH_V2 = True
 
@@ -8082,7 +8095,9 @@ except Exception:
 
 DB_PATH = "./ela.sqlite3"
 DATA_DIR = os.path.join(os.getcwd(), "data", "opportunities")
+EXPORT_DIR = os.path.join(os.getcwd(), "exports")
 os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(EXPORT_DIR, exist_ok=True)
 
 def _log(msg: str):
     try:
@@ -8099,6 +8114,7 @@ def samv2_get_conn():
 def samv2_migrate():
     conn = samv2_get_conn()
     cur = conn.cursor()
+    # Opportunities
     cur.execute(
         \"\"\"
         CREATE TABLE IF NOT EXISTS samv2_opportunities (
@@ -8129,6 +8145,7 @@ def samv2_migrate():
         )
         \"\"\"
     )
+    # Documents
     cur.execute(
         \"\"\"
         CREATE TABLE IF NOT EXISTS samv2_docs (
@@ -8144,6 +8161,7 @@ def samv2_migrate():
         )
         \"\"\"
     )
+    # Pipeline links
     cur.execute(
         \"\"\"
         CREATE TABLE IF NOT EXISTS samv2_pipeline_links (
@@ -8154,6 +8172,7 @@ def samv2_migrate():
         )
         \"\"\"
     )
+    # Alerts
     cur.execute(
         \"\"\"
         CREATE TABLE IF NOT EXISTS samv2_alert_rules (
@@ -8168,6 +8187,7 @@ def samv2_migrate():
         )
         \"\"\"
     )
+    # Pull log
     cur.execute(
         \"\"\"
         CREATE TABLE IF NOT EXISTS samv2_pull_log (
@@ -8178,6 +8198,7 @@ def samv2_migrate():
         )
         \"\"\"
     )
+    # Proposal drafts
     cur.execute(
         \"\"\"
         CREATE TABLE IF NOT EXISTS samv2_proposals (
@@ -8196,6 +8217,7 @@ def samv2_migrate():
 def _sha1(obj: dict) -> str:
     return hashlib.sha1(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
 
+# ---- SAM API
 def samv2_search(params: dict) -> list[dict]:
     if requests is None:
         _log("Requests not available.")
@@ -8318,6 +8340,7 @@ def samv2_upsert_records(records: list[dict]) -> int:
     conn.commit(); conn.close()
     return added
 
+# ---- Attachments
 def samv2_download_attachments(opportunity_id: int) -> int:
     if requests is None:
         _log("Requests not available; skipping downloads.")
@@ -8357,6 +8380,7 @@ def samv2_download_attachments(opportunity_id: int) -> int:
     conn.commit(); conn.close()
     return downloaded
 
+# ---- Email
 def _send_via_sendgrid(to_email: str, subject: str, html: str) -> bool:
     if not SENDGRID_API_KEY or not ALERTS_FROM or requests is None:
         return False
@@ -8456,6 +8480,7 @@ def samv2_run_alerts(send_now: bool = True):
     conn.commit(); conn.close()
     return results
 
+# ---- Templates (NAICS-based)
 def _tmpl_for_naics(naics_str: str):
     naics_str = (naics_str or "").strip()
     primary = naics_str.split(",")[0].strip() if naics_str else ""
@@ -8524,6 +8549,8 @@ def samv2_build_proposal_payload(opp: dict) -> dict:
         "sections": {name: "" for name in outline},
         "pricing": {"notes": "Insert CLIN pricing and assumptions here.", "rows": []},
         "attachments": [],
+        "section_L": "",
+        "section_M": "",
     }
     return payload
 
@@ -8551,6 +8578,129 @@ def samv2_start_proposal(opportunity_id: int) -> dict | None:
         pass
     return payload
 
+# ---- Section L/M Extraction (best-effort from PDFs)
+def _extract_text_from_pdf(path: str) -> str:
+    if not PyPDF2:
+        return ""
+    try:
+        with open(path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            chunks = []
+            for page in reader.pages:
+                try:
+                    chunks.append(page.extract_text() or "")
+                except Exception:
+                    continue
+            return "
+".join(chunks)
+    except Exception:
+        return ""
+
+def samv2_extract_section_LM(opportunity_id: int) -> dict:
+    \"\"\"Return dict with 'L' and 'M' extracted text snippets, best-effort.\"\"\"
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    docs = cur.fetchall()
+    text_all = ""
+    for fname, path in docs:
+        if not path or not os.path.exists(path):
+            continue
+        if path.lower().endswith(".pdf"):
+            text_all += "
+" + _extract_text_from_pdf(path)
+        # (Extensions like .docx could be added if docx is installed; omitted here)
+    # Heuristic splits
+    L_text = ""
+    M_text = ""
+    low = text_all.lower()
+    if "section l" in low:
+        idx = low.find("section l")
+        L_text = text_all[idx: idx + 5000]
+    if "section m" in low:
+        idx = low.find("section m")
+        M_text = text_all[idx: idx + 5000]
+    if not L_text and "instructions to offerors" in low:
+        idx = low.find("instructions to offerors")
+        L_text = text_all[idx: idx + 5000]
+    if not M_text and "evaluation factors" in low:
+        idx = low.find("evaluation factors")
+        M_text = text_all[idx: idx + 5000]
+    return {"L": L_text.strip(), "M": M_text.strip()}
+
+# ---- DOCX Export
+def samv2_export_docx_from_payload(payload: dict, export_name: str) -> str:
+    base = os.path.join(EXPORT_DIR, export_name)
+    if docx is None:
+        # Fallback: write Markdown
+        md_path = base + ".md"
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(f"# {payload['meta'].get('title') or 'Proposal'}\n\n")
+            f.write(f"**Solicitation:** {payload['meta'].get('sol_number')}  \\n")
+            f.write(f"**Agency:** {payload['meta'].get('agency')}  \\n")
+            f.write(f"**NAICS:** {payload['meta'].get('naics')}  \\n")
+            f.write(f"**Set-Aside:** {payload['meta'].get('set_aside')}  \\n")
+            f.write(f"**Due Date:** {payload['meta'].get('due_date')}\n\n")
+            if payload.get("section_L"): f.write("## Section L (Instructions)\n" + payload["section_L"] + "\n\n")
+            if payload.get("section_M"): f.write("## Section M (Evaluation)\n" + payload["section_M"] + "\n\n")
+            f.write("## Outline\n")
+            for sec in payload.get("outline", []):
+                f.write(f"### {sec}\n\n")
+        return md_path
+    # Real DOCX
+    doc = docx.Document()
+    doc.add_heading(payload["meta"].get("title") or "Proposal", 0)
+    meta = payload["meta"]
+    p = doc.add_paragraph()
+    p.add_run("Solicitation: ").bold = True; p.add_run(str(meta.get("sol_number") or "")); doc.add_paragraph("")
+    p = doc.add_paragraph()
+    p.add_run("Agency: ").bold = True; p.add_run(str(meta.get("agency") or ""))
+    p = doc.add_paragraph()
+    p.add_run("NAICS: ").bold = True; p.add_run(str(meta.get("naics") or ""))
+    p = doc.add_paragraph()
+    p.add_run("Set-Aside: ").bold = True; p.add_run(str(meta.get("set_aside") or ""))
+    p = doc.add_paragraph()
+    p.add_run("Due Date: ").bold = True; p.add_run(str(meta.get("due_date") or ""))
+    if payload.get("section_L"):
+        doc.add_heading("Section L (Instructions)", level=1)
+        doc.add_paragraph(payload["section_L"][:4000])
+    if payload.get("section_M"):
+        doc.add_heading("Section M (Evaluation)", level=1)
+        doc.add_paragraph(payload["section_M"][:4000])
+    doc.add_heading("Outline", level=1)
+    for sec in payload.get("outline", []):
+        doc.add_heading(sec, level=2)
+        doc.add_paragraph(payload.get("sections", {}).get(sec, ""))
+    path = base + ".docx"
+    doc.save(path)
+    return path
+
+# ---- Win Probability (simple heuristic)
+def samv2_win_probability(opp_row: dict) -> dict:
+    score = 50
+    # Set-aside boost
+    sa = (opp_row.get("set_aside") or "").lower()
+    if "small" in sa: score += 8
+    if "sdvosb" in sa or "service-disabled" in sa: score += 6
+    if "8(a)" in sa: score += 4
+    if "hubzone" in sa: score += 4
+    # Time to due date (more time -> higher)
+    try:
+        if opp_row.get("due_date"):
+            due = _dt.datetime.fromisoformat(opp_row["due_date"].replace("Z","").replace("z",""))
+            days = (due - _dt.datetime.utcnow()).days
+            if days >= 21: score += 6
+            elif days >= 10: score += 3
+            elif days <= 3: score -= 8
+    except Exception:
+        pass
+    # NAICS presence
+    if opp_row.get("naics"): score += 2
+    # Attachments exist -> clearer requirements
+    # (In real model you'd use past perf, CPARs, teammate fit, incumbent, etc.)
+    prob = max(5, min(95, score))
+    return {"score": prob, "explain": "Heuristic based on set-aside, time to due date, NAICS presence."}
+
+# ---- UI helpers
 def _has_dialog() -> bool:
     return hasattr(st, "dialog")
 
@@ -8563,6 +8713,12 @@ def rfp_analyzer_popup(opp_row: dict):
             if not desc or len(desc.strip()) < 40:
                 desc = "AI Summary: This opportunity likely involves services/supplies per NAICS/PSC with specified performance location and deadline. Open the attached documents for exact scope and submission instructions."
             st.write(desc)
+
+            # Win probability
+            wp = samv2_win_probability(opp_row)
+            st.metric("Win Probability (est.)", f"{wp['score']}%")
+            st.caption(wp["explain"])
+
             cols = st.columns(2)
             with cols[0]:
                 st.write("**Key Facts**")
@@ -8581,20 +8737,35 @@ def rfp_analyzer_popup(opp_row: dict):
             st.text_input("Your question", key=f"q_{opp_row.get('id')}")
             if st.button("Analyze Question", key=f"qa_{opp_row.get('id')}"):
                 st.info("This is a placeholder for your LLM-based Q&A over the attached documents.")
-            cols2 = st.columns(2)
+            cols2 = st.columns(3)
             with cols2[0]:
                 if st.button("Start Proposal (Prefill)", key=f"start_{opp_row.get('id')}"):
                     payload = samv2_start_proposal(opp_row.get("id"))
                     if payload:
                         st.success("Draft created and Proposal Builder prefilled.")
-                    else:
-                        st.error("Could not start proposal.")
             with cols2[1]:
-                if st.button("Download Attachments", key=f"dl_inmodal_{opp_row.get('id')}"):
-                    cnt = samv2_download_attachments(opp_row.get("id"))
-                    if cnt: st.success(f"Downloaded {cnt} file(s).")
-                    else: st.warning("No downloadable attachments found.")
-        _dlg()
+                if st.button("Extract Section L/M", key=f"lm_{opp_row.get('id')}"):
+                    res = samv2_extract_section_LM(opp_row.get("id"))
+                    if res.get("L") or res.get("M"):
+                        # Also patch into session payload if present
+                        pb = st.session_state.get("proposal_builder_payload")
+                        if isinstance(pb, dict):
+                            if res.get("L"): pb["section_L"] = res["L"]
+                            if res.get("M"): pb["section_M"] = res["M"]
+                            st.session_state["proposal_builder_payload"] = pb
+                        st.success("Extracted Section L/M into the draft.")
+                    else:
+                        st.warning("Couldn't find clear Section L/M text in PDFs.")
+            with cols2[2]:
+                if st.button("Export Proposal DOCX", key=f"docx_{opp_row.get('id')}"):
+                    payload = st.session_state.get("proposal_builder_payload")
+                    if not payload or not isinstance(payload, dict):
+                        payload = samv2_start_proposal(opp_row.get("id"))
+                    name = f"{opp_row.get('sol_number') or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}".replace(" ", "_")
+                    path = samv2_export_docx_from_payload(payload, name)
+                    st.success(f"Exported: {os.path.basename(path)}")
+                    st.markdown(f"[Download file]({path})")
+
     else:
         with st.expander("RFP Analyzer (fallback)"):
             st.info("Update Streamlit to use nice modal popups (st.dialog). For now, this expander shows the same info.")
@@ -8667,23 +8838,23 @@ def render_sam_watch_v2():
 
     st.markdown("### Results")
     conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, sol_number, title, agency, set_aside, naics, posted_date, due_date, last_modified, sam_detail_url, description FROM samv2_opportunities ORDER BY COALESCE(last_modified, posted_date) DESC LIMIT 300")
+    cur.execute("SELECT id, sol_number, title, agency, set_aside, naics, posted_date, due_date, last_modified, sam_detail_url, description, psc FROM samv2_opportunities ORDER BY COALESCE(last_modified, posted_date) DESC LIMIT 300")
     rows = cur.fetchall()
     conn.close()
 
     if not rows:
         st.info("No records yet. Adjust filters and click 'Pull SAM Data'.")
     else:
-        for rid, sol, title, agency, sa, naics_v, posted, due, mod, link, desc in rows:
+        for rid, sol, title, agency, sa, naics_v, posted, due, mod, link, desc, psc in rows:
             with st.container(border=True):
                 c1, c2 = st.columns([0.07, 0.93])
                 with c1:
                     st.checkbox("", key=f"samv2_ck_{rid}")
                 with c2:
                     st.markdown(f"**{title or '(Untitled)'}**")
-                    st.caption(f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}")
+                    st.caption(f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}  |  PSC: {psc or 'N/A'}")
                     st.caption(f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}")
-                    link_col, b1, b2, b3, b4 = st.columns([0.30, 0.18, 0.18, 0.17, 0.17])
+                    link_col, b1, b2, b3, b4, b5 = st.columns([0.24, 0.16, 0.16, 0.16, 0.14, 0.14])
                     with link_col:
                         if link: st.markdown(f"[Open in SAM.gov]({link})")
                         else: st.text("No SAM link")
@@ -8691,7 +8862,7 @@ def render_sam_watch_v2():
                         if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
                             opp = {
                                 "id": rid, "sol_number": sol, "title": title, "agency": agency,
-                                "set_aside": sa, "naics": naics_v, "posted_date": posted,
+                                "set_aside": sa, "naics": naics_v, "psc": psc, "posted_date": posted,
                                 "due_date": due, "last_modified": mod, "sam_detail_url": link,
                                 "description": desc or ""
                             }
@@ -8709,13 +8880,20 @@ def render_sam_watch_v2():
                             payload = samv2_start_proposal(rid)
                             if payload:
                                 st.success("Proposal draft saved and builder prefilled.")
-                            else:
-                                st.error("Could not start proposal.")
                     with b4:
                         if st.button("Download Attachments", key=f"dl_{rid}"):
                             cnt = samv2_download_attachments(rid)
                             if cnt: st.success(f"Downloaded {cnt} file(s).")
                             else: st.warning("No downloadable attachments found.")
+                    with b5:
+                        if st.button("Export DOCX", key=f"docx_{rid}"):
+                            payload = st.session_state.get("proposal_builder_payload")
+                            if not payload or not isinstance(payload, dict):
+                                payload = samv2_start_proposal(rid)
+                            name = f"{sol or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}".replace(" ", "_")
+                            path = samv2_export_docx_from_payload(payload, name)
+                            st.success(f"Exported: {os.path.basename(path)}")
+                            st.markdown(f"[Download file]({path})")
 
     if save_selected:
         conn = samv2_get_conn(); cur = conn.cursor()
@@ -8749,6 +8927,7 @@ except Exception as ex:
     _log("SAM V2 init error: " + str(ex))
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
+
 
 
 
