@@ -8865,6 +8865,133 @@ def samv2_export_docx_from_payload(payload: dict, export_name: str) -> str:
 def _has_dialog() -> bool:
     return hasattr(st, "dialog")
 
+
+# === SAM V2: Pricing Enhancements START ===
+_PRICE_BENCHMARKS = {
+    "561720": {"label": "Custodial (per SF-month)", "unit_hint": "SF-MO", "range": (0.08, 0.35)},
+    "561730": {"label": "Grounds (per acre-month)", "unit_hint": "ACRE-MO", "range": (50, 300)},
+    "238220": {"label": "HVAC/Plumbing Labor (per hour)", "unit_hint": "HR", "range": (75, 180)},
+    "561612": {"label": "Security Guard (per hour)", "unit_hint": "HR", "range": (20, 70)},
+}
+
+def samv2_get_payload():
+    try:
+        pb = st.session_state.get("proposal_builder_payload")
+        if isinstance(pb, dict):
+            return pb
+    except Exception:
+        pass
+    return {}
+
+def samv2_set_payload(pb: dict):
+    try:
+        st.session_state["proposal_builder_payload"] = pb
+    except Exception:
+        pass
+
+def samv2_get_clins_from_payload() -> list[dict]:
+    pb = samv2_get_payload()
+    return list(pb.get("pricing", {}).get("rows", []))
+
+def samv2_set_clins_in_payload(rows: list[dict]):
+    pb = samv2_get_payload() or {}
+    pb.setdefault("pricing", {})
+    pb["pricing"]["rows"] = rows
+    samv2_set_payload(pb)
+
+def samv2_price_check(rows: list[dict], naics: str) -> dict:
+    issues = []
+    totals = 0.0
+    cnt = 0
+    # Simple stats
+    for i, r in enumerate(rows, start=1):
+        qty = str(r.get("Qty", "")).strip()
+        unit_price = str(r.get("Unit Price", "")).strip()
+        if not qty or not unit_price:
+            issues.append((i, "Missing Qty or Unit Price", "Fill both to compute Extended Amount."))
+            continue
+        try:
+            q = float(qty); up = float(unit_price)
+            if q <= 0 or up <= 0:
+                issues.append((i, "Non-positive values", "Qty and Unit Price must be > 0."))
+            totals += q * up; cnt += 1
+        except Exception:
+            issues.append((i, "Non-numeric values", "Qty/Unit Price must be numbers."))
+    # Range checks by NAICS benchmark (if available)
+    primary = (naics or "").split(",")[0].strip()
+    bench = _PRICE_BENCHMARKS.get(primary)
+    if bench:
+        lo, hi = bench["range"]
+        for i, r in enumerate(rows, start=1):
+            unit_price = str(r.get("Unit Price", "")).strip()
+            if not unit_price:
+                continue
+            try:
+                up = float(unit_price)
+                if up < lo:
+                    issues.append((i, "Unit Price low vs. benchmark", f"Below {lo} for {bench['label']}"))
+                if up > hi:
+                    issues.append((i, "Unit Price high vs. benchmark", f"Above {hi} for {bench['label']}"))
+            except Exception:
+                pass
+    score = 100
+    if issues:
+        # Deduct small chunks per issue (cap)
+        score = max(40, 100 - min(30, len(issues) * 3))
+    summary = f"Items: {len(rows)} | Priced: {cnt} | Est. Total (if complete): ${totals:,.2f}"
+    return {"score": score, "issues": issues, "summary": summary, "benchmark": bench}
+
+def samv2_clin_editor_dialog(opportunity_id: int, opp_row: dict | None = None):
+    # Editor dialog using Streamlit's data_editor (if available)
+    rows = samv2_get_clins_from_payload()
+    if not rows:
+        # bootstrap from parser
+        rows = samv2_parse_clins_from_docs(opportunity_id)
+        if not rows:
+            rows = [{"CLIN":"","Description":"","Qty":"","Unit":"","Unit Price":"","Extended Amount":"","Notes":""}]
+    if hasattr(st, "dialog"):
+        @st.dialog("Edit CLINs", width="large")
+        def _dlg():
+            st.write("Enter CLIN rows (you can add/remove rows). Extended Amount auto-calcs on export if Qty & Unit Price are set.")
+            edited = st.data_editor(
+                rows,
+                num_rows="dynamic",
+                use_container_width=True,
+                key=f"clin_edit_{opportunity_id}"
+            )
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("Save to Draft", key=f"save_clin_{opportunity_id}"):
+                    samv2_set_clins_in_payload(edited)
+                    st.success("Saved CLINs to draft.")
+            with col2:
+                if st.button("Run Price Check", key=f"check_clin_{opportunity_id}"):
+                    naics = (opp_row or {}).get("naics") if opp_row else ""
+                    res = samv2_price_check(edited, naics or "")
+                    st.metric("Pricing Health", f"{res['score']}%")
+                    st.caption(res["summary"])
+                    if res["benchmark"]:
+                        st.caption(f"Benchmark: {_PRICE_BENCHMARKS[(naics or '').split(',')[0].strip()]['label']} — range {res['benchmark']['range'][0]} - {res['benchmark']['range'][1]}")
+                    if res["issues"]:
+                        for idx, title, msg in res["issues"][:50]:
+                            st.warning(f"Row {idx}: {title} — {msg}")
+            with col3:
+                if st.button("Re-export CLIN Sheet", key=f"export_clin_{opportunity_id}"):
+                    edited_rows = edited
+                    path = samv2_build_clin_sheet(opportunity_id, rows=edited_rows, subcontractor_mode=False)
+                    pb = samv2_get_payload()
+                    pb.setdefault("pricing", {})["file_path"] = path
+                    samv2_set_payload(pb)
+                    st.success(f"Exported: {path}")
+                    st.markdown(f"[Download]({path})")
+        _dlg()
+    else:
+        with st.expander("Edit CLINs (upgrade Streamlit to use modal)"):
+            edited = st.data_editor(rows, num_rows="dynamic", use_container_width=True, key=f"clin_edit_{opportunity_id}")
+            if st.button("Save CLINs", key=f"save2_{opportunity_id}"):
+                samv2_set_clins_in_payload(edited)
+                st.success("Saved.")
+# === SAM V2: Pricing Enhancements END ===
 def rfp_analyzer_popup(opp_row: dict):
     if _has_dialog():
         @st.dialog(f"RFP Analyzer — {opp_row.get('title') or opp_row.get('sol_number')}", width="large")
@@ -8895,7 +9022,7 @@ def rfp_analyzer_popup(opp_row: dict):
                 st.write(f"Last Modified: {opp_row.get('last_modified') or 'N/A'}")
             st.markdown("---")
             st.write("**RFP Tools**")
-            c1, c2, c3, c4, c5 = st.columns(5)
+            c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
             with c1:
                 if st.button("Start Proposal (Prefill)", key=f"start_{opp_row.get('id')}"):
                     payload = samv2_start_proposal(opp_row.get("id"))
@@ -8907,6 +9034,11 @@ def rfp_analyzer_popup(opp_row: dict):
                     else: st.warning("Couldn't find clear L/M text.")
             with c3:
                 if st.button("Build CLIN Sheet", key=f"clin_{opp_row.get('id')}"):
+                    # Also save parsed rows into draft
+                    rows_guess = samv2_parse_clins_from_docs(opp_row.get('id'))
+                    if rows_guess:
+                        samv2_set_clins_in_payload(rows_guess)
+
                     rows = samv2_parse_clins_from_docs(opp_row.get("id"))
                     path = samv2_build_clin_sheet(opp_row.get("id"), rows=rows, subcontractor_mode=False)
                     st.success(f"CLIN sheet ready: {os.path.basename(path)}")
@@ -8917,11 +9049,14 @@ def rfp_analyzer_popup(opp_row: dict):
                         pb.setdefault("pricing", {})["file_path"] = path
                         st.session_state["proposal_builder_payload"] = pb
             with c4:
+                if st.button("Edit CLINs", key=f"editclin_{opp_row.get('id')}"):
+                    samv2_clin_editor_dialog(opp_row.get('id'), opp_row)
+            with c5:
                 if st.button("Compliance Matrix (Excel)", key=f"cm_{opp_row.get('id')}"):
                     path = samv2_export_compliance_matrix(opp_row.get("id"))
                     st.success(f"Matrix exported: {os.path.basename(path)}")
                     st.markdown(f"[Download]({path})")
-            with c5:
+            with c6:
                 if st.button("Export Proposal DOCX", key=f"docx_{opp_row.get('id')}"):
                     payload = st.session_state.get("proposal_builder_payload")
                     if not payload or not isinstance(payload, dict):
@@ -8945,6 +9080,33 @@ def rfp_analyzer_popup(opp_row: dict):
                     ok = samv2_email_package(sub_email, "CLIN Pricing Input Request", "<p>Please fill in the Unit Prices and return.</p>", [path])
                     if ok: st.info("Emailed sub input sheet.")
                     else: st.warning("Email send failed (check secrets).")
+
+            
+            st.markdown("---")
+            st.write("**Vendor Quote Requests**")
+            vndr_name = st.text_input("Vendor Name", key=f"vndr_nm_{opp_row.get('id')}")
+            vndr_email = st.text_input("Vendor Email", key=f"vndr_em_{opp_row.get('id')}")
+            quote_due = st.text_input("Requested Quote Due (e.g., 2025-10-20 17:00 CT)", key=f"vndr_due_{opp_row.get('id')}")
+            if st.button("Send Quote Request", key=f"vndr_send_{opp_row.get('id')}"):
+                # Ensure there is a sub input sheet to attach
+                rows = samv2_get_clins_from_payload() or samv2_parse_clins_from_docs(opp_row.get('id'))
+                path = samv2_build_clin_sheet(opp_row.get('id'), rows=rows, subcontractor_mode=True)
+                subj = f"Quote Request — {opp_row.get('sol_number') or opp_row.get('title')}"
+                body = f\"\"\"\
+                <p>Dear {vndr_name or 'Vendor'},</p>
+                <p>We are preparing a proposal for <b>{opp_row.get('title') or opp_row.get('sol_number')}</b> ({opp_row.get('agency')}).
+                Please review the attached CLIN Pricing Input Sheet and provide your best pricing. If possible, return by <b>{quote_due or 'TBD'}</b>.</p>
+                <p>Notes:</p>
+                <ul>
+                  <li>Enter Unit Prices and any clarifying notes per CLIN.</li>
+                  <li>Include delivery/lead times and any exceptions.</li>
+                </ul>
+                <p>Thank you,</p>
+                <p>BD Team</p>
+                \"\"\"
+                ok = samv2_email_package(vndr_email, subj, body, [path] if path else [])
+                if ok: st.success("Quote request sent.")
+                else: st.warning("Email failed (check secrets).")
 
             st.markdown("---")
             st.write("**Email Package to CO/POC**")
