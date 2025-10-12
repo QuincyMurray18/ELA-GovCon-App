@@ -8011,3 +8011,1383 @@ try:
                 st.warning(f"[Deals save note: {_e_deals_save}]")
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
+
+
+# ==============================
+# SAM WATCH 10/10: UI wiring helpers
+# ==============================
+
+def ela_sam__get_conn_safe():
+    """
+    Prefer the host app's get_db() if available to share the same SQLite file,
+    otherwise fall back to the SAM module's connection.
+    """
+    try:
+        return get_db()  # type: ignore  # existing app helper
+    except Exception:
+        return ela_sam_get_conn()
+
+def ela_sam__detect_notice_id_col(conn):
+    cur = conn.execute("PRAGMA table_info(opportunities)")
+    cols = [r[1] for r in cur.fetchall()]
+    # Prefer new schema
+    if "notice_id" in cols:
+        return "notice_id"
+    # Back-compat with earlier schema variants seen in your file
+    for alt in ("sam_notice_id","sam_id","noticeId","solicitation_id"):
+        if alt in cols:
+            return alt
+    return "notice_id"
+
+def ela_sam_fetch_opportunities(filters: dict, limit: int = 200):
+    conn = ela_sam__get_conn_safe()
+    nid_col = ela_sam__detect_notice_id_col(conn)
+    # Basic filtering against local table to avoid external calls during UI.
+    wh = []
+    params = []
+    if filters.get("keywords"):
+        kw = f"%{filters['keywords'].strip()}%"
+        wh += ["(title LIKE ? OR agency LIKE ? OR office LIKE ?)"]
+        params += [kw, kw, kw]
+    if filters.get("naics"):
+        wh += ["naics LIKE ?"]
+        params += [f"%{filters['naics']}%"]
+    if filters.get("set_aside"):
+        wh += ["set_aside LIKE ?"]
+        params += [f"%{filters['set_aside']}%"]
+    if filters.get("notice_type"):
+        wh += ["notice_type LIKE ?"]
+        params += [f"%{filters['notice_type']}%"]
+    if filters.get("posted_from"):
+        wh += ["date(posted_date) >= date(?)"]
+        params += [filters["posted_from"]]
+    if filters.get("posted_to"):
+        wh += ["date(posted_date) <= date(?)"]
+        params += [filters["posted_to"]]
+
+    where = ("WHERE " + " AND ".join(wh)) if wh else ""
+    sql = f"""      SELECT {nid_col} as notice_id, title, agency, naics, psc, set_aside, posted_date, due_date, status, sam_url
+      FROM opportunities
+      {where}
+      ORDER BY COALESCE(due_date, posted_date) DESC
+      LIMIT ?
+    """
+    params += [int(limit)]
+    cur = conn.execute(sql, params)
+    rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
+    # Mark duplicates (already in pipeline)
+    try:
+        cur2 = conn.execute("SELECT notice_id FROM pipeline_items")
+        in_pipe = {r[0] for r in cur2.fetchall()}
+    except Exception:
+        in_pipe = set()
+    for r in rows:
+        r["in_pipeline"] = 1 if r["notice_id"] in in_pipe else 0
+    return rows
+
+def ela_sam_ui_render_filters():
+    try:
+        import streamlit as st
+        with st.container(border=True):
+            st.subheader("SAM Watch Search")
+            c1, c2, c3 = st.columns([2,1,1])
+            with c1:
+                keywords = st.text_input("Keywords", key="sam_kw", placeholder="janitorial, HVAC, landscaping")
+            with c2:
+                naics = st.text_input("NAICS", key="sam_naics", placeholder="561720")
+            with c3:
+                set_aside = st.text_input("Set-aside", key="sam_setaside", placeholder="Total Small Business")
+            c4, c5, c6 = st.columns([1,1,1])
+            with c4:
+                notice_type = st.selectbox("Notice type", ["","Solicitation","Combined Synopsis/Solicitation","Presolicitation","Sources Sought"], key="sam_nt")
+            with c5:
+                posted_from = st.date_input("Posted from", value=None, key="sam_from")
+            with c6:
+                posted_to = st.date_input("Posted to", value=None, key="sam_to")
+            st.caption("Tip: saved searches and email alerts coming from subscriptions table.")
+        return {
+            "keywords": keywords.strip() if keywords else "",
+            "naics": naics.strip() if naics else "",
+            "set_aside": set_aside.strip() if set_aside else "",
+            "notice_type": notice_type or "",
+            "posted_from": str(posted_from) if posted_from else None,
+            "posted_to": str(posted_to) if posted_to else None,
+        }
+    except Exception:
+        return {}
+
+def ela_sam_ui_render_results_table(rows):
+    try:
+        import streamlit as st
+        import pandas as pd
+        if not rows:
+            st.info("No opportunities matched your filters.")
+            return []
+
+        df = pd.DataFrame(rows)
+        # Build a simple checkbox selection UI
+        st.write("### Results")
+        selected_ids = []
+        for idx, r in df.iterrows():
+            with st.expander(f"{r['title']} • {r.get('agency','')} • Due: {r.get('due_date','N/A')}", expanded=False):
+                st.write(f"**Notice ID:** {r['notice_id']}")
+                st.write(f"**NAICS:** {r.get('naics','')}  **PSC:** {r.get('psc','')}  **Set-aside:** {r.get('set_aside','')}")
+                st.write(f"**Posted:** {r.get('posted_date','')}  **Due:** {r.get('due_date','')}  **Status:** {r.get('status','')}")
+                if r.get("sam_url"):
+                    st.write(f"[Open in SAM.gov]({r['sam_url']})")
+                add_col, analyze_col, start_col = st.columns([1,1,1])
+                with add_col:
+                    if st.checkbox("Select", key=f"sel_{r['notice_id']}"):
+                        selected_ids.append(r["notice_id"])
+                with analyze_col:
+                    if st.button("Analyze", key=f"an_{r['notice_id']}"):
+                        st.session_state["sam_modal_open"] = r["notice_id"]
+                with start_col:
+                    if st.button("Start Proposal", key=f"sp_{r['notice_id']}"):
+                        conn = ela_sam__get_conn_safe()
+                        ctx = ela_sam_get_proposal_context(conn, r["notice_id"])
+                        st.session_state["proposal_context"] = ctx
+                        st.session_state["active_tab"] = "Proposal Builder"
+                        st.rerun()
+                if r.get("in_pipeline"):
+                    st.caption("✅ Already in Pipeline")
+        return selected_ids
+    except Exception:
+        return []
+
+def ela_sam_render_embedded_panel():
+    """Drop-in panel to place inside your existing SAM Watch tab."""
+    try:
+        import streamlit as st
+        st.markdown("## SAM Watch — Enhanced")
+        filters = ela_sam_ui_render_filters()
+        rows = ela_sam_fetch_opportunities(filters, limit=200)
+        selected = ela_sam_ui_render_results_table(rows)
+        if selected and st.button("Add selected to Pipeline", type="primary"):
+            conn = ela_sam__get_conn_safe()
+            outcomes = [ela_sam_add_to_pipeline(conn, nid) for nid in selected]
+            ela_sam_ui_toast_add_results(outcomes)
+        # Modal
+        notice_id = st.session_state.get("sam_modal_open")
+        if notice_id:
+            with st.dialog("RFP Analyzer"):
+                ela_sam_ui_render_rfp_modal(notice_id)
+                if st.button("Close", key="close_rfp_modal"):
+                    st.session_state["sam_modal_open"] = None
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.warning(f"[SAM Watch UI error] {str(_e)[:300]}")
+        except Exception:
+            pass
+
+# ==============================
+# End SAM WATCH 10/10: UI wiring
+
+# ==============================
+# SAM WATCH 10/10: Pull-new implementations
+# ==============================
+
+def ela_sam_transform_record(api_row: dict) -> dict:
+    """Map SAM API response row into our opportunities schema."""
+    get = api_row.get
+    # Handle nested keys defensively
+    notice_id = get("noticeId") or get("notice_id") or get("id") or ""
+    sol = get("solicitationNumber") or get("solNumber") or ""
+    title = get("title") or get("opportunityTitle") or ""
+    notice_type = get("noticeType") or get("type") or ""
+    agency = (get("agency") or {}).get("name") if isinstance(get("agency"), dict) else get("agency") or ""
+    office = (get("office") or {}).get("name") if isinstance(get("office"), dict) else get("office") or ""
+    naics = ""
+    try:
+        naics = ",".join(str(x) for x in (get("naicsCodes") or [])) if isinstance(get("naicsCodes"), list) else (get("naics") or "")
+    except Exception:
+        naics = get("naics") or ""
+    psc = get("productServiceCode") or get("psc") or ""
+    set_aside = get("setAside") or ""
+    pop = ""
+    try:
+        popd = get("placeOfPerformance") or {}
+        city = popd.get("city") or ""
+        state = popd.get("state") or ""
+        country = popd.get("country") or ""
+        pop = ", ".join([x for x in [city, state, country] if x])
+    except Exception:
+        pass
+    posted_date = get("postedDate") or get("publishDate") or ""
+    due_date = get("responseDueDate") or get("dueDate") or ""
+    status = get("status") or ("active" if get("active", True) else "inactive")
+    sam_url = get("uiLink") or get("samLink") or ""
+    return {
+        "notice_id": str(notice_id),
+        "sol_number": sol,
+        "title": title,
+        "notice_type": notice_type,
+        "agency": agency,
+        "office": office,
+        "naics": naics,
+        "psc": psc,
+        "set_aside": set_aside,
+        "place_of_performance": pop,
+        "posted_date": posted_date,
+        "due_date": due_date,
+        "status": status,
+        "sam_url": sam_url,
+        "is_archived": 0
+    }
+
+def ela_sam_pull_new(filters: dict, limit: int = 200) -> dict:
+    """Call SAM API search, upsert into DB, and return a summary of changes."""
+    conn = ela_sam__get_conn_safe()
+    client = SamClient()
+    items = client.search(filters) or []
+    added = 0
+    updated = 0
+    for row in items[:limit]:
+        rec = ela_sam_transform_record(row)
+        try:
+            # Try to see if it exists
+            cur = conn.execute("SELECT title, status, due_date FROM opportunities WHERE notice_id=?", (rec["notice_id"],))
+            prev = cur.fetchone()
+            ela_sam_upsert_opportunity(conn, rec)
+            if prev:
+                old = {"title": prev[0], "status": prev[1], "due_date": prev[2]}
+                diffs = ela_sam_compute_diff(old, {"title": rec["title"], "status": rec["status"], "due_date": rec["due_date"]})
+                if diffs:
+                    ela_sam_log_change(conn, rec["notice_id"], "updated", {"diffs": diffs})
+                    updated += 1
+            else:
+                added += 1
+        except Exception:
+            pass
+    return {"added": added, "updated": updated, "fetched": len(items)}
+
+# Extend UI panel with a Pull New button at the top
+def ela_sam_render_embedded_panel_with_pull():
+    try:
+        import streamlit as st
+        st.markdown("## SAM Watch — Enhanced")
+        filters = ela_sam_ui_render_filters()
+        # Pull new button
+        if st.button("Pull New from SAM.gov"):
+            res = ela_sam_pull_new(filters, limit=200)
+            st.success(f"Fetched {res['fetched']} • Added {res['added']} • Updated {res['updated']}")
+        rows = ela_sam_fetch_opportunities(filters, limit=200)
+        selected = ela_sam_ui_render_results_table(rows)
+        if selected and st.button("Add selected to Pipeline", type="primary"):
+            conn = ela_sam__get_conn_safe()
+            outcomes = [ela_sam_add_to_pipeline(conn, nid) for nid in selected]
+            ela_sam_ui_toast_add_results(outcomes)
+        notice_id = st.session_state.get("sam_modal_open")
+        if notice_id:
+            with st.dialog("RFP Analyzer"):
+                ela_sam_ui_render_rfp_modal(notice_id)
+                if st.button("Close", key="close_rfp_modal2"):
+                    st.session_state["sam_modal_open"] = None
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.warning(f"[SAM Pull UI error] {str(_e)[:300]}")
+        except Exception:
+            pass
+
+# ==============================
+# End SAM WATCH 10/10: Pull-new
+
+
+# ==============================
+# SAM WATCH 10/10: Attachments + Parsing + Summaries
+# ==============================
+
+def ela_sam__notice_dir(notice_id: str) -> str:
+    import os
+    base = os.path.join(os.getcwd(), "data", "opportunities", str(notice_id))
+    os.makedirs(base, exist_ok=True)
+    os.makedirs(os.path.join(base, "originals"), exist_ok=True)
+    os.makedirs(os.path.join(base, "parsed"), exist_ok=True)
+    return base
+
+def ela_sam_download_all_attachments(notice_id: str) -> dict:
+    """Fetch attachment list from API, download to /data/opportunities/{notice_id}/originals, 
+    upsert metadata and return a summary."""
+    conn = ela_sam__get_conn_safe()
+    client = SamClient()
+    files = client.list_attachments(notice_id) or []
+    base = ela_sam__notice_dir(notice_id)
+    originals = os.path.join(base, "originals")
+
+    downloaded = 0
+    from datetime import datetime as _dt
+    for f in files:
+        # API shape differs; be defensive
+        url = f.get("url") or f.get("href") or f.get("downloadUrl") or ""
+        fname = f.get("fileName") or f.get("name") or (url.split("/")[-1] if url else "")
+        ftype = (fname.split(".")[-1].lower() if "." in fname else "").strip()
+        if not url or not fname:
+            continue
+        dest = os.path.join(originals, fname)
+        dest = client.download_attachment(url, dest)
+        # hash file
+        h = ""
+        try:
+            import hashlib
+            with open(dest, "rb") as fp:
+                h = hashlib.sha256(fp.read()).hexdigest()
+        except Exception:
+            pass
+        meta = {
+            "file_name": fname,
+            "file_url": url,
+            "file_type": ftype,
+            "local_path": dest,
+            "hash": h,
+            "downloaded_at": _dt.utcnow().isoformat()
+        }
+        ela_sam_upsert_attachments_meta(conn, notice_id, [meta])
+        downloaded += 1
+    return {"count": downloaded, "listed": len(files)}
+
+def ela_sam_parse_local_attachments(notice_id: str) -> dict:
+    """Parse local attachments to text where possible (pdf/docx/txt). Saves text files under parsed/."""
+    base = ela_sam__notice_dir(notice_id)
+    originals = os.path.join(base, "originals")
+    parsed_dir = os.path.join(base, "parsed")
+    os.makedirs(parsed_dir, exist_ok=True)
+
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute("SELECT file_name, local_path, file_type FROM attachments WHERE notice_id=?", (notice_id,))
+    rows = cur.fetchall()
+
+    parsed = 0
+    for fname, local_path, ftype in rows:
+        if not local_path or not os.path.exists(local_path):
+            continue
+        out_txt = os.path.join(parsed_dir, f"{os.path.splitext(fname)[0]}.txt")
+        # Skip if already parsed and newer than source
+        try:
+            if os.path.exists(out_txt) and os.path.getmtime(out_txt) >= os.path.getmtime(local_path):
+                continue
+        except Exception:
+            pass
+        text = ""
+        try:
+            ext = (ftype or "").lower()
+            if ext == "pdf" or local_path.lower().endswith(".pdf"):
+                try:
+                    import PyPDF2
+                    with open(local_path, "rb") as fp:
+                        reader = PyPDF2.PdfReader(fp)
+                        text_chunks = []
+                        for page in reader.pages:
+                            try:
+                                text_chunks.append(page.extract_text() or "")
+                            except Exception:
+                                text_chunks.append("")
+                        text = "\n".join(text_chunks)
+                except Exception:
+                    text = ""
+            elif ext in ("docx","doc") or local_path.lower().endswith(".docx"):
+                try:
+                    import docx
+                    d = docx.Document(local_path)
+                    text = "\n".join(p.text for p in d.paragraphs)
+                except Exception:
+                    text = ""
+            elif ext in ("txt","csv") or local_path.lower().endswith(".txt"):
+                try:
+                    with open(local_path, "r", encoding="utf-8", errors="ignore") as fp:
+                        text = fp.read()
+                except Exception:
+                    text = ""
+            else:
+                # unknown: try binary-safe read then ignore
+                text = ""
+        except Exception:
+            text = ""
+
+        try:
+            with open(out_txt, "w", encoding="utf-8", errors="ignore") as w:
+                w.write(text or "")
+            parsed += 1
+        except Exception:
+            pass
+    return {"parsed": parsed}
+
+def ela_sam_refresh_summary_from_files(notice_id: str) -> dict:
+    """Create/refresh AI summary using parsed text blobs (basic heuristic if LLM not configured)."""
+    conn = ela_sam__get_conn_safe()
+    base = ela_sam__notice_dir(notice_id)
+    parsed_dir = os.path.join(base, "parsed")
+
+    # Concatenate a limited amount of text to keep it fast
+    combined = []
+    try:
+        import glob, itertools
+        txts = sorted(glob.glob(os.path.join(parsed_dir, "*.txt")))
+        for path in txts[:8]:  # up to 8 files
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+                    combined.append(fp.read())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    corpus = "\n\n".join(combined)[:150000]  # cap size
+
+    # Pull meta for a better header
+    cur = conn.execute("SELECT title, agency, naics, set_aside, due_date FROM opportunities WHERE notice_id=?", (notice_id,))
+    r = cur.fetchone()
+    meta = {"title": "", "agency": "", "naics": "", "set_aside": "", "due_date": ""}
+    if r:
+        meta = dict(zip(["title","agency","naics","set_aside","due_date"], r))
+
+    # Very simple heuristic summary if no LLM: first N lines that look like requirements
+    import re as _re
+    bullets = []
+    for line in (corpus or "").splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if _re.search(r"(shall|must|provide|require|deliver|submit|include)", s, _re.I):
+            bullets.append("- " + s)
+        if len(bullets) >= 12:
+            break
+    overview = f"{meta.get('title','Opportunity')} for {meta.get('agency','agency')} (NAICS {meta.get('naics','N/A')}, Set-aside: {meta.get('set_aside','N/A')}). Due: {meta.get('due_date','N/A')}."
+    key_requirements = "\n".join(bullets) if bullets else "- See attached documents for detailed requirements."
+
+    # Save into rfp_summaries
+    conn.execute("""        INSERT INTO rfp_summaries (notice_id, overview, key_requirements, section_C, section_L, section_M, deliverables, compliance_flags, extracted_json, model_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(notice_id) DO UPDATE SET
+            overview=excluded.overview,
+            key_requirements=excluded.key_requirements,
+            section_C=excluded.section_C,
+            section_L=excluded.section_L,
+            section_M=excluded.section_M,
+            deliverables=excluded.deliverables,
+            compliance_flags=excluded.compliance_flags,
+            extracted_json=excluded.extracted_json,
+            model_name=excluded.model_name,
+            updated_at=CURRENT_TIMESTAMP
+    """, (
+        notice_id, overview, key_requirements, "", "", "", "", "",
+        _json.dumps({"source":"local_parse","files_dir": parsed_dir, "chars": len(corpus)}),
+        "local-parse"
+    ))
+    conn.commit()
+    return {"overview_len": len(overview), "bullets": len(bullets)}
+
+# ---- Wire actions into the RFP modal ----
+def ela_sam_ui_render_rfp_modal(notice_id: str):
+    try:
+        import streamlit as st
+        conn = ela_sam__get_conn_safe()
+        ctx = ela_sam_get_proposal_context(conn, notice_id)
+        opp = (ctx or {}).get("opportunity", {})
+        summ = (ctx or {}).get("summary", {})
+        st.subheader(opp.get("title","Opportunity"))
+        st.caption(f"Notice: {opp.get('notice_id', '')} • Agency: {opp.get('agency','')} • Due: {opp.get('due_date','N/A')}")
+        with st.container(border=True):
+            colA, colB, colC = st.columns(3)
+            with colA:
+                if st.button("Fetch docs"):
+                    res = ela_sam_download_all_attachments(notice_id)
+                    st.success(f"Docs: listed {res['listed']} • downloaded {res['count']}")
+            with colB:
+                if st.button("Parse docs"):
+                    res = ela_sam_parse_local_attachments(notice_id)
+                    st.success(f"Parsed {res['parsed']} file(s).")
+            with colC:
+                if st.button("Summarize now"):
+                    res = ela_sam_refresh_summary_from_files(notice_id)
+                    st.success(f"Summary updated • {res['bullets']} bullets.")
+
+        # Refresh summary after possible actions
+        ctx = ela_sam_get_proposal_context(conn, notice_id)
+        summ = (ctx or {}).get("summary", {})
+
+        st.write("**AI Summary**")
+        st.write(summ.get("overview") or "Run 'Fetch docs' → 'Parse docs' → 'Summarize now' to generate a summary.")
+        st.write("**Key Requirements**")
+        st.write((summ.get("key_requirements") or "").replace("\n", "\n"))
+
+        qs = st.text_input("Ask RFP Analyzer about this job")
+        if qs:
+            st.info("Q&A stub: connect to your RFP chat using the parsed text corpus.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Open full RFP Analyzer"):
+                st.session_state["active_tab"] = "RFP Analyzer"
+                st.rerun()
+        with col2:
+            if st.button("Start Proposal"):
+                st.session_state["proposal_context"] = ctx
+                st.session_state["active_tab"] = "Proposal Builder"
+                st.rerun()
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.warning(f"[RFP modal error] {str(_e)[:300]}")
+        except Exception:
+            pass
+
+# ==============================
+# End SAM WATCH 10/10: Attachments + Parsing + Summaries
+
+
+# ==============================
+# SAM WATCH 10/10: Saved Searches, Alerts, Status Watcher
+# ==============================
+
+def ela_sam_save_search(name: str, query: dict) -> int:
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute("INSERT INTO saved_searches (name, query_json) VALUES (?, ?)", (name, _json.dumps(query)))
+    conn.commit()
+    return cur.lastrowid
+
+def ela_sam_list_saved_searches() -> list:
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute("SELECT id, name, query_json, created_at FROM saved_searches ORDER BY created_at DESC")
+    rows = [{"id": r[0], "name": r[1], "query": _json.loads(r[2] or "{}"), "created_at": r[3]} for r in cur.fetchall()]
+    return rows
+
+def ela_sam_delete_saved_search(ss_id: int) -> None:
+    conn = ela_sam__get_conn_safe()
+    conn.execute("DELETE FROM saved_searches WHERE id=?", (ss_id,))
+    conn.commit()
+
+def ela_sam_subscribe_alert(user_email: str, frequency: str, query: dict) -> int:
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute("INSERT INTO alert_subscriptions (user_email, frequency, query_json, enabled) VALUES (?, ?, ?, 1)",
+                       (user_email, frequency, _json.dumps(query)))
+    conn.commit()
+    return cur.lastrowid
+
+def ela_sam_list_alerts() -> list:
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute("SELECT id, user_email, frequency, query_json, enabled FROM alert_subscriptions ORDER BY id DESC")
+    return [{"id": r[0], "user_email": r[1], "frequency": r[2], "query": _json.loads(r[3] or "{}"), "enabled": int(r[4] or 0)} for r in cur.fetchall()]
+
+def ela_sam_toggle_alert(alert_id: int, enabled: bool) -> None:
+    conn = ela_sam__get_conn_safe()
+    conn.execute("UPDATE alert_subscriptions SET enabled=? WHERE id=?", (1 if enabled else 0, alert_id))
+    conn.commit()
+
+# ---- Email sender ----
+def ela_sam_send_email(to_addrs: list, subject: str, html_body: str, text_body: str = None):
+    import os, smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    host = os.environ.get("SMTP_HOST")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER")
+    pwd = os.environ.get("SMTP_PASS")
+    sender = os.environ.get("SMTP_FROM", user or "alerts@ela.local")
+
+    if not host or not user or not pwd:
+        # No SMTP configured; noop
+        return False
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = ", ".join(to_addrs)
+    if text_body:
+        msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            server.login(user, pwd)
+            server.sendmail(sender, to_addrs, msg.as_string())
+        return True
+    except Exception:
+        return False
+
+# ---- Status watcher ----
+def ela_sam_refresh_tracked_status() -> dict:
+    """Check pipeline_items for status changes via API detail, log changes, detect new attachments."""
+    conn = ela_sam__get_conn_safe()
+    client = SamClient()
+    cur = conn.execute("SELECT notice_id FROM pipeline_items")
+    ids = [r[0] for r in cur.fetchall()]
+    changed = 0
+    for nid in ids:
+        try:
+            # old snapshot
+            cur2 = conn.execute("SELECT status, due_date, title FROM opportunities WHERE notice_id=?", (nid,))
+            old = cur2.fetchone()
+            old_map = {"status": old[0] if old else None, "due_date": old[1] if old else None, "title": old[2] if old else None}
+            # new snapshot
+            det = client.detail(nid) or {}
+            if det:
+                rec = ela_sam_transform_record(det)
+                ela_sam_upsert_opportunity(conn, rec)
+                diffs = ela_sam_compute_diff(old_map, {"status": rec.get("status"), "due_date": rec.get("due_date"), "title": rec.get("title")})
+                if diffs:
+                    ela_sam_log_change(conn, nid, "updated", {"diffs": diffs})
+                    changed += 1
+            # attachment changes
+            files = client.list_attachments(nid) or []
+            cur3 = conn.execute("SELECT COUNT(1) FROM attachments WHERE notice_id=?", (nid,))
+            prev_count = cur3.fetchone()[0]
+            if len(files) > prev_count:
+                ela_sam_log_change(conn, nid, "attachment_added", {"count": len(files), "prev": prev_count})
+        except Exception:
+            pass
+    return {"tracked": len(ids), "changed": changed}
+
+# ---- Alerts job ----
+def ela_sam_run_alerts_job() -> dict:
+    conn = ela_sam__get_conn_safe()
+    alerts = ela_sam_list_alerts()
+    total_sent = 0
+    for a in alerts:
+        if not a["enabled"]:
+            continue
+        res = ela_sam_pull_new(a["query"], limit=200)
+        # compose email if anything new/updated
+        if res.get("added") or res.get("updated"):
+            # get the latest 25 for body
+            rows = ela_sam_fetch_opportunities(a["query"], limit=25)
+            lines = []
+            for r in rows:
+                line = f"""<p><b>{r.get('title','')}</b><br/>
+                Agency: {r.get('agency','')} • NAICS: {r.get('naics','')} • Due: {r.get('due_date','N/A')}<br/>
+                <a href="{r.get('sam_url','')}">SAM link</a></p>"""
+                lines.append(line)
+            html = f"""<h3>SAM Watch Alert</h3>
+            <p><b>Fetched:</b> {res.get('fetched',0)} • <b>Added:</b> {res.get('added',0)} • <b>Updated:</b> {res.get('updated',0)}</p>
+            {''.join(lines)}"""
+            ok = ela_sam_send_email([a["user_email"]], "SAM Watch Alert", html, text_body=None)
+            if ok:
+                total_sent += 1
+    return {"alerts": len(alerts), "sent": total_sent}
+
+# ---- Scheduler (optional) ----
+def ela_sam_start_scheduler():
+    """Start APScheduler background jobs if available. Safe no-op otherwise."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        sched = BackgroundScheduler()
+        # Twice daily status refresh
+        sched.add_job(ela_sam_refresh_tracked_status, "cron", hour="8,16", minute=5, id="sam_status_refresh", replace_existing=True)
+        # Daily alerts run at 7:45am
+        sched.add_job(ela_sam_run_alerts_job, "cron", hour=7, minute=45, id="sam_alerts_run", replace_existing=True)
+        sched.start()
+        return True
+    except Exception:
+        return False
+
+# ---- Small UI manager panel ----
+def ela_sam_render_alerts_manager():
+    try:
+        import streamlit as st
+        st.markdown("### Saved Searches & Alerts")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Saved Searches")
+            name = st.text_input("Name", key="ss_name")
+            filters = ela_sam_ui_render_filters()
+            if st.button("Save this search"):
+                ss_id = ela_sam_save_search(name or "My search", filters)
+                st.success(f"Saved search #{ss_id}")
+            saved = ela_sam_list_saved_searches()
+            for s in saved:
+                st.caption(f"• {s['name']} – {s['created_at']}")
+        with col2:
+            st.subheader("Email Alerts")
+            email = st.text_input("Send to email", key="alert_email")
+            freq = st.selectbox("Frequency", ["daily","weekly","monthly"], index=0)
+            filters2 = ela_sam_ui_render_filters()
+            if st.button("Subscribe alert"):
+                aid = ela_sam_subscribe_alert(email, freq, filters2)
+                st.success(f"Alert #{aid} created")
+            for a in ela_sam_list_alerts():
+                st.caption(f"• {a['user_email']} – {a['frequency']} – enabled={a['enabled']}")
+
+        st.divider()
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("Run alerts now"):
+                res = ela_sam_run_alerts_job()
+                st.success(f"Ran alerts • {res['sent']} email(s) sent")
+        with c2:
+            if st.button("Refresh tracked status now"):
+                res = ela_sam_refresh_tracked_status()
+                st.success(f"Tracked {res['tracked']} • Changed {res['changed']}")
+        with c3:
+            if st.button("Start background scheduler"):
+                ok = ela_sam_start_scheduler()
+                st.success("Scheduler started" if ok else "Scheduler not available")
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.warning(f"[Alerts manager error] {str(_e)[:300]}")
+        except Exception:
+            pass
+
+# ==============================
+# End SAM WATCH 10/10: Saved Searches, Alerts, Status Watcher
+
+
+# ==============================
+# SAM WATCH 10/10: Bid Readiness + CO Outreach Drafts
+# ==============================
+
+def ela_sam_get_company_profile() -> dict:
+    """Try to load company profile from DB or env; return safe defaults if not found."""
+    conn = ela_sam__get_conn_safe()
+    # Optional table: company_profile(key TEXT PRIMARY KEY, json TEXT)
+    try:
+        cur = conn.execute("SELECT json FROM company_profile WHERE key='default'")
+        row = cur.fetchone()
+        if row and row[0]:
+            return _json.loads(row[0])
+    except Exception:
+        pass
+    # Fallback env-based
+    import os
+    return {
+        "legal_name": os.environ.get("ELA_COMPANY_NAME", "ELA Management LLC"),
+        "capabilities_naics": (os.environ.get("ELA_NAICS", "561720,238220,561730") or "").split(","),
+        "eligible_set_asides": (os.environ.get("ELA_SET_ASIDES", "Total Small Business") or "").split(","),
+        "certifications": (os.environ.get("ELA_CERTS", "SDB, WOSB") or "").split(","),
+        "past_perf_count": int(os.environ.get("ELA_PAST_PERF", "3")),
+        "bonding_capacity": float(os.environ.get("ELA_BONDING", "0")),
+        "max_contract_value": float(os.environ.get("ELA_MAX_VALUE", "500000")),
+        "primary_poc": os.environ.get("ELA_PRIMARY_POC", "Latrice Mack"),
+        "primary_email": os.environ.get("ELA_PRIMARY_EMAIL", "elamgmtllc@gmail.com"),
+        "primary_phone": os.environ.get("ELA_PRIMARY_PHONE", "832-273-0498"),
+    }
+
+def ela_sam_compute_bid_readiness(notice_id: str, profile: dict = None) -> dict:
+    """Heuristic 0-100 score with transparent breakdown; safe with missing data."""
+    conn = ela_sam__get_conn_safe()
+    profile = profile or ela_sam_get_company_profile()
+
+    # Load opportunity
+    cur = conn.execute("""        SELECT title, agency, naics, set_aside, due_date, posted_date
+        FROM opportunities WHERE notice_id=?
+    """, (notice_id,))
+    row = cur.fetchone()
+    if not row:
+        return {"score": 0, "breakdown": [], "notes": "Opportunity not found."}
+    title, agency, naics_csv, set_aside, due_date, posted_date = row
+    naics_list = [x.strip() for x in (naics_csv or "").split(",") if x.strip()]
+
+    # Factors (weights sum to 100)
+    weights = {
+        "NAICS fit": 25,
+        "Set-aside eligibility": 25,
+        "Time runway": 10,
+        "Docs parsed": 10,
+        "Past performance": 10,
+        "Certifications": 10,
+        "Capacity vs value": 10
+    }
+
+    # NAICS fit
+    cap_naics = [x.strip() for x in (profile.get("capabilities_naics") or [])]
+    naics_match = 1 if any(n in cap_naics for n in naics_list if n) else 0
+    s1 = naics_match * weights["NAICS fit"]
+
+    # Set-aside eligibility (string contains check, case-insensitive)
+    elig_set = [s.strip().lower() for s in (profile.get("eligible_set_asides") or [])]
+    op_set = (set_aside or "").strip().lower()
+    set_ok = 1 if (not op_set or any(e in op_set for e in elig_set) or "small business" in op_set) else 0
+    s2 = set_ok * weights["Set-aside eligibility"]
+
+    # Time runway: days until due >= 7 gets full, >=3 gets half
+    import datetime as _dt
+    runway = 0
+    try:
+        if due_date:
+            d = _dt.datetime.fromisoformat(str(due_date).split(" ")[0])
+            days = (d - _dt.datetime.utcnow()).days
+            runway = days
+    except Exception:
+        runway = 0
+    if runway >= 7:
+        s3 = weights["Time runway"]
+    elif runway >= 3:
+        s3 = int(weights["Time runway"] * 0.5)
+    else:
+        s3 = 0
+
+    # Docs parsed: count parsed txt files
+    base = ela_sam__notice_dir(notice_id)
+    import glob, os
+    parsed = len(glob.glob(os.path.join(base, "parsed", "*.txt")))
+    s4 = weights["Docs parsed"] if parsed >= 1 else 0
+
+    # Past performance
+    pp = int(profile.get("past_perf_count") or 0)
+    s5 = weights["Past performance"] if pp >= 3 else int(weights["Past performance"] * 0.5) if pp == 1 or pp == 2 else 0
+
+    # Certifications (bonus for matching common ones)
+    certs = [c.strip().upper() for c in (profile.get("certifications") or [])]
+    cert_score = 0
+    for tag in ("SDB","WOSB","MBE","8(A)","HUBZONE","VOSB","SDVOSB"):
+        if tag in certs:
+            cert_score += 2
+    cert_score = min(cert_score, 10)
+    s6 = cert_score
+
+    # Capacity vs value (no value in schema; heuristic: give half credit if bonding or max value >= 100k)
+    max_val = float(profile.get("max_contract_value") or 0)
+    s7 = weights["Capacity vs value"] if max_val >= 100000 else int(weights["Capacity vs value"] * 0.5) if max_val >= 50000 else 0
+
+    total = s1 + s2 + s3 + s4 + s5 + s6 + s7
+    breakdown = [
+        {"factor": "NAICS fit", "points": s1, "reason": f"Opportunity NAICS {naics_list} vs capabilities {cap_naics}"},
+        {"factor": "Set-aside eligibility", "points": s2, "reason": f"Opportunity set-aside '{set_aside}' vs eligibility {elig_set}"},
+        {"factor": "Time runway", "points": s3, "reason": f"{runway} day(s) until due"},
+        {"factor": "Docs parsed", "points": s4, "reason": f"{parsed} parsed file(s)"},
+        {"factor": "Past performance", "points": s5, "reason": f"{pp} referenced engagement(s)"},
+        {"factor": "Certifications", "points": s6, "reason": f"{', '.join(certs) or 'none'}"},
+        {"factor": "Capacity vs value", "points": s7, "reason": f"Max contract value threshold: {int(max_val):,}"},
+    ]
+    return {"score": int(total), "breakdown": breakdown, "meta": {"title": title, "agency": agency, "due_date": due_date, "runway_days": runway}}
+
+def ela_sam_generate_co_outreach_email(notice_id: str, contact_name: str = None) -> dict:
+    """Draft a concise CO/POC outreach email using opportunity context and summary."""
+    conn = ela_sam__get_conn_safe()
+    prof = ela_sam_get_company_profile()
+    cur = conn.execute("""        SELECT title, agency, sol_number, set_aside, naics, due_date, sam_url
+        FROM opportunities WHERE notice_id=?
+    """, (notice_id,))
+    row = cur.fetchone()
+    if not row:
+        return {"subject":"", "body": "Context unavailable."}
+    title, agency, sol, set_aside, naics, due, link = row
+    # try to get a contact
+    ccur = conn.execute("SELECT name, email FROM opportunity_contacts WHERE notice_id=? LIMIT 1", (notice_id,))
+    c = ccur.fetchone()
+    to_name = contact_name or (c[0] if c and c[0] else "Contracting Officer")
+    subj = f"{prof.get('legal_name','ELA Management LLC')} – {title or 'Opportunity'} (NAICS {naics or 'N/A'})"
+    body = f"""Hello {to_name},
+
+My name is {prof.get('primary_poc','Latrice Mack')} with {prof.get('legal_name','ELA Management LLC')}. We are a small business with experience in {', '.join(prof.get('capabilities_naics', [])[:3])} and certifications ({', '.join(prof.get('certifications', []))}).
+
+We are reviewing “{title or 'this opportunity'}” for {agency or 'the agency'} (Solicitation {sol or 'N/A'}, NAICS {naics or 'N/A'}, Set‑aside: {set_aside or 'N/A'}, Due: {str(due) or 'N/A'}). Could you please confirm:
+• Any amendments or anticipated updates
+• Preferred format and submission method
+• Whether site visits or Q&A deadlines are planned
+
+If helpful, we can provide a brief capability statement and relevant past performance examples. 
+Link: {link or 'SAM.gov listing'}
+
+Thank you for your time.
+{prof.get('primary_poc','Latrice Mack')}
+{prof.get('primary_email','elamgmtllc@gmail.com')} | {prof.get('primary_phone','832-273-0498')}
+"""
+    return {"subject": subj, "body": body}
+
+def ela_sam_render_readiness_widget(notice_id: str):
+    try:
+        import streamlit as st
+        res = ela_sam_compute_bid_readiness(notice_id)
+        st.markdown("### Bid Readiness")
+        st.metric("Score", f"{res['score']}/100" , help="Higher is better based on capability match, set‑aside fit, runway, docs parsed, certifications, etc.")
+        with st.expander("Breakdown", expanded=False):
+            for b in res.get("breakdown", []):
+                st.write(f"**{b['factor']}**: {b['points']} • {b['reason']}")
+    except Exception:
+        pass
+
+def ela_sam_render_outreach_draft(notice_id: str):
+    try:
+        import streamlit as st
+        st.markdown("### CO Outreach Draft")
+        name_hint = st.text_input("Contact name (optional)", key=f"co_name_{notice_id}", placeholder="e.g., Ms. Johnson")
+        draft = ela_sam_generate_co_outreach_email(notice_id, name_hint or None)
+        st.text_area("Subject", draft.get("subject",""), height=40)
+        st.text_area("Email body", draft.get("body",""), height=220)
+    except Exception:
+        pass
+
+# ---- Extend the RFP modal to include readiness + outreach ----
+def ela_sam_ui_render_rfp_modal(notice_id: str):
+    try:
+        import streamlit as st
+        conn = ela_sam__get_conn_safe()
+        ctx = ela_sam_get_proposal_context(conn, notice_id)
+        opp = (ctx or {}).get("opportunity", {})
+        summ = (ctx or {}).get("summary", {})
+        st.subheader(opp.get("title","Opportunity"))
+        st.caption(f"Notice: {opp.get('notice_id', '')} • Agency: {opp.get('agency','')} • Due: {opp.get('due_date','N/A')}")
+        with st.container(border=True):
+            colA, colB, colC = st.columns(3)
+            with colA:
+                if st.button("Fetch docs"):
+                    res = ela_sam_download_all_attachments(notice_id)
+                    st.success(f"Docs: listed {res['listed']} • downloaded {res['count']}")
+            with colB:
+                if st.button("Parse docs"):
+                    res = ela_sam_parse_local_attachments(notice_id)
+                    st.success(f"Parsed {res['parsed']} file(s).")
+            with colC:
+                if st.button("Summarize now"):
+                    res = ela_sam_refresh_summary_from_files(notice_id)
+                    st.success(f"Summary updated • {res['bullets']} bullets.")
+
+        # Refresh summary after possible actions
+        ctx = ela_sam_get_proposal_context(conn, notice_id)
+        summ = (ctx or {}).get("summary", {})
+
+        top = st.container()
+        with top:
+            left, right = st.columns([2,1])
+            with left:
+                st.write("**AI Summary**")
+                st.write(summ.get("overview") or "Run 'Fetch docs' → 'Parse docs' → 'Summarize now' to generate a summary.")
+                st.write("**Key Requirements**")
+                st.write((summ.get("key_requirements") or "").replace("\n", "\n"))
+            with right:
+                ela_sam_render_readiness_widget(notice_id)
+
+        qs = st.text_input("Ask RFP Analyzer about this job")
+        if qs:
+            st.info("Q&A stub: connect to your RFP chat using the parsed text corpus.")
+
+        ela_sam_render_outreach_draft(notice_id)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Open full RFP Analyzer"):
+                st.session_state["active_tab"] = "RFP Analyzer"
+                st.rerun()
+        with col2:
+            if st.button("Start Proposal"):
+                st.session_state["proposal_context"] = ctx
+                st.session_state["active_tab"] = "Proposal Builder"
+                st.rerun()
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.warning(f"[RFP modal error] {str(_e)[:300]}")
+        except Exception:
+            pass
+
+# ==============================
+# End SAM WATCH 10/10: Bid Readiness + CO Outreach Drafts
+
+
+# ==============================
+# SAM WATCH 10/10: Pricing Checklist handoff
+# ==============================
+
+def ela_sam_extract_pricing_signals(notice_id: str) -> dict:
+    """Heuristic extraction of pricing inputs from parsed text and metadata.
+    Returns a dict suitable for a Pricing Calculator tab. Safe with missing data.
+    """
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute("""        SELECT title, agency, naics, psc, set_aside, place_of_performance, due_date
+        FROM opportunities WHERE notice_id=?
+    """, (notice_id,))
+    row = cur.fetchone()
+    meta = {}
+    if row:
+        meta = dict(zip(
+            ["title","agency","naics","psc","set_aside","place_of_performance","due_date"], row
+        ))
+
+    # Read combined parsed corpus for quick signals
+    base = ela_sam__notice_dir(notice_id)
+    import glob, os, re as _re
+    tokens = []
+    try:
+        for path in sorted(glob.glob(os.path.join(base, "parsed", "*.txt")))[:8]:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+                    txt = fp.read()
+                    tokens.append(txt)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    corpus = "\n".join(tokens)
+
+    # Heuristic extraction
+    def find_flag(pattern: str) -> bool:
+        try:
+            return bool(_re.search(pattern, corpus, _re.I))
+        except Exception:
+            return False
+
+    labor_flags = {
+        "supervisor": find_flag(r"site\s*supervisor|project\s*manager|supervisory"),
+        "qa_qc": find_flag(r"quality\s*(control|assurance)|QA|QC"),
+        "safety": find_flag(r"safety\s*(plan|program|meetings|OSHA)"),
+        "union": find_flag(r"collective\s*bargaining|prevailing\s*wage"),
+        "bonding": find_flag(r"performance\s*bond|payment\s*bond"),
+        "insurance": find_flag(r"insurance|COI|coverage"),
+        "supplies": find_flag(r"consumables|supplies|materials"),
+        "equipment": find_flag(r"equipment|vehicles|tools"),
+        "travel": find_flag(r"travel|lodging|per\s*diem"),
+        "reports": find_flag(r"report(s)?|deliverable(s)?|monthly\s*report")
+    }
+
+    estimated_period = None
+    try:
+        m = _re.search(r"(base|initial)\s*period.*?(\d+)\s*(day|days|month|months|year|years)", corpus, _re.I|_re.S)
+        if m:
+            estimated_period = f"{m.group(2)} {m.group(3)}"
+    except Exception:
+        pass
+
+    deliverables = []
+    for line in corpus.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.lower().startswith(("deliverable", "deliverables", "reports", "report", "monthly")):
+            deliverables.append(s)
+            if len(deliverables) >= 10:
+                break
+
+    return {
+        "meta": meta,
+        "labor_flags": labor_flags,
+        "estimated_period": estimated_period,
+        "deliverables": deliverables
+    }
+
+def ela_sam_start_pricing_checklist(notice_id: str):
+    """Build pricing context and send to Pricing Calculator tab via session_state."""
+    try:
+        import streamlit as st
+        ctx = ela_sam_extract_pricing_signals(notice_id)
+        st.session_state["pricing_context"] = ctx
+        st.session_state["active_tab"] = "Pricing Calculator"
+        st.rerun()
+    except Exception:
+        pass
+
+# Extend the RFP modal to include Pricing Checklist launcher
+def ela_sam_ui_render_rfp_modal(notice_id: str):
+    try:
+        import streamlit as st
+        conn = ela_sam__get_conn_safe()
+        ctx = ela_sam_get_proposal_context(conn, notice_id)
+        opp = (ctx or {}).get("opportunity", {})
+        summ = (ctx or {}).get("summary", {})
+        st.subheader(opp.get("title","Opportunity"))
+        st.caption(f"Notice: {opp.get('notice_id', '')} • Agency: {opp.get('agency','')} • Due: {opp.get('due_date','N/A')}")
+        with st.container(border=True):
+            colA, colB, colC, colD = st.columns(4)
+            with colA:
+                if st.button("Fetch docs"):
+                    res = ela_sam_download_all_attachments(notice_id)
+                    st.success(f"Docs: listed {res['listed']} • downloaded {res['count']}")
+            with colB:
+                if st.button("Parse docs"):
+                    res = ela_sam_parse_local_attachments(notice_id)
+                    st.success(f"Parsed {res['parsed']} file(s).")
+            with colC:
+                if st.button("Summarize now"):
+                    res = ela_sam_refresh_summary_from_files(notice_id)
+                    st.success(f"Summary updated • {res['bullets']} bullets.")
+            with colD:
+                if st.button("Start Pricing Checklist"):
+                    ela_sam_start_pricing_checklist(notice_id)
+
+        # Refresh summary after possible actions
+        ctx = ela_sam_get_proposal_context(conn, notice_id)
+        summ = (ctx or {}).get("summary", {})
+
+        top = st.container()
+        with top:
+            left, right = st.columns([2,1])
+            with left:
+                st.write("**AI Summary**")
+                st.write(summ.get("overview") or "Run 'Fetch docs' → 'Parse docs' → 'Summarize now' to generate a summary.")
+                st.write("**Key Requirements**")
+                st.write((summ.get("key_requirements") or "").replace("\n", "\n"))
+            with right:
+                ela_sam_render_readiness_widget(notice_id)
+
+        qs = st.text_input("Ask RFP Analyzer about this job")
+        if qs:
+            st.info("Q&A stub: connect to your RFP chat using the parsed text corpus.")
+
+        ela_sam_render_outreach_draft(notice_id)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Open full RFP Analyzer"):
+                st.session_state["active_tab"] = "RFP Analyzer"
+                st.rerun()
+        with col2:
+            if st.button("Start Proposal"):
+                st.session_state["proposal_context"] = ctx
+                st.session_state["active_tab"] = "Proposal Builder"
+                st.rerun()
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.warning(f"[RFP modal error] {str(_e)[:300]}")
+        except Exception:
+            pass
+
+# ==============================
+# End SAM WATCH 10/10: Pricing Checklist handoff
+
+
+# ==============================
+# SAM WATCH 10/10: NAICS labor presets for Pricing Calculator
+# ==============================
+
+def ela_sam_get_naics_labor_presets() -> dict:
+    """Curated labor presets by NAICS with conservative default rates.
+    These are placeholders; replace with your internal rate card.
+    Rates are in USD/hour and can be overridden in the Pricing Calculator.
+    """
+    return {
+        "561720": [  # Janitorial Services
+            {"role": "Project Manager", "rate": 65},
+            {"role": "Site Supervisor", "rate": 45},
+            {"role": "Janitor/Custodian", "rate": 28},
+            {"role": "Quality Inspector", "rate": 40}
+        ],
+        "238220": [  # Plumbing, Heating, and Air-Conditioning
+            {"role": "Project Manager", "rate": 85},
+            {"role": "HVAC Technician (Journeyman)", "rate": 75},
+            {"role": "HVAC Apprentice/Helper", "rate": 45},
+            {"role": "QA/QC Inspector", "rate": 60}
+        ],
+        "561730": [  # Landscaping Services
+            {"role": "Project Manager", "rate": 65},
+            {"role": "Crew Lead", "rate": 42},
+            {"role": "Groundskeeper/Laborer", "rate": 30},
+            {"role": "Irrigation Tech", "rate": 50}
+        ],
+        "722310": [  # Food Service Contractors (example for catering/mess)
+            {"role": "Food Service Manager", "rate": 55},
+            {"role": "Cook", "rate": 35},
+            {"role": "Food Service Worker", "rate": 28},
+            {"role": "Sanitation", "rate": 27}
+        ]
+    }
+
+def ela_sam_seed_pricing_by_naics(naics_csv: str, labor_flags: dict) -> list:
+    presets = ela_sam_get_naics_labor_presets()
+    picked = []
+    # prefer first NAICS in list that has presets
+    naics_list = [x.strip() for x in (naics_csv or "").split(",") if x.strip()]
+    base = None
+    for n in naics_list:
+        if n in presets:
+            base = presets[n]
+            break
+    base = base or presets.get("561720", [])  # default to janitorial
+    # Copy and adjust: if flags indicate QA/QC, supervisor, safety, etc., ensure roles present
+    def ensure_role(arr, role, rate):
+        if not any(r["role"] == role for r in arr):
+            arr.append({"role": role, "rate": rate})
+    items = [dict(role=r["role"], rate=float(r["rate"]), hours=160.0 if r["role"] in ("Project Manager","Site Supervisor") else 173.3, qty=1, notes="preset") for r in base]
+    if labor_flags.get("qa_qc"):
+        ensure_role(items, "QA/QC Inspector", 55.0)
+    if labor_flags.get("safety"):
+        ensure_role(items, "Safety Officer", 58.0)
+    if labor_flags.get("supervisor"):
+        ensure_role(items, "Site Supervisor", 45.0)
+    # Sort and return
+    items = sorted(items, key=lambda x: x["role"])
+    return items
+
+# Inject presets into pricing_context
+def ela_sam_extract_pricing_signals(notice_id: str) -> dict:
+    """Patched version: adds suggested_labor based on NAICS and flags."""
+    conn = ela_sam__get_conn_safe()
+    cur = conn.execute(        "SELECT title, agency, naics, psc, set_aside, place_of_performance, due_date FROM opportunities WHERE notice_id=?",         (notice_id,))
+    row = cur.fetchone()
+    meta = {}
+    if row:
+        meta = dict(zip(["title","agency","naics","psc","set_aside","place_of_performance","due_date"], row))
+
+    # Previous logic to collect corpus and flags
+    base = ela_sam__notice_dir(notice_id)
+    import glob, os, re as _re
+    tokens = []
+    try:
+        for path in sorted(glob.glob(os.path.join(base, "parsed", "*.txt")))[:8]:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+                    tokens.append(fp.read())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    corpus = "\n".join(tokens)
+
+    def find_flag(pattern: str) -> bool:
+        try:
+            return bool(_re.search(pattern, corpus, _re.I))
+        except Exception:
+            return False
+
+    labor_flags = {
+        "supervisor": find_flag(r"site\s*supervisor|project\s*manager|supervisory"),
+        "qa_qc": find_flag(r"quality\s*(control|assurance)|QA|QC"),
+        "safety": find_flag(r"safety\s*(plan|program|meetings|OSHA)"),
+        "union": find_flag(r"collective\s*bargaining|prevailing\s*wage"),
+        "bonding": find_flag(r"performance\s*bond|payment\s*bond"),
+        "insurance": find_flag(r"insurance|COI|coverage"),
+        "supplies": find_flag(r"consumables|supplies|materials"),
+        "equipment": find_flag(r"equipment|vehicles|tools"),
+        "travel": find_flag(r"travel|lodging|per\s*diem"),
+        "reports": find_flag(r"report(s)?|deliverable(s)?|monthly\s*report")
+    }
+
+    estimated_period = None
+    try:
+        m = _re.search(r"(base|initial)\s*period.*?(\d+)\s*(day|days|month|months|year|years)", corpus, _re.I|_re.S)
+        if m:
+            estimated_period = f"{m.group(2)} {m.group(3)}"
+    except Exception:
+        pass
+
+    deliverables = []
+    for line in corpus.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.lower().startswith(("deliverable", "deliverables", "reports", "report", "monthly")):
+            deliverables.append(s)
+            if len(deliverables) >= 10:
+                break
+
+    suggested_labor = ela_sam_seed_pricing_by_naics(meta.get("naics",""), labor_flags)
+
+    return {
+        "meta": meta,
+        "labor_flags": labor_flags,
+        "estimated_period": estimated_period,
+        "deliverables": deliverables,
+        "suggested_labor": suggested_labor
+    }
+
+# ==============================
+# End SAM WATCH 10/10: NAICS labor presets
+
+
+# ==============================
+# SAM WATCH 10/10: Overhead + Profit Calculator
+# ==============================
+
+def ela_sam_compute_price_totals(labor_rows: list, overhead_pct=15.0, gna_pct=7.0, contingency_pct=3.0, profit_pct=10.0, tax_pct=0.0) -> dict:
+    """Compute extended costs from labor rows and markup percentages.
+    labor_rows: list of {rate, hours, qty}
+    All percentages are in % (e.g., 10.0 = 10%).
+    """
+    import math
+    labor_subtotal = 0.0
+    for r in labor_rows or []:
+        try:
+            rate = float(r.get("rate", 0))
+            hours = float(r.get("hours", 0))
+            qty = float(r.get("qty", 1))
+            labor_subtotal += rate * hours * qty
+        except Exception:
+            continue
+    overhead = labor_subtotal * (float(overhead_pct)/100.0)
+    gna = labor_subtotal * (float(gna_pct)/100.0)
+    contingency = labor_subtotal * (float(contingency_pct)/100.0)
+    subtotal_plus = labor_subtotal + overhead + gna + contingency
+    profit = subtotal_plus * (float(profit_pct)/100.0)
+    taxable = subtotal_plus + profit
+    taxes = taxable * (float(tax_pct)/100.0)
+    grand_total = taxable + taxes
+    return {
+        "labor_subtotal": labor_subtotal,
+        "overhead": overhead,
+        "gna": gna,
+        "contingency": contingency,
+        "profit": profit,
+        "taxes": taxes,
+        "total": grand_total
+    }
+
+def ela_sam_render_overhead_profit_panel():
+    """Drop-in panel for the Pricing Calculator tab. Pulls rows from session_state['pricing_context']['suggested_labor']
+    and exposes editable percentages, computing totals on the fly.
+    """
+    try:
+        import streamlit as st
+        import pandas as pd
+        ctx = st.session_state.get("pricing_context", {})
+        rows = ctx.get("suggested_labor", [])
+        st.markdown("### Overhead • G&A • Profit")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            overhead_pct = st.number_input("Overhead %", min_value=0.0, max_value=100.0, value=15.0, step=0.5, key="ovh_pct")
+        with c2:
+            gna_pct = st.number_input("G&A %", min_value=0.0, max_value=100.0, value=7.0, step=0.5, key="gna_pct")
+        with c3:
+            contingency_pct = st.number_input("Contingency %", min_value=0.0, max_value=100.0, value=3.0, step=0.5, key="cont_pct")
+        with c4:
+            profit_pct = st.number_input("Profit %", min_value=0.0, max_value=100.0, value=10.0, step=0.5, key="profit_pct")
+        with c5:
+            tax_pct = st.number_input("Tax %", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="tax_pct")
+
+        # Editable labor grid
+        df = pd.DataFrame(rows) if rows else pd.DataFrame([{"role":"", "rate":0.0, "hours":0.0, "qty":1, "notes":""}])
+        edited = st.data_editor(df, num_rows="dynamic", use_container_width=True, key="labor_editor")
+        # Convert edited back to list of dicts
+        edited_rows = edited.to_dict(orient="records")
+
+        totals = ela_sam_compute_price_totals(
+            edited_rows, overhead_pct=overhead_pct, gna_pct=gna_pct,
+            contingency_pct=contingency_pct, profit_pct=profit_pct, tax_pct=tax_pct
+        )
+
+        # Metrics row
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Labor Subtotal", f"${totals['labor_subtotal']:,.2f}")
+            st.metric("Overhead", f"${totals['overhead']:,.2f}")
+        with m2:
+            st.metric("G&A", f"${totals['gna']:,.2f}")
+            st.metric("Contingency", f"${totals['contingency']:,.2f}")
+        with m3:
+            st.metric("Profit", f"${totals['profit']:,.2f}")
+            st.metric("Taxes", f"${totals['taxes']:,.2f}")
+        st.header(f"Total: ${totals['total']:,.2f}")
+
+        # Persist back to session_state for other tabs/exports
+        st.session_state["pricing_context"] = {
+            **ctx,
+            "suggested_labor": edited_rows,
+            "markups": {
+                "overhead_pct": overhead_pct,
+                "gna_pct": gna_pct,
+                "contingency_pct": contingency_pct,
+                "profit_pct": profit_pct,
+                "tax_pct": tax_pct
+            },
+            "totals": totals
+        }
+    except Exception:
+        pass
+
+# ==============================
+# End SAM WATCH 10/10: Overhead + Profit Calculator
+# ==============================
+
+# ==============================
+
+# ==============================
+
+# ==============================
+
+# ==============================
+
+# ==============================
+
+# ==============================
+# ==============================
