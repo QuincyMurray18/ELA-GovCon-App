@@ -8873,7 +8873,9 @@ def ela_sam_extract_pricing_signals(notice_id: str) -> dict:
     except Exception: pass
     deliverables = []
     for line in corpus.splitlines():
-        s = line.strip(); if not s: continue
+        s = line.strip()
+        if not s:
+            continue
         if s.lower().startswith(("deliverable", "deliverables", "reports", "report", "monthly")):
             deliverables.append(s); 
             if len(deliverables) >= 10: break
