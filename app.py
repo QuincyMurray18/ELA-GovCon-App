@@ -8014,9 +8014,10 @@ except Exception as _e_deals_tab:
 
 
 
+
 # === SAM WATCH V2 (AUTO-MERGED) START ===
-# This block was auto-merged by ChatGPT on 2025-10-12T21:37:00.538121.
-# Adds: attachment persistence + downloader, and email sending via SendGrid or SMTP.
+# Auto-merged by ChatGPT on 2025-10-12T21:41:46.422697
+# Adds: Proposal Builder auto-route with NAICS-based outline + compliance checklist.
 
 from __future__ import annotations
 
@@ -8034,27 +8035,23 @@ import datetime as _dt
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# Third-party imports are wrapped in try/except to avoid crashing if missing
 try:
     import requests
-except Exception as _e_req:
+except Exception:
     requests = None
 
 try:
     import streamlit as st
-except Exception as _e_st:
+except Exception:
     class _Shim:
         def __getattr__(self, k):
-            def _f(*a, **kw):
+            def _f(*a, **kw): 
                 return None
             return _f
     st = _Shim()
 
 ENABLE_SAM_WATCH_V2 = True
 
-# ----------------------
-# Config and constants
-# ----------------------
 SAM_API_BASE = "https://api.sam.gov/opportunities/v3/search"
 SAM_API_KEY = None
 try:
@@ -8062,7 +8059,6 @@ try:
 except Exception:
     SAM_API_KEY = None
 
-# Email config (either SendGrid or SMTP)
 SENDGRID_API_KEY = None
 ALERTS_FROM = None
 SMTP_HOST = None
@@ -8084,9 +8080,7 @@ try:
 except Exception:
     pass
 
-# Default database path confirmed by user
 DB_PATH = "./ela.sqlite3"
-
 DATA_DIR = os.path.join(os.getcwd(), "data", "opportunities")
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -8097,9 +8091,6 @@ def _log(msg: str):
     except Exception:
         pass
 
-# ----------------------
-# DB bootstrap / migrations (idempotent)
-# ----------------------
 def samv2_get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -8168,11 +8159,11 @@ def samv2_migrate():
         CREATE TABLE IF NOT EXISTS samv2_alert_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT,
-            frequency TEXT, -- daily, weekly, monthly
+            frequency TEXT,
             keywords TEXT,
             naics TEXT,
             set_aside TEXT,
-            notice_types TEXT, -- csv
+            notice_types TEXT,
             last_sent_at TEXT
         )
         \"\"\"
@@ -8187,23 +8178,31 @@ def samv2_migrate():
         )
         \"\"\"
     )
+    cur.execute(
+        \"\"\"
+        CREATE TABLE IF NOT EXISTS samv2_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opportunity_id INTEGER UNIQUE,
+            payload_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
+        )
+        \"\"\"
+    )
     conn.commit()
     conn.close()
 
 def _sha1(obj: dict) -> str:
     return hashlib.sha1(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
 
-# ----------------------
-# SAM.gov API client
-# ----------------------
 def samv2_search(params: dict) -> list[dict]:
-    \"\"\"Call SAM.gov v3 API with robust error handling. Returns a list of normalized records.\"\"\"
     if requests is None:
-        _log("Requests library not available. Returning empty results.")
+        _log("Requests not available.")
         return []
     api_key = SAM_API_KEY or params.pop("api_key", None)
     if not api_key:
-        _log("SAM_API_KEY missing in Streamlit secrets. Returning empty results.")
+        _log("Missing SAM_API_KEY.")
         return []
     headers = {"Accept": "application/json"}
     q = params.copy()
@@ -8217,9 +8216,7 @@ def samv2_search(params: dict) -> list[dict]:
             _log(f"SAM API error {resp.status_code}: {resp.text[:200]}")
             return []
         data = resp.json()
-        records = data.get("opportunitiesData", [])
-        for r in records:
-            # Normalize common fields; keys may vary by notice
+        for r in data.get("opportunitiesData", []):
             agency = r.get("agency")
             if isinstance(agency, dict):
                 agency = agency.get("name")
@@ -8256,25 +8253,21 @@ def samv2_search(params: dict) -> list[dict]:
                     })
             norm["attachments"] = attachments
             out.append(norm)
-        return out
     except Exception as ex:
         _log("SAM API exception: " + str(ex))
-        return []
+    return out
 
-def _samv2_get_or_create_opp_id(cur, sol_number:str, agency:str, notice_type:str):
+def _samv2_get_or_create_opp_id(cur, sol_number, agency, notice_type):
     cur.execute("SELECT id FROM samv2_opportunities WHERE sol_number=? AND agency=? AND notice_type=?", (sol_number, agency, notice_type))
     row = cur.fetchone()
-    if row:
-        return row[0]
+    if row: return row[0]
     return None
 
 def samv2_upsert_records(records: list[dict]) -> int:
-    conn = samv2_get_conn()
-    cur = conn.cursor()
+    conn = samv2_get_conn(); cur = conn.cursor()
     added = 0
     for r in records:
-        payload = r.copy()
-        payload_hash = _sha1(payload)
+        payload_hash = _sha1(r)
         cur.execute(
             \"\"\"
             INSERT OR IGNORE INTO samv2_opportunities
@@ -8294,21 +8287,17 @@ def samv2_upsert_records(records: list[dict]) -> int:
         )
         if cur.rowcount > 0:
             added += 1
-        # Determine opportunity id
         opp_id = _samv2_get_or_create_opp_id(cur, r.get("sol_number"), r.get("agency"), r.get("notice_type"))
-        # Update if hash changed
         if opp_id is not None:
             cur.execute("SELECT payload_hash FROM samv2_opportunities WHERE id=?", (opp_id,))
             ph = cur.fetchone()
             if ph and ph[0] != payload_hash:
                 cur.execute(
-                    \"\"\"
-                    UPDATE samv2_opportunities
+                    \"\"\"UPDATE samv2_opportunities
                     SET title=?, description=?, naics=?, psc=?, set_aside=?, place_of_performance=?,
                         city=?, state=?, zip=?, country=?, posted_date=?, due_date=?, last_modified=?,
                         sam_detail_url=?, payload_hash=?, updated_at=datetime('now')
-                    WHERE id=?
-                    \"\"\"
+                    WHERE id=?\"\"\"
                     ,
                     (
                         r.get("title"), r.get("description"), r.get("naics"), r.get("psc"),
@@ -8318,7 +8307,6 @@ def samv2_upsert_records(records: list[dict]) -> int:
                         r.get("sam_detail_url"), payload_hash, opp_id
                     )
                 )
-            # Persist attachments (if any)
             for att in (r.get("attachments") or []):
                 try:
                     cur.execute(
@@ -8327,12 +8315,10 @@ def samv2_upsert_records(records: list[dict]) -> int:
                     )
                 except Exception:
                     pass
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     return added
 
 def samv2_download_attachments(opportunity_id: int) -> int:
-    \"\"\"Download all recorded attachments for an opportunity. Returns number of files downloaded or verified.\"\"\"
     if requests is None:
         _log("Requests not available; skipping downloads.")
         return 0
@@ -8351,33 +8337,26 @@ def samv2_download_attachments(opportunity_id: int) -> int:
     for did, fname, url, lpath in docs:
         if not url:
             continue
-        safe_name = fname or "attachment"
-        # Make filename unique-ish
-        base = safe_name.replace("/", "_").replace("\", "_")
+        base = (fname or "attachment").replace("/", "_").replace("\", "_")
         if not os.path.splitext(base)[1]:
-            # Guess extension from URL
             ext = os.path.splitext(url.split("?")[0])[1] or ".bin"
             base = base + ext
-        dest_path = os.path.join(folder, base)
-        # Skip if already downloaded
-        if os.path.exists(dest_path):
+        dest = os.path.join(folder, base)
+        if os.path.exists(dest):
             downloaded += 1
             continue
         try:
-            resp = requests.get(url, timeout=60)
-            if resp.status_code == 200 and resp.content:
-                with open(dest_path, "wb") as f:
-                    f.write(resp.content)
-                cur.execute("UPDATE samv2_docs SET local_path=? WHERE id=?", (dest_path, did))
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200 and r.content:
+                with open(dest, "wb") as f:
+                    f.write(r.content)
+                cur.execute("UPDATE samv2_docs SET local_path=? WHERE id=?", (dest, did))
                 downloaded += 1
         except Exception as ex:
             _log("Download error: " + str(ex))
     conn.commit(); conn.close()
     return downloaded
 
-# ----------------------
-# Email utilities
-# ----------------------
 def _send_via_sendgrid(to_email: str, subject: str, html: str) -> bool:
     if not SENDGRID_API_KEY or not ALERTS_FROM or requests is None:
         return False
@@ -8420,58 +8399,46 @@ def _send_via_smtp(to_email: str, subject: str, html: str) -> bool:
 def samv2_send_email_digest(to_email: str, rows: list[tuple]) -> bool:
     if not rows:
         return True
-    # Build a simple HTML list
     items = []
     for sol, title, agency, posted, due, link in rows:
-        title_safe = (title or "(Untitled)")
         link_html = f'<a href="{link or "#"}">Open</a>' if link else "(no link)"
-        items.append(f"<li><b>{title_safe}</b> — {agency or 'N/A'} — Sol: {sol or 'N/A'} — Due: {due or 'N/A'} — {link_html}</li>")
+        items.append(f"<li><b>{title or '(Untitled)'} — {agency or 'N/A'}</b> (Sol: {sol or 'N/A'}) — Due: {due or 'N/A'} — {link_html}</li>")
     html = "<h3>New/Updated Opportunities</h3><ul>" + "
 ".join(items) + "</ul>"
     subject = "ELA Bid Alert — New/Updated Opportunities"
-    # Prefer SendGrid if configured
     if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
         if _send_via_sendgrid(to_email, subject, html):
             return True
-    # Fallback to SMTP
     return _send_via_smtp(to_email, subject, html)
 
 def samv2_save_alert_rule(email: str, frequency: str, keywords: str, naics: str, set_aside: str, notice_types_csv: str):
-    conn = samv2_get_conn()
-    cur = conn.cursor()
+    conn = samv2_get_conn(); cur = conn.cursor()
     cur.execute(
         "INSERT INTO samv2_alert_rules(email, frequency, keywords, naics, set_aside, notice_types, last_sent_at) VALUES(?,?,?,?,?,?, NULL)",
         (email, frequency, keywords, naics, set_aside, notice_types_csv)
     )
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def samv2_due_for_send(freq: str, last_sent: str | None) -> bool:
     now = _dt.datetime.utcnow()
-    if not last_sent:
-        return True
+    if not last_sent: return True
     try:
         last = _dt.datetime.fromisoformat(last_sent)
     except Exception:
         return True
     delta = now - last
-    if freq == "daily":
-        return delta.days >= 1
-    if freq == "weekly":
-        return delta.days >= 7
-    if freq == "monthly":
-        return delta.days >= 28
+    if freq == "daily": return delta.days >= 1
+    if freq == "weekly": return delta.days >= 7
+    if freq == "monthly": return delta.days >= 28
     return False
 
 def samv2_run_alerts(send_now: bool = True):
-    \"\"\"Prepare and optionally send digests. Returns list of (email, count_sent).\"\"\"
-    conn = samv2_get_conn()
-    cur = conn.cursor()
+    conn = samv2_get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, email, frequency, keywords, naics, set_aside, notice_types, last_sent_at FROM samv2_alert_rules")
     rules = cur.fetchall()
     results = []
     for rid, email, freq, keywords, naics, set_aside, types_csv, last_sent in rules:
-        if not samv2_due_for_send(freq, last_sent):
+        if not samv2_due_for_send(freq, last_sent): 
             continue
         lookback_days = 1 if freq == "daily" else 7 if freq == "weekly" else 28
         cur.execute(
@@ -8486,13 +8453,104 @@ def samv2_run_alerts(send_now: bool = True):
         if sent_ok:
             cur.execute("UPDATE samv2_alert_rules SET last_sent_at=? WHERE id=?", (_dt.datetime.utcnow().isoformat(), rid))
         results.append((email, len(rows)))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     return results
 
-# ----------------------
-# RFP Analyzer (popup)
-# ----------------------
+def _tmpl_for_naics(naics_str: str):
+    naics_str = (naics_str or "").strip()
+    primary = naics_str.split(",")[0].strip() if naics_str else ""
+    outline = [
+        "Cover Letter",
+        "Executive Summary",
+        "Understanding of Requirements",
+        "Technical Approach",
+        "Management Approach",
+        "Quality Control Plan",
+        "Staffing Plan & Key Personnel",
+        "Safety Plan (if applicable)",
+        "Past Performance",
+        "Pricing & Assumptions",
+        "Certifications & Compliance",
+        "Attachments & Forms"
+    ]
+    checklist = [
+        "Confirm set-aside eligibility and reps & certs current",
+        "Register/verify UEI, CAGE, NAICS on SAM profile",
+        "Note response due date/time and timezone",
+        "Follow submission method (portal/email) and file naming rules",
+        "Complete all required forms (SF-1449/SF-33, Section K, etc.)",
+        "Address all evaluation factors (Section M) in order",
+        "Include technical volume page limits and font requirements",
+        "Provide pricing in requested format (CLINs), include any options",
+        "Acknowledge all amendments",
+        "Confirm POP, delivery schedule, and place of performance",
+        "Include subcontracting approach if required",
+        "Validate contact info for CO/CS"
+    ]
+    if primary.startswith("561720"):
+        outline.insert(3, "Workloading & Frequencies Matrix")
+        checklist.append("Comply with custodial frequency, green products, waste handling")
+    elif primary.startswith("561730"):
+        outline.insert(3, "Seasonal Grounds Maintenance Plan")
+        checklist.append("Mowing/trimming schedules, pesticide certifications, arborist standards")
+    elif primary.startswith("238220"):
+        outline.insert(3, "Equipment & Materials Submittals")
+        checklist.append("Licenses, OEM specs, commissioning, warranty terms, safety (Lockout/Tagout)")
+    elif primary.startswith("311"):
+        outline.insert(3, "Product Specifications & Sourcing")
+        checklist.append("USDA grades, substitutions policy, delivery windows, HACCP")
+    elif primary.startswith("561612"):
+        outline.insert(3, "Post Orders & Guard Coverage Matrix")
+        checklist.append("Licenses, background checks, training hours, incident reporting")
+    return outline, checklist
+
+def samv2_build_proposal_payload(opp: dict) -> dict:
+    outline, checklist = _tmpl_for_naics(opp.get("naics"))
+    payload = {
+        "meta": {
+            "sol_number": opp.get("sol_number"),
+            "title": opp.get("title"),
+            "agency": opp.get("agency"),
+            "naics": opp.get("naics"),
+            "psc": opp.get("psc"),
+            "set_aside": opp.get("set_aside"),
+            "due_date": opp.get("due_date"),
+            "posted_date": opp.get("posted_date"),
+            "sam_detail_url": opp.get("sam_detail_url"),
+            "place_of_performance": opp.get("place_of_performance"),
+        },
+        "outline": outline,
+        "checklist": checklist,
+        "sections": {name: "" for name in outline},
+        "pricing": {"notes": "Insert CLIN pricing and assumptions here.", "rows": []},
+        "attachments": [],
+    }
+    return payload
+
+def samv2_start_proposal(opportunity_id: int) -> dict | None:
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, sol_number, title, agency, naics, psc, set_aside, due_date, posted_date, sam_detail_url, place_of_performance, description FROM samv2_opportunities WHERE id=?", (opportunity_id,))
+    r = cur.fetchone()
+    if not r:
+        conn.close(); return None
+    opp = {
+        "id": r[0], "sol_number": r[1], "title": r[2], "agency": r[3],
+        "naics": r[4], "psc": r[5], "set_aside": r[6], "due_date": r[7],
+        "posted_date": r[8], "sam_detail_url": r[9], "place_of_performance": r[10],
+        "description": r[11]
+    }
+    payload = samv2_build_proposal_payload(opp)
+    cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    payload["attachments"] = [{"filename": a, "path": p} for a, p in cur.fetchall() if p]
+    cur.execute("INSERT OR IGNORE INTO samv2_proposals(opportunity_id, payload_json) VALUES(?,?)", (opportunity_id, json.dumps(payload)))
+    cur.execute("UPDATE samv2_proposals SET payload_json=?, updated_at=datetime('now') WHERE opportunity_id=?", (json.dumps(payload), opportunity_id))
+    conn.commit(); conn.close()
+    try:
+        st.session_state["proposal_builder_payload"] = payload
+    except Exception:
+        pass
+    return payload
+
 def _has_dialog() -> bool:
     return hasattr(st, "dialog")
 
@@ -8520,26 +8578,33 @@ def rfp_analyzer_popup(opp_row: dict):
                 st.write(f"Last Modified: {opp_row.get('last_modified') or 'N/A'}")
             st.markdown("---")
             st.write("**Ask a question about this RFP**")
-            _q = st.text_input("Your question")
-            if st.button("Analyze Question"):
+            st.text_input("Your question", key=f"q_{opp_row.get('id')}")
+            if st.button("Analyze Question", key=f"qa_{opp_row.get('id')}"):
                 st.info("This is a placeholder for your LLM-based Q&A over the attached documents.")
-            if st.button("Send to Proposal Builder"):
-                st.session_state["proposal_builder_payload"] = opp_row
-                st.success("Prefill ready in Proposal Builder tab.")
+            cols2 = st.columns(2)
+            with cols2[0]:
+                if st.button("Start Proposal (Prefill)", key=f"start_{opp_row.get('id')}"):
+                    payload = samv2_start_proposal(opp_row.get("id"))
+                    if payload:
+                        st.success("Draft created and Proposal Builder prefilled.")
+                    else:
+                        st.error("Could not start proposal.")
+            with cols2[1]:
+                if st.button("Download Attachments", key=f"dl_inmodal_{opp_row.get('id')}"):
+                    cnt = samv2_download_attachments(opp_row.get("id"))
+                    if cnt: st.success(f"Downloaded {cnt} file(s).")
+                    else: st.warning("No downloadable attachments found.")
         _dlg()
     else:
         with st.expander("RFP Analyzer (fallback)"):
             st.info("Update Streamlit to use nice modal popups (st.dialog). For now, this expander shows the same info.")
             st.write(opp_row)
 
-# ----------------------
-# UI — Sidebar launcher + main renderer
-# ----------------------
 def render_sam_watch_v2():
     samv2_migrate()
 
     st.title("SAM Watch V2 (Preview)")
-    st.caption("One-stop SAM.gov — search, analyze, save to pipeline, alerts.")
+    st.caption("One-stop SAM.gov — search, analyze, start proposals, alerts.")
 
     with st.sidebar:
         st.subheader("SAM Watch V2 — Filters")
@@ -8565,27 +8630,31 @@ def render_sam_watch_v2():
             if st.form_submit_button("Save Alert Rule"):
                 if email:
                     samv2_save_alert_rule(email, freq, keywords, naics, set_aside if set_aside!="Any" else "", ",".join(notice_types))
-                    st.success("Alert rule saved. Alerts are sent when you click 'Run Alerts' or on next scheduled run.")
-        if st.button("Run Alerts Now & Send"):
-            results = samv2_run_alerts(send_now=True)
-            st.info(f"Prepared and sent digests for {len(results)} rule(s).")
+                    st.success("Alert rule saved.")
+        colsA = st.columns(2)
+        with colsA[0]:
+            if st.button("Run Alerts Now & Send"):
+                results = samv2_run_alerts(send_now=True)
+                st.info(f"Emailed {len(results)} digest(s).")
+        with colsA[1]:
+            if st.button("Prepare Alerts Only"):
+                results = samv2_run_alerts(send_now=False)
+                st.info(f"Prepared {len(results)} digest(s).")
 
-    colA, colB, colC, colD = st.columns([1,1,1,1])
+    colA, colB, colC = st.columns([1,1,2])
     with colA:
         run_pull = st.button("Pull SAM Data")
     with colB:
         save_selected = st.button("Save Selected to Pipeline")
     with colC:
-        run_alerts = st.button("Prepare Alerts (no send)")
-    with colD:
         st.write("")
 
     status_ph = st.empty()
 
     if run_pull:
         q = {
-            "q": st.session_state.get("_samv2_kw") or None,
-            "notice_type": ",".join(st.session_state.get("_samv2_types", [])),
+            "q": keywords or None,
+            "notice_type": ",".join(notice_types),
             "postedFrom": date_from.isoformat(),
             "postedTo": date_to.isoformat(),
         }
@@ -8596,14 +8665,8 @@ def render_sam_watch_v2():
         conn.commit(); conn.close()
         status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new (others updated or deduped).")
 
-    if run_alerts:
-        results = samv2_run_alerts(send_now=False)
-        status_ph.info(f"Prepared {len(results)} digest(s). Use 'Run Alerts Now & Send' to email them.")
-
-    # List grid
     st.markdown("### Results")
-    conn = samv2_get_conn()
-    cur = conn.cursor()
+    conn = samv2_get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, sol_number, title, agency, set_aside, naics, posted_date, due_date, last_modified, sam_detail_url, description FROM samv2_opportunities ORDER BY COALESCE(last_modified, posted_date) DESC LIMIT 300")
     rows = cur.fetchall()
     conn.close()
@@ -8618,17 +8681,13 @@ def render_sam_watch_v2():
                     st.checkbox("", key=f"samv2_ck_{rid}")
                 with c2:
                     st.markdown(f"**{title or '(Untitled)'}**")
-                    sub = f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}"
-                    st.caption(sub)
-                    sub2 = f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}"
-                    st.caption(sub2)
-                    link_col, btn_col1, btn_col2, btn_col3 = st.columns([0.38, 0.2, 0.22, 0.2])
+                    st.caption(f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}")
+                    st.caption(f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}")
+                    link_col, b1, b2, b3, b4 = st.columns([0.30, 0.18, 0.18, 0.17, 0.17])
                     with link_col:
-                        if link:
-                            st.markdown(f"[Open in SAM.gov]({link})")
-                        else:
-                            st.text("No SAM link")
-                    with btn_col1:
+                        if link: st.markdown(f"[Open in SAM.gov]({link})")
+                        else: st.text("No SAM link")
+                    with b1:
                         if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
                             opp = {
                                 "id": rid, "sol_number": sol, "title": title, "agency": agency,
@@ -8637,40 +8696,43 @@ def render_sam_watch_v2():
                                 "description": desc or ""
                             }
                             rfp_analyzer_popup(opp)
-                    with btn_col2:
+                    with b2:
                         if st.button("Generate Proposal", key=f"gen_{rid}"):
-                            st.session_state["proposal_builder_payload"] = {
+                            payload = {
                                 "sol_number": sol, "title": title, "agency": agency,
                                 "set_aside": sa, "naics": naics_v, "due_date": due
                             }
-                            st.success("Proposal Builder prefill ready. Switch to Proposal Builder tab.")
-                    with btn_col3:
+                            st.session_state["proposal_builder_payload"] = payload
+                            st.success("Proposal Builder prefill ready.")
+                    with b3:
+                        if st.button("Start Proposal", key=f"start_{rid}"):
+                            payload = samv2_start_proposal(rid)
+                            if payload:
+                                st.success("Proposal draft saved and builder prefilled.")
+                            else:
+                                st.error("Could not start proposal.")
+                    with b4:
                         if st.button("Download Attachments", key=f"dl_{rid}"):
                             cnt = samv2_download_attachments(rid)
-                            if cnt:
-                                st.success(f"Downloaded {cnt} file(s) for {sol or title}.")
-                            else:
-                                st.warning("No downloadable attachments found.")
+                            if cnt: st.success(f"Downloaded {cnt} file(s).")
+                            else: st.warning("No downloadable attachments found.")
 
     if save_selected:
-        # Only save checked ones
         conn = samv2_get_conn(); cur = conn.cursor()
         saved = 0; skipped = 0
         for rid, *_ in rows:
             if st.session_state.get(f"samv2_ck_{rid}", False):
                 try:
                     cur.execute("INSERT OR IGNORE INTO samv2_pipeline_links(opportunity_id) VALUES(?)", (rid,))
-                    if cur.rowcount > 0:
-                        saved += 1
-                    else:
-                        skipped += 1
+                    if cur.rowcount > 0: saved += 1
+                    else: skipped += 1
                 except Exception:
                     skipped += 1
         conn.commit(); conn.close()
         st.success(f"Added {saved} deal(s). Skipped {skipped} duplicate(s).")
 
 def _sidebar_launcher():
-    if not ENABLE_SAM_WATCH_V2:
+    if not ENABLE_SAM_WATCH_V2: 
         return
     try:
         with st.sidebar:
@@ -8681,12 +8743,12 @@ def _sidebar_launcher():
     except Exception as ex:
         _log("Sidebar launcher error: " + str(ex))
 
-# Auto-run launcher at end of script execution
 try:
     _sidebar_launcher()
 except Exception as ex:
     _log("SAM V2 init error: " + str(ex))
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
+
 
 
