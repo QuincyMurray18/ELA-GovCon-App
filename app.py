@@ -1,3 +1,4 @@
+from __future__ import annotations
 # ===== app.py =====
 
 def _strip_markdown_to_plain(txt: str) -> str:
@@ -8021,7 +8022,6 @@ except Exception as _e_deals_tab:
 # Auto-merged by ChatGPT on 2025-10-12T22:03:29.056867
 # Adds: CLIN Pricing Sheet generator + Smart CLIN parser + Sub input + Email package + Compliance Matrix export.
 
-from __future__ import annotations
 
 import os
 import io
@@ -9287,7 +9287,6 @@ except Exception as ex:
     _log("SAM V2 init error: " + str(ex))
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
-
 
 
 
