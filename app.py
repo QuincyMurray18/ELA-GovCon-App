@@ -8239,11 +8239,35 @@ def samv2_search(params: dict) -> list[dict]:
     if not api_key:
         _log("Missing SAM_API_KEY.")
         return []
-    headers = {"Accept": "application/json"}
+    headers = {"Accept":"application/json","X-Api-Key": api_key}
     q = params.copy()
+    # Normalize notice type labels to API codes if user passed labels
+    nt_map = {
+        "Solicitation": "opp",
+        "Combined Synopsis/Solicitation": "comsynopp",
+        "Presolicitation": "presolicitation",
+        "Sources Sought": "sources_sought",
+        "SRCSGT": "sources_sought",
+    }
+    nt_in = q.pop("notice_type", "") or q.get("noticeType", "")
+    if isinstance(nt_in, str) and nt_in:
+        nts = [x.strip() for x in nt_in.split(",") if x.strip()]
+        q["noticeType"] = ",".join([nt_map.get(x, x) for x in nts])
+    
     q["api_key"] = api_key
     q.setdefault("limit", 100)
     q.setdefault("offset", 0)
+    def _to_us(d):
+        try:
+            from datetime import datetime
+            if isinstance(d, str) and len(d)>=10 and d[4]=="-":
+                return datetime.fromisoformat(d[:10]).strftime("%m/%d/%Y")
+            return d
+        except Exception:
+            return d
+    # Coerce date params
+    if "postedFrom" in q: q["postedFrom"] = _to_us(q["postedFrom"])
+    if "postedTo" in q: q["postedTo"] = _to_us(q["postedTo"])
     out = []
     try:
         resp = requests.get(SAM_API_BASE, params=q, headers=headers, timeout=30)
@@ -8291,7 +8315,6 @@ def samv2_search(params: dict) -> list[dict]:
     except Exception as ex:
         _log("SAM API exception: " + str(ex))
     return out
-
 def _samv2_get_or_create_opp_id(cur, sol_number, agency, notice_type):
     cur.execute("SELECT id FROM samv2_opportunities WHERE sol_number=? AND agency=? AND notice_type=?", (sol_number, agency, notice_type))
     row = cur.fetchone()
@@ -9134,7 +9157,8 @@ def render_sam_watch_v2():
     st.title("SAM Watch V2 (Preview)")
     st.caption("One-click CLIN sheets, compliance matrix, proposal export, and email package.")
 
-    with st.sidebar:
+    _filt_ctx = st.sidebar if not st.session_state.get("_samv2_in_dialog") else st
+    with _filt_ctx:
         st.subheader("SAM Watch V2 — Filters")
         keywords = st.text_input("Keywords", value=st.session_state.get("_samv2_kw", ""))
         naics = st.text_input("NAICS (comma-separated)", value=st.session_state.get("_samv2_naics", ""))
@@ -9144,7 +9168,7 @@ def render_sam_watch_v2():
             default=st.session_state.get("_samv2_types", ["Solicitation", "Combined Synopsis/Solicitation"]),
         )
         set_aside = st.selectbox("Set-Aside", ["Any","Total Small Business","WOSB","SDVOSB","8(a)","HUBZone"], index=0)
-        date_from = st.date_input("Posted from", value=_dt.date.today() - _dt.timedelta(days=30))
+        date_from = st.date_input("Posted from", value=_dt.date.today() - _dt.timedelta(days=60))
         date_to = st.date_input("Posted to", value=_dt.date.today())
         st.session_state["_samv2_kw"] = keywords
         st.session_state["_samv2_naics"] = naics
@@ -9183,8 +9207,8 @@ def render_sam_watch_v2():
         q = {
             "q": keywords or None,
             "notice_type": ",".join(notice_types),
-            "postedFrom": date_from.isoformat(),
-            "postedTo": date_to.isoformat(),
+            "postedFrom": date_from.strftime("%m/%d/%Y"),
+            "postedTo": date_to.strftime("%m/%d/%Y"),
         }
         recs = samv2_search(q)
         added = samv2_upsert_records(recs)
@@ -9269,6 +9293,7 @@ def render_sam_watch_v2():
         conn.commit(); conn.close()
         st.success(f"Added {saved} deal(s). Skipped {skipped} duplicate(s).")
 
+
 def _sidebar_launcher():
     if not ENABLE_SAM_WATCH_V2: 
         return
@@ -9276,10 +9301,38 @@ def _sidebar_launcher():
         with st.sidebar:
             if st.button("🚀 Launch SAM Watch V2", key="__samv2_launch"):
                 st.session_state["_samv2_open"] = True
+
         if st.session_state.get("_samv2_open"):
-            render_sam_watch_v2()
+            # Open inside a dialog to avoid bleeding across other tabs
+            try:
+                @st.dialog("SAM Watch V2", width="large")
+                def _samv2_dialog():
+                    st.session_state["_samv2_in_dialog"] = True
+                    try:
+                        render_sam_watch_v2()
+                    finally:
+                        st.session_state["_samv2_in_dialog"] = False
+                    st.divider()
+                    if st.button("Close", key="__samv2_close"):
+                        st.session_state["_samv2_open"] = False
+                        try: st.rerun()
+                        except Exception: pass
+                _samv2_dialog()
+            except Exception:
+                # Fallback: expander if dialog not available
+                with st.expander("SAM Watch V2", expanded=True):
+                    st.session_state["_samv2_in_dialog"] = True
+                    try:
+                        render_sam_watch_v2()
+                    finally:
+                        st.session_state["_samv2_in_dialog"] = False
+                    if st.button("Close", key="__samv2_close_fallback"):
+                        st.session_state["_samv2_open"] = False
+                        try: st.rerun()
+                        except Exception: pass
     except Exception as ex:
         _log("Sidebar launcher error: " + str(ex))
+"Sidebar launcher error: " + str(ex))
 
 try:
     _sidebar_launcher()
