@@ -9364,60 +9364,59 @@ except Exception as _e_deals_tab:
 
 
 
-# ===== DB GUARD APPEND =====
-try:
-    import pandas as _pd_guard
-    _orig_read_sql_query = _pd_guard.read_sql_query
-    def _guarded_read_sql_query(sql, con=None, *args, **kwargs):
-        try:
-            return _orig_read_sql_query(sql, con, *args, **kwargs)
-        except Exception as _e:
-            _msg = str(_e)
-            _targets = ("contacts", "vendors", "outreach_log", "opportunities", "email_templates")
-            if "no such table" in _msg:
-                for _t in _targets:
-                    if ("no such table: " + _t) in _msg:
-                        try:
-                            _c = con
-                            if _c is None:
-                                # Try a few globals if no con passed
-                                for _name in ("conn", "db", "connection"):
-                                    try:
-                                        _c = globals()[_name]
-                                        break
-                                    except Exception:
-                                        pass
-                            if _c is not None:
-                                # Create minimal schemas
-                                _c.execute("create table if not exists contacts (id integer primary key, name text, org text, role text, email text, phone text, source text, notes text, created_at text default (datetime('now')))")
-                                _c.execute("create table if not exists vendors (id integer primary key, company text, contact_name text, email text, phone text, notes text, created_at text default (datetime('now')))")
-                                _c.execute("create table if not exists outreach_log (id integer primary key, vendor_id integer, opportunity_id integer, status text, channel text, notes text, created_at text default (datetime('now')))")
-                                _c.execute("create table if not exists opportunities (id integer primary key, sam_id text, title text, posted text, due text, agency text, naics text, url text, status text, created_at text default (datetime('now')))")
-                                _c.execute("create table if not exists email_templates (id integer primary key, name text unique, subject text, body text, created_at text default (datetime('now')))")
-                                try:
-                                    for _tb in ("contacts","vendors","outreach_log","opportunities","email_templates"):
-                                        try:
-                                            _c.execute("update " + _tb + " set created_at = datetime('now') where created_at is null or created_at=''")
-                                        except Exception:
-                                            pass
-                                    _c.commit()
-                                except Exception:
-                                    pass
-                            # Retry query once
-                            return _orig_read_sql_query(sql, con, *args, **kwargs)
-                        except Exception as _e2:
-                            try:
-                                import streamlit as _st
-                                _st.caption("[DB guard note: " + str(_e2) + "]")
-                            except Exception:
-                                pass
-                            raise _e2
-            raise
-    _pd_guard.read_sql_query = _guarded_read_sql_query
-except Exception as _e_guard_install:
+# ===== CORE SCHEMA BOOT (safe append) =====
+def __ela_boot_ensure_core_tables():
     try:
-        import streamlit as _st
-        _st.caption("[DB guard install note: " + str(_e_guard_install) + "]")
-    except Exception:
-        pass
-# ===== END DB GUARD APPEND =====
+        conn = None
+        try:
+            # Preferred: get_db context manager if available
+            with get_db() as c:
+                conn = c
+                c.execute("create table if not exists contacts (id integer primary key, name text, org text, role text, email text, phone text, source text, notes text, created_at text default (datetime('now')))")
+                c.execute("create table if not exists vendors (id integer primary key, company text, contact_name text, email text, phone text, notes text, created_at text default (datetime('now')))")
+                c.execute("create table if not exists outreach_log (id integer primary key, vendor_id integer, opportunity_id integer, status text, channel text, notes text, created_at text default (datetime('now')))")
+                c.execute("create table if not exists opportunities (id integer primary key, sam_id text, title text, posted text, due text, agency text, naics text, url text, status text, created_at text default (datetime('now')))")
+                c.execute("create table if not exists email_templates (id integer primary key, name text unique, subject text, body text, created_at text default (datetime('now')))")
+                for _tb in ("contacts","vendors","outreach_log","opportunities","email_templates"):
+                    try:
+                        c.execute("update " + _tb + " set created_at = datetime('now') where created_at is null or created_at=''")
+                    except Exception:
+                        pass
+                c.commit()
+                return
+        except Exception:
+            pass
+        # Fallback: try common global connections without requiring get_db
+        for name in ("conn", "db", "connection"):
+            try:
+                conn = globals()[name]
+                break
+            except Exception:
+                pass
+        if conn is not None:
+            conn.execute("create table if not exists contacts (id integer primary key, name text, org text, role text, email text, phone text, source text, notes text, created_at text default (datetime('now')))")
+            conn.execute("create table if not exists vendors (id integer primary key, company text, contact_name text, email text, phone text, notes text, created_at text default (datetime('now')))")
+            conn.execute("create table if not exists outreach_log (id integer primary key, vendor_id integer, opportunity_id integer, status text, channel text, notes text, created_at text default (datetime('now')))")
+            conn.execute("create table if not exists opportunities (id integer primary key, sam_id text, title text, posted text, due text, agency text, naics text, url text, status text, created_at text default (datetime('now')))")
+            conn.execute("create table if not exists email_templates (id integer primary key, name text unique, subject text, body text, created_at text default (datetime('now')))")
+            try:
+                for _tb in ("contacts","vendors","outreach_log","opportunities","email_templates"):
+                    try:
+                        conn.execute("update " + _tb + " set created_at = datetime('now') where created_at is null or created_at=''")
+                    except Exception:
+                        pass
+                conn.commit()
+            except Exception:
+                pass
+    except Exception as _e_boot:
+        try:
+            import streamlit as _st
+            _st.caption("[Core schema boot note: " + str(_e_boot) + "]")
+        except Exception:
+            pass
+
+try:
+    __ela_boot_ensure_core_tables()
+except Exception:
+    pass
+# ===== END CORE SCHEMA BOOT =====
