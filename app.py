@@ -8466,6 +8466,9 @@ def _ela_render_samwatch_10():
                     if pick and pick != "--":
                         sel = next((r for r in results if r["notice_id"] == pick), None)
                         if sel:
+                         st.session_state['selected_notice'] = _notice_to_modal_data(sel)
+                         st.session_state['show_notice_modal'] = True
+                         return  # stop rendering this tab; state will render modal on next pass
                             with st.expander("Opportunity Details", expanded=True):
                                 st.write(f"**Title:** {sel.get('title','')}")
                                 st.write(f"**Type:** {sel.get('notice_type','')}")
