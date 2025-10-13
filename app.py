@@ -34,6 +34,51 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
 
+from datetime import datetime, timedelta
+
+def _ela_v2_params(params: dict) -> dict:
+    """Translate legacy fields to valid v2 params for SAM.gov search."""
+    try:
+        p = dict(params or {})
+    except Exception:
+        return params
+    # noticeType -> ptype mapping
+    nt = p.pop("noticeType", None)
+    if nt is not None:
+        if not isinstance(nt, list):
+            nt = [nt]
+        m = []
+        for v in nt:
+            s = str(v).lower()
+            if "combined" in s:
+                m.append("k")
+            elif s == "solicitation" or s.endswith("solicitation"):
+                m.append("o")
+            elif "presolicitation" in s:
+                m.append("p")
+            elif "sources" in s:
+                m.append("r")
+        if m:
+            p["ptype"] = ",".join(m)
+    # index/size -> offset/limit
+    if "index" in p and "offset" not in p:
+        p["offset"] = p.pop("index")
+    if "size" in p and "limit" not in p:
+        p["limit"] = p.pop("size")
+    # naics -> ncode
+    if "naics" in p and "ncode" not in p:
+        p["ncode"] = p.pop("naics")
+    # ensure postedFrom/postedTo
+    if "postedFrom" not in p or "postedTo" not in p:
+        today = datetime.utcnow().date()
+        p.setdefault("postedFrom", (today - timedelta(days=30)).strftime("%m/%d/%Y"))
+        p.setdefault("postedTo", today.strftime("%m/%d/%Y"))
+    # response format
+    p.setdefault("response", "json")
+    return p
+
+
+
 # --- SAM.gov compatibility shim (auto-fixes v3 URL with v2-style params) ---
 try:
     import requests as _requests
@@ -8103,7 +8148,7 @@ def _ela_hash_obj(obj) -> str:
 def _ela_sam_fetch(api_key: str, params: dict, page: int=0, records_per_page: int=50) -> dict:
     # Conservative, synchronous fetcher for stability
     import requests
-    base = "https://api.sam.gov/opportunities/v3/search"
+    base = "https://api.sam.gov/opportunities/v2/search"
     qp = dict(params)
     qp["api_key"] = api_key
     qp["index"] = page
