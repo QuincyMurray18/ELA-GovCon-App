@@ -8642,3 +8642,10 @@ def _render_notice_modal():
         # keep app stable even if a field is missing
         st.debug(f"Modal render skipped: {_e}")
 
+
+
+# === Ensure Notice modal always renders if its state is set ===
+try:
+    _render_notice_modal()
+except Exception as _e_modal_call:
+    pass
