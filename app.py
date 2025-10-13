@@ -34,169 +34,6 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
 
-# --- SQLite adapters to allow dict/list parameters (serialize to JSON) ---
-import sqlite3, json as _json
-sqlite3.register_adapter(dict, lambda d: _json.dumps(d))
-sqlite3.register_adapter(list, lambda a: _json.dumps(a))
-# Optional: ensure text returned as str
-# (Streamlit sometimes chokes on bytes if text_factory isn't str)
-try:
-    _sqlite_text_factory = sqlite3.Connection.text_factory
-except Exception:
-    pass
-# --- end adapters ---
-
-
-
-from datetime import datetime, timedelta
-
-def _ela_v2_params(params: dict) -> dict:
-    """Translate legacy fields to valid v2 params for SAM.gov search."""
-    try:
-        p = dict(params or {})
-    except Exception:
-        return params
-    # noticeType -> ptype mapping
-    nt = p.pop("noticeType", None)
-    if nt is not None:
-        if not isinstance(nt, list):
-            nt = [nt]
-        m = []
-        for v in nt:
-            s = str(v).lower()
-            if "combined" in s:
-                m.append("k")
-            elif s == "solicitation" or s.endswith("solicitation"):
-                m.append("o")
-            elif "presolicitation" in s:
-                m.append("p")
-            elif "sources" in s:
-                m.append("r")
-        if m:
-            p["ptype"] = ",".join(m)
-    # index/size -> offset/limit
-    if "index" in p and "offset" not in p:
-        p["offset"] = p.pop("index")
-    if "size" in p and "limit" not in p:
-        p["limit"] = p.pop("size")
-    # naics -> ncode
-    if "naics" in p and "ncode" not in p:
-        p["ncode"] = p.pop("naics")
-    # ensure postedFrom/postedTo
-    if "postedFrom" not in p or "postedTo" not in p:
-        today = datetime.utcnow().date()
-        p.setdefault("postedFrom", (today - timedelta(days=30)).strftime("%m/%d/%Y"))
-        p.setdefault("postedTo", today.strftime("%m/%d/%Y"))
-    # response format
-    p.setdefault("response", "json")
-    return p
-
-
-
-# --- SAM.gov compatibility shim (auto-fixes v3 URL with v2-style params) ---
-try:
-    import requests as _requests
-    def _sam_fix_endpoint(url, params):
-        try:
-            if "api.sam.gov/opportunities/v3/search" in url:
-                # If old param names present, downgrade to v2 endpoint
-                legacy_keys = ("noticeType", "index", "size", "postedFrom", "postedTo", "active", "naics")
-                if isinstance(params, dict) and any(k in params for k in legacy_keys):
-                    url = url.replace("/v3/", "/v2/")
-            return url, params
-        except Exception:
-            return url, params
-
-    def requests_get(url, **kwargs):
-        params = kwargs.get("params")
-        if params is not None:
-            new_url, new_params = _sam_fix_endpoint(url, params)
-            kwargs["params"] = new_params
-            url = new_url
-        return _requests.get(url, **kwargs)
-except Exception:
-    # Fallback: keep native requests.get
-    def requests_get(url, **kwargs):
-        import requests as __r
-        return __r.get(url, **kwargs)
-# --- end shim ---
-
-# --- SAM.gov URL normalizer for legacy querystrings embedded in URL ---
-def _normalize_sam_url(url, params=None):
-    try:
-        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-        from datetime import datetime, timedelta
-        parsed = urlparse(url)
-        qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        # Merge kwargs params over URL qs (kwargs wins)
-        if isinstance(params, dict):
-            qs.update({k: v for k, v in params.items() if v is not None})
-
-        # Detect legacy v3+v2 mix -> force v2 endpoint
-        if "api.sam.gov" in parsed.netloc and "/opportunities/v3/search" in parsed.path:
-            if any(k in qs for k in ("noticeType","index","size","postedFrom","postedTo","naics")):
-                parsed = parsed._replace(path=parsed.path.replace("/v3/","/v2/"))
-
-        # If using v2 endpoint, translate legacy fields
-        if "/opportunities/v2/search" in parsed.path:
-            # noticeType -> ptype
-            def map_notice_to_ptype(v):
-                s = str(v).lower()
-                if "combined" in s: return "k"
-                if s == "solicitation" or s.endswith("solicitation"): return "o"
-                if "presolicitation" in s: return "p"
-                if "sources" in s: return "r"
-                return None
-            nts = qs.pop("noticeType", None)
-            if nts is not None:
-                if not isinstance(nts, list):
-                    nts = [nts]
-                mapped = [map_notice_to_ptype(v) for v in nts]
-                mapped = [m for m in mapped if m]
-                if mapped:
-                    qs["ptype"] = ",".join(mapped)
-            # index/size -> offset/limit
-            if "index" in qs and "offset" not in qs:
-                qs["offset"] = qs.pop("index")
-            if "size" in qs and "limit" not in qs:
-                qs["limit"] = qs.pop("size")
-            # naics -> ncode
-            if "naics" in qs and "ncode" not in qs:
-                qs["ncode"] = qs.pop("naics")
-            # posted dates required
-            if "postedFrom" not in qs or "postedTo" not in qs:
-                today = datetime.utcnow().date()
-                qs.setdefault("postedFrom", (today - timedelta(days=30)).strftime("%m/%d/%Y"))
-                qs.setdefault("postedTo", today.strftime("%m/%d/%Y"))
-            # response=json
-            qs.setdefault("response", "json")
-
-        # Rebuild URL (and drop params kwarg; we encoded everything in URL)
-        new_query = urlencode(qs, doseq=True)
-        new_url = urlunparse(parsed._replace(query=new_query))
-        return new_url, None
-    except Exception:
-        return url, params
-
-# Override requests_get to normalize both URL and params before calling
-try:
-    import requests as _requests
-    def requests_get(url, **kwargs):
-        params = kwargs.get("params")
-        url, params = _normalize_sam_url(url, params)
-        if params is None:
-            kwargs.pop("params", None)
-        else:
-            kwargs["params"] = params
-        return _requests.get(url, **kwargs)
-except Exception:
-    pass
-# --- end normalizer ---
-
-
-
-
-
 # ===== Proposal drafts utilities =====
 from datetime import datetime
 import os, io
@@ -635,12 +472,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-
-# --- Modal state guards (SAM Watch 10/10) ---
-if 'show_notice_modal' not in st.session_state:
-    st.session_state['show_notice_modal'] = False
-if 'selected_notice' not in st.session_state:
-    st.session_state['selected_notice'] = None
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
@@ -2544,7 +2375,7 @@ def gsa_calc_rates(query: str, page: int = 1):
     url = "https://api.gsa.gov/technology/calc/search"
     params = {"q": query, "page": page}
     try:
-        r = requests_get(url, params=params, timeout=20)
+        r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
         js = r.json()
         items = js.get("results", []) or []
@@ -2597,7 +2428,7 @@ def sam_search(
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests_get(base, params=params, headers=headers, timeout=40)
+        r = requests.get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
         try:
@@ -2764,7 +2595,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests_get(search_url, params=search_params, timeout=25)
+        rs = requests.get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
         data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
@@ -2786,7 +2617,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
                 det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests_get(det_url, params=det_params, timeout=20)
+                rd = requests.get(det_url, params=det_params, timeout=20)
                 det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
@@ -5186,7 +5017,7 @@ except Exception as _e_sync:
                 today_us = _us_date(datetime.utcnow().date())
                 test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json", "postedFrom": today_us, "postedTo": today_us}
                 headers = {"X-Api-Key": SAM_API_KEY}
-                r = requests_get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+                r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
                 st.write("HTTP", r.status_code)
                 text_preview = (r.text or "")[:1000]
                 try:
@@ -5947,7 +5778,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests_get(search_url, params=search_params, timeout=25)
+        rs = requests.get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
         data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
@@ -5969,7 +5800,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
                 det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests_get(det_url, params=det_params, timeout=20)
+                rd = requests.get(det_url, params=det_params, timeout=20)
                 det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
@@ -6012,7 +5843,7 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
     try:
         parsed = urlparse(base_url)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-        r = requests_get(robots_url, timeout=8)
+        r = requests.get(robots_url, timeout=8)
         if r.status_code != 200 or "Disallow" not in r.text: return True
         disallows = []
         for line in r.text.splitlines():
@@ -6029,7 +5860,7 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
 def _fetch(url: str, timeout=12) -> str:
     try:
         headers = {"User-Agent": "ELA-GovCon-Scraper/1.0 (+contact via site form)"}
-        r = requests_get(url, headers=headers, timeout=timeout)
+        r = requests.get(url, headers=headers, timeout=timeout)
         if r.status_code != 200 or not r.headers.get("Content-Type","").lower().startswith("text"):
             return ""
         return r.text[:1_000_000]
@@ -6116,7 +5947,7 @@ def sam_search(
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests_get(base, params=params, headers=headers, timeout=40)
+        r = requests.get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
         try:
@@ -6315,7 +6146,7 @@ with st.sidebar:
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
                            "postedFrom": today_us, "postedTo": today_us}
             headers = {"X-Api-Key": SAM_API_KEY}
-            r = requests_get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
             st.write("HTTP", r.status_code)
             text_preview = (r.text or "")[:1000]
             try:
@@ -8182,437 +8013,526 @@ except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
 
 
-# ===== SAM Watch 10/10 (modular) =====
-def _ela_safe_imports_for_samwatch():
-    import importlib
-    mods = {}
-    for name in ("streamlit","requests","sqlite3","hashlib","json","time","os","io","zipfile","datetime"):
-        try:
-            mods[name] = importlib.import_module(name)
-        except Exception:
-            mods[name] = None
-    return mods
+# ===============================
+# SAM Watch 10/10 — Ingestion + Monitoring (v2 API)
+# Production endpoint per GSA docs: https://api.sam.gov/opportunities/v2/search
+# Fields: resourceLinks (attachments), pointOfContact, placeOfPerformance, organizationName, etc.
+# ===============================
+def _sam10_get_api_key():
+    try:
+        return (os.getenv("SAM_API_KEY") or st.secrets.get("SAM_API_KEY","") or "").strip()
+    except Exception:
+        return (os.getenv("SAM_API_KEY") or "").strip()
 
-def _ela_db_conn(db_path: str):
-    import sqlite3, os
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    con = sqlite3.connect(db_path)
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS sam_opportunities (
-        notice_id TEXT PRIMARY KEY,
-        raw_json TEXT NOT NULL,
-        notice_type TEXT,
-        title TEXT,
-        naics TEXT,
-        psc TEXT,
-        posted DATE,
-        due DATE,
-        agency TEXT,
-        place_of_performance TEXT,
-        last_hash TEXT,
-        cached_at INTEGER
-    );
-    """)
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS tracked_opps (
-        notice_id TEXT PRIMARY KEY,
-        status TEXT,
-        saved_at INTEGER,
-        last_checked INTEGER,
-        last_hash TEXT
-    );
-    """)
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS bid_alert_settings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        frequency TEXT,
-        keywords TEXT,
-        naics TEXT,
-        emails TEXT,
-        created_at INTEGER
-    );
-    """)
-    con.commit()
-    return con
-
-def _ela_hash_obj(obj) -> str:
-    import hashlib, json
-    return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode("utf-8")).hexdigest()
-
-def _ela_sam_fetch(api_key: str, params: dict, page: int=0, records_per_page: int=50) -> dict:
-    # Conservative, synchronous fetcher for stability
+def _sam10_http_get(url, params=None, timeout=40):
     import requests
-    base = "https://api.sam.gov/opportunities/v2/search"
-    qp = dict(params)
-    qp["api_key"] = api_key
-    qp["index"] = page
-    qp["size"] = records_per_page
-    resp = requests_get(base, params=qp, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    headers = {}
+    ak = _sam10_get_api_key()
+    if ak:
+        headers["X-Api-Key"] = ak
+        # also include api_key as query to satisfy some endpoints that require it in querystring
+        if params is not None and "api_key" not in params:
+            params = dict(params, api_key=ak)
+    r = requests.get(url, params=params, headers=headers, timeout=timeout)
+    return r
 
-def _ela_extract_notice_fields(item: dict) -> dict:
-    # SAM.gov v3 structure can vary; do best-effort extraction
-    get = lambda *keys, default="": next((item.get(k,"") for k in keys if k in item), default)
-    def dig(path, dct, default=""):
-        cur = dct
-        for p in path:
-            if isinstance(cur, dict) and p in cur:
-                cur = cur[p]
-            else:
-                return default
-        return cur
-    title = dig(["title"], item, default=get("title"))
-    notice_id = dig(["noticeId"], item, default=get("noticeId"))
-    notice_type = dig(["type"], item, default=item.get("noticeType",""))
-    naics = ""
+def _sam10_coerce_date_str(d):
+    # Accept "YYYY-MM-DD HH:MM:SS" or "MM/dd/yyyy"
+    if not d:
+        return ""
     try:
-        naics = ",".join([x.get("naicsCode","") for x in dig(["naics","codes"], item, default=[]) if x.get("naicsCode")])
-    except Exception:
-        naics = item.get("naicsCode","")
-    psc = dig(["psc","code"], item, default=item.get("pscCode",""))
-    posted = dig(["postedDate"], item, default=item.get("postedDate",""))
-    due = dig(["responseDate"], item, default=item.get("responseDate",""))
-    agency = dig(["organization","name"], item, default=item.get("organizationName",""))
-    pop = dig(["placeOfPerformance","city"], item, default="")
-    if not pop:
-        pop = dig(["placeOfPerformance","state"], item, default="")
-    desc = dig(["description"], item, default=item.get("description",""))
-    poc_list = dig(["pointOfContact"], item, default=item.get("pointOfContact", []))
-    if isinstance(poc_list, dict):
-        poc_list = [poc_list]
-    links = item.get("attachments", []) or item.get("links", [])
-    return {
-        "notice_id": notice_id,
-        "title": title,
-        "notice_type": notice_type,
-        "naics": naics,
-        "psc": psc,
-        "posted": posted,
-        "due": due,
-        "agency": agency,
-        "place_of_performance": pop,
-        "description": desc,
-        "pocs": poc_list,
-        "links": links,
-        "raw": item
-    }
-
-def _ela_cache_notice(con, notice: dict):
-    raw_json = __import__("json").dumps(notice["raw"], ensure_ascii=False)
-    h = _ela_hash_obj(notice["raw"])
-    con.execute("""
-    INSERT INTO sam_opportunities (notice_id, raw_json, notice_type, title, naics, psc, posted, due, agency, place_of_performance, last_hash, cached_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(notice_id) DO UPDATE SET
-      raw_json=excluded.raw_json,
-      notice_type=excluded.notice_type,
-      title=excluded.title,
-      naics=excluded.naics,
-      psc=excluded.psc,
-      posted=excluded.posted,
-      due=excluded.due,
-      agency=excluded.agency,
-      place_of_performance=excluded.place_of_performance,
-      last_hash=excluded.last_hash,
-      cached_at=excluded.cached_at
-    """, (
-        notice["notice_id"], raw_json, notice["notice_type"], notice["title"], notice["naics"],
-        notice["psc"], notice["posted"], notice["due"], notice["agency"], notice["place_of_performance"],
-        h, int(__import__("time").time())
-    ))
-    con.commit()
-    return h
-
-def _ela_save_to_pipeline(con, notice_id: str, last_hash: str=""):
-    ts = int(__import__("time").time())
-    con.execute("""
-    INSERT INTO tracked_opps (notice_id, status, saved_at, last_checked, last_hash)
-    VALUES (?,?,?,?,?)
-    ON CONFLICT(notice_id) DO UPDATE SET
-      last_checked=excluded.last_checked,
-      last_hash=excluded.last_hash
-    """,(notice_id, "active", ts, ts, last_hash))
-    con.commit()
-
-def _ela_check_updates_for_tracked(con, api_key: str):
-    # Refresh tracked opportunities; return list of updated notice_ids
-    import json as _json
-    cur = con.execute("SELECT notice_id, last_hash FROM tracked_opps")
-    updated = []
-    for nid, last_hash in cur.fetchall():
-        try:
-            data = _ela_sam_fetch(api_key, {"noticeId": nid}, page=0, records_per_page=1)
-            records = data.get("opportunitiesData", []) or data.get("data", [])
-            if records:
-                notice = _ela_extract_notice_fields(records[0])
-                new_hash = _ela_cache_notice(con, notice)
-                con.execute("UPDATE tracked_opps SET last_checked=?, last_hash=? WHERE notice_id=?",
-                            (int(__import__('time').time()), new_hash, nid))
-                if new_hash and new_hash != last_hash:
-                    updated.append(nid)
-        except Exception:
-            # ignore individual failures
-            pass
-    con.commit()
-    return updated
-
-def _ela_send_email_alerts(settings: dict, subject: str, body: str):
-    # Minimal email sender using secrets if available
-    try:
-        import smtplib, ssl, os
-        from email.message import EmailMessage
-        emails = [e.strip() for e in settings.get("emails","").split(",") if e.strip()]
-        if not emails:
-            return False
-        host = os.getenv("ELA_SMTP_HOST") or settings.get("smtp_host","")
-        port = int(os.getenv("ELA_SMTP_PORT") or settings.get("smtp_port", 587))
-        user = os.getenv("ELA_SMTP_USER") or settings.get("smtp_user","")
-        pwd = os.getenv("ELA_SMTP_PASS") or settings.get("smtp_pass","")
-        if not (host and user and pwd):
-            return False
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = user
-        msg["To"] = ", ".join(emails)
-        msg.set_content(body)
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP(host, port) as server:
-            server.starttls(context=ctx)
-            server.login(user, pwd)
-            server.send_message(msg)
-        return True
-    except Exception:
-        return False
-
-def _ela_analyze_rfp_summary(doc_texts: list) -> str:
-    # Lightweight heuristic summary to avoid external dependencies
-    # In your environment, you can swap this with your existing LLM call.
-    key_points = []
-    for t in doc_texts[:5]:
-        if not isinstance(t, str):
-            continue
-        lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
-        key_points.extend(lines[:5])
-    pick = key_points[:12]
-    if not pick:
-        return "No detailed documents detected. Use the attachments panel to upload RFP files for analysis."
-    return "RFP Summary (auto):\n- " + "\n- ".join(pick)
-
-def _ela_render_samwatch_10():
-    mods = _ela_safe_imports_for_samwatch()
-    st = mods["streamlit"]
-    if st is None:
-        return
-    # Early render modal so selection feels persistent across reruns
-    try:
-        if st.session_state.get('show_notice_modal') and st.session_state.get('selected_notice'):
-            _render_notice_modal()
-    except Exception:
-        pass
-
-    import os, json, time
-    db_path = os.getenv("ELA_DB_PATH", "./data/ela_app.db")
-    con = _ela_db_conn(db_path)
-    st.title("SAM Watch 10/10 (Beta)")
-    with st.sidebar:
-        st.subheader("Search Filters")
-        kw = st.text_input("Keywords", "")
-        naics = st.text_input("NAICS (comma-separated)", "")
-        psc = st.text_input("PSC (comma-separated)", "")
-        types = st.multiselect("Notice Types", ["Solicitation","Combined Synopsis/Solicitation","Presolicitation","Sources Sought"], default=["Solicitation","Combined Synopsis/Solicitation"])
-        search = st.button("Search SAM.gov")
-        st.markdown("---")
-        st.subheader("Alerts")
-        freq = st.selectbox("Frequency", ["Off","Daily","Weekly","Monthly"], index=0)
-        emails = st.text_input("Emails (comma-separated)", "")
-        if st.button("Save Alert Settings"):
-            con.execute("INSERT INTO bid_alert_settings(frequency, keywords, naics, emails, created_at) VALUES(?,?,?,?,?)",
-                        (freq.lower(), kw, naics, emails, int(time.time())))
-            con.commit()
-            st.success("Alert settings saved.")
-    if search:
-        api_key = os.getenv("SAM_API_KEY") or st.secrets.get("sam","")
-        if not api_key:
-            st.error("Missing SAM API key. Set SAM_API_KEY env var or st.secrets['sam'].")
-        else:
-            params = {}
-            if kw: params["q"] = kw
-            if naics: params["naics"] = [x.strip() for x in naics.split(",") if x.strip()]
-            if psc: params["psc"] = [x.strip() for x in psc.split(",") if x.strip()]
-            # map types to API
-            # Using 'noticeType' textual match as a fallback
-            params["noticeType"] = types
-            results = []
+        from datetime import datetime as _dt
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%m/%d/%Y"):
             try:
-                for page in range(0, 3):  # fetch first ~150 results
-                    data = _ela_sam_fetch(api_key, params, page=page, records_per_page=50)
-                    recs = data.get("opportunitiesData", []) or data.get("data", [])
-                    if not recs: break
-                    for it in recs:
-                        ntc = _ela_extract_notice_fields(it)
-                        h = _ela_cache_notice(con, ntc)
-                        results.append(ntc)
-                if not results:
-                    st.info("No results.")
-                else:
-                    import pandas as pd
-                    df = pd.DataFrame([{
-                        "Notice ID": r["notice_id"],
-                        "Title": r["title"],
-                        "Type": r["notice_type"],
-                        "NAICS": r["naics"],
-                        "PSC": r["psc"],
-                        "Posted": r["posted"],
-                        "Due": r["due"],
-                        "Agency": r["agency"],
-                        "Place": r["place_of_performance"]
-                    } for r in results])
-                    st.dataframe(df, use_container_width=True)
-                    pick = st.selectbox("Open notice details", ["--"] + [r["notice_id"] for r in results])
-                    if pick and pick != "--":
-                        sel = next((r for r in results if r["notice_id"] == pick), None)
-                        if sel:
-                            st.session_state['selected_notice'] = _notice_to_modal_data(sel)
-                            st.session_state['show_notice_modal'] = True
-                            try:
-                                st.experimental_set_query_params(page='samwatch10')
-                            except Exception:
-                                pass
-                            st.stop()
-https://sam.gov/opp/{sel['notice_id']}/view")
-            except Exception as ex:
-                st.error(f"Search failed: {ex}")
+                return _dt.strftime(_dt.strptime(str(d), fmt), "%Y-%m-%d")
+            except Exception:
+                pass
+        return str(d)
+    except Exception:
+        return str(d)
 
-def render_sam_watch_10_page_if_query_param():
-    # Optional helper: render this page when URL contains ?page=samwatch10
-    mods = _ela_safe_imports_for_samwatch()
-    st = mods["streamlit"]
-    if st is None:
-        return
+def _sam10_sha(obj):
     try:
-        q = st.experimental_get_query_params()
-        if q.get("page", [""])[0].lower() == "samwatch10":
-            _ela_render_samwatch_10()
+        s = json.dumps(obj, sort_keys=True, default=str)
+    except Exception:
+        s = str(obj)
+    return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
+
+def _sam10_get_db():
+    # Reuse existing DB_PATH and get_db if available
+    try:
+        return get_db()
+    except Exception:
+        import sqlite3, os
+        db_path = os.getenv("DB_PATH") or "ela_govcon.db"
+        return sqlite3.connect(db_path, check_same_thread=False)
+
+def _sam10_ensure_tables():
+    conn = _sam10_get_db()
+    cur = conn.cursor()
+    # Attachments separate table for querying if not already present
+    cur.execute("""create table if not exists opp_attachments(
+        id integer primary key,
+        sam_notice_id text,
+        filename text,
+        url text,
+        created_at text default current_timestamp
+    )""")
+    # Watchlist for change monitoring
+    cur.execute("""create table if not exists opp_watchlist(
+        id integer primary key,
+        sam_notice_id text unique,
+        title text,
+        last_hash text,
+        last_checked text,
+        email_to text,
+        active integer default 1,
+        created_at text default current_timestamp
+    )""")
+    # Extend opportunities if needed
+    try:
+        cur.execute("alter table opportunities add column active text")
     except Exception:
         pass
-
-# Try to expose a minimal launcher in the sidebar without breaking existing layout
-def maybe_inject_samwatch10_sidebar_button():
-    mods = _ela_safe_imports_for_samwatch()
-    st = mods["streamlit"]
-    if st is None:
-        return
     try:
-        with st.sidebar:
-            if st.button("Launch SAM Watch 10/10"):
-                st.experimental_set_query_params(page="samwatch10")
+        cur.execute("alter table opportunities add column last_seen text")
     except Exception:
         pass
+    try:
+        cur.execute("alter table opportunities add column raw_json text")
+    except Exception:
+        pass
+    conn.commit()
 
-# Auto-run safe injectors (no-ops if Streamlit isn't imported yet)
-maybe_inject_samwatch10_sidebar_button()
-render_sam_watch_10_page_if_query_param()
-# ===== /SAM Watch 10/10 =====
+_sam10_ensure_tables_called = False
 
-def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
-               notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"):
-    if not SAM_API_KEY:
+def _sam10_bootstrap_once():
+    global _sam10_ensure_tables_called
+    if not _sam10_ensure_tables_called:
+        _sam10_ensure_tables()
+        _sam10_ensure_tables_called = True
+
+def sam_search_v2_enhanced(
+    naics_list,
+    min_days=3,
+    limit=100,
+    keyword=None,
+    posted_from_days=30,
+    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT",
+    active="true"
+):
+    """
+    Returns df, info using GSA v2 endpoint with attachments via resourceLinks and robust field mapping.
+    """
+    _sam10_bootstrap_once()
+    import pandas as pd, requests
+    from datetime import datetime, timedelta
+
+    ak = _sam10_get_api_key()
+    if not ak:
         return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
 
-    base_v3 = "https://api.sam.gov/opportunities/v2/search"  # downgraded to v2 to align with v2-style params
-    base_v2 = "https://api.sam.gov/opportunities/v2/search"
-
+    base = "https://api.sam.gov/opportunities/v2/search"
     today = datetime.utcnow().date()
-    posted_from = (today - timedelta(days=posted_from_days)).strftime("%m/%d/%Y")
-    posted_to = today.strftime("%m/%d/%Y")
+    min_due_date = today + timedelta(days=int(min_days) if min_days is not None else 0)
+    posted_from = (today - timedelta(days=int(posted_from_days))).strftime("%m/%d/%Y")
+    posted_to   = today.strftime("%m/%d/%Y")
 
-    params_v3 = {
-        "api_key": SAM_API_KEY,
-        "limit": str(limit),
-        "sort": "-published_date",
-        "posted_from": posted_from,
-        "posted_to": posted_to,
+    # Map UI terms to ptype codes per GSA docs
+    # p=Pre-solicitation, r=Sources Sought, o=Solicitation, k=Combined
+    _map = {
+        "Presolicitation": "p",
+        "SRCSGT": "r",
+        "Sources Sought": "r",
+        "Solicitation": "o",
+        "Combined Synopsis/Solicitation": "k"
     }
+    ptypes = []
+    for t in (notice_types or "").split(","):
+        t=t.strip()
+        if not t: 
+            continue
+        ptypes.append(_map.get(t, t.lower()[:1]))
+    ptype_param = ",".join(sorted(set([x for x in ptypes if x])))
 
-    # Convert old-style comma-separated list to v3 array style
-    if notice_types:
-        params_v3["notice_types[]"] = [n.strip() for n in notice_types.split(",") if n.strip()]
-
-    if naics_list:
-        params_v3["naics_codes[]"] = [c for c in naics_list if c]
+    params = {
+        "api_key": ak,
+        "limit": str(int(limit)),
+        "postedFrom": posted_from,
+        "postedTo": posted_to,
+    }
+    if ptype_param:
+        params["ptype"] = ptype_param
     if keyword:
-        params_v3["keywords"] = keyword
+        params["title"] = str(keyword)
 
-    try:
-        r = requests_get(base_v3, params=params_v3, timeout=40)
-        if r.status_code == 404:
-            # fallback to v2 automatically
-            raise ValueError("v3_404")
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        # fallback to v2 legacy style
-        params_v2 = {
-            "api_key": SAM_API_KEY,
-            "limit": str(limit),
-            "response": "json",
-            "sort": "-publishedDate",
-            "active": active,
-            "postedFrom": posted_from,
-            "postedTo": posted_to,
-            "noticeType": notice_types,
-        }
-        if naics_list:
-            params_v2["naics"] = ",".join(naics_list)
-        if keyword:
-            params_v2["keywords"] = keyword
-        r = requests_get(base_v2, params=params_v2, timeout=40)
-        r.raise_for_status()
-        data = r.json()
+    # NAICS filter supports only one code per query in v2; do multiple passes if list
+    codes = naics_list or []
+    codes = [str(c).strip() for c in codes if str(c).strip()]
+    if not codes:
+        codes = [""]  # single pass no NAICS filter
 
-    # unified parsing
-    items = data.get("opportunitiesData") or data.get("data") or []
     rows = []
-    for opp in items:
-        rows.append({
-            "sam_notice_id": opp.get("noticeId"),
-            "title": opp.get("title"),
-            "agency": opp.get("organizationName"),
-            "naics": ",".join(opp.get("naicsCodes", [])),
-            "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-            "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city", ""),
-            "response_due": opp.get("responseDeadLine") or "",
-            "posted": opp.get("publishedDate", ""),
-            "type": opp.get("type", ""),
-            "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-        })
+    raw_first = ""
+    total_api = 0
+    for idx, ncode in enumerate(codes):
+        q = dict(params)
+        if ncode:
+            q["ncode"] = ncode
+        try:
+            r = _sam10_http_get(base, params=q, timeout=50)
+            total_api += 1
+            if not raw_first:
+                raw_first = (r.text or "")[:1000]
+            if r.status_code != 200:
+                try:
+                    j = r.json()
+                except Exception:
+                    j = {"message": r.text[:500]}
+                return pd.DataFrame(), {"ok": False, "reason": "http", "status": r.status_code, "detail": j, "raw_preview": raw_first}
+            data = r.json() or {}
+            items = data.get("opportunitiesData", []) or []
+            for opp in items:
+                # Attachments are in resourceLinks (array of URLs). No filenames in API.
+                res_links = opp.get("resourceLinks") or []
+                attachments = [{"name": f"Attachment {i+1}", "url": u} for i, u in enumerate(res_links) if u]
 
+                # Due date field label is 'reponseDeadLine' in docs, but often 'responseDeadLine' in payload.
+                due_str = opp.get("responseDeadLine") or opp.get("reponseDeadLine") or ""
+                # Posted date
+                posted_dt = opp.get("postedDate") or opp.get("publishedDate") or ""
+
+                # Organization
+                org = opp.get("organizationName") or opp.get("fullParentPathName") or ""
+
+                # Place of performance
+                pop = opp.get("placeOfPerformance") or {}
+                pop_city = ""
+                try:
+                    pop_city = (pop.get("city") or {}).get("name") or pop.get("city") or ""
+                except Exception:
+                    pop_city = ""
+                pop_state = ""
+                try:
+                    pop_state = (pop.get("state") or {}).get("name") or pop.get("state") or ""
+                except Exception:
+                    pop_state = ""
+                pop_fmt = ", ".join([x for x in [pop_city, pop_state] if x])
+
+                # POC
+                poc = opp.get("pointOfContact") or opp.get("data", {}).get("pointOfContact") or {}
+                poc_full = ""
+                if isinstance(poc, dict):
+                    poc_full = poc.get("fullname") or poc.get("fullName") or ""
+                # Build row
+                rows.append({
+                    "sam_notice_id": opp.get("noticeId") or opp.get("noticeid") or "",
+                    "title": opp.get("title") or "",
+                    "agency": org,
+                    "naics": (",".join(opp.get("naicsCodes", [])) if opp.get("naicsCodes") else opp.get("naicsCode") or ""),
+                    "psc": opp.get("classificationCode") or (",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else ""),
+                    "place_of_performance": pop_fmt,
+                    "response_due": due_str,
+                    "posted": posted_dt,
+                    "type": opp.get("type") or opp.get("baseType") or "",
+                    "url": f"https://sam.gov/opp/{opp.get('noticeId') or opp.get('noticeid')}/view" if (opp.get("noticeId") or opp.get("noticeid")) else "",
+                    "attachments_json": json.dumps(attachments),
+                    "poc_name": poc_full,
+                    "active": opp.get("active"),
+                    "raw_json": json.dumps(opp, default=str)
+                })
+        except Exception as ex:
+            return pd.DataFrame(), {"ok": False, "reason": "exception", "detail": str(ex), "raw_preview": raw_first}
+
+    import pandas as pd
     df = pd.DataFrame(rows)
-    return df, {"ok": True, "count": len(df), "status": "success"}
+    # Enforce min due date filter
+    if not df.empty:
+        def _to_date(x):
+            try:
+                from datetime import datetime as _dt
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
+                    try:
+                        return _dt.strptime(str(x), fmt).date()
+                    except Exception:
+                        pass
+            except Exception:
+                return None
+            return None
+        mind = min_due_date
+        def _ok_due(v):
+            d = _to_date(v)
+            return True if d is None else d >= mind
+        df = df[df["response_due"].apply(_ok_due)]
 
+    info = {
+        "ok": True, "count": int(len(df)),
+        "filters": {"naics": ",".join([c for c in codes if c]), "keyword": keyword or "", "postedFrom": posted_from, "postedTo": posted_to,
+                    "min_due_days": min_days, "noticeType": notice_types, "active": active, "limit": limit},
+        "raw_preview": raw_first
+    }
+    return df, info
 
-def _render_notice_modal():
+# Override existing search with enhanced behavior
+try:
+    sam_search = sam_search_v2_enhanced
+except Exception:
+    pass
+
+# ----- Persistence helpers (safe upsert) -----
+def _sam10_to_sql(v):
+    if v is None: return None
+    if isinstance(v, (dict, list)): 
+        try: return json.dumps(v, ensure_ascii=False)
+        except Exception: return str(v)
+    return str(v)
+
+def sam10_save_opportunities(df):
+    """Save df rows into 'opportunities' and attachment rows into 'opp_attachments'."""
+    _sam10_bootstrap_once()
+    if df is None or df.empty:
+        return 0, 0
+    conn = _sam10_get_db(); cur = conn.cursor()
+    added, updated = 0, 0
+    for _, r in df.iterrows():
+        nid = str(r.get("sam_notice_id") or "").strip()
+        if not nid: 
+            continue
+        cur.execute("select id, raw_json from opportunities where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+        base = {
+            "sam_notice_id": nid,
+            "title": _sam10_to_sql(r.get("title")),
+            "agency": _sam10_to_sql(r.get("agency")),
+            "naics": _sam10_to_sql(r.get("naics")),
+            "psc": _sam10_to_sql(r.get("psc")),
+            "place_of_performance": _sam10_to_sql(r.get("place_of_performance")),
+            "response_due": _sam10_to_sql(r.get("response_due")),
+            "posted": _sam10_to_sql(r.get("posted")),
+            "type": _sam10_to_sql(r.get("type")),
+            "url": _sam10_to_sql(r.get("url")),
+            "attachments_json": _sam10_to_sql(r.get("attachments_json")),
+            "active": _sam10_to_sql(r.get("active")),
+            "last_seen": datetime.datetime.utcnow().isoformat(timespec="seconds"),
+            "raw_json": _sam10_to_sql(r.get("raw_json"))
+        }
+        if row:
+            cur.execute("""update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?,
+                           response_due=?, posted=?, type=?, url=?, attachments_json=?, active=?, last_seen=?, raw_json=?
+                           where sam_notice_id=?""",
+                        (base["title"], base["agency"], base["naics"], base["psc"], base["place_of_performance"],
+                         base["response_due"], base["posted"], base["type"], base["url"], base["attachments_json"],
+                         base["active"], base["last_seen"], base["raw_json"], nid))
+            updated += 1
+        else:
+            cur.execute("""insert into opportunities(sam_notice_id,title,agency,naics,psc,place_of_performance,
+                           response_due,posted,type,url,attachments_json,status,active,last_seen,raw_json)
+                           values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (base["sam_notice_id"], base["title"], base["agency"], base["naics"], base["psc"], base["place_of_performance"],
+                         base["response_due"], base["posted"], base["type"], base["url"], base["attachments_json"],
+                         "New", base["active"], base["last_seen"], base["raw_json"]))
+            added += 1
+
+        # attachments
+        try:
+            atts = r.get("attachments_json")
+            if isinstance(atts, str):
+                atts = json.loads(atts)
+            if isinstance(atts, list):
+                # Clear old, insert new
+                cur.execute("delete from opp_attachments where sam_notice_id=?", (nid,))
+                for a in atts:
+                    cur.execute("insert into opp_attachments(sam_notice_id, filename, url) values(?,?,?)",
+                                (nid, a.get("name","Attachment"), a.get("url","")))
+        except Exception:
+            pass
+
+    conn.commit()
+    return added, updated
+
+# ----- Watchlist + change detection -----
+def sam10_watch_add(nid: str, title: str = "", email_to: str = ""):
+    _sam10_bootstrap_once()
+    if not nid: 
+        return False, "missing notice id"
+    conn = _sam10_get_db(); cur = conn.cursor()
+    # compute initial hash from current opportunity raw_json if present
+    cur.execute("select raw_json from opportunities where sam_notice_id=?", (nid,))
+    row = cur.fetchone()
+    last_hash = _sam10_sha(row[0]) if row and row[0] else ""
+    cur.execute("""insert into opp_watchlist(sam_notice_id,title,last_hash,last_checked,email_to,active)
+                   values(?,?,?,?,?,1)
+                   on conflict(sam_notice_id) do update set title=excluded.title, email_to=excluded.email_to, active=1""",
+                (nid, title or "", last_hash, datetime.datetime.utcnow().isoformat(timespec="seconds"), email_to or ""))
+    conn.commit()
+    return True, "watching"
+
+def _sam10_notify(email_to: str, subject: str, body: str):
+    # Attempt Microsoft Graph first if configured, else try a simple SMTP via any existing mail helper, else only UI.
     try:
-        if st.session_state.get('show_notice_modal') and st.session_state.get('selected_notice'):
-            with st.modal("Notice Details", key="notice_modal"):
-                data = st.session_state['selected_notice'] or {}
-                st.markdown(f"### {data.get('title','(no title)')}")
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.write("**Agency:**", data.get('agency',''))
-                    st.write("**Type:**", data.get('type',''))
-                    st.write("**NAICS:**", data.get('naics',''))
-                    st.write("**PSC:**", data.get('psc',''))
-                    st.write("**Posted:**", data.get('posted',''))
-                    st.write("**Due:**", data.get('response_due',''))
-                with c2:
-                    st.write("**Place of Performance:**", data.get('place_of_performance',''))
-                    st.write("**SAM Link:**", data.get('url',''))
-                if st.button("Close", key="close_notice_modal"):
-                    st.session_state['show_notice_modal'] = False
-                    st.session_state['selected_notice'] = None
-    except Exception as _e:
-        # keep app stable even if a field is missing
-        st.debug(f"Modal render skipped: {_e}")
+        if (os.getenv("MS_TENANT_ID") or st.secrets.get("MS_TENANT_ID","")) and 'send_via_graph' in globals():
+            try:
+                sender = os.getenv("MS_SENDER_UPN") or st.secrets.get("MS_SENDER_UPN","")
+            except Exception:
+                sender = None
+            try:
+                send_via_graph(email_to, subject, body, sender_upn=sender)
+                return "graph"
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Fallback: use outreach email helper if available
+    try:
+        if 'send_outreach_email' in globals() and email_to:
+            send_outreach_email(user="default", to_addrs=[email_to], subject=subject, body=body)
+            return "smtp"
+    except Exception:
+        pass
+    # Last resort: UI only
+    try:
+        st.toast(subject + " | " + body[:140])
+    except Exception:
+        pass
+    return "ui"
 
+def sam10_watch_poll_and_alert(max_rows: int = 200):
+    """Fetch fresh data for watched notices via search and compare hash. Alert on changes."""
+    _sam10_bootstrap_once()
+    import pandas as pd
+    conn = _sam10_get_db(); cur = conn.cursor()
+    cur.execute("select sam_notice_id, coalesce(title,''), coalesce(email_to,'') from opp_watchlist where active=1 order by id desc limit ?", (int(max_rows),))
+    watch_rows = cur.fetchall()
+    if not watch_rows:
+        return 0, 0
+    nids = [w[0] for w in watch_rows if w and w[0]]
+    # Pull fresh data by noticeid filter in v2
+    fresh = []
+    for nid in nids:
+        try:
+            r = _sam10_http_get("https://api.sam.gov/opportunities/v2/search", params={"noticeid": nid, "limit": "1"})
+            if r.status_code != 200: 
+                continue
+            js = r.json() or {}
+            items = js.get("opportunitiesData", []) or []
+            if items:
+                fresh.append(items[0])
+        except Exception:
+            continue
+    changed = 0
+    for opp in fresh:
+        nid = opp.get("noticeId") or opp.get("noticeid")
+        # Save into opportunities to keep current copy
+        df, _ = sam_search_v2_enhanced(naics_list=[], min_days=0, limit=1, keyword=opp.get("title"), posted_from_days=365, notice_types="", active="true")
+        if not df.empty:
+            sam10_save_opportunities(df)
+        # Compare hash
+        h = _sam10_sha(opp)
+        cur.execute("select last_hash, email_to, title from opp_watchlist where sam_notice_id=?", (nid,))
+        row = cur.fetchone()
+        if row:
+            last_hash, email_to, title = row[0] or "", row[1] or "", row[2] or ""
+            if h != last_hash:
+                changed += 1
+                cur.execute("update opp_watchlist set last_hash=?, last_checked=current_timestamp where sam_notice_id=?", (h, nid))
+                # Notify
+                subj = f"SAM update: {title or opp.get('title','(no title)')} [{nid}]"
+                # Build a terse diff message
+                due = opp.get("responseDeadLine") or opp.get("reponseDeadLine") or ""
+                link = f"https://sam.gov/opp/{nid}/view"
+                body = f"Notice changed.\nNotice ID: {nid}\nTitle: {opp.get('title','')}\nDue: {due}\nLink: {link}\n"
+                _sam10_notify(email_to, subj, body)
+        else:
+            # not in watchlist table?
+            pass
+    conn.commit()
+    return len(nids), changed
+
+# ----- Lightweight UI injector -----
+def render_sam_watch_10_10_panel():
+    _sam10_bootstrap_once()
+    import pandas as pd
+    st.subheader("SAM Watch 10/10")
+    ak = _sam10_get_api_key()
+    if not ak:
+        st.error("Set SAM_API_KEY in Streamlit secrets or environment.")
+        return
+
+    cols = st.columns(4)
+    naics_csv = cols[0].text_input("NAICS list (comma)", value=get_setting("sam10_naics_csv","541611,561720,236220"))
+    keyword = cols[1].text_input("Keyword", value=get_setting("sam10_keyword",""))
+    lookback = cols[2].number_input("Posted look-back days", min_value=1, max_value=365, value=int(get_setting("sam10_lookback","30") or 30))
+    min_due = cols[3].number_input("Min days until due", min_value=0, max_value=365, value=int(get_setting("sam10_min_due","3") or 3))
+
+    types = st.multiselect("Notice types", ["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"],
+                           default=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"])
+
+    if st.button("Search SAM"):
+        naics_list = [c.strip() for c in naics_csv.split(",") if c.strip()]
+        df, info = sam_search_v2_enhanced(naics_list=naics_list, min_days=min_due, limit=200, keyword=keyword,
+                                          posted_from_days=lookback, notice_types=",".join(types), active="true")
+        if not info.get("ok"):
+            st.error(f"API error: {info}")
+            return
+        if df.empty:
+            st.info("No results.")
+            return
+        st.dataframe(df[["sam_notice_id","title","agency","naics","psc","place_of_performance","response_due","posted","type"]], use_container_width=True, hide_index=True)
+
+        # Save and watch
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Save all to pipeline"):
+                ins, upd = sam10_save_opportunities(df)
+                st.success(f"Saved opportunities: added {ins}, updated {upd}")
+        with c2:
+            email_to = st.text_input("Alert email", value=get_setting("sam10_alert_email",""))
+            if st.button("Watch all for changes"):
+                added = 0
+                for _, r in df.iterrows():
+                    ok, _ = sam10_watch_add(str(r.get("sam_notice_id")), title=str(r.get("title") or ""), email_to=email_to)
+                    if ok: added += 1
+                st.success(f"Watchlist updated: {added} notices.")
+
+        # Show attachments inline with links
+        st.markdown("#### Attachments preview")
+        for _, r in df.iterrows():
+            try:
+                atts = r.get("attachments_json")
+                if isinstance(atts, str):
+                    atts = json.loads(atts)
+                if atts:
+                    st.write(f"**{r.get('title','')}**")
+                    for a in atts:
+                        url = a.get("url","")
+                        name = a.get("name","Attachment")
+                        if url:
+                            st.markdown(f"- [{name}]({url})")
+            except Exception:
+                pass
+
+    # Poller
+    with st.expander("Change monitor", expanded=False):
+        email_default = st.text_input("Default alert email", value=get_setting("sam10_alert_email",""))
+        if st.button("Run poll now"):
+            set_setting("sam10_alert_email", email_default or "")
+            total, changed = sam10_watch_poll_and_alert()
+            st.success(f"Polled {total} watched. Changes: {changed}")
+
+# Sidebar hook
+def _sam10_sidebar_hook():
+    try:
+        sec = st.sidebar.expander("SAM Watch 10/10", expanded=False)
+        with sec:
+            if st.button("Open SAM Watch 10/10 panel", key="open_sam_watch_10_10"):
+                st.session_state["_sam10_panel_open"] = True
+        if st.session_state.get("_sam10_panel_open"):
+            render_sam_watch_10_10_panel()
+    except Exception:
+        pass
+
+# Invoke sidebar hook so users can access the panel without modifying existing nav.
+try:
+    _sam10_sidebar_hook()
+except Exception:
+    pass
