@@ -8536,3 +8536,184 @@ try:
     _sam10_sidebar_hook()
 except Exception:
     pass
+
+
+
+# ===== SAM Watch 10/10 hotfix: robust joins and POC parsing =====
+def _sam10_extract_codes(list_obj):
+    out = []
+    for it in list_obj or []:
+        if isinstance(it, dict):
+            for k in ("code","value","id","naics","psc","classificationCode"):
+                v = it.get(k)
+                if v:
+                    out.append(str(v))
+                    break
+        else:
+            out.append(str(it))
+    return out
+
+def _sam10_first_poc(poc_obj):
+    # Supports dict or list of dicts. Prefer primary type.
+    try:
+        if isinstance(poc_obj, list):
+            primary = [p for p in poc_obj if isinstance(p, dict) and p.get("type","").lower()=="primary"]
+            cand = primary[0] if primary else (poc_obj[0] if poc_obj else {})
+            full = cand.get("fullName") or cand.get("fullname") or cand.get("name") or ""
+            email = cand.get("email") or ""
+            phone = cand.get("phone") or ""
+            return ", ".join([x for x in [full, email, phone] if x])
+        if isinstance(poc_obj, dict):
+            full = poc_obj.get("fullName") or poc_obj.get("fullname") or poc_obj.get("name") or ""
+            email = poc_obj.get("email") or ""
+            phone = poc_obj.get("phone") or ""
+            return ", ".join([x for x in [full, email, phone] if x])
+    except Exception:
+        pass
+    return ""
+
+def sam_search_v2_enhanced_v2(
+    naics_list,
+    min_days=3,
+    limit=100,
+    keyword=None,
+    posted_from_days=30,
+    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT",
+    active="true"
+):
+    _sam10_bootstrap_once()
+    import pandas as pd, requests, json
+    from datetime import datetime, timedelta
+
+    ak = _sam10_get_api_key()
+    if not ak:
+        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+
+    base = "https://api.sam.gov/opportunities/v2/search"
+    today = datetime.utcnow().date()
+    min_due_date = today + timedelta(days=int(min_days) if min_days is not None else 0)
+    posted_from = (today - timedelta(days=int(posted_from_days))).strftime("%m/%d/%Y")
+    posted_to   = today.strftime("%m/%d/%Y")
+
+    _map = {"Presolicitation":"p","SRCSGT":"r","Sources Sought":"r","Solicitation":"o","Combined Synopsis/Solicitation":"k"}
+    ptypes = []
+    for t in (notice_types or "").split(","):
+        t=t.strip()
+        if not t: 
+            continue
+        ptypes.append(_map.get(t, t.lower()[:1]))
+    ptype_param = ",".join(sorted(set([x for x in ptypes if x])))
+
+    params = {"api_key": ak, "limit": str(int(limit)), "postedFrom": posted_from, "postedTo": posted_to}
+    if ptype_param:
+        params["ptype"] = ptype_param
+    if keyword:
+        params["title"] = str(keyword)
+
+    codes = [str(c).strip() for c in (naics_list or []) if str(c).strip()] or [""]
+
+    rows = []
+    raw_first = ""
+    total_api = 0
+    for ncode in codes:
+        q = dict(params)
+        if ncode:
+            q["ncode"] = ncode
+        try:
+            r = _sam10_http_get(base, params=q, timeout=50)
+            total_api += 1
+            if not raw_first:
+                raw_first = (r.text or "")[:1000]
+            if r.status_code != 200:
+                try:
+                    j = r.json()
+                except Exception:
+                    j = {"message": r.text[:500]}
+                return pd.DataFrame(), {"ok": False, "reason": "http", "status": r.status_code, "detail": j, "raw_preview": raw_first}
+            data = r.json() or {}
+            items = data.get("opportunitiesData", []) or []
+            for opp in items:
+                res_links = opp.get("resourceLinks") or []
+                attachments = [{"name": f"Attachment {i+1}", "url": u} for i, u in enumerate(res_links) if u]
+
+                due_str = opp.get("responseDeadLine") or opp.get("reponseDeadLine") or ""
+                posted_dt = opp.get("postedDate") or opp.get("publishedDate") or ""
+
+                org = opp.get("organizationName") or opp.get("fullParentPathName") or ""
+
+                pop = opp.get("placeOfPerformance") or {}
+                pop_city = ""
+                try:
+                    pop_city = (pop.get("city") or {}).get("name") or pop.get("city") or ""
+                except Exception:
+                    pop_city = ""
+                pop_state = ""
+                try:
+                    pop_state = (pop.get("state") or {}).get("name") or pop.get("state") or ""
+                except Exception:
+                    pop_state = ""
+                pop_fmt = ", ".join([x for x in [str(pop_city).strip(), str(pop_state).strip()] if x])
+
+                # Safe NAICS and PSC extraction
+                naics = opp.get("naicsCode") or ""
+                if not naics:
+                    naics_list2 = _sam10_extract_codes(opp.get("naicsCodes"))
+                    naics = ",".join([str(x) for x in naics_list2]) if naics_list2 else ""
+
+                psc = opp.get("classificationCode") or ""
+                if not psc:
+                    psc_list = _sam10_extract_codes(opp.get("productOrServiceCodes"))
+                    psc = ",".join([str(x) for x in psc_list]) if psc_list else ""
+
+                poc_full = _sam10_first_poc(opp.get("pointOfContact") or opp.get("data", {}).get("pointOfContact"))
+
+                rows.append({
+                    "sam_notice_id": opp.get("noticeId") or opp.get("noticeid") or "",
+                    "title": opp.get("title") or "",
+                    "agency": org,
+                    "naics": naics,
+                    "psc": psc,
+                    "place_of_performance": pop_fmt,
+                    "response_due": due_str,
+                    "posted": posted_dt,
+                    "type": opp.get("type") or opp.get("baseType") or "",
+                    "url": f"https://sam.gov/opp/{opp.get('noticeId') or opp.get('noticeid')}/view" if (opp.get("noticeId") or opp.get("noticeid")) else "",
+                    "attachments_json": json.dumps(attachments),
+                    "poc_name": poc_full,
+                    "active": opp.get("active"),
+                    "raw_json": json.dumps(opp, default=str)
+                })
+        except Exception as ex:
+            return pd.DataFrame(), {"ok": False, "reason": "exception", "detail": str(ex), "raw_preview": raw_first}
+
+    import pandas as pd
+    df = pd.DataFrame(rows)
+
+    # Enforce min due with ISO support
+    if not df.empty:
+        def _to_date(x):
+            from datetime import datetime as _dt, timezone
+            try:
+                # Try ISO
+                return _dt.fromisoformat(str(x).replace("Z","+00:00")).date()
+            except Exception:
+                pass
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    return _dt.strptime(str(x), fmt).date()
+                except Exception:
+                    continue
+            return None
+        mind = min_due_date
+        df = df[df["response_due"].apply(lambda v: True if _to_date(v) is None else _to_date(v) >= mind)]
+
+    info = {"ok": True, "count": int(len(df)),
+            "filters": {"naics": ",".join([c for c in (naics_list or []) if c]), "keyword": keyword or "",
+                        "postedFrom": posted_from, "postedTo": posted_to, "min_due_days": min_days,
+                        "noticeType": notice_types, "active": active, "limit": limit},
+            "raw_preview": raw_first}
+    return df, info
+
+# Override search function with hotfix
+sam_search = sam_search_v2_enhanced_v2
+# ===== end hotfix =====
