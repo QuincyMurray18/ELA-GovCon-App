@@ -8469,7 +8469,6 @@ def _ela_render_samwatch_10():
                             st.session_state['selected_notice'] = _notice_to_modal_data(sel)
                             st.session_state['show_notice_modal'] = True
                             return
-https://sam.gov/opp/{sel['notice_id']}/view")
             except Exception as ex:
                 st.error(f"Search failed: {ex}")
 
