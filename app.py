@@ -7785,6 +7785,14 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
+        
+        # === V2 takeover ===
+        try:
+            render_sam_watch_v2()
+            st.stop()
+        except Exception as _e_samv2:
+            st.warning(f"SAM Watch V2 error: {_e_samv2}. Falling back to legacy UI.")
+
         _st.header("SAM Watch")
         _st.subheader("Filters")
         with _st.form("simple_filters", clear_on_submit=False):
@@ -9131,7 +9139,7 @@ def rfp_analyzer_popup(opp_row: dict):
 def render_sam_watch_v2():
     samv2_migrate()
 
-    st.title("SAM Watch V2 (Preview)")
+    st.title("SAM Watch")
     st.caption("One-click CLIN sheets, compliance matrix, proposal export, and email package.")
 
     with st.sidebar:
@@ -9149,6 +9157,13 @@ def render_sam_watch_v2():
         st.session_state["_samv2_kw"] = keywords
         st.session_state["_samv2_naics"] = naics
         st.session_state["_samv2_types"] = notice_types
+        # Widen defaults if empty to avoid zero-result traps
+        if not (keywords or "").strip():
+            keywords = "janitorial OR landscaping OR hvac"
+        if not (naics or "").strip():
+            naics = "561720, 561730, 238220"
+        if not notice_types:
+            notice_types = ["Solicitation","Combined Synopsis/Solicitation"]
 
         st.markdown("---")
         st.subheader("Bid Alerts")
@@ -9270,21 +9285,7 @@ def render_sam_watch_v2():
         st.success(f"Added {saved} deal(s). Skipped {skipped} duplicate(s).")
 
 def _sidebar_launcher():
-    if not ENABLE_SAM_WATCH_V2: 
-        return
-    try:
-        with st.sidebar:
-            if st.button("🚀 Launch SAM Watch V2", key="__samv2_launch"):
-                st.session_state["_samv2_open"] = True
-        if st.session_state.get("_samv2_open"):
-            render_sam_watch_v2()
-    except Exception as ex:
-        _log("Sidebar launcher error: " + str(ex))
-
-try:
-    _sidebar_launcher()
-except Exception as ex:
-    _log("SAM V2 init error: " + str(ex))
+    return
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
 
