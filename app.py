@@ -470,59 +470,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
 
 import pandas as pd
-
-# ---- Core schema hardening and universal SQL guard ----
-def ensure_core_tables(_conn):
-    try:
-        _conn.execute("create table if not exists contacts (id integer primary key, name text, org text, role text, email text, phone text, source text, notes text, created_at text default (datetime('now')))")
-        _conn.execute("create table if not exists vendors (id integer primary key, company text, contact_name text, email text, phone text, notes text, created_at text default (datetime('now')))")
-        _conn.execute("create table if not exists outreach_log (id integer primary key, vendor_id integer, opportunity_id integer, status text, channel text, notes text, created_at text default (datetime('now')))")
-        _conn.execute("create table if not exists opportunities (id integer primary key, sam_id text, title text, posted text, due text, agency text, naics text, url text, status text, created_at text default (datetime('now')))")
-        # Backfill created_at
-        _conn.execute("update contacts set created_at = datetime('now') where created_at is null or created_at=''")
-        _conn.execute("update vendors set created_at = datetime('now') where created_at is null or created_at=''")
-        _conn.execute("update outreach_log set created_at = datetime('now') where created_at is null or created_at=''")
-        _conn.execute("update opportunities set created_at = datetime('now') where created_at is null or created_at=''")
-        _conn.commit()
-    except Exception as _e_core:
-        try:
-            import streamlit as _st
-            _st.caption(f"[Schema hardening note: {_e_core}]")
-        except Exception:
-            pass
-
-# Monkeypatch pandas.read_sql_query to auto-heal missing core tables and retry once
-try:
-    _orig_read_sql_query = pd.read_sql_query
-    def _guarded_read_sql_query(sql, con=None, *args, **kwargs):
-        try:
-            return _orig_read_sql_query(sql, con, *args, **kwargs)
-        except Exception as _e:
-            _msg = str(_e)
-            # Only act on "no such table" for known core tables
-            _targets = ("contacts", "vendors", "outreach_log", "opportunities")
-            if "no such table" in _msg:
-                for _t in _targets:
-                    if f"no such table: {_t}" in _msg:
-                        try:
-                            ensure_core_tables(con)
-                            return _orig_read_sql_query(sql, con, *args, **kwargs)
-                        except Exception as _e2:
-                            try:
-                                import streamlit as _st
-                                _st.caption(f"[DB guard note: {_e2}]")
-                            except Exception:
-                                pass
-                            raise _e2
-            raise
-    pd.read_sql_query = _guarded_read_sql_query
-except Exception as _e_guard:
-    try:
-        import streamlit as _st
-        _st.caption(f"[DB guard install note: {_e_guard}]")
-    except Exception:
-        pass
-
 import numpy as np
 import streamlit as st
 
@@ -9414,3 +9361,63 @@ except Exception as _e_deals_tab:
 
 
 
+
+
+
+# ===== DB GUARD APPEND =====
+try:
+    import pandas as _pd_guard
+    _orig_read_sql_query = _pd_guard.read_sql_query
+    def _guarded_read_sql_query(sql, con=None, *args, **kwargs):
+        try:
+            return _orig_read_sql_query(sql, con, *args, **kwargs)
+        except Exception as _e:
+            _msg = str(_e)
+            _targets = ("contacts", "vendors", "outreach_log", "opportunities", "email_templates")
+            if "no such table" in _msg:
+                for _t in _targets:
+                    if ("no such table: " + _t) in _msg:
+                        try:
+                            _c = con
+                            if _c is None:
+                                # Try a few globals if no con passed
+                                for _name in ("conn", "db", "connection"):
+                                    try:
+                                        _c = globals()[_name]
+                                        break
+                                    except Exception:
+                                        pass
+                            if _c is not None:
+                                # Create minimal schemas
+                                _c.execute("create table if not exists contacts (id integer primary key, name text, org text, role text, email text, phone text, source text, notes text, created_at text default (datetime('now')))")
+                                _c.execute("create table if not exists vendors (id integer primary key, company text, contact_name text, email text, phone text, notes text, created_at text default (datetime('now')))")
+                                _c.execute("create table if not exists outreach_log (id integer primary key, vendor_id integer, opportunity_id integer, status text, channel text, notes text, created_at text default (datetime('now')))")
+                                _c.execute("create table if not exists opportunities (id integer primary key, sam_id text, title text, posted text, due text, agency text, naics text, url text, status text, created_at text default (datetime('now')))")
+                                _c.execute("create table if not exists email_templates (id integer primary key, name text unique, subject text, body text, created_at text default (datetime('now')))")
+                                try:
+                                    for _tb in ("contacts","vendors","outreach_log","opportunities","email_templates"):
+                                        try:
+                                            _c.execute("update " + _tb + " set created_at = datetime('now') where created_at is null or created_at=''")
+                                        except Exception:
+                                            pass
+                                    _c.commit()
+                                except Exception:
+                                    pass
+                            # Retry query once
+                            return _orig_read_sql_query(sql, con, *args, **kwargs)
+                        except Exception as _e2:
+                            try:
+                                import streamlit as _st
+                                _st.caption("[DB guard note: " + str(_e2) + "]")
+                            except Exception:
+                                pass
+                            raise _e2
+            raise
+    _pd_guard.read_sql_query = _guarded_read_sql_query
+except Exception as _e_guard_install:
+    try:
+        import streamlit as _st
+        _st.caption("[DB guard install note: " + str(_e_guard_install) + "]")
+    except Exception:
+        pass
+# ===== END DB GUARD APPEND =====
