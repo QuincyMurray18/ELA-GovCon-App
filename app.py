@@ -34,6 +34,20 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
 
+# --- SQLite adapters to allow dict/list parameters (serialize to JSON) ---
+import sqlite3, json as _json
+sqlite3.register_adapter(dict, lambda d: _json.dumps(d))
+sqlite3.register_adapter(list, lambda a: _json.dumps(a))
+# Optional: ensure text returned as str
+# (Streamlit sometimes chokes on bytes if text_factory isn't str)
+try:
+    _sqlite_text_factory = sqlite3.Connection.text_factory
+except Exception:
+    pass
+# --- end adapters ---
+
+
+
 from datetime import datetime, timedelta
 
 def _ela_v2_params(params: dict) -> dict:
