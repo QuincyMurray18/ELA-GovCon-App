@@ -3504,6 +3504,1267 @@ def _render_saved_vendors_manager(_container=None):
 
     with c3:
         _c.caption("Tip: Add a new row at the bottom to create a vendor manually.")
+# === SAM WATCH V2 (AUTO-MERGED) START ===
+# Auto-merged by ChatGPT on 2025-10-12T22:03:29.056867
+# Adds: CLIN Pricing Sheet generator + Smart CLIN parser + Sub input + Email package + Compliance Matrix export.
+
+
+import os
+import io
+import ssl
+import csv
+import json
+import time
+import smtplib
+import hashlib
+import sqlite3
+import pathlib
+import traceback
+import datetime as _dt
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# Optional libs
+try:
+    import requests
+except Exception:
+    requests = None
+
+try:
+    import streamlit as st
+except Exception:
+    class _Shim:
+        def __getattr__(self, k):
+            def _f(*a, **kw): 
+                return None
+            return _f
+    st = _Shim()
+
+# Optional PDF/DOCX tools
+try:
+    import PyPDF2
+except Exception:
+    PyPDF2 = None
+
+try:
+    import docx  # python-docx
+except Exception:
+    docx = None
+
+try:
+    import openpyxl
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+except Exception:
+    openpyxl = None
+    Workbook = None
+    get_column_letter = None
+
+ENABLE_SAM_WATCH_V2 = True
+
+SAM_API_BASE = "https://api.sam.gov/opportunities/v3/search"
+SAM_API_KEY = None
+try:
+    SAM_API_KEY = st.secrets.get("SAM_API_KEY", None)
+except Exception:
+    SAM_API_KEY = None
+
+SENDGRID_API_KEY = None
+ALERTS_FROM = None
+SMTP_HOST = None
+SMTP_PORT = None
+SMTP_USER = None
+SMTP_PASS = None
+SMTP_FROM = None
+SMTP_TLS = True
+
+try:
+    SENDGRID_API_KEY = st.secrets.get("SENDGRID_API_KEY", None)
+    ALERTS_FROM = st.secrets.get("ALERTS_FROM", None)
+    SMTP_HOST = st.secrets.get("SMTP_HOST", None)
+    SMTP_PORT = st.secrets.get("SMTP_PORT", None)
+    SMTP_USER = st.secrets.get("SMTP_USER", None)
+    SMTP_PASS = st.secrets.get("SMTP_PASS", None)
+    SMTP_FROM = st.secrets.get("SMTP_FROM", None)
+    SMTP_TLS = bool(st.secrets.get("SMTP_TLS", True))
+except Exception:
+    pass
+
+DB_PATH = "./ela.sqlite3"
+DATA_DIR = os.path.join(os.getcwd(), "data", "opportunities")
+EXPORT_DIR = os.path.join(os.getcwd(), "exports")
+CLIN_DIR = os.path.join(EXPORT_DIR, "clin_sheets")
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(EXPORT_DIR, exist_ok=True)
+os.makedirs(CLIN_DIR, exist_ok=True)
+
+def _log(msg: str):
+    try:
+        st.session_state.setdefault("_samv2_logs", [])
+        st.session_state["_samv2_logs"].append(f"{_dt.datetime.now().isoformat()} | {msg}")
+    except Exception:
+        pass
+
+def samv2_get_conn():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+def samv2_migrate():
+    conn = samv2_get_conn()
+    cur = conn.cursor()
+    # Opportunities
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samv2_opportunities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sol_number TEXT,
+            title TEXT,
+            description TEXT,
+            notice_type TEXT,
+            agency TEXT,
+            office TEXT,
+            naics TEXT,
+            psc TEXT,
+            set_aside TEXT,
+            place_of_performance TEXT,
+            city TEXT,
+            state TEXT,
+            zip TEXT,
+            country TEXT,
+            posted_date TEXT,
+            due_date TEXT,
+            last_modified TEXT,
+            sam_detail_url TEXT,
+            status TEXT DEFAULT 'Active',
+            payload_hash TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(sol_number, agency, notice_type) ON CONFLICT IGNORE
+        )
+        """
+    )
+    # Documents
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samv2_docs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opportunity_id INTEGER,
+            filename TEXT,
+            url TEXT,
+            local_path TEXT,
+            file_hash TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(opportunity_id, url) ON CONFLICT IGNORE,
+            FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
+        )
+        """
+    )
+    # Pipeline links
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samv2_pipeline_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opportunity_id INTEGER UNIQUE,
+            deal_id TEXT,
+            saved_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    # Alerts
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samv2_alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT,
+            frequency TEXT,
+            keywords TEXT,
+            naics TEXT,
+            set_aside TEXT,
+            notice_types TEXT,
+            last_sent_at TEXT
+        )
+        """
+    )
+    # Pull log
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samv2_pull_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            params_json TEXT,
+            pulled_count INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    # Proposal drafts
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samv2_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opportunity_id INTEGER UNIQUE,
+            payload_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+def _sha1(obj: dict) -> str:
+    return hashlib.sha1(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
+
+# ---- SAM API
+def samv2_search(params: dict) -> list[dict]:
+    if requests is None:
+        _log("Requests not available.")
+        return []
+    api_key = SAM_API_KEY or params.pop("api_key", None)
+    if not api_key:
+        _log("Missing SAM_API_KEY.")
+        return []
+    headers = {"Accept": "application/json"}
+    q = params.copy()
+    q["api_key"] = api_key
+    q.setdefault("limit", 100)
+    q.setdefault("offset", 0)
+    out = []
+    try:
+        resp = requests.get(SAM_API_BASE, params=q, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            _log(f"SAM API error {resp.status_code}: {resp.text[:200]}")
+            return []
+        data = resp.json()
+        for r in data.get("opportunitiesData", []):
+            agency = r.get("agency")
+            if isinstance(agency, dict):
+                agency = agency.get("name")
+            office = r.get("office")
+            if isinstance(office, dict):
+                office = office.get("name")
+            pop = r.get("placeOfPerformance") or {}
+            norm = {
+                "sol_number": r.get("solicitationNumber") or r.get("noticeId"),
+                "title": r.get("title"),
+                "description": r.get("description") or "",
+                "notice_type": r.get("type"),
+                "agency": agency,
+                "office": office,
+                "naics": ", ".join(r.get("naicsCodes", []) or r.get("naics", []) or []),
+                "psc": ", ".join(r.get("pscCodes", []) or r.get("productServiceCode", []) or []),
+                "set_aside": r.get("typeOfSetAside") or r.get("setAside"),
+                "place_of_performance": pop.get("address", ""),
+                "city": pop.get("city", ""),
+                "state": pop.get("state", ""),
+                "zip": pop.get("zip", ""),
+                "country": pop.get("countryCode", ""),
+                "posted_date": r.get("publishDate") or r.get("postedDate"),
+                "due_date": r.get("responseDate") or r.get("archiveDate"),
+                "last_modified": r.get("lastModifiedDate") or r.get("modifiedDate"),
+                "sam_detail_url": r.get("uiLink") or r.get("url") or "",
+            }
+            attachments = []
+            for att in (r.get("attachments") or []):
+                if isinstance(att, dict):
+                    attachments.append({
+                        "name": att.get("fileName") or att.get("title") or "attachment",
+                        "url": att.get("url") or att.get("href") or "",
+                    })
+            norm["attachments"] = attachments
+            out.append(norm)
+    except Exception as ex:
+        _log("SAM API exception: " + str(ex))
+    return out
+
+def _samv2_get_or_create_opp_id(cur, sol_number, agency, notice_type):
+    cur.execute("SELECT id FROM samv2_opportunities WHERE sol_number=? AND agency=? AND notice_type=?", (sol_number, agency, notice_type))
+    row = cur.fetchone()
+    if row: return row[0]
+    return None
+
+def samv2_upsert_records(records: list[dict]) -> int:
+    conn = samv2_get_conn(); cur = conn.cursor()
+    added = 0
+    for r in records:
+        payload_hash = _sha1(r)
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO samv2_opportunities
+            (sol_number, title, description, notice_type, agency, office, naics, psc, set_aside,
+             place_of_performance, city, state, zip, country, posted_date, due_date, last_modified,
+             sam_detail_url, status, payload_hash, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'Active', ?, datetime('now'), datetime('now'))
+            """
+            ,
+            (
+                r.get("sol_number"), r.get("title"), r.get("description"), r.get("notice_type"),
+                r.get("agency"), r.get("office"), r.get("naics"), r.get("psc"), r.get("set_aside"),
+                r.get("place_of_performance"), r.get("city"), r.get("state"), r.get("zip"), r.get("country"),
+                r.get("posted_date"), r.get("due_date"), r.get("last_modified"),
+                r.get("sam_detail_url"), payload_hash
+            )
+        )
+        if cur.rowcount > 0:
+            added += 1
+        opp_id = _samv2_get_or_create_opp_id(cur, r.get("sol_number"), r.get("agency"), r.get("notice_type"))
+        if opp_id is not None:
+            cur.execute("SELECT payload_hash FROM samv2_opportunities WHERE id=?", (opp_id,))
+            ph = cur.fetchone()
+            if ph and ph[0] != payload_hash:
+                cur.execute(
+                    """UPDATE samv2_opportunities
+                    SET title=?, description=?, naics=?, psc=?, set_aside=?, place_of_performance=?,
+                        city=?, state=?, zip=?, country=?, posted_date=?, due_date=?, last_modified=?,
+                        sam_detail_url=?, payload_hash=?, updated_at=datetime('now')
+                    WHERE id=?"""
+                    ,
+                    (
+                        r.get("title"), r.get("description"), r.get("naics"), r.get("psc"),
+                        r.get("set_aside"), r.get("place_of_performance"),
+                        r.get("city"), r.get("state"), r.get("zip"), r.get("country"),
+                        r.get("posted_date"), r.get("due_date"), r.get("last_modified"),
+                        r.get("sam_detail_url"), payload_hash, opp_id
+                    )
+                )
+            for att in (r.get("attachments") or []):
+                try:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO samv2_docs(opportunity_id, filename, url, local_path, file_hash) VALUES(?,?,?,?,NULL)",
+                        (opp_id, att.get("name") or "attachment", att.get("url") or "", None)
+                    )
+                except Exception:
+                    pass
+    conn.commit(); conn.close()
+    return added
+
+# ---- Attachments
+def samv2_download_attachments(opportunity_id: int) -> int:
+    if requests is None:
+        _log("Requests not available; skipping downloads.")
+        return 0
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT sol_number FROM samv2_opportunities WHERE id=?", (opportunity_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close(); return 0
+    sol = row[0] or f"opp_{opportunity_id}"
+    folder = os.path.join(DATA_DIR, sol)
+    pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
+
+    cur.execute("SELECT id, filename, url, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    docs = cur.fetchall()
+    downloaded = 0
+    for did, fname, url, lpath in docs:
+        if not url:
+            continue
+        base = (fname or "attachment").replace("/", "_").replace("\\", "_")
+        if not os.path.splitext(base)[1]:
+            ext = os.path.splitext(url.split("?")[0])[1] or ".bin"
+            base = base + ext
+        dest = os.path.join(folder, base)
+        if os.path.exists(dest):
+            downloaded += 1
+            continue
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == 200 and r.content:
+                with open(dest, "wb") as f:
+                    f.write(r.content)
+                cur.execute("UPDATE samv2_docs SET local_path=? WHERE id=?", (dest, did))
+                downloaded += 1
+        except Exception as ex:
+            _log("Download error: " + str(ex))
+    conn.commit(); conn.close()
+    return downloaded
+
+# ---- Email
+def _send_via_sendgrid(to_email: str, subject: str, html: str, attachments: list[str] | None = None) -> bool:
+    if not SENDGRID_API_KEY or not ALERTS_FROM or requests is None:
+        return False
+    try:
+        url = "https://api.sendgrid.com/v3/mail/send"
+        content = [{"type": "text/html", "value": html}]
+        atts = []
+        import base64
+        for path in (attachments or []):
+            try:
+                with open(path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                atts.append({"content": b64, "filename": os.path.basename(path)})
+            except Exception:
+                continue
+        payload = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {"email": ALERTS_FROM},
+            "subject": subject,
+            "content": content,
+        }
+        if atts:
+            payload["attachments"] = atts
+        headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"}
+        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+        return 200 <= r.status_code < 300
+    except Exception as ex:
+        _log("SendGrid error: " + str(ex))
+        return False
+
+def _send_via_smtp(to_email: str, subject: str, html: str, attachments: list[str] | None = None) -> bool:
+    if not SMTP_HOST or not SMTP_PORT or not SMTP_FROM:
+        return False
+    try:
+        msg = MIMEMultipart("mixed")
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(html, "html"))
+        msg.attach(alt)
+        msg["Subject"] = subject
+        msg["From"] = SMTP_FROM
+        msg["To"] = to_email
+        # Attach files
+        from email.mime.base import MIMEBase
+        from email import encoders
+        for path in (attachments or []):
+            try:
+                with open(path, "rb") as f:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"')
+                msg.attach(part)
+            except Exception:
+                continue
+        context = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
+            if SMTP_TLS:
+                server.starttls(context=context)
+            if SMTP_USER and SMTP_PASS:
+                server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        return True
+    except Exception as ex:
+        _log("SMTP error: " + str(ex))
+        return False
+
+def samv2_email_package(to_email: str, subject: str, html_body: str, files: list[str]) -> bool:
+    if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
+        if _send_via_sendgrid(to_email, subject, html_body, files):
+            return True
+    return _send_via_smtp(to_email, subject, html_body, files)
+
+def samv2_send_email_digest(to_email: str, rows: list[tuple]) -> bool:
+    if not rows:
+        return True
+    items = []
+    for sol, title, agency, posted, due, link in rows:
+        link_html = f'<a href="{link or "#"}">Open</a>' if link else "(no link)"
+        items.append(f"<li><b>{title or '(Untitled)'} — {agency or 'N/A'}</b> (Sol: {sol or 'N/A'}) — Due: {due or 'N/A'} — {link_html}</li>")
+    html = "<h3>New/Updated Opportunities</h3><ul>" + "\n".join(items) + "</ul>"
+    subject = "ELA Bid Alert — New/Updated Opportunities"
+    if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
+        if _send_via_sendgrid(to_email, subject, html):
+            return True
+    return _send_via_smtp(to_email, subject, html)
+
+def samv2_save_alert_rule(email: str, frequency: str, keywords: str, naics: str, set_aside: str, notice_types_csv: str):
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO samv2_alert_rules(email, frequency, keywords, naics, set_aside, notice_types, last_sent_at) VALUES(?,?,?,?,?,?, NULL)",
+        (email, frequency, keywords, naics, set_aside, notice_types_csv)
+    )
+    conn.commit(); conn.close()
+
+def samv2_due_for_send(freq: str, last_sent: str | None) -> bool:
+    now = _dt.datetime.utcnow()
+    if not last_sent: return True
+    try:
+        last = _dt.datetime.fromisoformat(last_sent)
+    except Exception:
+        return True
+    delta = now - last
+    if freq == "daily": return delta.days >= 1
+    if freq == "weekly": return delta.days >= 7
+    if freq == "monthly": return delta.days >= 28
+    return False
+
+def samv2_run_alerts(send_now: bool = True):
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, email, frequency, keywords, naics, set_aside, notice_types, last_sent_at FROM samv2_alert_rules")
+    rules = cur.fetchall()
+    results = []
+    for rid, email, freq, keywords, naics, set_aside, types_csv, last_sent in rules:
+        if not samv2_due_for_send(freq, last_sent): 
+            continue
+        lookback_days = 1 if freq == "daily" else 7 if freq == "weekly" else 28
+        cur.execute(
+            "SELECT sol_number, title, agency, posted_date, due_date, sam_detail_url FROM samv2_opportunities WHERE julianday('now') - julianday(COALESCE(last_modified, posted_date, created_at)) <= ?",
+            (lookback_days,)
+        )
+        rows = cur.fetchall()
+        rows = [r for r in rows if (not keywords or (keywords.lower() in (r[1] or '').lower()))]
+        sent_ok = True
+        if send_now and rows:
+            sent_ok = samv2_send_email_digest(email, rows)
+        if sent_ok:
+            cur.execute("UPDATE samv2_alert_rules SET last_sent_at=? WHERE id=?", (_dt.datetime.utcnow().isoformat(), rid))
+        results.append((email, len(rows)))
+    conn.commit(); conn.close()
+    return results
+
+# ---- Templates (NAICS-based)
+def _tmpl_for_naics(naics_str: str):
+    naics_str = (naics_str or "").strip()
+    primary = naics_str.split(",")[0].strip() if naics_str else ""
+    outline = [
+        "Cover Letter",
+        "Executive Summary",
+        "Understanding of Requirements",
+        "Technical Approach",
+        "Management Approach",
+        "Quality Control Plan",
+        "Staffing Plan & Key Personnel",
+        "Safety Plan (if applicable)",
+        "Past Performance",
+        "Pricing & Assumptions",
+        "Certifications & Compliance",
+        "Attachments & Forms"
+    ]
+    checklist = [
+        "Confirm set-aside eligibility and reps & certs current",
+        "Register/verify UEI, CAGE, NAICS on SAM profile",
+        "Note response due date/time and timezone",
+        "Follow submission method (portal/email) and file naming rules",
+        "Complete all required forms (SF-1449/SF-33, Section K, etc.)",
+        "Address all evaluation factors (Section M) in order",
+        "Include technical volume page limits and font requirements",
+        "Provide pricing in requested format (CLINs), include any options",
+        "Acknowledge all amendments",
+        "Confirm POP, delivery schedule, and place of performance",
+        "Include subcontracting approach if required",
+        "Validate contact info for CO/CS"
+    ]
+    if primary.startswith("561720"):
+        outline.insert(3, "Workloading & Frequencies Matrix")
+        checklist.append("Comply with custodial frequency, green products, waste handling")
+    elif primary.startswith("561730"):
+        outline.insert(3, "Seasonal Grounds Maintenance Plan")
+        checklist.append("Mowing/trimming schedules, pesticide certifications, arborist standards")
+    elif primary.startswith("238220"):
+        outline.insert(3, "Equipment & Materials Submittals")
+        checklist.append("Licenses, OEM specs, commissioning, warranty terms, safety (Lockout/Tagout)")
+    elif primary.startswith("311"):
+        outline.insert(3, "Product Specifications & Sourcing")
+        checklist.append("USDA grades, substitutions policy, delivery windows, HACCP")
+    elif primary.startswith("561612"):
+        outline.insert(3, "Post Orders & Guard Coverage Matrix")
+        checklist.append("Licenses, background checks, training hours, incident reporting")
+    return outline, checklist
+
+def samv2_build_proposal_payload(opp: dict) -> dict:
+    outline, checklist = _tmpl_for_naics(opp.get("naics"))
+    payload = {
+        "meta": {
+            "sol_number": opp.get("sol_number"),
+            "title": opp.get("title"),
+            "agency": opp.get("agency"),
+            "naics": opp.get("naics"),
+            "psc": opp.get("psc"),
+            "set_aside": opp.get("set_aside"),
+            "due_date": opp.get("due_date"),
+            "posted_date": opp.get("posted_date"),
+            "sam_detail_url": opp.get("sam_detail_url"),
+            "place_of_performance": opp.get("place_of_performance"),
+        },
+        "outline": outline,
+        "checklist": checklist,
+        "sections": {name: "" for name in outline},
+        "pricing": {"notes": "Insert CLIN pricing and assumptions here.", "rows": [], "file_path": ""},
+        "attachments": [],
+        "section_L": "",
+        "section_M": "",
+    }
+    return payload
+
+def samv2_start_proposal(opportunity_id: int) -> dict | None:
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, sol_number, title, agency, naics, psc, set_aside, due_date, posted_date, sam_detail_url, place_of_performance, description FROM samv2_opportunities WHERE id=?", (opportunity_id,))
+    r = cur.fetchone()
+    if not r:
+        conn.close(); return None
+    opp = {
+        "id": r[0], "sol_number": r[1], "title": r[2], "agency": r[3],
+        "naics": r[4], "psc": r[5], "set_aside": r[6], "due_date": r[7],
+        "posted_date": r[8], "sam_detail_url": r[9], "place_of_performance": r[10],
+        "description": r[11]
+    }
+    payload = samv2_build_proposal_payload(opp)
+    cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    payload["attachments"] = [{"filename": a, "path": p} for a, p in cur.fetchall() if p]
+    cur.execute("INSERT OR IGNORE INTO samv2_proposals(opportunity_id, payload_json) VALUES(?,?)", (opportunity_id, json.dumps(payload)))
+    cur.execute("UPDATE samv2_proposals SET payload_json=?, updated_at=datetime('now') WHERE opportunity_id=?", (json.dumps(payload), opportunity_id))
+    conn.commit(); conn.close()
+    try:
+        st.session_state["proposal_builder_payload"] = payload
+    except Exception:
+        pass
+    return payload
+
+# ---- Section L/M Extraction (best-effort from PDFs)
+def _extract_text_from_pdf(path: str) -> str:
+    if not PyPDF2:
+        return ""
+    try:
+        with open(path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            chunks = []
+            for page in reader.pages:
+                try:
+                    chunks.append(page.extract_text() or "")
+                except Exception:
+                    continue
+            return "\n".join(chunks)
+    except Exception:
+        return ""
+
+def samv2_extract_section_LM(opportunity_id: int) -> dict:
+    """Return dict with 'L' and 'M' extracted text snippets, best-effort."""
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    docs = cur.fetchall()
+    text_all = ""
+    for fname, path in docs:
+        if not path or not os.path.exists(path):
+            continue
+        if path.lower().endswith(".pdf"):
+            text_all += "\n" + _extract_text_from_pdf(path)
+    L_text = ""
+    M_text = ""
+    low = text_all.lower()
+    if "section l" in low:
+        idx = low.find("section l")
+        L_text = text_all[idx: idx + 8000]
+    if "section m" in low:
+        idx = low.find("section m")
+        M_text = text_all[idx: idx + 8000]
+    if not L_text and "instructions to offerors" in low:
+        idx = low.find("instructions to offerors")
+        L_text = text_all[idx: idx + 8000]
+    if not M_text and "evaluation factors" in low:
+        idx = low.find("evaluation factors")
+        M_text = text_all[idx: idx + 8000]
+    # Patch into draft if exists
+    pb = st.session_state.get("proposal_builder_payload")
+    if isinstance(pb, dict):
+        if L_text: pb["section_L"] = L_text
+        if M_text: pb["section_M"] = M_text
+        st.session_state["proposal_builder_payload"] = pb
+    return {"L": L_text.strip(), "M": M_text.strip()}
+
+# ---- Smart CLIN parser
+_CLIN_PATTERNS = [
+    r"(?:^|\n)\s*CLIN\s*[:#-]?\s*(?P<clin>[A-Za-z0-9]+)[\s\-:]*\s*(?P<desc>[^\n]{5,120})?",
+    r"(?P<clin>\b[0-9]{4}\b)\s+(?P<desc>[^\n]{5,120})",
+    r"(?P<clin>\b[0-9]{2,4}[A-Z]?\b)\s+-\s+(?P<desc>[^\n]{5,120})",
+]
+
+def samv2_parse_clins_from_text(text: str) -> list[dict]:
+    rows = []
+    seen = set()
+    for pat in _CLIN_PATTERNS:
+        for m in re.finditer(pat, text, flags=re.IGNORECASE):
+            clin = (m.groupdict().get("clin") or "").strip()
+            desc = (m.groupdict().get("desc") or "").strip(" -:	")
+            if clin and clin not in seen:
+                seen.add(clin)
+                rows.append({"CLIN": clin, "Description": desc, "Qty": "", "Unit": "", "Unit Price": "", "Extended Amount": "", "Notes": ""})
+    return rows
+
+def samv2_parse_clins_from_docs(opportunity_id: int) -> list[dict]:
+    # Uses extracted text from PDFs
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
+    texts = ""
+    for (p,) in cur.fetchall():
+        if p and p.lower().endswith(".pdf"):
+            texts += "\n" + _extract_text_from_pdf(p)
+    conn.close()
+    if not texts.strip():
+        # fallback: try current draft's Section L
+        pb = st.session_state.get("proposal_builder_payload")
+        if isinstance(pb, dict):
+            texts = (pb.get("section_L") or "") + "\n" + (pb.get("section_M") or "")
+    return samv2_parse_clins_from_text(texts)
+
+# ---- CLIN Pricing sheet (xlsx or csv)
+def _write_xlsx(path: str, header: list[str], rows: list[dict]):
+    if openpyxl is None or Workbook is None:
+        return False
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "CLIN Pricing"
+    ws.append(header)
+    for r in rows:
+        ws.append([r.get(h, "") for h in header])
+    # total line
+    ws.append([])
+    ws.append(["", "", "", "Total", "", f"=SUM(F2:F{len(rows)+1})", ""])
+    # autosize
+    if get_column_letter:
+        for i, h in enumerate(header, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = max(12, min(40, len(h) + 6))
+    wb.save(path)
+    return True
+
+def _write_csv(path: str, header: list[str], rows: list[dict]):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for r in rows:
+            w.writerow([r.get(h, "") for h in header])
+        w.writerow([])
+        w.writerow(["", "", "", "Total", "", "", ""])
+    return True
+
+def samv2_build_clin_sheet(opportunity_id: int, rows: list[dict] | None = None, subcontractor_mode: bool = False) -> str:
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT sol_number, title, agency, naics, place_of_performance FROM samv2_opportunities WHERE id=?", (opportunity_id,))
+    meta = cur.fetchone()
+    conn.close()
+    sol = (meta[0] if meta else f"opp_{opportunity_id}") or f"opp_{opportunity_id}"
+    header = ["CLIN", "Description", "Qty", "Unit", "Unit Price", "Extended Amount", "Notes"]
+    if rows is None:
+        rows = samv2_parse_clins_from_docs(opportunity_id)
+        if not rows:
+            rows = [{"CLIN": "", "Description": "", "Qty": "", "Unit": "", "Unit Price": "", "Extended Amount": "", "Notes": ""}]
+    # ensure formula column blank (Excel computes if user fills unit price/qty)
+    for r in rows:
+        if r.get("Qty") and r.get("Unit Price") and not r.get("Extended Amount"):
+            try:
+                q = float(r["Qty"]); u = float(r["Unit Price"])
+                r["Extended Amount"] = q * u
+            except Exception:
+                r["Extended Amount"] = ""
+    base = os.path.join(CLIN_DIR, f"{sol}{'_sub' if subcontractor_mode else ''}")
+    xlsx_path = base + ".xlsx"
+    csv_path = base + ".csv"
+    wrote_xlsx = _write_xlsx(xlsx_path, header, rows)
+    if not wrote_xlsx:
+        _write_csv(csv_path, header, rows)
+        return csv_path
+    return xlsx_path
+
+# ---- Compliance Matrix (Excel)
+def samv2_export_compliance_matrix(opportunity_id: int) -> str:
+    # Build matrix from Section L/M text available in draft/session
+    pb = st.session_state.get("proposal_builder_payload") or {}
+    L = (pb.get("section_L") or "").splitlines()
+    M = (pb.get("section_M") or "").splitlines()
+    items = []
+    for line in L:
+        line = line.strip()
+        if len(line) >= 6:
+            items.append({"Requirement": line[:300], "Source": "L", "Owner": "", "Status": "Open", "Due": ""})
+    for line in M:
+        line = line.strip()
+        if len(line) >= 6:
+            items.append({"Requirement": line[:300], "Source": "M", "Owner": "", "Status": "Open", "Due": ""})
+    base = os.path.join(EXPORT_DIR, f"compliance_{pb.get('meta',{}).get('sol_number') or 'matrix'}")
+    xlsx = base + ".xlsx"
+    if openpyxl and Workbook:
+        wb = Workbook(); ws = wb.active; ws.title = "Compliance Matrix"
+        header = ["Requirement", "Source", "Owner", "Status", "Due"]
+        ws.append(header)
+        for r in items:
+            ws.append([r[h] for h in header])
+        wb.save(xlsx)
+        return xlsx
+    # CSV fallback
+    csvp = base + ".csv"
+    with open(csvp, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f); w.writerow(["Requirement","Source","Owner","Status","Due"])
+        for r in items:
+            w.writerow([r["Requirement"], r["Source"], r["Owner"], r["Status"], r["Due"]])
+    return csvp
+
+# ---- Win Probability (simple heuristic)
+def samv2_win_probability(opp_row: dict) -> dict:
+    score = 50
+    sa = (opp_row.get("set_aside") or "").lower()
+    if "small" in sa: score += 8
+    if "sdvosb" in sa or "service-disabled" in sa: score += 6
+    if "8(a)" in sa: score += 4
+    if "hubzone" in sa: score += 4
+    try:
+        if opp_row.get("due_date"):
+            due = _dt.datetime.fromisoformat(opp_row["due_date"].replace("Z","").replace("z",""))
+            days = (due - _dt.datetime.utcnow()).days
+            if days >= 21: score += 6
+            elif days >= 10: score += 3
+            elif days <= 3: score -= 8
+    except Exception:
+        pass
+    if opp_row.get("naics"): score += 2
+    prob = max(5, min(95, score))
+    return {"score": prob, "explain": "Heuristic based on set-aside, time to due date, NAICS presence."}
+
+# ---- DOCX Export
+def samv2_export_docx_from_payload(payload: dict, export_name: str) -> str:
+    base = os.path.join(EXPORT_DIR, export_name)
+    if docx is None:
+        md_path = base + ".md"
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(f"# {payload['meta'].get('title') or 'Proposal'}\n\n")
+            f.write(f"**Solicitation:** {payload['meta'].get('sol_number')}  \\n")
+            f.write(f"**Agency:** {payload['meta'].get('agency')}  \\n")
+            f.write(f"**NAICS:** {payload['meta'].get('naics')}  \\n")
+            f.write(f"**Set-Aside:** {payload['meta'].get('set_aside')}  \\n")
+            f.write(f"**Due Date:** {payload['meta'].get('due_date')}\n\n")
+            if payload.get("section_L"): f.write("## Section L (Instructions)\n" + payload["section_L"] + "\n\n")
+            if payload.get("section_M"): f.write("## Section M (Evaluation)\n" + payload["section_M"] + "\n\n")
+            f.write("## Outline\n")
+            for sec in payload.get("outline", []):
+                f.write(f"### {sec}\n\n")
+        return md_path
+    doc = docx.Document()
+    doc.add_heading(payload["meta"].get("title") or "Proposal", 0)
+    meta = payload["meta"]
+    p = doc.add_paragraph(); p.add_run("Solicitation: ").bold = True; p.add_run(str(meta.get("sol_number") or ""))
+    p = doc.add_paragraph(); p.add_run("Agency: ").bold = True; p.add_run(str(meta.get("agency") or ""))
+    p = doc.add_paragraph(); p.add_run("NAICS: ").bold = True; p.add_run(str(meta.get("naics") or ""))
+    p = doc.add_paragraph(); p.add_run("Set-Aside: ").bold = True; p.add_run(str(meta.get("set_aside") or ""))
+    p = doc.add_paragraph(); p.add_run("Due Date: ").bold = True; p.add_run(str(meta.get("due_date") or ""))
+    if payload.get("section_L"):
+        doc.add_heading("Section L (Instructions)", level=1); doc.add_paragraph(payload["section_L"][:4000])
+    if payload.get("section_M"):
+        doc.add_heading("Section M (Evaluation)", level=1); doc.add_paragraph(payload["section_M"][:4000])
+    doc.add_heading("Outline", level=1)
+    for sec in payload.get("outline", []):
+        doc.add_heading(sec, level=2); doc.add_paragraph(payload.get("sections", {}).get(sec, ""))
+    path = base + ".docx"; doc.save(path); return path
+
+# ---- UI helpers
+def _has_dialog() -> bool:
+    return hasattr(st, "dialog")
+
+
+# === SAM V2: Pricing Enhancements START ===
+_PRICE_BENCHMARKS = {
+    "561720": {"label": "Custodial (per SF-month)", "unit_hint": "SF-MO", "range": (0.08, 0.35)},
+    "561730": {"label": "Grounds (per acre-month)", "unit_hint": "ACRE-MO", "range": (50, 300)},
+    "238220": {"label": "HVAC/Plumbing Labor (per hour)", "unit_hint": "HR", "range": (75, 180)},
+    "561612": {"label": "Security Guard (per hour)", "unit_hint": "HR", "range": (20, 70)},
+}
+
+def samv2_get_payload():
+    try:
+        pb = st.session_state.get("proposal_builder_payload")
+        if isinstance(pb, dict):
+            return pb
+    except Exception:
+        pass
+    return {}
+
+def samv2_set_payload(pb: dict):
+    try:
+        st.session_state["proposal_builder_payload"] = pb
+    except Exception:
+        pass
+
+def samv2_get_clins_from_payload() -> list[dict]:
+    pb = samv2_get_payload()
+    return list(pb.get("pricing", {}).get("rows", []))
+
+def samv2_set_clins_in_payload(rows: list[dict]):
+    pb = samv2_get_payload() or {}
+    pb.setdefault("pricing", {})
+    pb["pricing"]["rows"] = rows
+    samv2_set_payload(pb)
+
+def samv2_price_check(rows: list[dict], naics: str) -> dict:
+    issues = []
+    totals = 0.0
+    cnt = 0
+    # Simple stats
+    for i, r in enumerate(rows, start=1):
+        qty = str(r.get("Qty", "")).strip()
+        unit_price = str(r.get("Unit Price", "")).strip()
+        if not qty or not unit_price:
+            issues.append((i, "Missing Qty or Unit Price", "Fill both to compute Extended Amount."))
+            continue
+        try:
+            q = float(qty); up = float(unit_price)
+            if q <= 0 or up <= 0:
+                issues.append((i, "Non-positive values", "Qty and Unit Price must be > 0."))
+            totals += q * up; cnt += 1
+        except Exception:
+            issues.append((i, "Non-numeric values", "Qty/Unit Price must be numbers."))
+    # Range checks by NAICS benchmark (if available)
+    primary = (naics or "").split(",")[0].strip()
+    bench = _PRICE_BENCHMARKS.get(primary)
+    if bench:
+        lo, hi = bench["range"]
+        for i, r in enumerate(rows, start=1):
+            unit_price = str(r.get("Unit Price", "")).strip()
+            if not unit_price:
+                continue
+            try:
+                up = float(unit_price)
+                if up < lo:
+                    issues.append((i, "Unit Price low vs. benchmark", f"Below {lo} for {bench['label']}"))
+                if up > hi:
+                    issues.append((i, "Unit Price high vs. benchmark", f"Above {hi} for {bench['label']}"))
+            except Exception:
+                pass
+    score = 100
+    if issues:
+        # Deduct small chunks per issue (cap)
+        score = max(40, 100 - min(30, len(issues) * 3))
+    summary = f"Items: {len(rows)} | Priced: {cnt} | Est. Total (if complete): ${totals:,.2f}"
+    return {"score": score, "issues": issues, "summary": summary, "benchmark": bench}
+
+def samv2_clin_editor_dialog(opportunity_id: int, opp_row: dict | None = None):
+    # Editor dialog using Streamlit's data_editor (if available)
+    rows = samv2_get_clins_from_payload()
+    if not rows:
+        # bootstrap from parser
+        rows = samv2_parse_clins_from_docs(opportunity_id)
+        if not rows:
+            rows = [{"CLIN":"","Description":"","Qty":"","Unit":"","Unit Price":"","Extended Amount":"","Notes":""}]
+    if hasattr(st, "dialog"):
+        @st.dialog("Edit CLINs", width="large")
+        def _dlg():
+            st.write("Enter CLIN rows (you can add/remove rows). Extended Amount auto-calcs on export if Qty & Unit Price are set.")
+            edited = st.data_editor(
+                rows,
+                num_rows="dynamic",
+                use_container_width=True,
+                key=f"clin_edit_{opportunity_id}"
+            )
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("Save to Draft", key=f"save_clin_{opportunity_id}"):
+                    samv2_set_clins_in_payload(edited)
+                    st.success("Saved CLINs to draft.")
+            with col2:
+                if st.button("Run Price Check", key=f"check_clin_{opportunity_id}"):
+                    naics = (opp_row or {}).get("naics") if opp_row else ""
+                    res = samv2_price_check(edited, naics or "")
+                    st.metric("Pricing Health", f"{res['score']}%")
+                    st.caption(res["summary"])
+                    if res["benchmark"]:
+                        st.caption(f"Benchmark: {_PRICE_BENCHMARKS[(naics or '').split(',')[0].strip()]['label']} — range {res['benchmark']['range'][0]} - {res['benchmark']['range'][1]}")
+                    if res["issues"]:
+                        for idx, title, msg in res["issues"][:50]:
+                            st.warning(f"Row {idx}: {title} — {msg}")
+            with col3:
+                if st.button("Re-export CLIN Sheet", key=f"export_clin_{opportunity_id}"):
+                    edited_rows = edited
+                    path = samv2_build_clin_sheet(opportunity_id, rows=edited_rows, subcontractor_mode=False)
+                    pb = samv2_get_payload()
+                    pb.setdefault("pricing", {})["file_path"] = path
+                    samv2_set_payload(pb)
+                    st.success(f"Exported: {path}")
+                    st.markdown(f"[Download]({path})")
+        _dlg()
+    else:
+        with st.expander("Edit CLINs (upgrade Streamlit to use modal)"):
+            edited = st.data_editor(rows, num_rows="dynamic", use_container_width=True, key=f"clin_edit_{opportunity_id}")
+            if st.button("Save CLINs", key=f"save2_{opportunity_id}"):
+                samv2_set_clins_in_payload(edited)
+                st.success("Saved.")
+# === SAM V2: Pricing Enhancements END ===
+def rfp_analyzer_popup(opp_row: dict):
+    if _has_dialog():
+        @st.dialog(f"RFP Analyzer — {opp_row.get('title') or opp_row.get('sol_number')}", width="large")
+        def _dlg():
+            st.markdown("**Quick Summary**")
+            desc = opp_row.get("description") or "No description available."
+            if not desc or len(desc.strip()) < 40:
+                desc = "AI Summary: This opportunity likely involves services/supplies per NAICS/PSC with specified performance location and deadline. Open the attached documents for exact scope and submission instructions."
+            st.write(desc)
+
+            # Win probability
+            wp = samv2_win_probability(opp_row)
+            st.metric("Win Probability (est.)", f"{wp['score']}%")
+            st.caption(wp["explain"])
+
+            cols = st.columns(2)
+            with cols[0]:
+                st.write("**Key Facts**")
+                st.write(f"Solicitation: {opp_row.get('sol_number') or 'N/A'}")
+                st.write(f"Agency: {opp_row.get('agency') or 'N/A'}")
+                st.write(f"Set-Aside: {opp_row.get('set_aside') or 'N/A'}")
+                st.write(f"NAICS: {opp_row.get('naics') or 'N/A'}")
+                st.write(f"PSC: {opp_row.get('psc') or 'N/A'}")
+            with cols[1]:
+                st.write("**Dates**")
+                st.write(f"Posted: {opp_row.get('posted_date') or 'N/A'}")
+                st.write(f"Due: {opp_row.get('due_date') or 'N/A'}")
+                st.write(f"Last Modified: {opp_row.get('last_modified') or 'N/A'}")
+            st.markdown("---")
+            st.write("**RFP Tools**")
+            c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+            with c1:
+                if st.button("Start Proposal (Prefill)", key=f"start_{opp_row.get('id')}"):
+                    payload = samv2_start_proposal(opp_row.get("id"))
+                    if payload: st.success("Draft created and Builder prefilled.")
+            with c2:
+                if st.button("Extract Section L/M", key=f"lm_{opp_row.get('id')}"):
+                    res = samv2_extract_section_LM(opp_row.get("id"))
+                    if res.get("L") or res.get("M"): st.success("Section L/M extracted into draft.")
+                    else: st.warning("Couldn't find clear L/M text.")
+            with c3:
+                if st.button("Build CLIN Sheet", key=f"clin_{opp_row.get('id')}"):
+                    # Also save parsed rows into draft
+                    rows_guess = samv2_parse_clins_from_docs(opp_row.get('id'))
+                    if rows_guess:
+                        samv2_set_clins_in_payload(rows_guess)
+
+                    rows = samv2_parse_clins_from_docs(opp_row.get("id"))
+                    path = samv2_build_clin_sheet(opp_row.get("id"), rows=rows, subcontractor_mode=False)
+                    st.success(f"CLIN sheet ready: {os.path.basename(path)}")
+                    st.markdown(f"[Download]({path})")
+                    # attach to draft
+                    pb = st.session_state.get("proposal_builder_payload")
+                    if isinstance(pb, dict):
+                        pb.setdefault("pricing", {})["file_path"] = path
+                        st.session_state["proposal_builder_payload"] = pb
+            with c4:
+                if st.button("Edit CLINs", key=f"editclin_{opp_row.get('id')}"):
+                    samv2_clin_editor_dialog(opp_row.get('id'), opp_row)
+            with c5:
+                if st.button("Compliance Matrix (Excel)", key=f"cm_{opp_row.get('id')}"):
+                    path = samv2_export_compliance_matrix(opp_row.get("id"))
+                    st.success(f"Matrix exported: {os.path.basename(path)}")
+                    st.markdown(f"[Download]({path})")
+            with c6:
+                if st.button("Export Proposal DOCX", key=f"docx_{opp_row.get('id')}"):
+                    payload = st.session_state.get("proposal_builder_payload")
+                    if not payload or not isinstance(payload, dict):
+                        payload = samv2_start_proposal(opp_row.get("id"))
+                    name = f"{opp_row.get('sol_number') or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
+                    path = samv2_export_docx_from_payload(payload, name)
+                    st.success(f"Exported: {os.path.basename(path)}")
+                    st.markdown(f"[Download file]({path})")
+
+            st.markdown("---")
+            st.write("**Subcontractor Input**")
+            sub_name = st.text_input("Subcontractor Company Name", key=f"sub_nm_{opp_row.get('id')}")
+            sub_email = st.text_input("Subcontractor Email", key=f"sub_em_{opp_row.get('id')}")
+            if st.button("Generate Sub Input Sheet", key=f"sub_sheet_{opp_row.get('id')}"):
+                rows = samv2_parse_clins_from_docs(opp_row.get("id"))
+                path = samv2_build_clin_sheet(opp_row.get("id"), rows=rows, subcontractor_mode=True)
+                st.success(f"Sub input sheet ready: {os.path.basename(path)}")
+                st.markdown(f"[Download for Sub]({path})")
+                # Optional email
+                if sub_email:
+                    ok = samv2_email_package(sub_email, "CLIN Pricing Input Request", "<p>Please fill in the Unit Prices and return.</p>", [path])
+                    if ok: st.info("Emailed sub input sheet.")
+                    else: st.warning("Email send failed (check secrets).")
+
+            
+            st.markdown("---")
+            st.write("**Vendor Quote Requests**")
+            vndr_name = st.text_input("Vendor Name", key=f"vndr_nm_{opp_row.get('id')}")
+            vndr_email = st.text_input("Vendor Email", key=f"vndr_em_{opp_row.get('id')}")
+            quote_due = st.text_input("Requested Quote Due (e.g., 2025-10-20 17:00 CT)", key=f"vndr_due_{opp_row.get('id')}")
+            if st.button("Send Quote Request", key=f"vndr_send_{opp_row.get('id')}"):
+                # Ensure there is a sub input sheet to attach
+                rows = samv2_get_clins_from_payload() or samv2_parse_clins_from_docs(opp_row.get('id'))
+                path = samv2_build_clin_sheet(opp_row.get('id'), rows=rows, subcontractor_mode=True)
+                subj = f"Quote Request — {opp_row.get('sol_number') or opp_row.get('title')}"
+                body = f"""
+                <p>Dear {vndr_name or 'Vendor'},</p>
+                <p>We are preparing a proposal for <b>{opp_row.get('title') or opp_row.get('sol_number')}</b> ({opp_row.get('agency')}).
+                Please review the attached CLIN Pricing Input Sheet and provide your best pricing. If possible, return by <b>{quote_due or 'TBD'}</b>.</p>
+                <p>Notes:</p>
+                <ul>
+                  <li>Enter Unit Prices and any clarifying notes per CLIN.</li>
+                  <li>Include delivery/lead times and any exceptions.</li>
+                </ul>
+                <p>Thank you,</p>
+                <p>BD Team</p>
+                """
+                ok = samv2_email_package(vndr_email, subj, body, [path] if path else [])
+                if ok: st.success("Quote request sent.")
+                else: st.warning("Email failed (check secrets).")
+
+            st.markdown("---")
+            st.write("**Email Package to CO/POC**")
+            co_email = st.text_input("CO/POC Email", key=f"co_em_{opp_row.get('id')}")
+            include_clin = st.checkbox("Attach CLIN Pricing Sheet (if available)", value=True, key=f"co_inc_clin_{opp_row.get('id')}")
+            include_docx = st.checkbox("Attach Proposal DOCX (if available)", value=True, key=f"co_inc_docx_{opp_row.get('id')}")
+            if st.button("Send Email Package", key=f"co_send_{opp_row.get('id')}"):
+                files = []
+                pb = st.session_state.get("proposal_builder_payload") or {}
+                if include_clin and isinstance(pb, dict):
+                    path = pb.get("pricing", {}).get("file_path")
+                    if path and os.path.exists(path): files.append(path)
+                if include_docx:
+                    name = f"{opp_row.get('sol_number') or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
+                    p = samv2_export_docx_from_payload(pb or samv2_start_proposal(opp_row.get('id')), name)
+                    if p and os.path.exists(p): files.append(p)
+                if co_email:
+                    ok = samv2_email_package(co_email, f"Proposal Package — {opp_row.get('sol_number') or opp_row.get('title')}", "<p>Attached, please find our proposal materials.</p>", files)
+                    if ok: st.success("Package sent to CO/POC.")
+                    else: st.warning("Email failed (check SENDGRID/SMTP secrets).")
+
+    else:
+        with st.expander("RFP Analyzer (fallback)"):
+            st.info("Update Streamlit to use nice modal popups (st.dialog). For now, this expander shows the same info.")
+            st.write(opp_row)
+
+def render_sam_watch_v2():
+    samv2_migrate()
+
+    st.title("SAM Watch")
+    st.caption("One-click CLIN sheets, compliance matrix, proposal export, and email package.")
+
+    with st.sidebar:
+        st.subheader("SAM Watch V2 — Filters")
+        keywords = st.text_input("Keywords", value=st.session_state.get("_samv2_kw", ""))
+        naics = st.text_input("NAICS (comma-separated)", value=st.session_state.get("_samv2_naics", ""))
+        notice_types = st.multiselect(
+            "Notice Types",
+            options=["Solicitation", "Combined Synopsis/Solicitation", "Presolicitation", "Sources Sought"],
+            default=st.session_state.get("_samv2_types", ["Solicitation", "Combined Synopsis/Solicitation"]),
+        )
+        set_aside = st.selectbox("Set-Aside", ["Any","Total Small Business","WOSB","SDVOSB","8(a)","HUBZone"], index=0)
+        date_from = st.date_input("Posted from", value=_dt.date.today() - _dt.timedelta(days=30))
+        date_to = st.date_input("Posted to", value=_dt.date.today())
+        st.session_state["_samv2_kw"] = keywords
+        st.session_state["_samv2_naics"] = naics
+        st.session_state["_samv2_types"] = notice_types
+
+        st.markdown("---")
+        st.subheader("Bid Alerts")
+        with st.form("samv2_alerts_form"):
+            email = st.text_input("Send alerts to (email)")
+            freq = st.selectbox("Frequency", ["daily","weekly","monthly"], index=0)
+            if st.form_submit_button("Save Alert Rule"):
+                if email:
+                    samv2_save_alert_rule(email, freq, keywords, naics, set_aside if set_aside!="Any" else "", ",".join(notice_types))
+                    st.success("Alert rule saved.")
+        colsA = st.columns(2)
+        with colsA[0]:
+            if st.button("Run Alerts Now & Send"):
+                results = samv2_run_alerts(send_now=True)
+                st.info(f"Emailed {len(results)} digest(s).")
+        with colsA[1]:
+            if st.button("Prepare Alerts Only"):
+                results = samv2_run_alerts(send_now=False)
+                st.info(f"Prepared {len(results)} digest(s).")
+
+    colA, colB, colC = st.columns([1,1,2])
+    with colA:
+        run_pull = st.button("Pull SAM Data")
+    with colB:
+        save_selected = st.button("Save Selected to Pipeline")
+    with colC:
+        st.write("")
+
+    status_ph = st.empty()
+
+    if run_pull:
+        q = {
+            "q": keywords or None,
+            "notice_type": ",".join(notice_types),
+            "postedFrom": date_from.isoformat(),
+            "postedTo": date_to.isoformat(),
+        }
+        recs = samv2_search(q)
+        added = samv2_upsert_records(recs)
+        conn = samv2_get_conn()
+        conn.execute("INSERT INTO samv2_pull_log(params_json, pulled_count) VALUES(?,?)", (json.dumps(q), len(recs)))
+        conn.commit(); conn.close()
+        status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new (others updated or deduped).")
+
+    st.markdown("### Results")
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, sol_number, title, agency, set_aside, naics, posted_date, due_date, last_modified, sam_detail_url, description, psc FROM samv2_opportunities ORDER BY COALESCE(last_modified, posted_date) DESC LIMIT 300")
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        st.info("No records yet. Adjust filters and click 'Pull SAM Data'.")
+    else:
+        for rid, sol, title, agency, sa, naics_v, posted, due, mod, link, desc, psc in rows:
+            with st.container(border=True):
+                c1, c2 = st.columns([0.07, 0.93])
+                with c1:
+                    st.checkbox("", key=f"samv2_ck_{rid}")
+                with c2:
+                    st.markdown(f"**{title or '(Untitled)'}**")
+                    st.caption(f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}  |  PSC: {psc or 'N/A'}")
+                    st.caption(f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}")
+                    link_col, b1, b2, b3, b4, b5, b6 = st.columns([0.20, 0.14, 0.14, 0.14, 0.12, 0.13, 0.13])
+                    with link_col:
+                        if link: st.markdown(f"[Open in SAM.gov]({link})")
+                        else: st.text("No SAM link")
+                    with b1:
+                        if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
+                            opp = {
+                                "id": rid, "sol_number": sol, "title": title, "agency": agency,
+                                "set_aside": sa, "naics": naics_v, "psc": psc, "posted_date": posted,
+                                "due_date": due, "last_modified": mod, "sam_detail_url": link,
+                                "description": desc or ""
+                            }
+                            rfp_analyzer_popup(opp)
+                    with b2:
+                        if st.button("Start Proposal", key=f"start_{rid}"):
+                            payload = samv2_start_proposal(rid)
+                            if payload: st.success("Proposal draft saved and builder prefilled.")
+                    with b3:
+                        if st.button("Download Attachments", key=f"dl_{rid}"):
+                            cnt = samv2_download_attachments(rid)
+                            if cnt: st.success(f"Downloaded {cnt} file(s).")
+                            else: st.warning("No downloadable attachments found.")
+                    with b4:
+                        if st.button("Build CLIN Sheet", key=f"clin_{rid}"):
+                            rows_guess = samv2_parse_clins_from_docs(rid)
+                            path = samv2_build_clin_sheet(rid, rows=rows_guess, subcontractor_mode=False)
+                            st.success(f"CLIN sheet ready: {os.path.basename(path)}"); st.markdown(f"[Download]({path})")
+                            pb = st.session_state.get("proposal_builder_payload")
+                            if isinstance(pb, dict):
+                                pb.setdefault("pricing", {})["file_path"] = path
+                                st.session_state["proposal_builder_payload"] = pb
+                    with b5:
+                        if st.button("Compliance Matrix", key=f"cm_{rid}"):
+                            path = samv2_export_compliance_matrix(rid)
+                            st.success(f"Matrix exported: {os.path.basename(path)}"); st.markdown(f"[Download]({path})")
+                    with b6:
+                        if st.button("Export DOCX", key=f"docx_{rid}"):
+                            payload = st.session_state.get("proposal_builder_payload")
+                            if not payload or not isinstance(payload, dict):
+                                payload = samv2_start_proposal(rid)
+                            name = f"{sol or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
+                            path = samv2_export_docx_from_payload(payload, name)
+                            st.success(f"Exported: {os.path.basename(path)}"); st.markdown(f"[Download file]({path})")
+
+    if save_selected:
+        conn = samv2_get_conn(); cur = conn.cursor()
+        saved = 0; skipped = 0
+        for rid, *_ in rows:
+            if st.session_state.get(f"samv2_ck_{rid}", False):
+                try:
+                    cur.execute("INSERT OR IGNORE INTO samv2_pipeline_links(opportunity_id) VALUES(?)", (rid,))
+                    if cur.rowcount > 0: saved += 1
+                    else: skipped += 1
+                except Exception:
+                    skipped += 1
+        conn.commit(); conn.close()
+        st.success(f"Added {saved} deal(s). Skipped {skipped} duplicate(s).")
+
+def _sidebar_launcher():
+    return
+
+# === SAM WATCH V2 (AUTO-MERGED) END ===
+
+
+
+
+
+
 
 TAB_LABELS = [
     "SAM Watch", "Pipeline", "RFP Analyzer", "L&M Checklist", "Past Performance", "RFQ Generator", "Subcontractor Finder", "Outreach", "Quote Comparison", "Pricing Calculator", "Win Probability", "Proposal Builder", "Ask the doc", "Chat Assistant", "Auto extract", "Capability Statement", "White Paper Builder", "Contacts", "Data Export", "Deals"
@@ -7785,39 +9046,6 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
-        
-        
-
-        # === V2 takeover (guarded) ===
-        if "_samv2_boot" not in st.session_state:
-            st.session_state["_samv2_boot"] = 0
-        _boot = int(st.session_state.get("_samv2_boot", 0))
-
-        _has_v2 = "render_sam_watch_v2" in globals()
-        if _has_v2:
-            try:
-                render_sam_watch_v2()
-                st.stop()
-            except Exception as _e_samv2:
-                st.warning(f"SAM Watch V2 error: {_e_samv2}. Showing legacy UI below.")
-        else:
-            # Give the file a chance to finish defining V2 (which is located later in the file)
-            if _boot < 1:
-                st.session_state["_samv2_boot"] = _boot + 1
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    pass
-            else:
-                st.info("SAM Watch V2 is loading... legacy UI shown meanwhile.")
-
-# === V2 takeover ===
-        try:
-            render_sam_watch_v2()
-            st.stop()
-        except Exception as _e_samv2:
-            st.warning(f"SAM Watch V2 error: {_e_samv2}. Falling back to legacy UI.")
-
         _st.header("SAM Watch")
         _st.subheader("Filters")
         with _st.form("simple_filters", clear_on_submit=False):
@@ -8047,1272 +9275,6 @@ except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
 
 
-
-
-
-
-# === SAM WATCH V2 (AUTO-MERGED) START ===
-# Auto-merged by ChatGPT on 2025-10-12T22:03:29.056867
-# Adds: CLIN Pricing Sheet generator + Smart CLIN parser + Sub input + Email package + Compliance Matrix export.
-
-
-import os
-import io
-import ssl
-import csv
-import json
-import time
-import smtplib
-import hashlib
-import sqlite3
-import pathlib
-import traceback
-import datetime as _dt
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-# Optional libs
-try:
-    import requests
-except Exception:
-    requests = None
-
-try:
-    import streamlit as st
-except Exception:
-    class _Shim:
-        def __getattr__(self, k):
-            def _f(*a, **kw): 
-                return None
-            return _f
-    st = _Shim()
-
-# Optional PDF/DOCX tools
-try:
-    import PyPDF2
-except Exception:
-    PyPDF2 = None
-
-try:
-    import docx  # python-docx
-except Exception:
-    docx = None
-
-try:
-    import openpyxl
-    from openpyxl import Workbook
-    from openpyxl.utils import get_column_letter
-except Exception:
-    openpyxl = None
-    Workbook = None
-    get_column_letter = None
-
-ENABLE_SAM_WATCH_V2 = True
-
-SAM_API_BASE = "https://api.sam.gov/opportunities/v3/search"
-SAM_API_KEY = None
-try:
-    SAM_API_KEY = st.secrets.get("SAM_API_KEY", None)
-except Exception:
-    SAM_API_KEY = None
-
-SENDGRID_API_KEY = None
-ALERTS_FROM = None
-SMTP_HOST = None
-SMTP_PORT = None
-SMTP_USER = None
-SMTP_PASS = None
-SMTP_FROM = None
-SMTP_TLS = True
-
-try:
-    SENDGRID_API_KEY = st.secrets.get("SENDGRID_API_KEY", None)
-    ALERTS_FROM = st.secrets.get("ALERTS_FROM", None)
-    SMTP_HOST = st.secrets.get("SMTP_HOST", None)
-    SMTP_PORT = st.secrets.get("SMTP_PORT", None)
-    SMTP_USER = st.secrets.get("SMTP_USER", None)
-    SMTP_PASS = st.secrets.get("SMTP_PASS", None)
-    SMTP_FROM = st.secrets.get("SMTP_FROM", None)
-    SMTP_TLS = bool(st.secrets.get("SMTP_TLS", True))
-except Exception:
-    pass
-
-DB_PATH = "./ela.sqlite3"
-DATA_DIR = os.path.join(os.getcwd(), "data", "opportunities")
-EXPORT_DIR = os.path.join(os.getcwd(), "exports")
-CLIN_DIR = os.path.join(EXPORT_DIR, "clin_sheets")
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(EXPORT_DIR, exist_ok=True)
-os.makedirs(CLIN_DIR, exist_ok=True)
-
-def _log(msg: str):
-    try:
-        st.session_state.setdefault("_samv2_logs", [])
-        st.session_state["_samv2_logs"].append(f"{_dt.datetime.now().isoformat()} | {msg}")
-    except Exception:
-        pass
-
-def samv2_get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
-
-def samv2_migrate():
-    conn = samv2_get_conn()
-    cur = conn.cursor()
-    # Opportunities
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS samv2_opportunities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sol_number TEXT,
-            title TEXT,
-            description TEXT,
-            notice_type TEXT,
-            agency TEXT,
-            office TEXT,
-            naics TEXT,
-            psc TEXT,
-            set_aside TEXT,
-            place_of_performance TEXT,
-            city TEXT,
-            state TEXT,
-            zip TEXT,
-            country TEXT,
-            posted_date TEXT,
-            due_date TEXT,
-            last_modified TEXT,
-            sam_detail_url TEXT,
-            status TEXT DEFAULT 'Active',
-            payload_hash TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(sol_number, agency, notice_type) ON CONFLICT IGNORE
-        )
-        """
-    )
-    # Documents
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS samv2_docs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            opportunity_id INTEGER,
-            filename TEXT,
-            url TEXT,
-            local_path TEXT,
-            file_hash TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(opportunity_id, url) ON CONFLICT IGNORE,
-            FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
-        )
-        """
-    )
-    # Pipeline links
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS samv2_pipeline_links (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            opportunity_id INTEGER UNIQUE,
-            deal_id TEXT,
-            saved_at TEXT DEFAULT (datetime('now'))
-        )
-        """
-    )
-    # Alerts
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS samv2_alert_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT,
-            frequency TEXT,
-            keywords TEXT,
-            naics TEXT,
-            set_aside TEXT,
-            notice_types TEXT,
-            last_sent_at TEXT
-        )
-        """
-    )
-    # Pull log
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS samv2_pull_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            params_json TEXT,
-            pulled_count INTEGER,
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-        """
-    )
-    # Proposal drafts
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS samv2_proposals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            opportunity_id INTEGER UNIQUE,
-            payload_json TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY(opportunity_id) REFERENCES samv2_opportunities(id)
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
-def _sha1(obj: dict) -> str:
-    return hashlib.sha1(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()
-
-# ---- SAM API
-def samv2_search(params: dict) -> list[dict]:
-    if requests is None:
-        _log("Requests not available.")
-        return []
-    api_key = SAM_API_KEY or params.pop("api_key", None)
-    if not api_key:
-        _log("Missing SAM_API_KEY.")
-        return []
-    headers = {"Accept": "application/json"}
-    q = params.copy()
-    q["api_key"] = api_key
-    q.setdefault("limit", 100)
-    q.setdefault("offset", 0)
-    out = []
-    try:
-        resp = requests.get(SAM_API_BASE, params=q, headers=headers, timeout=30)
-        if resp.status_code != 200:
-            _log(f"SAM API error {resp.status_code}: {resp.text[:200]}")
-            return []
-        data = resp.json()
-        for r in data.get("opportunitiesData", []):
-            agency = r.get("agency")
-            if isinstance(agency, dict):
-                agency = agency.get("name")
-            office = r.get("office")
-            if isinstance(office, dict):
-                office = office.get("name")
-            pop = r.get("placeOfPerformance") or {}
-            norm = {
-                "sol_number": r.get("solicitationNumber") or r.get("noticeId"),
-                "title": r.get("title"),
-                "description": r.get("description") or "",
-                "notice_type": r.get("type"),
-                "agency": agency,
-                "office": office,
-                "naics": ", ".join(r.get("naicsCodes", []) or r.get("naics", []) or []),
-                "psc": ", ".join(r.get("pscCodes", []) or r.get("productServiceCode", []) or []),
-                "set_aside": r.get("typeOfSetAside") or r.get("setAside"),
-                "place_of_performance": pop.get("address", ""),
-                "city": pop.get("city", ""),
-                "state": pop.get("state", ""),
-                "zip": pop.get("zip", ""),
-                "country": pop.get("countryCode", ""),
-                "posted_date": r.get("publishDate") or r.get("postedDate"),
-                "due_date": r.get("responseDate") or r.get("archiveDate"),
-                "last_modified": r.get("lastModifiedDate") or r.get("modifiedDate"),
-                "sam_detail_url": r.get("uiLink") or r.get("url") or "",
-            }
-            attachments = []
-            for att in (r.get("attachments") or []):
-                if isinstance(att, dict):
-                    attachments.append({
-                        "name": att.get("fileName") or att.get("title") or "attachment",
-                        "url": att.get("url") or att.get("href") or "",
-                    })
-            norm["attachments"] = attachments
-            out.append(norm)
-    except Exception as ex:
-        _log("SAM API exception: " + str(ex))
-    return out
-
-def _samv2_get_or_create_opp_id(cur, sol_number, agency, notice_type):
-    cur.execute("SELECT id FROM samv2_opportunities WHERE sol_number=? AND agency=? AND notice_type=?", (sol_number, agency, notice_type))
-    row = cur.fetchone()
-    if row: return row[0]
-    return None
-
-def samv2_upsert_records(records: list[dict]) -> int:
-    conn = samv2_get_conn(); cur = conn.cursor()
-    added = 0
-    for r in records:
-        payload_hash = _sha1(r)
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO samv2_opportunities
-            (sol_number, title, description, notice_type, agency, office, naics, psc, set_aside,
-             place_of_performance, city, state, zip, country, posted_date, due_date, last_modified,
-             sam_detail_url, status, payload_hash, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'Active', ?, datetime('now'), datetime('now'))
-            """
-            ,
-            (
-                r.get("sol_number"), r.get("title"), r.get("description"), r.get("notice_type"),
-                r.get("agency"), r.get("office"), r.get("naics"), r.get("psc"), r.get("set_aside"),
-                r.get("place_of_performance"), r.get("city"), r.get("state"), r.get("zip"), r.get("country"),
-                r.get("posted_date"), r.get("due_date"), r.get("last_modified"),
-                r.get("sam_detail_url"), payload_hash
-            )
-        )
-        if cur.rowcount > 0:
-            added += 1
-        opp_id = _samv2_get_or_create_opp_id(cur, r.get("sol_number"), r.get("agency"), r.get("notice_type"))
-        if opp_id is not None:
-            cur.execute("SELECT payload_hash FROM samv2_opportunities WHERE id=?", (opp_id,))
-            ph = cur.fetchone()
-            if ph and ph[0] != payload_hash:
-                cur.execute(
-                    """UPDATE samv2_opportunities
-                    SET title=?, description=?, naics=?, psc=?, set_aside=?, place_of_performance=?,
-                        city=?, state=?, zip=?, country=?, posted_date=?, due_date=?, last_modified=?,
-                        sam_detail_url=?, payload_hash=?, updated_at=datetime('now')
-                    WHERE id=?"""
-                    ,
-                    (
-                        r.get("title"), r.get("description"), r.get("naics"), r.get("psc"),
-                        r.get("set_aside"), r.get("place_of_performance"),
-                        r.get("city"), r.get("state"), r.get("zip"), r.get("country"),
-                        r.get("posted_date"), r.get("due_date"), r.get("last_modified"),
-                        r.get("sam_detail_url"), payload_hash, opp_id
-                    )
-                )
-            for att in (r.get("attachments") or []):
-                try:
-                    cur.execute(
-                        "INSERT OR IGNORE INTO samv2_docs(opportunity_id, filename, url, local_path, file_hash) VALUES(?,?,?,?,NULL)",
-                        (opp_id, att.get("name") or "attachment", att.get("url") or "", None)
-                    )
-                except Exception:
-                    pass
-    conn.commit(); conn.close()
-    return added
-
-# ---- Attachments
-def samv2_download_attachments(opportunity_id: int) -> int:
-    if requests is None:
-        _log("Requests not available; skipping downloads.")
-        return 0
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT sol_number FROM samv2_opportunities WHERE id=?", (opportunity_id,))
-    row = cur.fetchone()
-    if not row:
-        conn.close(); return 0
-    sol = row[0] or f"opp_{opportunity_id}"
-    folder = os.path.join(DATA_DIR, sol)
-    pathlib.Path(folder).mkdir(parents=True, exist_ok=True)
-
-    cur.execute("SELECT id, filename, url, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
-    docs = cur.fetchall()
-    downloaded = 0
-    for did, fname, url, lpath in docs:
-        if not url:
-            continue
-        base = (fname or "attachment").replace("/", "_").replace("\\", "_")
-        if not os.path.splitext(base)[1]:
-            ext = os.path.splitext(url.split("?")[0])[1] or ".bin"
-            base = base + ext
-        dest = os.path.join(folder, base)
-        if os.path.exists(dest):
-            downloaded += 1
-            continue
-        try:
-            r = requests.get(url, timeout=60)
-            if r.status_code == 200 and r.content:
-                with open(dest, "wb") as f:
-                    f.write(r.content)
-                cur.execute("UPDATE samv2_docs SET local_path=? WHERE id=?", (dest, did))
-                downloaded += 1
-        except Exception as ex:
-            _log("Download error: " + str(ex))
-    conn.commit(); conn.close()
-    return downloaded
-
-# ---- Email
-def _send_via_sendgrid(to_email: str, subject: str, html: str, attachments: list[str] | None = None) -> bool:
-    if not SENDGRID_API_KEY or not ALERTS_FROM or requests is None:
-        return False
-    try:
-        url = "https://api.sendgrid.com/v3/mail/send"
-        content = [{"type": "text/html", "value": html}]
-        atts = []
-        import base64
-        for path in (attachments or []):
-            try:
-                with open(path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
-                atts.append({"content": b64, "filename": os.path.basename(path)})
-            except Exception:
-                continue
-        payload = {
-            "personalizations": [{"to": [{"email": to_email}]}],
-            "from": {"email": ALERTS_FROM},
-            "subject": subject,
-            "content": content,
-        }
-        if atts:
-            payload["attachments"] = atts
-        headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"}
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
-        return 200 <= r.status_code < 300
-    except Exception as ex:
-        _log("SendGrid error: " + str(ex))
-        return False
-
-def _send_via_smtp(to_email: str, subject: str, html: str, attachments: list[str] | None = None) -> bool:
-    if not SMTP_HOST or not SMTP_PORT or not SMTP_FROM:
-        return False
-    try:
-        msg = MIMEMultipart("mixed")
-        alt = MIMEMultipart("alternative")
-        alt.attach(MIMEText(html, "html"))
-        msg.attach(alt)
-        msg["Subject"] = subject
-        msg["From"] = SMTP_FROM
-        msg["To"] = to_email
-        # Attach files
-        from email.mime.base import MIMEBase
-        from email import encoders
-        for path in (attachments or []):
-            try:
-                with open(path, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"')
-                msg.attach(part)
-            except Exception:
-                continue
-        context = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
-            if SMTP_TLS:
-                server.starttls(context=context)
-            if SMTP_USER and SMTP_PASS:
-                server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
-        return True
-    except Exception as ex:
-        _log("SMTP error: " + str(ex))
-        return False
-
-def samv2_email_package(to_email: str, subject: str, html_body: str, files: list[str]) -> bool:
-    if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
-        if _send_via_sendgrid(to_email, subject, html_body, files):
-            return True
-    return _send_via_smtp(to_email, subject, html_body, files)
-
-def samv2_send_email_digest(to_email: str, rows: list[tuple]) -> bool:
-    if not rows:
-        return True
-    items = []
-    for sol, title, agency, posted, due, link in rows:
-        link_html = f'<a href="{link or "#"}">Open</a>' if link else "(no link)"
-        items.append(f"<li><b>{title or '(Untitled)'} — {agency or 'N/A'}</b> (Sol: {sol or 'N/A'}) — Due: {due or 'N/A'} — {link_html}</li>")
-    html = "<h3>New/Updated Opportunities</h3><ul>" + "\n".join(items) + "</ul>"
-    subject = "ELA Bid Alert — New/Updated Opportunities"
-    if SENDGRID_API_KEY and ALERTS_FROM and requests is not None:
-        if _send_via_sendgrid(to_email, subject, html):
-            return True
-    return _send_via_smtp(to_email, subject, html)
-
-def samv2_save_alert_rule(email: str, frequency: str, keywords: str, naics: str, set_aside: str, notice_types_csv: str):
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO samv2_alert_rules(email, frequency, keywords, naics, set_aside, notice_types, last_sent_at) VALUES(?,?,?,?,?,?, NULL)",
-        (email, frequency, keywords, naics, set_aside, notice_types_csv)
-    )
-    conn.commit(); conn.close()
-
-def samv2_due_for_send(freq: str, last_sent: str | None) -> bool:
-    now = _dt.datetime.utcnow()
-    if not last_sent: return True
-    try:
-        last = _dt.datetime.fromisoformat(last_sent)
-    except Exception:
-        return True
-    delta = now - last
-    if freq == "daily": return delta.days >= 1
-    if freq == "weekly": return delta.days >= 7
-    if freq == "monthly": return delta.days >= 28
-    return False
-
-def samv2_run_alerts(send_now: bool = True):
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, email, frequency, keywords, naics, set_aside, notice_types, last_sent_at FROM samv2_alert_rules")
-    rules = cur.fetchall()
-    results = []
-    for rid, email, freq, keywords, naics, set_aside, types_csv, last_sent in rules:
-        if not samv2_due_for_send(freq, last_sent): 
-            continue
-        lookback_days = 1 if freq == "daily" else 7 if freq == "weekly" else 28
-        cur.execute(
-            "SELECT sol_number, title, agency, posted_date, due_date, sam_detail_url FROM samv2_opportunities WHERE julianday('now') - julianday(COALESCE(last_modified, posted_date, created_at)) <= ?",
-            (lookback_days,)
-        )
-        rows = cur.fetchall()
-        rows = [r for r in rows if (not keywords or (keywords.lower() in (r[1] or '').lower()))]
-        sent_ok = True
-        if send_now and rows:
-            sent_ok = samv2_send_email_digest(email, rows)
-        if sent_ok:
-            cur.execute("UPDATE samv2_alert_rules SET last_sent_at=? WHERE id=?", (_dt.datetime.utcnow().isoformat(), rid))
-        results.append((email, len(rows)))
-    conn.commit(); conn.close()
-    return results
-
-# ---- Templates (NAICS-based)
-def _tmpl_for_naics(naics_str: str):
-    naics_str = (naics_str or "").strip()
-    primary = naics_str.split(",")[0].strip() if naics_str else ""
-    outline = [
-        "Cover Letter",
-        "Executive Summary",
-        "Understanding of Requirements",
-        "Technical Approach",
-        "Management Approach",
-        "Quality Control Plan",
-        "Staffing Plan & Key Personnel",
-        "Safety Plan (if applicable)",
-        "Past Performance",
-        "Pricing & Assumptions",
-        "Certifications & Compliance",
-        "Attachments & Forms"
-    ]
-    checklist = [
-        "Confirm set-aside eligibility and reps & certs current",
-        "Register/verify UEI, CAGE, NAICS on SAM profile",
-        "Note response due date/time and timezone",
-        "Follow submission method (portal/email) and file naming rules",
-        "Complete all required forms (SF-1449/SF-33, Section K, etc.)",
-        "Address all evaluation factors (Section M) in order",
-        "Include technical volume page limits and font requirements",
-        "Provide pricing in requested format (CLINs), include any options",
-        "Acknowledge all amendments",
-        "Confirm POP, delivery schedule, and place of performance",
-        "Include subcontracting approach if required",
-        "Validate contact info for CO/CS"
-    ]
-    if primary.startswith("561720"):
-        outline.insert(3, "Workloading & Frequencies Matrix")
-        checklist.append("Comply with custodial frequency, green products, waste handling")
-    elif primary.startswith("561730"):
-        outline.insert(3, "Seasonal Grounds Maintenance Plan")
-        checklist.append("Mowing/trimming schedules, pesticide certifications, arborist standards")
-    elif primary.startswith("238220"):
-        outline.insert(3, "Equipment & Materials Submittals")
-        checklist.append("Licenses, OEM specs, commissioning, warranty terms, safety (Lockout/Tagout)")
-    elif primary.startswith("311"):
-        outline.insert(3, "Product Specifications & Sourcing")
-        checklist.append("USDA grades, substitutions policy, delivery windows, HACCP")
-    elif primary.startswith("561612"):
-        outline.insert(3, "Post Orders & Guard Coverage Matrix")
-        checklist.append("Licenses, background checks, training hours, incident reporting")
-    return outline, checklist
-
-def samv2_build_proposal_payload(opp: dict) -> dict:
-    outline, checklist = _tmpl_for_naics(opp.get("naics"))
-    payload = {
-        "meta": {
-            "sol_number": opp.get("sol_number"),
-            "title": opp.get("title"),
-            "agency": opp.get("agency"),
-            "naics": opp.get("naics"),
-            "psc": opp.get("psc"),
-            "set_aside": opp.get("set_aside"),
-            "due_date": opp.get("due_date"),
-            "posted_date": opp.get("posted_date"),
-            "sam_detail_url": opp.get("sam_detail_url"),
-            "place_of_performance": opp.get("place_of_performance"),
-        },
-        "outline": outline,
-        "checklist": checklist,
-        "sections": {name: "" for name in outline},
-        "pricing": {"notes": "Insert CLIN pricing and assumptions here.", "rows": [], "file_path": ""},
-        "attachments": [],
-        "section_L": "",
-        "section_M": "",
-    }
-    return payload
-
-def samv2_start_proposal(opportunity_id: int) -> dict | None:
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, sol_number, title, agency, naics, psc, set_aside, due_date, posted_date, sam_detail_url, place_of_performance, description FROM samv2_opportunities WHERE id=?", (opportunity_id,))
-    r = cur.fetchone()
-    if not r:
-        conn.close(); return None
-    opp = {
-        "id": r[0], "sol_number": r[1], "title": r[2], "agency": r[3],
-        "naics": r[4], "psc": r[5], "set_aside": r[6], "due_date": r[7],
-        "posted_date": r[8], "sam_detail_url": r[9], "place_of_performance": r[10],
-        "description": r[11]
-    }
-    payload = samv2_build_proposal_payload(opp)
-    cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
-    payload["attachments"] = [{"filename": a, "path": p} for a, p in cur.fetchall() if p]
-    cur.execute("INSERT OR IGNORE INTO samv2_proposals(opportunity_id, payload_json) VALUES(?,?)", (opportunity_id, json.dumps(payload)))
-    cur.execute("UPDATE samv2_proposals SET payload_json=?, updated_at=datetime('now') WHERE opportunity_id=?", (json.dumps(payload), opportunity_id))
-    conn.commit(); conn.close()
-    try:
-        st.session_state["proposal_builder_payload"] = payload
-    except Exception:
-        pass
-    return payload
-
-# ---- Section L/M Extraction (best-effort from PDFs)
-def _extract_text_from_pdf(path: str) -> str:
-    if not PyPDF2:
-        return ""
-    try:
-        with open(path, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
-            chunks = []
-            for page in reader.pages:
-                try:
-                    chunks.append(page.extract_text() or "")
-                except Exception:
-                    continue
-            return "\n".join(chunks)
-    except Exception:
-        return ""
-
-def samv2_extract_section_LM(opportunity_id: int) -> dict:
-    """Return dict with 'L' and 'M' extracted text snippets, best-effort."""
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT filename, local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
-    docs = cur.fetchall()
-    text_all = ""
-    for fname, path in docs:
-        if not path or not os.path.exists(path):
-            continue
-        if path.lower().endswith(".pdf"):
-            text_all += "\n" + _extract_text_from_pdf(path)
-    L_text = ""
-    M_text = ""
-    low = text_all.lower()
-    if "section l" in low:
-        idx = low.find("section l")
-        L_text = text_all[idx: idx + 8000]
-    if "section m" in low:
-        idx = low.find("section m")
-        M_text = text_all[idx: idx + 8000]
-    if not L_text and "instructions to offerors" in low:
-        idx = low.find("instructions to offerors")
-        L_text = text_all[idx: idx + 8000]
-    if not M_text and "evaluation factors" in low:
-        idx = low.find("evaluation factors")
-        M_text = text_all[idx: idx + 8000]
-    # Patch into draft if exists
-    pb = st.session_state.get("proposal_builder_payload")
-    if isinstance(pb, dict):
-        if L_text: pb["section_L"] = L_text
-        if M_text: pb["section_M"] = M_text
-        st.session_state["proposal_builder_payload"] = pb
-    return {"L": L_text.strip(), "M": M_text.strip()}
-
-# ---- Smart CLIN parser
-_CLIN_PATTERNS = [
-    r"(?:^|\n)\s*CLIN\s*[:#-]?\s*(?P<clin>[A-Za-z0-9]+)[\s\-:]*\s*(?P<desc>[^\n]{5,120})?",
-    r"(?P<clin>\b[0-9]{4}\b)\s+(?P<desc>[^\n]{5,120})",
-    r"(?P<clin>\b[0-9]{2,4}[A-Z]?\b)\s+-\s+(?P<desc>[^\n]{5,120})",
-]
-
-def samv2_parse_clins_from_text(text: str) -> list[dict]:
-    rows = []
-    seen = set()
-    for pat in _CLIN_PATTERNS:
-        for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            clin = (m.groupdict().get("clin") or "").strip()
-            desc = (m.groupdict().get("desc") or "").strip(" -:	")
-            if clin and clin not in seen:
-                seen.add(clin)
-                rows.append({"CLIN": clin, "Description": desc, "Qty": "", "Unit": "", "Unit Price": "", "Extended Amount": "", "Notes": ""})
-    return rows
-
-def samv2_parse_clins_from_docs(opportunity_id: int) -> list[dict]:
-    # Uses extracted text from PDFs
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT local_path FROM samv2_docs WHERE opportunity_id=?", (opportunity_id,))
-    texts = ""
-    for (p,) in cur.fetchall():
-        if p and p.lower().endswith(".pdf"):
-            texts += "\n" + _extract_text_from_pdf(p)
-    conn.close()
-    if not texts.strip():
-        # fallback: try current draft's Section L
-        pb = st.session_state.get("proposal_builder_payload")
-        if isinstance(pb, dict):
-            texts = (pb.get("section_L") or "") + "\n" + (pb.get("section_M") or "")
-    return samv2_parse_clins_from_text(texts)
-
-# ---- CLIN Pricing sheet (xlsx or csv)
-def _write_xlsx(path: str, header: list[str], rows: list[dict]):
-    if openpyxl is None or Workbook is None:
-        return False
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "CLIN Pricing"
-    ws.append(header)
-    for r in rows:
-        ws.append([r.get(h, "") for h in header])
-    # total line
-    ws.append([])
-    ws.append(["", "", "", "Total", "", f"=SUM(F2:F{len(rows)+1})", ""])
-    # autosize
-    if get_column_letter:
-        for i, h in enumerate(header, start=1):
-            ws.column_dimensions[get_column_letter(i)].width = max(12, min(40, len(h) + 6))
-    wb.save(path)
-    return True
-
-def _write_csv(path: str, header: list[str], rows: list[dict]):
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(header)
-        for r in rows:
-            w.writerow([r.get(h, "") for h in header])
-        w.writerow([])
-        w.writerow(["", "", "", "Total", "", "", ""])
-    return True
-
-def samv2_build_clin_sheet(opportunity_id: int, rows: list[dict] | None = None, subcontractor_mode: bool = False) -> str:
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT sol_number, title, agency, naics, place_of_performance FROM samv2_opportunities WHERE id=?", (opportunity_id,))
-    meta = cur.fetchone()
-    conn.close()
-    sol = (meta[0] if meta else f"opp_{opportunity_id}") or f"opp_{opportunity_id}"
-    header = ["CLIN", "Description", "Qty", "Unit", "Unit Price", "Extended Amount", "Notes"]
-    if rows is None:
-        rows = samv2_parse_clins_from_docs(opportunity_id)
-        if not rows:
-            rows = [{"CLIN": "", "Description": "", "Qty": "", "Unit": "", "Unit Price": "", "Extended Amount": "", "Notes": ""}]
-    # ensure formula column blank (Excel computes if user fills unit price/qty)
-    for r in rows:
-        if r.get("Qty") and r.get("Unit Price") and not r.get("Extended Amount"):
-            try:
-                q = float(r["Qty"]); u = float(r["Unit Price"])
-                r["Extended Amount"] = q * u
-            except Exception:
-                r["Extended Amount"] = ""
-    base = os.path.join(CLIN_DIR, f"{sol}{'_sub' if subcontractor_mode else ''}")
-    xlsx_path = base + ".xlsx"
-    csv_path = base + ".csv"
-    wrote_xlsx = _write_xlsx(xlsx_path, header, rows)
-    if not wrote_xlsx:
-        _write_csv(csv_path, header, rows)
-        return csv_path
-    return xlsx_path
-
-# ---- Compliance Matrix (Excel)
-def samv2_export_compliance_matrix(opportunity_id: int) -> str:
-    # Build matrix from Section L/M text available in draft/session
-    pb = st.session_state.get("proposal_builder_payload") or {}
-    L = (pb.get("section_L") or "").splitlines()
-    M = (pb.get("section_M") or "").splitlines()
-    items = []
-    for line in L:
-        line = line.strip()
-        if len(line) >= 6:
-            items.append({"Requirement": line[:300], "Source": "L", "Owner": "", "Status": "Open", "Due": ""})
-    for line in M:
-        line = line.strip()
-        if len(line) >= 6:
-            items.append({"Requirement": line[:300], "Source": "M", "Owner": "", "Status": "Open", "Due": ""})
-    base = os.path.join(EXPORT_DIR, f"compliance_{pb.get('meta',{}).get('sol_number') or 'matrix'}")
-    xlsx = base + ".xlsx"
-    if openpyxl and Workbook:
-        wb = Workbook(); ws = wb.active; ws.title = "Compliance Matrix"
-        header = ["Requirement", "Source", "Owner", "Status", "Due"]
-        ws.append(header)
-        for r in items:
-            ws.append([r[h] for h in header])
-        wb.save(xlsx)
-        return xlsx
-    # CSV fallback
-    csvp = base + ".csv"
-    with open(csvp, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f); w.writerow(["Requirement","Source","Owner","Status","Due"])
-        for r in items:
-            w.writerow([r["Requirement"], r["Source"], r["Owner"], r["Status"], r["Due"]])
-    return csvp
-
-# ---- Win Probability (simple heuristic)
-def samv2_win_probability(opp_row: dict) -> dict:
-    score = 50
-    sa = (opp_row.get("set_aside") or "").lower()
-    if "small" in sa: score += 8
-    if "sdvosb" in sa or "service-disabled" in sa: score += 6
-    if "8(a)" in sa: score += 4
-    if "hubzone" in sa: score += 4
-    try:
-        if opp_row.get("due_date"):
-            due = _dt.datetime.fromisoformat(opp_row["due_date"].replace("Z","").replace("z",""))
-            days = (due - _dt.datetime.utcnow()).days
-            if days >= 21: score += 6
-            elif days >= 10: score += 3
-            elif days <= 3: score -= 8
-    except Exception:
-        pass
-    if opp_row.get("naics"): score += 2
-    prob = max(5, min(95, score))
-    return {"score": prob, "explain": "Heuristic based on set-aside, time to due date, NAICS presence."}
-
-# ---- DOCX Export
-def samv2_export_docx_from_payload(payload: dict, export_name: str) -> str:
-    base = os.path.join(EXPORT_DIR, export_name)
-    if docx is None:
-        md_path = base + ".md"
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(f"# {payload['meta'].get('title') or 'Proposal'}\n\n")
-            f.write(f"**Solicitation:** {payload['meta'].get('sol_number')}  \\n")
-            f.write(f"**Agency:** {payload['meta'].get('agency')}  \\n")
-            f.write(f"**NAICS:** {payload['meta'].get('naics')}  \\n")
-            f.write(f"**Set-Aside:** {payload['meta'].get('set_aside')}  \\n")
-            f.write(f"**Due Date:** {payload['meta'].get('due_date')}\n\n")
-            if payload.get("section_L"): f.write("## Section L (Instructions)\n" + payload["section_L"] + "\n\n")
-            if payload.get("section_M"): f.write("## Section M (Evaluation)\n" + payload["section_M"] + "\n\n")
-            f.write("## Outline\n")
-            for sec in payload.get("outline", []):
-                f.write(f"### {sec}\n\n")
-        return md_path
-    doc = docx.Document()
-    doc.add_heading(payload["meta"].get("title") or "Proposal", 0)
-    meta = payload["meta"]
-    p = doc.add_paragraph(); p.add_run("Solicitation: ").bold = True; p.add_run(str(meta.get("sol_number") or ""))
-    p = doc.add_paragraph(); p.add_run("Agency: ").bold = True; p.add_run(str(meta.get("agency") or ""))
-    p = doc.add_paragraph(); p.add_run("NAICS: ").bold = True; p.add_run(str(meta.get("naics") or ""))
-    p = doc.add_paragraph(); p.add_run("Set-Aside: ").bold = True; p.add_run(str(meta.get("set_aside") or ""))
-    p = doc.add_paragraph(); p.add_run("Due Date: ").bold = True; p.add_run(str(meta.get("due_date") or ""))
-    if payload.get("section_L"):
-        doc.add_heading("Section L (Instructions)", level=1); doc.add_paragraph(payload["section_L"][:4000])
-    if payload.get("section_M"):
-        doc.add_heading("Section M (Evaluation)", level=1); doc.add_paragraph(payload["section_M"][:4000])
-    doc.add_heading("Outline", level=1)
-    for sec in payload.get("outline", []):
-        doc.add_heading(sec, level=2); doc.add_paragraph(payload.get("sections", {}).get(sec, ""))
-    path = base + ".docx"; doc.save(path); return path
-
-# ---- UI helpers
-def _has_dialog() -> bool:
-    return hasattr(st, "dialog")
-
-
-# === SAM V2: Pricing Enhancements START ===
-_PRICE_BENCHMARKS = {
-    "561720": {"label": "Custodial (per SF-month)", "unit_hint": "SF-MO", "range": (0.08, 0.35)},
-    "561730": {"label": "Grounds (per acre-month)", "unit_hint": "ACRE-MO", "range": (50, 300)},
-    "238220": {"label": "HVAC/Plumbing Labor (per hour)", "unit_hint": "HR", "range": (75, 180)},
-    "561612": {"label": "Security Guard (per hour)", "unit_hint": "HR", "range": (20, 70)},
-}
-
-def samv2_get_payload():
-    try:
-        pb = st.session_state.get("proposal_builder_payload")
-        if isinstance(pb, dict):
-            return pb
-    except Exception:
-        pass
-    return {}
-
-def samv2_set_payload(pb: dict):
-    try:
-        st.session_state["proposal_builder_payload"] = pb
-    except Exception:
-        pass
-
-def samv2_get_clins_from_payload() -> list[dict]:
-    pb = samv2_get_payload()
-    return list(pb.get("pricing", {}).get("rows", []))
-
-def samv2_set_clins_in_payload(rows: list[dict]):
-    pb = samv2_get_payload() or {}
-    pb.setdefault("pricing", {})
-    pb["pricing"]["rows"] = rows
-    samv2_set_payload(pb)
-
-def samv2_price_check(rows: list[dict], naics: str) -> dict:
-    issues = []
-    totals = 0.0
-    cnt = 0
-    # Simple stats
-    for i, r in enumerate(rows, start=1):
-        qty = str(r.get("Qty", "")).strip()
-        unit_price = str(r.get("Unit Price", "")).strip()
-        if not qty or not unit_price:
-            issues.append((i, "Missing Qty or Unit Price", "Fill both to compute Extended Amount."))
-            continue
-        try:
-            q = float(qty); up = float(unit_price)
-            if q <= 0 or up <= 0:
-                issues.append((i, "Non-positive values", "Qty and Unit Price must be > 0."))
-            totals += q * up; cnt += 1
-        except Exception:
-            issues.append((i, "Non-numeric values", "Qty/Unit Price must be numbers."))
-    # Range checks by NAICS benchmark (if available)
-    primary = (naics or "").split(",")[0].strip()
-    bench = _PRICE_BENCHMARKS.get(primary)
-    if bench:
-        lo, hi = bench["range"]
-        for i, r in enumerate(rows, start=1):
-            unit_price = str(r.get("Unit Price", "")).strip()
-            if not unit_price:
-                continue
-            try:
-                up = float(unit_price)
-                if up < lo:
-                    issues.append((i, "Unit Price low vs. benchmark", f"Below {lo} for {bench['label']}"))
-                if up > hi:
-                    issues.append((i, "Unit Price high vs. benchmark", f"Above {hi} for {bench['label']}"))
-            except Exception:
-                pass
-    score = 100
-    if issues:
-        # Deduct small chunks per issue (cap)
-        score = max(40, 100 - min(30, len(issues) * 3))
-    summary = f"Items: {len(rows)} | Priced: {cnt} | Est. Total (if complete): ${totals:,.2f}"
-    return {"score": score, "issues": issues, "summary": summary, "benchmark": bench}
-
-def samv2_clin_editor_dialog(opportunity_id: int, opp_row: dict | None = None):
-    # Editor dialog using Streamlit's data_editor (if available)
-    rows = samv2_get_clins_from_payload()
-    if not rows:
-        # bootstrap from parser
-        rows = samv2_parse_clins_from_docs(opportunity_id)
-        if not rows:
-            rows = [{"CLIN":"","Description":"","Qty":"","Unit":"","Unit Price":"","Extended Amount":"","Notes":""}]
-    if hasattr(st, "dialog"):
-        @st.dialog("Edit CLINs", width="large")
-        def _dlg():
-            st.write("Enter CLIN rows (you can add/remove rows). Extended Amount auto-calcs on export if Qty & Unit Price are set.")
-            edited = st.data_editor(
-                rows,
-                num_rows="dynamic",
-                use_container_width=True,
-                key=f"clin_edit_{opportunity_id}"
-            )
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("Save to Draft", key=f"save_clin_{opportunity_id}"):
-                    samv2_set_clins_in_payload(edited)
-                    st.success("Saved CLINs to draft.")
-            with col2:
-                if st.button("Run Price Check", key=f"check_clin_{opportunity_id}"):
-                    naics = (opp_row or {}).get("naics") if opp_row else ""
-                    res = samv2_price_check(edited, naics or "")
-                    st.metric("Pricing Health", f"{res['score']}%")
-                    st.caption(res["summary"])
-                    if res["benchmark"]:
-                        st.caption(f"Benchmark: {_PRICE_BENCHMARKS[(naics or '').split(',')[0].strip()]['label']} — range {res['benchmark']['range'][0]} - {res['benchmark']['range'][1]}")
-                    if res["issues"]:
-                        for idx, title, msg in res["issues"][:50]:
-                            st.warning(f"Row {idx}: {title} — {msg}")
-            with col3:
-                if st.button("Re-export CLIN Sheet", key=f"export_clin_{opportunity_id}"):
-                    edited_rows = edited
-                    path = samv2_build_clin_sheet(opportunity_id, rows=edited_rows, subcontractor_mode=False)
-                    pb = samv2_get_payload()
-                    pb.setdefault("pricing", {})["file_path"] = path
-                    samv2_set_payload(pb)
-                    st.success(f"Exported: {path}")
-                    st.markdown(f"[Download]({path})")
-        _dlg()
-    else:
-        with st.expander("Edit CLINs (upgrade Streamlit to use modal)"):
-            edited = st.data_editor(rows, num_rows="dynamic", use_container_width=True, key=f"clin_edit_{opportunity_id}")
-            if st.button("Save CLINs", key=f"save2_{opportunity_id}"):
-                samv2_set_clins_in_payload(edited)
-                st.success("Saved.")
-# === SAM V2: Pricing Enhancements END ===
-def rfp_analyzer_popup(opp_row: dict):
-    if _has_dialog():
-        @st.dialog(f"RFP Analyzer — {opp_row.get('title') or opp_row.get('sol_number')}", width="large")
-        def _dlg():
-            st.markdown("**Quick Summary**")
-            desc = opp_row.get("description") or "No description available."
-            if not desc or len(desc.strip()) < 40:
-                desc = "AI Summary: This opportunity likely involves services/supplies per NAICS/PSC with specified performance location and deadline. Open the attached documents for exact scope and submission instructions."
-            st.write(desc)
-
-            # Win probability
-            wp = samv2_win_probability(opp_row)
-            st.metric("Win Probability (est.)", f"{wp['score']}%")
-            st.caption(wp["explain"])
-
-            cols = st.columns(2)
-            with cols[0]:
-                st.write("**Key Facts**")
-                st.write(f"Solicitation: {opp_row.get('sol_number') or 'N/A'}")
-                st.write(f"Agency: {opp_row.get('agency') or 'N/A'}")
-                st.write(f"Set-Aside: {opp_row.get('set_aside') or 'N/A'}")
-                st.write(f"NAICS: {opp_row.get('naics') or 'N/A'}")
-                st.write(f"PSC: {opp_row.get('psc') or 'N/A'}")
-            with cols[1]:
-                st.write("**Dates**")
-                st.write(f"Posted: {opp_row.get('posted_date') or 'N/A'}")
-                st.write(f"Due: {opp_row.get('due_date') or 'N/A'}")
-                st.write(f"Last Modified: {opp_row.get('last_modified') or 'N/A'}")
-            st.markdown("---")
-            st.write("**RFP Tools**")
-            c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-            with c1:
-                if st.button("Start Proposal (Prefill)", key=f"start_{opp_row.get('id')}"):
-                    payload = samv2_start_proposal(opp_row.get("id"))
-                    if payload: st.success("Draft created and Builder prefilled.")
-            with c2:
-                if st.button("Extract Section L/M", key=f"lm_{opp_row.get('id')}"):
-                    res = samv2_extract_section_LM(opp_row.get("id"))
-                    if res.get("L") or res.get("M"): st.success("Section L/M extracted into draft.")
-                    else: st.warning("Couldn't find clear L/M text.")
-            with c3:
-                if st.button("Build CLIN Sheet", key=f"clin_{opp_row.get('id')}"):
-                    # Also save parsed rows into draft
-                    rows_guess = samv2_parse_clins_from_docs(opp_row.get('id'))
-                    if rows_guess:
-                        samv2_set_clins_in_payload(rows_guess)
-
-                    rows = samv2_parse_clins_from_docs(opp_row.get("id"))
-                    path = samv2_build_clin_sheet(opp_row.get("id"), rows=rows, subcontractor_mode=False)
-                    st.success(f"CLIN sheet ready: {os.path.basename(path)}")
-                    st.markdown(f"[Download]({path})")
-                    # attach to draft
-                    pb = st.session_state.get("proposal_builder_payload")
-                    if isinstance(pb, dict):
-                        pb.setdefault("pricing", {})["file_path"] = path
-                        st.session_state["proposal_builder_payload"] = pb
-            with c4:
-                if st.button("Edit CLINs", key=f"editclin_{opp_row.get('id')}"):
-                    samv2_clin_editor_dialog(opp_row.get('id'), opp_row)
-            with c5:
-                if st.button("Compliance Matrix (Excel)", key=f"cm_{opp_row.get('id')}"):
-                    path = samv2_export_compliance_matrix(opp_row.get("id"))
-                    st.success(f"Matrix exported: {os.path.basename(path)}")
-                    st.markdown(f"[Download]({path})")
-            with c6:
-                if st.button("Export Proposal DOCX", key=f"docx_{opp_row.get('id')}"):
-                    payload = st.session_state.get("proposal_builder_payload")
-                    if not payload or not isinstance(payload, dict):
-                        payload = samv2_start_proposal(opp_row.get("id"))
-                    name = f"{opp_row.get('sol_number') or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
-                    path = samv2_export_docx_from_payload(payload, name)
-                    st.success(f"Exported: {os.path.basename(path)}")
-                    st.markdown(f"[Download file]({path})")
-
-            st.markdown("---")
-            st.write("**Subcontractor Input**")
-            sub_name = st.text_input("Subcontractor Company Name", key=f"sub_nm_{opp_row.get('id')}")
-            sub_email = st.text_input("Subcontractor Email", key=f"sub_em_{opp_row.get('id')}")
-            if st.button("Generate Sub Input Sheet", key=f"sub_sheet_{opp_row.get('id')}"):
-                rows = samv2_parse_clins_from_docs(opp_row.get("id"))
-                path = samv2_build_clin_sheet(opp_row.get("id"), rows=rows, subcontractor_mode=True)
-                st.success(f"Sub input sheet ready: {os.path.basename(path)}")
-                st.markdown(f"[Download for Sub]({path})")
-                # Optional email
-                if sub_email:
-                    ok = samv2_email_package(sub_email, "CLIN Pricing Input Request", "<p>Please fill in the Unit Prices and return.</p>", [path])
-                    if ok: st.info("Emailed sub input sheet.")
-                    else: st.warning("Email send failed (check secrets).")
-
-            
-            st.markdown("---")
-            st.write("**Vendor Quote Requests**")
-            vndr_name = st.text_input("Vendor Name", key=f"vndr_nm_{opp_row.get('id')}")
-            vndr_email = st.text_input("Vendor Email", key=f"vndr_em_{opp_row.get('id')}")
-            quote_due = st.text_input("Requested Quote Due (e.g., 2025-10-20 17:00 CT)", key=f"vndr_due_{opp_row.get('id')}")
-            if st.button("Send Quote Request", key=f"vndr_send_{opp_row.get('id')}"):
-                # Ensure there is a sub input sheet to attach
-                rows = samv2_get_clins_from_payload() or samv2_parse_clins_from_docs(opp_row.get('id'))
-                path = samv2_build_clin_sheet(opp_row.get('id'), rows=rows, subcontractor_mode=True)
-                subj = f"Quote Request — {opp_row.get('sol_number') or opp_row.get('title')}"
-                body = f"""
-                <p>Dear {vndr_name or 'Vendor'},</p>
-                <p>We are preparing a proposal for <b>{opp_row.get('title') or opp_row.get('sol_number')}</b> ({opp_row.get('agency')}).
-                Please review the attached CLIN Pricing Input Sheet and provide your best pricing. If possible, return by <b>{quote_due or 'TBD'}</b>.</p>
-                <p>Notes:</p>
-                <ul>
-                  <li>Enter Unit Prices and any clarifying notes per CLIN.</li>
-                  <li>Include delivery/lead times and any exceptions.</li>
-                </ul>
-                <p>Thank you,</p>
-                <p>BD Team</p>
-                """
-                ok = samv2_email_package(vndr_email, subj, body, [path] if path else [])
-                if ok: st.success("Quote request sent.")
-                else: st.warning("Email failed (check secrets).")
-
-            st.markdown("---")
-            st.write("**Email Package to CO/POC**")
-            co_email = st.text_input("CO/POC Email", key=f"co_em_{opp_row.get('id')}")
-            include_clin = st.checkbox("Attach CLIN Pricing Sheet (if available)", value=True, key=f"co_inc_clin_{opp_row.get('id')}")
-            include_docx = st.checkbox("Attach Proposal DOCX (if available)", value=True, key=f"co_inc_docx_{opp_row.get('id')}")
-            if st.button("Send Email Package", key=f"co_send_{opp_row.get('id')}"):
-                files = []
-                pb = st.session_state.get("proposal_builder_payload") or {}
-                if include_clin and isinstance(pb, dict):
-                    path = pb.get("pricing", {}).get("file_path")
-                    if path and os.path.exists(path): files.append(path)
-                if include_docx:
-                    name = f"{opp_row.get('sol_number') or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
-                    p = samv2_export_docx_from_payload(pb or samv2_start_proposal(opp_row.get('id')), name)
-                    if p and os.path.exists(p): files.append(p)
-                if co_email:
-                    ok = samv2_email_package(co_email, f"Proposal Package — {opp_row.get('sol_number') or opp_row.get('title')}", "<p>Attached, please find our proposal materials.</p>", files)
-                    if ok: st.success("Package sent to CO/POC.")
-                    else: st.warning("Email failed (check SENDGRID/SMTP secrets).")
-
-    else:
-        with st.expander("RFP Analyzer (fallback)"):
-            st.info("Update Streamlit to use nice modal popups (st.dialog). For now, this expander shows the same info.")
-            st.write(opp_row)
-
-def render_sam_watch_v2():
-    samv2_migrate()
-
-    st.title("SAM Watch")
-    st.caption("One-click CLIN sheets, compliance matrix, proposal export, and email package.")
-
-    with st.sidebar:
-        st.subheader("SAM Watch V2 — Filters")
-        keywords = st.text_input("Keywords", value=st.session_state.get("_samv2_kw", ""))
-        naics = st.text_input("NAICS (comma-separated)", value=st.session_state.get("_samv2_naics", ""))
-        notice_types = st.multiselect(
-            "Notice Types",
-            options=["Solicitation", "Combined Synopsis/Solicitation", "Presolicitation", "Sources Sought"],
-            default=st.session_state.get("_samv2_types", ["Solicitation", "Combined Synopsis/Solicitation"]),
-        )
-        set_aside = st.selectbox("Set-Aside", ["Any","Total Small Business","WOSB","SDVOSB","8(a)","HUBZone"], index=0)
-        date_from = st.date_input("Posted from", value=_dt.date.today() - _dt.timedelta(days=30))
-        date_to = st.date_input("Posted to", value=_dt.date.today())
-        st.session_state["_samv2_kw"] = keywords
-        st.session_state["_samv2_naics"] = naics
-        st.session_state["_samv2_types"] = notice_types
-        # Widen defaults if empty to avoid zero-result traps
-        if not (keywords or "").strip():
-            keywords = "janitorial OR landscaping OR hvac"
-        if not (naics or "").strip():
-            naics = "561720, 561730, 238220"
-        if not notice_types:
-            notice_types = ["Solicitation","Combined Synopsis/Solicitation"]
-
-        st.markdown("---")
-        st.subheader("Bid Alerts")
-        with st.form("samv2_alerts_form"):
-            email = st.text_input("Send alerts to (email)")
-            freq = st.selectbox("Frequency", ["daily","weekly","monthly"], index=0)
-            if st.form_submit_button("Save Alert Rule"):
-                if email:
-                    samv2_save_alert_rule(email, freq, keywords, naics, set_aside if set_aside!="Any" else "", ",".join(notice_types))
-                    st.success("Alert rule saved.")
-        colsA = st.columns(2)
-        with colsA[0]:
-            if st.button("Run Alerts Now & Send"):
-                results = samv2_run_alerts(send_now=True)
-                st.info(f"Emailed {len(results)} digest(s).")
-        with colsA[1]:
-            if st.button("Prepare Alerts Only"):
-                results = samv2_run_alerts(send_now=False)
-                st.info(f"Prepared {len(results)} digest(s).")
-
-    colA, colB, colC = st.columns([1,1,2])
-    with colA:
-        run_pull = st.button("Pull SAM Data")
-    with colB:
-        save_selected = st.button("Save Selected to Pipeline")
-    with colC:
-        st.write("")
-
-    status_ph = st.empty()
-
-    if run_pull:
-        q = {
-            "q": keywords or None,
-            "notice_type": ",".join(notice_types),
-            "postedFrom": date_from.isoformat(),
-            "postedTo": date_to.isoformat(),
-        }
-        recs = samv2_search(q)
-        added = samv2_upsert_records(recs)
-        conn = samv2_get_conn()
-        conn.execute("INSERT INTO samv2_pull_log(params_json, pulled_count) VALUES(?,?)", (json.dumps(q), len(recs)))
-        conn.commit(); conn.close()
-        status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new (others updated or deduped).")
-
-    st.markdown("### Results")
-    conn = samv2_get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, sol_number, title, agency, set_aside, naics, posted_date, due_date, last_modified, sam_detail_url, description, psc FROM samv2_opportunities ORDER BY COALESCE(last_modified, posted_date) DESC LIMIT 300")
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        st.info("No records yet. Adjust filters and click 'Pull SAM Data'.")
-    else:
-        for rid, sol, title, agency, sa, naics_v, posted, due, mod, link, desc, psc in rows:
-            with st.container(border=True):
-                c1, c2 = st.columns([0.07, 0.93])
-                with c1:
-                    st.checkbox("", key=f"samv2_ck_{rid}")
-                with c2:
-                    st.markdown(f"**{title or '(Untitled)'}**")
-                    st.caption(f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}  |  PSC: {psc or 'N/A'}")
-                    st.caption(f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}")
-                    link_col, b1, b2, b3, b4, b5, b6 = st.columns([0.20, 0.14, 0.14, 0.14, 0.12, 0.13, 0.13])
-                    with link_col:
-                        if link: st.markdown(f"[Open in SAM.gov]({link})")
-                        else: st.text("No SAM link")
-                    with b1:
-                        if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
-                            opp = {
-                                "id": rid, "sol_number": sol, "title": title, "agency": agency,
-                                "set_aside": sa, "naics": naics_v, "psc": psc, "posted_date": posted,
-                                "due_date": due, "last_modified": mod, "sam_detail_url": link,
-                                "description": desc or ""
-                            }
-                            rfp_analyzer_popup(opp)
-                    with b2:
-                        if st.button("Start Proposal", key=f"start_{rid}"):
-                            payload = samv2_start_proposal(rid)
-                            if payload: st.success("Proposal draft saved and builder prefilled.")
-                    with b3:
-                        if st.button("Download Attachments", key=f"dl_{rid}"):
-                            cnt = samv2_download_attachments(rid)
-                            if cnt: st.success(f"Downloaded {cnt} file(s).")
-                            else: st.warning("No downloadable attachments found.")
-                    with b4:
-                        if st.button("Build CLIN Sheet", key=f"clin_{rid}"):
-                            rows_guess = samv2_parse_clins_from_docs(rid)
-                            path = samv2_build_clin_sheet(rid, rows=rows_guess, subcontractor_mode=False)
-                            st.success(f"CLIN sheet ready: {os.path.basename(path)}"); st.markdown(f"[Download]({path})")
-                            pb = st.session_state.get("proposal_builder_payload")
-                            if isinstance(pb, dict):
-                                pb.setdefault("pricing", {})["file_path"] = path
-                                st.session_state["proposal_builder_payload"] = pb
-                    with b5:
-                        if st.button("Compliance Matrix", key=f"cm_{rid}"):
-                            path = samv2_export_compliance_matrix(rid)
-                            st.success(f"Matrix exported: {os.path.basename(path)}"); st.markdown(f"[Download]({path})")
-                    with b6:
-                        if st.button("Export DOCX", key=f"docx_{rid}"):
-                            payload = st.session_state.get("proposal_builder_payload")
-                            if not payload or not isinstance(payload, dict):
-                                payload = samv2_start_proposal(rid)
-                            name = f"{sol or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
-                            path = samv2_export_docx_from_payload(payload, name)
-                            st.success(f"Exported: {os.path.basename(path)}"); st.markdown(f"[Download file]({path})")
-
-    if save_selected:
-        conn = samv2_get_conn(); cur = conn.cursor()
-        saved = 0; skipped = 0
-        for rid, *_ in rows:
-            if st.session_state.get(f"samv2_ck_{rid}", False):
-                try:
-                    cur.execute("INSERT OR IGNORE INTO samv2_pipeline_links(opportunity_id) VALUES(?)", (rid,))
-                    if cur.rowcount > 0: saved += 1
-                    else: skipped += 1
-                except Exception:
-                    skipped += 1
-        conn.commit(); conn.close()
-        st.success(f"Added {saved} deal(s). Skipped {skipped} duplicate(s).")
-
-def _sidebar_launcher():
-    return
-
-# === SAM WATCH V2 (AUTO-MERGED) END ===
 
 
 
