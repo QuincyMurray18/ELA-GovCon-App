@@ -7786,7 +7786,32 @@ try:
 
     with tabs[TAB['SAM Watch']]:
         
-        # === V2 takeover ===
+        
+
+        # === V2 takeover (guarded) ===
+        if "_samv2_boot" not in st.session_state:
+            st.session_state["_samv2_boot"] = 0
+        _boot = int(st.session_state.get("_samv2_boot", 0))
+
+        _has_v2 = "render_sam_watch_v2" in globals()
+        if _has_v2:
+            try:
+                render_sam_watch_v2()
+                st.stop()
+            except Exception as _e_samv2:
+                st.warning(f"SAM Watch V2 error: {_e_samv2}. Showing legacy UI below.")
+        else:
+            # Give the file a chance to finish defining V2 (which is located later in the file)
+            if _boot < 1:
+                st.session_state["_samv2_boot"] = _boot + 1
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+            else:
+                st.info("SAM Watch V2 is loading... legacy UI shown meanwhile.")
+
+# === V2 takeover ===
         try:
             render_sam_watch_v2()
             st.stop()
