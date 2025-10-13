@@ -34,6 +34,169 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
 
+# --- SQLite adapters to allow dict/list parameters (serialize to JSON) ---
+import sqlite3, json as _json
+sqlite3.register_adapter(dict, lambda d: _json.dumps(d))
+sqlite3.register_adapter(list, lambda a: _json.dumps(a))
+# Optional: ensure text returned as str
+# (Streamlit sometimes chokes on bytes if text_factory isn't str)
+try:
+    _sqlite_text_factory = sqlite3.Connection.text_factory
+except Exception:
+    pass
+# --- end adapters ---
+
+
+
+from datetime import datetime, timedelta
+
+def _ela_v2_params(params: dict) -> dict:
+    """Translate legacy fields to valid v2 params for SAM.gov search."""
+    try:
+        p = dict(params or {})
+    except Exception:
+        return params
+    # noticeType -> ptype mapping
+    nt = p.pop("noticeType", None)
+    if nt is not None:
+        if not isinstance(nt, list):
+            nt = [nt]
+        m = []
+        for v in nt:
+            s = str(v).lower()
+            if "combined" in s:
+                m.append("k")
+            elif s == "solicitation" or s.endswith("solicitation"):
+                m.append("o")
+            elif "presolicitation" in s:
+                m.append("p")
+            elif "sources" in s:
+                m.append("r")
+        if m:
+            p["ptype"] = ",".join(m)
+    # index/size -> offset/limit
+    if "index" in p and "offset" not in p:
+        p["offset"] = p.pop("index")
+    if "size" in p and "limit" not in p:
+        p["limit"] = p.pop("size")
+    # naics -> ncode
+    if "naics" in p and "ncode" not in p:
+        p["ncode"] = p.pop("naics")
+    # ensure postedFrom/postedTo
+    if "postedFrom" not in p or "postedTo" not in p:
+        today = datetime.utcnow().date()
+        p.setdefault("postedFrom", (today - timedelta(days=30)).strftime("%m/%d/%Y"))
+        p.setdefault("postedTo", today.strftime("%m/%d/%Y"))
+    # response format
+    p.setdefault("response", "json")
+    return p
+
+
+
+# --- SAM.gov compatibility shim (auto-fixes v3 URL with v2-style params) ---
+try:
+    import requests as _requests
+    def _sam_fix_endpoint(url, params):
+        try:
+            if "api.sam.gov/opportunities/v3/search" in url:
+                # If old param names present, downgrade to v2 endpoint
+                legacy_keys = ("noticeType", "index", "size", "postedFrom", "postedTo", "active", "naics")
+                if isinstance(params, dict) and any(k in params for k in legacy_keys):
+                    url = url.replace("/v3/", "/v2/")
+            return url, params
+        except Exception:
+            return url, params
+
+    def requests_get(url, **kwargs):
+        params = kwargs.get("params")
+        if params is not None:
+            new_url, new_params = _sam_fix_endpoint(url, params)
+            kwargs["params"] = new_params
+            url = new_url
+        return _requests.get(url, **kwargs)
+except Exception:
+    # Fallback: keep native requests.get
+    def requests_get(url, **kwargs):
+        import requests as __r
+        return __r.get(url, **kwargs)
+# --- end shim ---
+
+# --- SAM.gov URL normalizer for legacy querystrings embedded in URL ---
+def _normalize_sam_url(url, params=None):
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        from datetime import datetime, timedelta
+        parsed = urlparse(url)
+        qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        # Merge kwargs params over URL qs (kwargs wins)
+        if isinstance(params, dict):
+            qs.update({k: v for k, v in params.items() if v is not None})
+
+        # Detect legacy v3+v2 mix -> force v2 endpoint
+        if "api.sam.gov" in parsed.netloc and "/opportunities/v3/search" in parsed.path:
+            if any(k in qs for k in ("noticeType","index","size","postedFrom","postedTo","naics")):
+                parsed = parsed._replace(path=parsed.path.replace("/v3/","/v2/"))
+
+        # If using v2 endpoint, translate legacy fields
+        if "/opportunities/v2/search" in parsed.path:
+            # noticeType -> ptype
+            def map_notice_to_ptype(v):
+                s = str(v).lower()
+                if "combined" in s: return "k"
+                if s == "solicitation" or s.endswith("solicitation"): return "o"
+                if "presolicitation" in s: return "p"
+                if "sources" in s: return "r"
+                return None
+            nts = qs.pop("noticeType", None)
+            if nts is not None:
+                if not isinstance(nts, list):
+                    nts = [nts]
+                mapped = [map_notice_to_ptype(v) for v in nts]
+                mapped = [m for m in mapped if m]
+                if mapped:
+                    qs["ptype"] = ",".join(mapped)
+            # index/size -> offset/limit
+            if "index" in qs and "offset" not in qs:
+                qs["offset"] = qs.pop("index")
+            if "size" in qs and "limit" not in qs:
+                qs["limit"] = qs.pop("size")
+            # naics -> ncode
+            if "naics" in qs and "ncode" not in qs:
+                qs["ncode"] = qs.pop("naics")
+            # posted dates required
+            if "postedFrom" not in qs or "postedTo" not in qs:
+                today = datetime.utcnow().date()
+                qs.setdefault("postedFrom", (today - timedelta(days=30)).strftime("%m/%d/%Y"))
+                qs.setdefault("postedTo", today.strftime("%m/%d/%Y"))
+            # response=json
+            qs.setdefault("response", "json")
+
+        # Rebuild URL (and drop params kwarg; we encoded everything in URL)
+        new_query = urlencode(qs, doseq=True)
+        new_url = urlunparse(parsed._replace(query=new_query))
+        return new_url, None
+    except Exception:
+        return url, params
+
+# Override requests_get to normalize both URL and params before calling
+try:
+    import requests as _requests
+    def requests_get(url, **kwargs):
+        params = kwargs.get("params")
+        url, params = _normalize_sam_url(url, params)
+        if params is None:
+            kwargs.pop("params", None)
+        else:
+            kwargs["params"] = params
+        return _requests.get(url, **kwargs)
+except Exception:
+    pass
+# --- end normalizer ---
+
+
+
+
+
 # ===== Proposal drafts utilities =====
 from datetime import datetime
 import os, io
@@ -473,13 +636,11 @@ import numpy as np
 import streamlit as st
 
 
-
 # --- Modal state guards (SAM Watch 10/10) ---
 if 'show_notice_modal' not in st.session_state:
     st.session_state['show_notice_modal'] = False
 if 'selected_notice' not in st.session_state:
     st.session_state['selected_notice'] = None
-
 
 # === Outreach Email (per-user) helpers ===
 import smtplib, base64
@@ -2383,7 +2544,7 @@ def gsa_calc_rates(query: str, page: int = 1):
     url = "https://api.gsa.gov/technology/calc/search"
     params = {"q": query, "page": page}
     try:
-        r = requests.get(url, params=params, timeout=20)
+        r = requests_get(url, params=params, timeout=20)
         r.raise_for_status()
         js = r.json()
         items = js.get("results", []) or []
@@ -2436,7 +2597,7 @@ def sam_search(
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests.get(base, params=params, headers=headers, timeout=40)
+        r = requests_get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
         try:
@@ -2603,7 +2764,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests.get(search_url, params=search_params, timeout=25)
+        rs = requests_get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
         data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
@@ -2625,7 +2786,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
                 det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests.get(det_url, params=det_params, timeout=20)
+                rd = requests_get(det_url, params=det_params, timeout=20)
                 det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
@@ -5025,7 +5186,7 @@ except Exception as _e_sync:
                 today_us = _us_date(datetime.utcnow().date())
                 test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json", "postedFrom": today_us, "postedTo": today_us}
                 headers = {"X-Api-Key": SAM_API_KEY}
-                r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+                r = requests_get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
                 st.write("HTTP", r.status_code)
                 text_preview = (r.text or "")[:1000]
                 try:
@@ -5786,7 +5947,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests.get(search_url, params=search_params, timeout=25)
+        rs = requests_get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
         data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
@@ -5808,7 +5969,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
                 det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests.get(det_url, params=det_params, timeout=20)
+                rd = requests_get(det_url, params=det_params, timeout=20)
                 det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
@@ -5851,7 +6012,7 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
     try:
         parsed = urlparse(base_url)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-        r = requests.get(robots_url, timeout=8)
+        r = requests_get(robots_url, timeout=8)
         if r.status_code != 200 or "Disallow" not in r.text: return True
         disallows = []
         for line in r.text.splitlines():
@@ -5868,7 +6029,7 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
 def _fetch(url: str, timeout=12) -> str:
     try:
         headers = {"User-Agent": "ELA-GovCon-Scraper/1.0 (+contact via site form)"}
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = requests_get(url, headers=headers, timeout=timeout)
         if r.status_code != 200 or not r.headers.get("Content-Type","").lower().startswith("text"):
             return ""
         return r.text[:1_000_000]
@@ -5955,7 +6116,7 @@ def sam_search(
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests.get(base, params=params, headers=headers, timeout=40)
+        r = requests_get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
         try:
@@ -6154,7 +6315,7 @@ with st.sidebar:
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
                            "postedFrom": today_us, "postedTo": today_us}
             headers = {"X-Api-Key": SAM_API_KEY}
-            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+            r = requests_get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
             st.write("HTTP", r.status_code)
             text_preview = (r.text or "")[:1000]
             try:
@@ -8081,12 +8242,12 @@ def _ela_hash_obj(obj) -> str:
 def _ela_sam_fetch(api_key: str, params: dict, page: int=0, records_per_page: int=50) -> dict:
     # Conservative, synchronous fetcher for stability
     import requests
-    base = "https://api.sam.gov/opportunities/v3/search"
+    base = "https://api.sam.gov/opportunities/v2/search"
     qp = dict(params)
     qp["api_key"] = api_key
     qp["index"] = page
     qp["size"] = records_per_page
-    resp = requests.get(base, params=qp, timeout=30)
+    resp = requests_get(base, params=qp, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -8379,3 +8540,105 @@ def maybe_inject_samwatch10_sidebar_button():
 maybe_inject_samwatch10_sidebar_button()
 render_sam_watch_10_page_if_query_param()
 # ===== /SAM Watch 10/10 =====
+
+def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
+               notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"):
+    if not SAM_API_KEY:
+        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+
+    base_v3 = "https://api.sam.gov/opportunities/v2/search"  # downgraded to v2 to align with v2-style params
+    base_v2 = "https://api.sam.gov/opportunities/v2/search"
+
+    today = datetime.utcnow().date()
+    posted_from = (today - timedelta(days=posted_from_days)).strftime("%m/%d/%Y")
+    posted_to = today.strftime("%m/%d/%Y")
+
+    params_v3 = {
+        "api_key": SAM_API_KEY,
+        "limit": str(limit),
+        "sort": "-published_date",
+        "posted_from": posted_from,
+        "posted_to": posted_to,
+    }
+
+    # Convert old-style comma-separated list to v3 array style
+    if notice_types:
+        params_v3["notice_types[]"] = [n.strip() for n in notice_types.split(",") if n.strip()]
+
+    if naics_list:
+        params_v3["naics_codes[]"] = [c for c in naics_list if c]
+    if keyword:
+        params_v3["keywords"] = keyword
+
+    try:
+        r = requests_get(base_v3, params=params_v3, timeout=40)
+        if r.status_code == 404:
+            # fallback to v2 automatically
+            raise ValueError("v3_404")
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        # fallback to v2 legacy style
+        params_v2 = {
+            "api_key": SAM_API_KEY,
+            "limit": str(limit),
+            "response": "json",
+            "sort": "-publishedDate",
+            "active": active,
+            "postedFrom": posted_from,
+            "postedTo": posted_to,
+            "noticeType": notice_types,
+        }
+        if naics_list:
+            params_v2["naics"] = ",".join(naics_list)
+        if keyword:
+            params_v2["keywords"] = keyword
+        r = requests_get(base_v2, params=params_v2, timeout=40)
+        r.raise_for_status()
+        data = r.json()
+
+    # unified parsing
+    items = data.get("opportunitiesData") or data.get("data") or []
+    rows = []
+    for opp in items:
+        rows.append({
+            "sam_notice_id": opp.get("noticeId"),
+            "title": opp.get("title"),
+            "agency": opp.get("organizationName"),
+            "naics": ",".join(opp.get("naicsCodes", [])),
+            "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+            "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city", ""),
+            "response_due": opp.get("responseDeadLine") or "",
+            "posted": opp.get("publishedDate", ""),
+            "type": opp.get("type", ""),
+            "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+        })
+
+    df = pd.DataFrame(rows)
+    return df, {"ok": True, "count": len(df), "status": "success"}
+
+
+def _render_notice_modal():
+    try:
+        if st.session_state.get('show_notice_modal') and st.session_state.get('selected_notice'):
+            with st.modal("Notice Details", key="notice_modal"):
+                data = st.session_state['selected_notice'] or {}
+                st.markdown(f"### {data.get('title','(no title)')}")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.write("**Agency:**", data.get('agency',''))
+                    st.write("**Type:**", data.get('type',''))
+                    st.write("**NAICS:**", data.get('naics',''))
+                    st.write("**PSC:**", data.get('psc',''))
+                    st.write("**Posted:**", data.get('posted',''))
+                    st.write("**Due:**", data.get('response_due',''))
+                with c2:
+                    st.write("**Place of Performance:**", data.get('place_of_performance',''))
+                    st.write("**SAM Link:**", data.get('url',''))
+                if st.button("Close", key="close_notice_modal"):
+                    st.session_state['show_notice_modal'] = False
+                    st.session_state['selected_notice'] = None
+    except Exception as _e:
+        # keep app stable even if a field is missing
+        st.debug(f"Modal render skipped: {_e}")
+
