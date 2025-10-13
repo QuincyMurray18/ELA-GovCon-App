@@ -107,6 +107,80 @@ except Exception:
         return __r.get(url, **kwargs)
 # --- end shim ---
 
+# --- SAM.gov URL normalizer for legacy querystrings embedded in URL ---
+def _normalize_sam_url(url, params=None):
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        from datetime import datetime, timedelta
+        parsed = urlparse(url)
+        qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        # Merge kwargs params over URL qs (kwargs wins)
+        if isinstance(params, dict):
+            qs.update({k: v for k, v in params.items() if v is not None})
+
+        # Detect legacy v3+v2 mix -> force v2 endpoint
+        if "api.sam.gov" in parsed.netloc and "/opportunities/v3/search" in parsed.path:
+            if any(k in qs for k in ("noticeType","index","size","postedFrom","postedTo","naics")):
+                parsed = parsed._replace(path=parsed.path.replace("/v3/","/v2/"))
+
+        # If using v2 endpoint, translate legacy fields
+        if "/opportunities/v2/search" in parsed.path:
+            # noticeType -> ptype
+            def map_notice_to_ptype(v):
+                s = str(v).lower()
+                if "combined" in s: return "k"
+                if s == "solicitation" or s.endswith("solicitation"): return "o"
+                if "presolicitation" in s: return "p"
+                if "sources" in s: return "r"
+                return None
+            nts = qs.pop("noticeType", None)
+            if nts is not None:
+                if not isinstance(nts, list):
+                    nts = [nts]
+                mapped = [map_notice_to_ptype(v) for v in nts]
+                mapped = [m for m in mapped if m]
+                if mapped:
+                    qs["ptype"] = ",".join(mapped)
+            # index/size -> offset/limit
+            if "index" in qs and "offset" not in qs:
+                qs["offset"] = qs.pop("index")
+            if "size" in qs and "limit" not in qs:
+                qs["limit"] = qs.pop("size")
+            # naics -> ncode
+            if "naics" in qs and "ncode" not in qs:
+                qs["ncode"] = qs.pop("naics")
+            # posted dates required
+            if "postedFrom" not in qs or "postedTo" not in qs:
+                today = datetime.utcnow().date()
+                qs.setdefault("postedFrom", (today - timedelta(days=30)).strftime("%m/%d/%Y"))
+                qs.setdefault("postedTo", today.strftime("%m/%d/%Y"))
+            # response=json
+            qs.setdefault("response", "json")
+
+        # Rebuild URL (and drop params kwarg; we encoded everything in URL)
+        new_query = urlencode(qs, doseq=True)
+        new_url = urlunparse(parsed._replace(query=new_query))
+        return new_url, None
+    except Exception:
+        return url, params
+
+# Override requests_get to normalize both URL and params before calling
+try:
+    import requests as _requests
+    def requests_get(url, **kwargs):
+        params = kwargs.get("params")
+        url, params = _normalize_sam_url(url, params)
+        if params is None:
+            kwargs.pop("params", None)
+        else:
+            kwargs["params"] = params
+        return _requests.get(url, **kwargs)
+except Exception:
+    pass
+# --- end normalizer ---
+
+
+
 
 
 # ===== Proposal drafts utilities =====
