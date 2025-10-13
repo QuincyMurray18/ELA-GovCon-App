@@ -8404,6 +8404,13 @@ def _ela_render_samwatch_10():
     st = mods["streamlit"]
     if st is None:
         return
+    # Early render modal so selection feels persistent across reruns
+    try:
+        if st.session_state.get('show_notice_modal') and st.session_state.get('selected_notice'):
+            _render_notice_modal()
+    except Exception:
+        pass
+
     import os, json, time
     db_path = os.getenv("ELA_DB_PATH", "./data/ela_app.db")
     con = _ela_db_conn(db_path)
@@ -8466,9 +8473,47 @@ def _ela_render_samwatch_10():
                     if pick and pick != "--":
                         sel = next((r for r in results if r["notice_id"] == pick), None)
                         if sel:
-                            st.session_state['selected_notice'] = _notice_to_modal_data(sel)
-                            st.session_state['show_notice_modal'] = True
-                            return
+                            with st.expander("Opportunity Details", expanded=True):
+                                st.write(f"**Title:** {sel['title']}")
+                                st.write(f"**Type:** {sel['notice_type']}")
+                                st.write(f"**NAICS:** {sel['naics']}   **PSC:** {sel['psc']}")
+                                st.write(f"**Posted:** {sel['posted']}   **Due:** {sel['due']}")
+                                st.write(f"**Agency:** {sel['agency']}")
+                                st.write(f"**Place of Performance:** {sel['place_of_performance']}")
+                                st.write("**POCs:**")
+                                st.json(sel.get("pocs", []))
+                                st.write("**Description:**")
+                                st.write(sel.get("description",""))
+                                if st.button("Save to Pipeline (track & dedupe)", key="save_"+sel["notice_id"]):
+                                    # save and dedupe (tracked_opps prevents re-pull)
+                                    last_hash = _ela_hash_obj(sel["raw"])
+                                    _ela_save_to_pipeline(con, sel["notice_id"], last_hash)
+                                    st.success("Saved. Future searches will ignore this exact Notice ID.")
+                                st.markdown("---")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    if st.button("Ask RFP Analyzer", key="rfp_"+sel["notice_id"]):
+                                        # gather minimal texts from description & available links titles
+                                        texts = [sel.get("description","")]
+                                        summary = _ela_analyze_rfp_summary(texts)
+                                        st.info(summary)
+                                with col2:
+                                    if st.button("Start Proposal", key="prop_"+sel["notice_id"]):
+                                        st.session_state["proposal_prefill"] = {
+                                            "notice_id": sel["notice_id"],
+                                            "title": sel["title"],
+                                            "naics": sel["naics"],
+                                            "psc": sel["psc"],
+                                            "agency": sel["agency"],
+                                            "due": sel["due"],
+                                            "description": sel.get("description","")
+                                        }
+                                        st.success("Prefill stored. Open the Proposal Builder page to continue.")
+                                with col3:
+                                    if st.button("Open on SAM.gov", key="open_"+sel["notice_id"]):
+                                        st.write("Copy this into your browser (if needed):")
+                                        # Generic external link since exact URL format can vary
+                                        st.code(f"https://sam.gov/opp/{sel['notice_id']}/view")
             except Exception as ex:
                 st.error(f"Search failed: {ex}")
 
@@ -8580,29 +8625,6 @@ def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days
     return df, {"ok": True, "count": len(df), "status": "success"}
 
 
-
-# --- Helper: normalize a SAM notice dict into modal-friendly fields (safe .get) ---
-def _notice_to_modal_data(sel: dict) -> dict:
-    if not isinstance(sel, dict):
-        return {}
-    # Map common variants to expected modal keys
-    return {
-        "title": sel.get("title") or sel.get("notice_title") or "(untitled)",
-        "agency": sel.get("agency") or sel.get("department") or "",
-        "type": sel.get("notice_type") or sel.get("type") or "",
-        "naics": sel.get("naics") or sel.get("NAICS") or "",
-        "psc": sel.get("psc") or sel.get("PSC") or "",
-        "posted": sel.get("posted") or sel.get("datePosted") or "",
-        "response_due": sel.get("due") or sel.get("response_due") or sel.get("responseDue") or "",
-        "place_of_performance": sel.get("place_of_performance") or sel.get("place") or "",
-        "pocs": sel.get("pocs") or [],
-        "description": sel.get("description") or sel.get("desc") or "",
-        "attachments": sel.get("attachments") or [],
-        "solnum": sel.get("solnum") or sel.get("solicitationNumber") or sel.get("sol_number") or "",
-        "notice_id": sel.get("notice_id") or sel.get("id") or "",
-        "links": sel.get("links") or sel.get("related_links") or [],
-        "raw": sel,
-    }
 def _render_notice_modal():
     try:
         if st.session_state.get('show_notice_modal') and st.session_state.get('selected_notice'):
@@ -8627,10 +8649,3 @@ def _render_notice_modal():
         # keep app stable even if a field is missing
         st.debug(f"Modal render skipped: {_e}")
 
-
-
-# === Ensure Notice modal always renders if its state is set ===
-try:
-    _render_notice_modal()
-except Exception as _e_modal_call:
-    pass
