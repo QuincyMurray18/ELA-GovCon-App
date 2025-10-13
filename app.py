@@ -3672,7 +3672,7 @@ try:
 except Exception:
     pass
 
-DB_PATH = "./ela.sqlite3"
+SAMV2_DB_PATH = DB_PATH  # use the same DB as the main app to avoid table mismatches
 DATA_DIR = os.path.join(os.getcwd(), "data", "opportunities")
 EXPORT_DIR = os.path.join(os.getcwd(), "exports")
 CLIN_DIR = os.path.join(EXPORT_DIR, "clin_sheets")
@@ -3688,7 +3688,7 @@ def _log(msg: str):
         pass
 
 def samv2_get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(SAMV2_DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
