@@ -471,59 +471,14 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
 import pandas as pd
 
-# ---- Core schema hardening: create critical tables if missing ----
+# ---- Core schema hardening and universal SQL guard ----
 def ensure_core_tables(_conn):
     try:
-        _conn.execute("""
-            create table if not exists contacts (
-                id integer primary key,
-                name text,
-                org text,
-                role text,
-                email text,
-                phone text,
-                source text,
-                notes text,
-                created_at text default (datetime('now'))
-            )
-        """)
-        _conn.execute("""
-            create table if not exists vendors (
-                id integer primary key,
-                company text,
-                contact_name text,
-                email text,
-                phone text,
-                notes text,
-                created_at text default (datetime('now'))
-            )
-        """)
-        _conn.execute("""
-            create table if not exists outreach_log (
-                id integer primary key,
-                vendor_id integer,
-                opportunity_id integer,
-                status text,
-                channel text,
-                notes text,
-                created_at text default (datetime('now'))
-            )
-        """)
-        _conn.execute("""
-            create table if not exists opportunities (
-                id integer primary key,
-                sam_id text,
-                title text,
-                posted text,
-                due text,
-                agency text,
-                naics text,
-                url text,
-                status text,
-                created_at text default (datetime('now'))
-            )
-        """)
-        # Backfill blank timestamps
+        _conn.execute("create table if not exists contacts (id integer primary key, name text, org text, role text, email text, phone text, source text, notes text, created_at text default (datetime('now')))")
+        _conn.execute("create table if not exists vendors (id integer primary key, company text, contact_name text, email text, phone text, notes text, created_at text default (datetime('now')))")
+        _conn.execute("create table if not exists outreach_log (id integer primary key, vendor_id integer, opportunity_id integer, status text, channel text, notes text, created_at text default (datetime('now')))")
+        _conn.execute("create table if not exists opportunities (id integer primary key, sam_id text, title text, posted text, due text, agency text, naics text, url text, status text, created_at text default (datetime('now')))")
+        # Backfill created_at
         _conn.execute("update contacts set created_at = datetime('now') where created_at is null or created_at=''")
         _conn.execute("update vendors set created_at = datetime('now') where created_at is null or created_at=''")
         _conn.execute("update outreach_log set created_at = datetime('now') where created_at is null or created_at=''")
@@ -535,6 +490,38 @@ def ensure_core_tables(_conn):
             _st.caption(f"[Schema hardening note: {_e_core}]")
         except Exception:
             pass
+
+# Monkeypatch pandas.read_sql_query to auto-heal missing core tables and retry once
+try:
+    _orig_read_sql_query = pd.read_sql_query
+    def _guarded_read_sql_query(sql, con=None, *args, **kwargs):
+        try:
+            return _orig_read_sql_query(sql, con, *args, **kwargs)
+        except Exception as _e:
+            _msg = str(_e)
+            # Only act on "no such table" for known core tables
+            _targets = ("contacts", "vendors", "outreach_log", "opportunities")
+            if "no such table" in _msg:
+                for _t in _targets:
+                    if f"no such table: {_t}" in _msg:
+                        try:
+                            ensure_core_tables(con)
+                            return _orig_read_sql_query(sql, con, *args, **kwargs)
+                        except Exception as _e2:
+                            try:
+                                import streamlit as _st
+                                _st.caption(f"[DB guard note: {_e2}]")
+                            except Exception:
+                                pass
+                            raise _e2
+            raise
+    pd.read_sql_query = _guarded_read_sql_query
+except Exception as _e_guard:
+    try:
+        import streamlit as _st
+        _st.caption(f"[DB guard install note: {_e_guard}]")
+    except Exception:
+        pass
 
 import numpy as np
 import streamlit as st
@@ -5525,7 +5512,7 @@ with legacy_tabs[2]:
     st.subheader("POC and networking hub")
     st.caption("Add or clean up government POCs and vendor contacts. Link key contacts to opportunities in your notes.")
     conn = get_db()
-    df_c = pd.read_sql_query("select * from contacts order by datetime(coalesce(nullif(created_at, ''), '1970-01-01')) desc, id desc", conn)
+    df_c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
         cur = conn.cursor()
@@ -6545,7 +6532,7 @@ with legacy_tabs[8]:
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
-    c = pd.read_sql_query("select * from contacts order by datetime(coalesce(nullif(created_at, ''), '1970-01-01')) desc, id desc", conn)
+    c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
     bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
     st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
