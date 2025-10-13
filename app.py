@@ -8377,7 +8377,7 @@ def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days
     if not SAM_API_KEY:
         return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
 
-    base_v3 = "https://api.sam.gov/opportunities/v3/search"
+    base_v3 = "https://api.sam.gov/opportunities/v2/search"  # downgraded to v2 to align with v2-style params
     base_v2 = "https://api.sam.gov/opportunities/v2/search"
 
     today = datetime.utcnow().date()
