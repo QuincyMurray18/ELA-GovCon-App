@@ -470,6 +470,72 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
 
 import pandas as pd
+
+# ---- Core schema hardening: create critical tables if missing ----
+def ensure_core_tables(_conn):
+    try:
+        _conn.execute("""
+            create table if not exists contacts (
+                id integer primary key,
+                name text,
+                org text,
+                role text,
+                email text,
+                phone text,
+                source text,
+                notes text,
+                created_at text default (datetime('now'))
+            )
+        """)
+        _conn.execute("""
+            create table if not exists vendors (
+                id integer primary key,
+                company text,
+                contact_name text,
+                email text,
+                phone text,
+                notes text,
+                created_at text default (datetime('now'))
+            )
+        """)
+        _conn.execute("""
+            create table if not exists outreach_log (
+                id integer primary key,
+                vendor_id integer,
+                opportunity_id integer,
+                status text,
+                channel text,
+                notes text,
+                created_at text default (datetime('now'))
+            )
+        """)
+        _conn.execute("""
+            create table if not exists opportunities (
+                id integer primary key,
+                sam_id text,
+                title text,
+                posted text,
+                due text,
+                agency text,
+                naics text,
+                url text,
+                status text,
+                created_at text default (datetime('now'))
+            )
+        """)
+        # Backfill blank timestamps
+        _conn.execute("update contacts set created_at = datetime('now') where created_at is null or created_at=''")
+        _conn.execute("update vendors set created_at = datetime('now') where created_at is null or created_at=''")
+        _conn.execute("update outreach_log set created_at = datetime('now') where created_at is null or created_at=''")
+        _conn.execute("update opportunities set created_at = datetime('now') where created_at is null or created_at=''")
+        _conn.commit()
+    except Exception as _e_core:
+        try:
+            import streamlit as _st
+            _st.caption(f"[Schema hardening note: {_e_core}]")
+        except Exception:
+            pass
+
 import numpy as np
 import streamlit as st
 
