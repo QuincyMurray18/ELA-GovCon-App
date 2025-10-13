@@ -470,6 +470,26 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
 
 import pandas as pd
+
+# ---- Robust SQL reader helper (prevents hard-crash on malformed data or missing table) ----
+def _safe_select_df(conn, sql: str, *, fallback_sql: str | None = None, empty_columns: list[str] | None = None, note_label: str = ""):
+    try:
+        return pd.read_sql_query(sql, conn)
+    except Exception as _e:
+        try:
+            if fallback_sql:
+                return pd.read_sql_query(fallback_sql, conn)
+        except Exception:
+            pass
+        try:
+            import streamlit as _st
+            _st.caption(f"[DB note{': ' + note_label if note_label else ''}: {_e}]")
+        except Exception:
+            pass
+        cols = empty_columns or []
+        import pandas as _pd
+        return _pd.DataFrame({c: _pd.Series(dtype='object') for c in cols})
+
 import numpy as np
 import streamlit as st
 
@@ -3017,7 +3037,34 @@ def run_migrations():
 
     conn.commit()
 
-def ensure_schema():
+def ensure_schema()
+
+# ---- One-time contacts table hardening ----
+try:
+    with get_db() as __mconn:
+        __mconn.execute("""
+            create table if not exists contacts (
+                id integer primary key,
+                name text,
+                org text,
+                role text,
+                email text,
+                phone text,
+                source text,
+                notes text,
+                created_at text default (datetime('now'))
+            )
+        """)
+        __mconn.execute("update contacts set created_at = datetime('now') where created_at is null or created_at=''")
+        __mconn.commit()
+except Exception as __e_mig:
+    try:
+        import streamlit as _st
+        _st.caption(f"[Contacts migration note: {__e_mig}]")
+    except Exception:
+        pass
+
+:
     conn = get_db()
     cur = conn.cursor()
     for ddl in SCHEMA.values(): cur.execute(ddl)
@@ -5459,7 +5506,7 @@ with legacy_tabs[2]:
     st.subheader("POC and networking hub")
     st.caption("Add or clean up government POCs and vendor contacts. Link key contacts to opportunities in your notes.")
     conn = get_db()
-    df_c = pd.read_sql_query("select * from contacts order by datetime(coalesce(nullif(created_at, ''), '1970-01-01')) desc, id desc", conn)
+    df_c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
         cur = conn.cursor()
@@ -6479,7 +6526,7 @@ with legacy_tabs[8]:
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
-    c = pd.read_sql_query("select * from contacts order by datetime(coalesce(nullif(created_at, ''), '1970-01-01')) desc, id desc", conn)
+    c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
     bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
     st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
