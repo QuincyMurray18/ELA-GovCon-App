@@ -2961,6 +2961,41 @@ def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
+def _safe_opportunities_df(conn, limit=None, default_order="posted"):
+    """
+    Return a DataFrame of opportunities with a resilient ORDER BY that
+    works even if legacy DBs are missing certain columns like 'posted'.
+    """
+    try:
+        cols = pd.read_sql_query("pragma table_info(opportunities)", conn)["name"].tolist()
+    except Exception:
+        cols = []
+    # Choose best available order column(s)
+    order_cols = []
+    for c in [default_order, "response_due", "created_at", "id"]:
+        if c in cols:
+            order_cols.append(c)
+            break
+    # Build ORDER BY clause safely
+    if order_cols and order_cols[0] in {"posted", "response_due", "created_at"}:
+        order_sql = f"ORDER BY date({order_cols[0]}) DESC, id DESC" if "id" in cols else f"ORDER BY date({order_cols[0]}) DESC"
+    elif order_cols and order_cols[0] == "id":
+        order_sql = "ORDER BY id DESC"
+    else:
+        order_sql = ""
+    lim_sql = f" LIMIT {int(limit)}" if limit else ""
+    q = f"SELECT * FROM opportunities {order_sql}{lim_sql}"
+    try:
+        return pd.read_sql_query(q, conn)
+    except Exception:
+        # Last-resort: no ORDER BY at all
+        try:
+            return pd.read_sql_query("SELECT * FROM opportunities", conn)
+        except Exception:
+            return pd.DataFrame()
+
+
+
 def run_migrations():
     conn = get_db()
     cur = conn.cursor()
@@ -5030,7 +5065,7 @@ try:
     with legacy_tabs[-1]:
         st.subheader("Win Probability")
         conn = get_db()
-        df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+        df_opp = _safe_opportunities_df(conn)
         df_pp = get_past_performance_df()
         if df_opp.empty:
             st.info("No opportunities in pipeline")
@@ -5065,7 +5100,7 @@ except Exception as _e_win:
 with legacy_tabs[0]:
     st.subheader("Opportunities pipeline")
     conn = get_db()
-    df_opp = pd.read_sql_query("select * from opportunities order by posted desc", conn)
+    df_opp = _safe_opportunities_df(conn)
     # Ensure optional columns exist
     for _col, _default in {"assignee":"", "status":"New", "quick_note":""}.items():
         if _col not in df_opp.columns:
@@ -9203,7 +9238,7 @@ try:
         st.subheader("Deals")
         conn = get_db()
         try:
-            df_deals = pd.read_sql_query("select * from opportunities order by COALESCE(due_date, posted) asc, posted desc", conn)
+            df_deals = _safe_opportunities_df(conn)
         except Exception:
             df_deals = pd.DataFrame()
 
