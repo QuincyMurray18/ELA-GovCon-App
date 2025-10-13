@@ -3012,6 +3012,9 @@ def run_migrations():
     # vendors table expansions
     try: cur.execute("alter table vendors add column distance_miles real")
     except Exception: pass
+    try: cur.execute("alter table contacts add column created_at text default current_timestamp")
+    except Exception: pass
+
     conn.commit()
 
 def ensure_schema():
@@ -5456,7 +5459,7 @@ with legacy_tabs[2]:
     st.subheader("POC and networking hub")
     st.caption("Add or clean up government POCs and vendor contacts. Link key contacts to opportunities in your notes.")
     conn = get_db()
-    df_c = pd.read_sql_query("select * from contacts order by created_at desc", conn)
+    df_c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
         cur = conn.cursor()
@@ -6476,7 +6479,7 @@ with legacy_tabs[8]:
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
-    c = pd.read_sql_query("select * from contacts", conn)
+    c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
     bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
     st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
