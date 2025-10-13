@@ -8467,12 +8467,12 @@ def _ela_render_samwatch_10():
                         sel = next((r for r in results if r["notice_id"] == pick), None)
                         if sel:
                             with st.expander("Opportunity Details", expanded=True):
-                                st.write(f"**Title:** {sel['title']}")
-                                st.write(f"**Type:** {sel['notice_type']}")
-                                st.write(f"**NAICS:** {sel['naics']}   **PSC:** {sel['psc']}")
-                                st.write(f"**Posted:** {sel['posted']}   **Due:** {sel['due']}")
-                                st.write(f"**Agency:** {sel['agency']}")
-                                st.write(f"**Place of Performance:** {sel['place_of_performance']}")
+                                st.write(f"**Title:** {sel.get('title','')}")
+                                st.write(f"**Type:** {sel.get('notice_type','')}")
+                                st.write(f"**NAICS:** {sel.get('naics','')}   **PSC:** {sel.get('psc','')}")
+                                st.write(f"**Posted:** {sel.get('posted','')}   **Due:** {sel.get('due','')}")
+                                st.write(f"**Agency:** {sel.get('agency','')}")
+                                st.write(f"**Place of Performance:** {sel.get('place_of_performance','')}")
                                 st.write("**POCs:**")
                                 st.json(sel.get("pocs", []))
                                 st.write("**Description:**")
@@ -8618,6 +8618,29 @@ def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days
     return df, {"ok": True, "count": len(df), "status": "success"}
 
 
+
+# --- Helper: normalize a SAM notice dict into modal-friendly fields (safe .get) ---
+def _notice_to_modal_data(sel: dict) -> dict:
+    if not isinstance(sel, dict):
+        return {}
+    # Map common variants to expected modal keys
+    return {
+        "title": sel.get("title") or sel.get("notice_title") or "(untitled)",
+        "agency": sel.get("agency") or sel.get("department") or "",
+        "type": sel.get("notice_type") or sel.get("type") or "",
+        "naics": sel.get("naics") or sel.get("NAICS") or "",
+        "psc": sel.get("psc") or sel.get("PSC") or "",
+        "posted": sel.get("posted") or sel.get("datePosted") or "",
+        "response_due": sel.get("due") or sel.get("response_due") or sel.get("responseDue") or "",
+        "place_of_performance": sel.get("place_of_performance") or sel.get("place") or "",
+        "pocs": sel.get("pocs") or [],
+        "description": sel.get("description") or sel.get("desc") or "",
+        "attachments": sel.get("attachments") or [],
+        "solnum": sel.get("solnum") or sel.get("solicitationNumber") or sel.get("sol_number") or "",
+        "notice_id": sel.get("notice_id") or sel.get("id") or "",
+        "links": sel.get("links") or sel.get("related_links") or [],
+        "raw": sel,
+    }
 def _render_notice_modal():
     try:
         if st.session_state.get('show_notice_modal') and st.session_state.get('selected_notice'):
