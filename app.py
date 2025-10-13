@@ -3065,16 +3065,60 @@ ensure_schema()
 
 run_migrations()
 # ---------- Utilities ----------
+
 def get_setting(key, default=""):
-    conn = get_db(); row = conn.execute("select value from settings where key=?", (key,)).fetchone()
-    return row[0] if row else default
+    """
+    Robust accessor that survives first-run DBs where the 'settings' table may not exist yet.
+    If the table is missing, it will create it (and seed defaults if SCHEMA is present),
+    then return the requested value or the provided default.
+    """
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        # Ensure table exists
+        cur.execute("select name from sqlite_master where type='table' and name='settings'")
+        if not cur.fetchone():
+            # Create settings table using SCHEMA if available, else minimal DDL
+            ddl = None
+            try:
+                ddl = SCHEMA.get("settings")
+            except Exception:
+                ddl = None
+            cur.executescript(ddl or "create table if not exists settings (key text primary key, value text, updated_at text default current_timestamp);")
+            conn.commit()
+        row = conn.execute("select value from settings where key=?", (key,)).fetchone()
+        return row[0] if row else default
+    except Exception:
+        # As a last resort, try to initialize schema and retry once
+        try:
+            ensure_schema()
+            conn = get_db()
+            row = conn.execute("select value from settings where key=?", (key,)).fetchone()
+            return row[0] if row else default
+        except Exception:
+            return default
 
 def set_setting(key, value):
+    """
+    Robust setter that ensures the 'settings' table exists before writing.
+    """
     conn = get_db()
-    conn.execute("""insert into settings(key,value) values(?,?)
-                    on conflict(key) do update set value=excluded.value, updated_at=current_timestamp""",
-                 (key, str(value)))
+    cur = conn.cursor()
+    cur.execute("select name from sqlite_master where type='table' and name='settings'")
+    if not cur.fetchone():
+        ddl = None
+        try:
+            ddl = SCHEMA.get("settings")
+        except Exception:
+            ddl = None
+        cur.executescript(ddl or "create table if not exists settings (key text primary key, value text, updated_at text default current_timestamp);")
+        conn.commit()
+    conn.execute(
+        "insert into settings(key,value) values(?,?) on conflict(key) do update set value=excluded.value, updated_at=current_timestamp",
+        (key, str(value)),
+    )
     conn.commit()
+
 
 def read_doc(uploaded_file):
     suffix = uploaded_file.name.lower().split(".")[-1]
