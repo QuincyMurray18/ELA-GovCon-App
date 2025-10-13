@@ -9315,8 +9315,10 @@ def _sidebar_launcher():
                     st.divider()
                     if st.button("Close", key="__samv2_close"):
                         st.session_state["_samv2_open"] = False
-                        try: st.rerun()
-                        except Exception: pass
+                        try:
+                            st.rerun()
+                        except Exception:
+                            pass
                 _samv2_dialog()
             except Exception:
                 # Fallback: expander if dialog not available
@@ -9328,19 +9330,10 @@ def _sidebar_launcher():
                         st.session_state["_samv2_in_dialog"] = False
                     if st.button("Close", key="__samv2_close_fallback"):
                         st.session_state["_samv2_open"] = False
-                        try: st.rerun()
-                        except Exception: pass
+                        try:
+                            st.rerun()
+                        except Exception:
+                            pass
     except Exception as ex:
         _log("Sidebar launcher error: " + str(ex))
-"Sidebar launcher error: " + str(ex))
-
-try:
-    _sidebar_launcher()
-except Exception as ex:
-    _log("SAM V2 init error: " + str(ex))
-
-# === SAM WATCH V2 (AUTO-MERGED) END ===
-
-
-
 
