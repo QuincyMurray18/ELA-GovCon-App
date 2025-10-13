@@ -8348,7 +8348,7 @@ def render_sam_watch_10_page_if_query_param():
     if st is None:
         return
     try:
-        q = st.experimental_get_query_params()
+        q = st.query_params
         if q.get("page", [""])[0].lower() == "samwatch10":
             _ela_render_samwatch_10()
     except Exception:
@@ -8363,7 +8363,7 @@ def maybe_inject_samwatch10_sidebar_button():
     try:
         with st.sidebar:
             if st.button("Launch SAM Watch 10/10"):
-                st.experimental_set_query_params(page="samwatch10")
+                st.query_params.update({page: "samwatch10"})
     except Exception:
         pass
 
