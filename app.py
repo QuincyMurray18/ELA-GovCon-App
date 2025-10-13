@@ -34,6 +34,36 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin, urlparse
 
 
+# --- SAM.gov compatibility shim (auto-fixes v3 URL with v2-style params) ---
+try:
+    import requests as _requests
+    def _sam_fix_endpoint(url, params):
+        try:
+            if "api.sam.gov/opportunities/v3/search" in url:
+                # If old param names present, downgrade to v2 endpoint
+                legacy_keys = ("noticeType", "index", "size", "postedFrom", "postedTo", "active", "naics")
+                if isinstance(params, dict) and any(k in params for k in legacy_keys):
+                    url = url.replace("/v3/", "/v2/")
+            return url, params
+        except Exception:
+            return url, params
+
+    def requests_get(url, **kwargs):
+        params = kwargs.get("params")
+        if params is not None:
+            new_url, new_params = _sam_fix_endpoint(url, params)
+            kwargs["params"] = new_params
+            url = new_url
+        return _requests.get(url, **kwargs)
+except Exception:
+    # Fallback: keep native requests.get
+    def requests_get(url, **kwargs):
+        import requests as __r
+        return __r.get(url, **kwargs)
+# --- end shim ---
+
+
+
 # ===== Proposal drafts utilities =====
 from datetime import datetime
 import os, io
@@ -2375,7 +2405,7 @@ def gsa_calc_rates(query: str, page: int = 1):
     url = "https://api.gsa.gov/technology/calc/search"
     params = {"q": query, "page": page}
     try:
-        r = requests.get(url, params=params, timeout=20)
+        r = requests_get(url, params=params, timeout=20)
         r.raise_for_status()
         js = r.json()
         items = js.get("results", []) or []
@@ -2428,7 +2458,7 @@ def sam_search(
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests.get(base, params=params, headers=headers, timeout=40)
+        r = requests_get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
         try:
@@ -2595,7 +2625,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests.get(search_url, params=search_params, timeout=25)
+        rs = requests_get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
         data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
@@ -2617,7 +2647,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
                 det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests.get(det_url, params=det_params, timeout=20)
+                rd = requests_get(det_url, params=det_params, timeout=20)
                 det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
@@ -5017,7 +5047,7 @@ except Exception as _e_sync:
                 today_us = _us_date(datetime.utcnow().date())
                 test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json", "postedFrom": today_us, "postedTo": today_us}
                 headers = {"X-Api-Key": SAM_API_KEY}
-                r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+                r = requests_get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
                 st.write("HTTP", r.status_code)
                 text_preview = (r.text or "")[:1000]
                 try:
@@ -5778,7 +5808,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
-        rs = requests.get(search_url, params=search_params, timeout=25)
+        rs = requests_get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
         data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
@@ -5800,7 +5830,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
                 det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
-                rd = requests.get(det_url, params=det_params, timeout=20)
+                rd = requests_get(det_url, params=det_params, timeout=20)
                 det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
@@ -5843,7 +5873,7 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
     try:
         parsed = urlparse(base_url)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-        r = requests.get(robots_url, timeout=8)
+        r = requests_get(robots_url, timeout=8)
         if r.status_code != 200 or "Disallow" not in r.text: return True
         disallows = []
         for line in r.text.splitlines():
@@ -5860,7 +5890,7 @@ def _allowed_by_robots(base_url: str, path: str) -> bool:
 def _fetch(url: str, timeout=12) -> str:
     try:
         headers = {"User-Agent": "ELA-GovCon-Scraper/1.0 (+contact via site form)"}
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = requests_get(url, headers=headers, timeout=timeout)
         if r.status_code != 200 or not r.headers.get("Content-Type","").lower().startswith("text"):
             return ""
         return r.text[:1_000_000]
@@ -5947,7 +5977,7 @@ def sam_search(
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests.get(base, params=params, headers=headers, timeout=40)
+        r = requests_get(base, params=params, headers=headers, timeout=40)
         status = r.status_code
         raw_preview = (r.text or "")[:1000]
         try:
@@ -6146,7 +6176,7 @@ with st.sidebar:
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
                            "postedFrom": today_us, "postedTo": today_us}
             headers = {"X-Api-Key": SAM_API_KEY}
-            r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
+            r = requests_get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
             st.write("HTTP", r.status_code)
             text_preview = (r.text or "")[:1000]
             try:
@@ -8078,7 +8108,7 @@ def _ela_sam_fetch(api_key: str, params: dict, page: int=0, records_per_page: in
     qp["api_key"] = api_key
     qp["index"] = page
     qp["size"] = records_per_page
-    resp = requests.get(base, params=qp, timeout=30)
+    resp = requests_get(base, params=qp, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -8402,7 +8432,7 @@ def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days
         params_v3["keywords"] = keyword
 
     try:
-        r = requests.get(base_v3, params=params_v3, timeout=40)
+        r = requests_get(base_v3, params=params_v3, timeout=40)
         if r.status_code == 404:
             # fallback to v2 automatically
             raise ValueError("v3_404")
@@ -8424,7 +8454,7 @@ def sam_search(naics_list, min_days=3, limit=100, keyword=None, posted_from_days
             params_v2["naics"] = ",".join(naics_list)
         if keyword:
             params_v2["keywords"] = keyword
-        r = requests.get(base_v2, params=params_v2, timeout=40)
+        r = requests_get(base_v2, params=params_v2, timeout=40)
         r.raise_for_status()
         data = r.json()
 
