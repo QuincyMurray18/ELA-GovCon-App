@@ -8466,50 +8466,10 @@ def _ela_render_samwatch_10():
                     if pick and pick != "--":
                         sel = next((r for r in results if r["notice_id"] == pick), None)
                         if sel:
-                         st.session_state['selected_notice'] = _notice_to_modal_data(sel)
-                         st.session_state['show_notice_modal'] = True
-                         return  # stop rendering this tab; state will render modal on next pass
-                            with st.expander("Opportunity Details", expanded=True):
-                                st.write(f"**Title:** {sel.get('title','')}")
-                                st.write(f"**Type:** {sel.get('notice_type','')}")
-                                st.write(f"**NAICS:** {sel.get('naics','')}   **PSC:** {sel.get('psc','')}")
-                                st.write(f"**Posted:** {sel.get('posted','')}   **Due:** {sel.get('due','')}")
-                                st.write(f"**Agency:** {sel.get('agency','')}")
-                                st.write(f"**Place of Performance:** {sel.get('place_of_performance','')}")
-                                st.write("**POCs:**")
-                                st.json(sel.get("pocs", []))
-                                st.write("**Description:**")
-                                st.write(sel.get("description",""))
-                                if st.button("Save to Pipeline (track & dedupe)", key="save_"+sel["notice_id"]):
-                                    # save and dedupe (tracked_opps prevents re-pull)
-                                    last_hash = _ela_hash_obj(sel["raw"])
-                                    _ela_save_to_pipeline(con, sel["notice_id"], last_hash)
-                                    st.success("Saved. Future searches will ignore this exact Notice ID.")
-                                st.markdown("---")
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    if st.button("Ask RFP Analyzer", key="rfp_"+sel["notice_id"]):
-                                        # gather minimal texts from description & available links titles
-                                        texts = [sel.get("description","")]
-                                        summary = _ela_analyze_rfp_summary(texts)
-                                        st.info(summary)
-                                with col2:
-                                    if st.button("Start Proposal", key="prop_"+sel["notice_id"]):
-                                        st.session_state["proposal_prefill"] = {
-                                            "notice_id": sel["notice_id"],
-                                            "title": sel["title"],
-                                            "naics": sel["naics"],
-                                            "psc": sel["psc"],
-                                            "agency": sel["agency"],
-                                            "due": sel["due"],
-                                            "description": sel.get("description","")
-                                        }
-                                        st.success("Prefill stored. Open the Proposal Builder page to continue.")
-                                with col3:
-                                    if st.button("Open on SAM.gov", key="open_"+sel["notice_id"]):
-                                        st.write("Copy this into your browser (if needed):")
-                                        # Generic external link since exact URL format can vary
-                                        st.code(f"https://sam.gov/opp/{sel['notice_id']}/view")
+                            st.session_state['selected_notice'] = _notice_to_modal_data(sel)
+                            st.session_state['show_notice_modal'] = True
+                            return
+https://sam.gov/opp/{sel['notice_id']}/view")
             except Exception as ex:
                 st.error(f"Search failed: {ex}")
 
