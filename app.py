@@ -5459,7 +5459,7 @@ with legacy_tabs[2]:
     st.subheader("POC and networking hub")
     st.caption("Add or clean up government POCs and vendor contacts. Link key contacts to opportunities in your notes.")
     conn = get_db()
-    df_c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
+    df_c = pd.read_sql_query("select * from contacts order by datetime(coalesce(nullif(created_at, ''), '1970-01-01')) desc, id desc", conn)
     grid = st.data_editor(df_c, use_container_width=True, num_rows="dynamic", key="contacts_grid")
     if st.button("Save contacts"):
         cur = conn.cursor()
@@ -6479,7 +6479,7 @@ with legacy_tabs[8]:
     conn = get_db()
     v = pd.read_sql_query("select * from vendors", conn)
     o = pd.read_sql_query("select * from opportunities", conn)
-    c = pd.read_sql_query("select * from contacts order by coalesce(created_at, id) desc", conn)
+    c = pd.read_sql_query("select * from contacts order by datetime(coalesce(nullif(created_at, ''), '1970-01-01')) desc, id desc", conn)
     bytes_xlsx = to_xlsx_bytes({"Vendors": v, "Opportunities": o, "Contacts": c})
     st.download_button("Download Excel workbook", data=bytes_xlsx, file_name="govcon_hub.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
