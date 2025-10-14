@@ -9059,3 +9059,148 @@ def samv2_doc_analyzer_sidebar(opportunity_id: int, doc_id: int):
         for m in msgs[-6:]:
             who = "You" if m["role"]=="user" else "Analyzer"
             st.sidebar.write(f"**{who}:** {m['content']}")
+
+
+def render_sam_watch_v2():
+    st.title("SAM Watch")
+    with st.form("samv2_filters", clear_on_submit=False):
+        c1, c2, c3 = st.columns([2,2,2])
+        with c1:
+            keywords = st.text_input("Keywords (comma separated)", value=st.session_state.get("_samv2_kw",""))
+            naics = st.text_input("NAICS include list (prefix ok, comma separated)", value=st.session_state.get("_samv2_naics",""))
+        with c2:
+            notice_types = st.multiselect(
+                "Notice Types",
+                options=["Solicitation","Combined Synopsis/Solicitation","Presolicitation","Sources Sought"],
+                default=st.session_state.get("_samv2_types",["Solicitation","Combined Synopsis/Solicitation"]),
+            )
+            set_aside = st.selectbox("Set-Aside", ["Any","Total Small Business","WOSB","EDWOSB","SDVOSB","8(A)","HUBZone","SDB","VOSB","None"], index=0)
+        with c3:
+            active_only = st.checkbox("Active only", value=True)
+            page_size = st.selectbox("Page size", [25,50,100], index=1)
+        run_btn = st.form_submit_button("Pull SAM Data")
+    st.session_state["_samv2_kw"] = keywords
+    st.session_state["_samv2_naics"] = naics
+    st.session_state["_samv2_types"] = notice_types
+    status_ph = st.empty()
+    if run_btn:
+        st.session_state['_samv2_offset'] = 0
+        q = {
+            "q": keywords or None,
+            "notice_type": ",".join(notice_types),
+            "limit": int(page_size),
+            "offset": int(st.session_state.get('_samv2_offset', 0)),
+        }
+        if active_only:
+            q["active"] = "true"
+        if naics.strip():
+            q["naics"] = naics.strip()
+        if set_aside != "Any":
+            q["set_aside"] = set_aside
+        recs = samv2_search(q)
+        added = samv2_upsert_records(recs)
+        conn = samv2_get_conn()
+        conn.execute("INSERT INTO samv2_pull_log(params_json, pulled_count) VALUES(?,?)", (json.dumps(q), len(recs)))
+        conn.commit(); conn.close()
+        status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new.")
+    st.markdown("### Results")
+    _da = st.session_state.get('_doc_analyze')
+    if isinstance(_da, dict):
+        samv2_doc_analyzer_sidebar(_da.get('opportunity_id'), _da.get('doc_id'))
+    col_l, col_r = st.columns([1,1])
+    with col_l:
+        if st.button("Load more"):
+            st.session_state['_samv2_offset'] = int(st.session_state.get('_samv2_offset', 0)) + int(page_size)
+            q_more = {
+                "q": keywords or None,
+                "notice_type": ",".join(notice_types),
+                "limit": int(page_size),
+                "offset": int(st.session_state.get('_samv2_offset', 0)),
+            }
+            if active_only:
+                q_more["active"] = "true"
+            if naics.strip():
+                q_more["naics"] = naics.strip()
+            if set_aside != "Any":
+                q_more["set_aside"] = set_aside
+            recs_more = samv2_search(q_more)
+            _ = samv2_upsert_records(recs_more)
+    with col_r:
+        st.caption(f"Offset: {int(st.session_state.get('_samv2_offset', 0))}  |  Page size: {page_size}")
+    conn = samv2_get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT o.id, o.sol_number, o.title, o.agency, o.set_aside, o.naics, o.psc,
+               o.posted_date, o.due_date, o.last_modified, o.sam_detail_url, o.description
+        FROM samv2_opportunities o
+        LEFT JOIN samv2_pipeline_links pl ON pl.opportunity_id = o.id
+        WHERE pl.opportunity_id IS NULL
+        ORDER BY COALESCE(o.last_modified, o.posted_date, o.created_at) DESC
+        LIMIT ?
+    """, (int(page_size)*(int(st.session_state.get('_samv2_offset',0))//int(page_size)+1),))
+    rows = cur.fetchall(); conn.close()
+    if not rows:
+        st.info("No results yet. Use Pull SAM Data.")
+        return
+    for rid, sol, title, agency, sa, naics_v, psc, posted, due, mod, link, desc in rows:
+        with st.container(border=True):
+            c1, c2 = st.columns([0.07, 0.93])
+            with c1:
+                if st.button("⭐ Save", key=f"star_{rid}"):
+                    samv2_mark_saved(rid)
+                    st.experimental_rerun()
+            with c2:
+                st.markdown(f"**{title or '(Untitled)'}**")
+                st.caption(f"Solicitation: {sol or 'N/A'}  |  Agency: {agency or 'N/A'}  |  Set-Aside: {sa or 'N/A'}  |  NAICS: {naics_v or 'N/A'}  |  PSC: {psc or 'N/A'}")
+                st.caption(f"Posted: {posted or 'N/A'}  |  Due: {due or 'N/A'}  |  Modified: {mod or 'N/A'}")
+            link_col, b1, b2, b3, b4 = st.columns([0.20, 0.20, 0.20, 0.20, 0.20])
+            with link_col:
+                if link: st.markdown(f"[Open in SAM.gov]({link})")
+                else: st.text("No SAM link")
+            with b1:
+                if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
+                    opp = {
+                        "id": rid, "sol_number": sol, "title": title, "agency": agency,
+                        "set_aside": sa, "naics": naics_v, "psc": psc, "posted_date": posted,
+                        "due_date": due, "last_modified": mod, "sam_detail_url": link,
+                        "description": desc or ""
+                    }
+                    rfp_analyzer_popup(opp)
+                with st.expander("Open Details", expanded=False):
+                    st.write(f"**Solicitation**: {sol or 'N/A'}  •  **Agency**: {agency or 'N/A'}  •  **Set-Aside**: {sa or 'N/A'}  •  **NAICS**: {naics_v or 'N/A'}  •  **PSC**: {psc or 'N/A'}")
+                    st.write(f"**Posted**: {posted or 'N/A'}  •  **Due**: {due or 'N/A'}  •  **Last Modified**: {mod or 'N/A'}")
+                    st.write("**Description**")
+                    st.write(desc or "No description. Use RFP Analyzer for AI summary.")
+                    try:
+                        conn2 = samv2_get_conn(); cur2 = conn2.cursor()
+                        cur2.execute("SELECT id, filename, url, local_path FROM samv2_docs WHERE opportunity_id=?", (rid,))
+                        docs = cur2.fetchall(); conn2.close()
+                    except Exception:
+                        docs = []
+                    if docs:
+                        st.write("**Attachments**")
+                        for did, fname, url, lpath in docs:
+                            d1, d2, d3 = st.columns([0.6,0.2,0.2])
+                            with d1:
+                                st.text(fname or "attachment")
+                            with d2:
+                                if st.button("Summarize", key=f"summ_{did}"):
+                                    st.session_state['_doc_analyze'] = {'opportunity_id': rid, 'doc_id': did}
+                            with d3:
+                                if url: st.markdown(f"[Open]({url})")
+                    else:
+                        st.caption("No attachment metadata yet.")
+            with b2:
+                if st.button("Start Proposal", key=f"start_{rid}"):
+                    payload = samv2_start_proposal(rid)
+                    if payload: st.success("Proposal draft saved and builder prefilled.")
+            with b3:
+                if st.button("Download Attachments", key=f"dl_{rid}"):
+                    cnt = samv2_download_attachments(rid)
+                    if cnt: st.success(f"Downloaded {cnt} file(s).")
+                    else: st.warning("No downloadable attachments found.")
+            with b4:
+                if st.button("Build CLIN Sheet", key=f"clin_{rid}"):
+                    rows_guess = samv2_parse_clins_from_docs(rid)
+                    path = samv2_build_clin_sheet(rid, rows=rows_guess, subcontractor_mode=False)
+                    st.success("CLIN sheet created." if path else "CLIN build failed.")
+    st.divider()
