@@ -1,4 +1,6 @@
 from __future__ import annotations
+_NS_KEY_COUNTS = {}  # module default
+
 run_pull = False  # module default
 
 # ===== app.py =====
