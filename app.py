@@ -8509,19 +8509,19 @@ try:
 
     with tabs[TAB['SAM Watch']]:
         render_sam_watch_v2()
-                    loaded_rows.append((
-                                    rid,
-                                    r.get("title"),
-                                    r.get("agency"),
-                                    r.get("response_due"),
-                                    r.get("url"),
-                                    r.get("posted"),
-                                ))
-                    _st.session_state["sam_watch_loaded_rows"] = loaded_rows
-                    _st.success(
-                        f"Loaded {len(loaded_rows)} opportunities (not saved)")
-                except Exception as _e_pull:
-                    _st.error(f"Pull failed: {_e_pull}")
+
+
+
+
+
+
+
+
+
+
+
+
+
         with colB:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
@@ -9969,7 +9969,5 @@ def render_sam_watch_v2():
     _log("SAM V2 init error: " + str(ex))
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
-
-
 
 
