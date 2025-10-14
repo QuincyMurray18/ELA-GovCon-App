@@ -8508,7 +8508,7 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
-        render_sam_watch_v2()
+        render_sam_watch()
 
 
 
@@ -9813,7 +9813,7 @@ def rfp_analyzer_popup(opp_row: dict):
             st.info("Update Streamlit to use nice modal popups (st.dialog). For now, this expander shows the same info.")
             st.write(opp_row)
 
-def render_sam_watch_v2():
+def render_sam_watch():
     samv2_migrate()
 
     st.title("SAM Watch")
