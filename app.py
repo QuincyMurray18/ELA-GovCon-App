@@ -1424,7 +1424,7 @@ def render_outreach_tools():
                         "quote_due": due_disp,
                         "attachments": (gen_names or []) + (upload_names or [])
                     }
-                    st.success("Preview generated below.")
+                    st.success(" generated below.")
 
 
             actions2 = st.columns([1, 2, 2, 5])
@@ -1475,12 +1475,12 @@ def render_outreach_tools():
                         if failures:
                             st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join([f"#{i} {subj} ({err})" for i, subj, err in failures]))
                         else:
-                            st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
+                            st.success(f"Sent all {sent} generated emails.")# ---------- Single  (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
-        st.markdown("#### Preview")
+        st.markdown("#### ")
         if not snap:
-            st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
+            st.info("Select a generated email above, attach files if needed, and click .", icon="ℹ️")
         else:
             # Header block similar to Gmail
             hdr_lines = []
@@ -1579,7 +1579,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     hc1, hc2, hc3 = st.columns([1,1,2])
     with hc1:
-        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
+        if st.button(" current draft", key=ns_key("outreach::hdr_preview_btn")):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
@@ -1618,7 +1618,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
+            if st.button(" email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
                 atts = []
                 try:
                     for f in (files or []):
@@ -1713,7 +1713,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     # === Header-level controls ===
     hc1, hc2, hc3 = st.columns([1,1,2])
     with hc1:
-        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
+        if st.button(" current draft", key=ns_key("outreach::hdr_preview_btn")):
             # Pull current draft values from session, even if the composer expander is closed
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
@@ -1756,7 +1756,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
+            if st.button(" email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
                 # Snapshot current fields (including attachments) for a pixel-accurate preview
                 atts = []
                 try:
@@ -1786,7 +1786,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
 
-    # === Unified Preview Block (used by both header-level and composer-level triggers) ===
+    # === Unified  Block (used by both header-level and composer-level triggers) ===
     preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
     if preview:
         import streamlit.components.v1 as components
@@ -1859,7 +1859,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
 
-    # Preview state
+    #  state
     st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
 
     with st.expander("Quick Outreach Composer", expanded=False):
@@ -1875,7 +1875,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
+            if st.button(" email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
                 # Store a snapshot of the compose fields in session so a rerun preserves the preview
                 # For attachments, store name and raw bytes so we can reconstruct file-like objects later.
                 atts = []
@@ -2126,7 +2126,7 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
     """
     Gmail sender using Streamlit secrets.
     Falls back to Microsoft Graph if Gmail is not configured.
-    Returns "Sent" or "Preview" string to avoid crashes.
+    Returns "Sent" or "" string to avoid crashes.
     """
     try:
         smtp_user = st.secrets.get("smtp_user")
@@ -2159,7 +2159,7 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
             _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
         except Exception:
             pass
-        return "Preview"
+        return ""
 
 st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
@@ -3728,11 +3728,11 @@ except Exception as _e_qc:
     st.markdown("### Vendor ranking (scorecards)")
     try:
         conn = get_db()
-        # Responsiveness proxy: count outreach_log entries per vendor with "Sent" or "Preview"
+        # Responsiveness proxy: count outreach_log entries per vendor with "Sent" or ""
         resp = pd.read_sql_query("""
             select v.id, v.company,
                    coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
-                   coalesce(sum(case when o.status like 'Preview%' then 1 else 0 end),0) as preview
+                   coalesce(sum(case when o.status like '%' then 1 else 0 end),0) as preview
             from vendors v left join outreach_log o on v.id = o.vendor_id
             group by v.id, v.company
         """, conn)
@@ -5088,7 +5088,7 @@ Certifications Small Business"""
     cap_md = st.session_state.get("capability_md", "")
     cap_md = _normalize_markdown_sections(cap_md)
     if cap_md:
-        st.markdown("#### Preview")
+        st.markdown("#### ")
         st.markdown(cap_md)
         issues, est_pages = _validate_text_for_guardrails(cap_md, page_limit=2, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
@@ -5121,7 +5121,7 @@ with legacy_tabs[7]:
     wp_md = st.session_state.get("whitepaper_md", "")
     wp_md = _normalize_markdown_sections(wp_md)
     if wp_md:
-        st.markdown("#### Preview")
+        st.markdown("#### ")
         st.markdown(wp_md)
         issues, est_pages = _validate_text_for_guardrails(wp_md, page_limit=4, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
@@ -9133,11 +9133,11 @@ def rfp_analyzer_popup(opp_row: dict):
 def render_sam_watch_v2():
     samv2_migrate()
 
-    st.title("SAM Watch V2 (Preview)")
+    st.title("SAM Watch ()")
     st.caption("One-click CLIN sheets, compliance matrix, proposal export, and email package.")
 
     with st.sidebar:
-        st.subheader("SAM Watch V2 — Filters")
+        st.subheader("SAM Watch — Filters")
         keywords = st.text_input("Keywords", value=st.session_state.get("_samv2_kw", ""))
         naics = st.text_input("NAICS (comma-separated)", value=st.session_state.get("_samv2_naics", ""))
         notice_types = st.multiselect(
@@ -9276,17 +9276,12 @@ def _sidebar_launcher():
         return
     try:
         with st.sidebar:
-            if st.button("🚀 Launch SAM Watch V2", key="__samv2_launch"):
+            if st.button("SAM Watch", key="__samv2_launch"):
                 st.session_state["_samv2_open"] = True
         if st.session_state.get("_samv2_open"):
             render_sam_watch_v2()
     except Exception as ex:
         _log("Sidebar launcher error: " + str(ex))
-
-try:
-    _sidebar_launcher()
-except Exception as ex:
-    _log("SAM V2 init error: " + str(ex))
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
 
