@@ -794,6 +794,11 @@ class SessionNS:
     def pop(self, key: str, default=None):
         return st.session_state.pop(self._k(key), default)
 
+try:
+    ACTIVE_USER = st.session_state.get("active_user") or os.getenv("DEFAULT_USER", "guest")
+except Exception:
+    ACTIVE_USER = "guest"
+
 NS = SessionNS(ACTIVE_USER)
 
 # --- Private workspace & publish queue ---
