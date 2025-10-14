@@ -9033,6 +9033,10 @@ def render_sam_watch_v2():
     status_ph = st.empty()
 
 
+    try:
+        run_pull
+    except NameError:
+        run_pull = False
 if run_pull:
     st.session_state['_samv2_offset'] = 0
     q = {
