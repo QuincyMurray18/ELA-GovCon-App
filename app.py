@@ -4732,7 +4732,7 @@ except Exception:
 
         active_only = st.checkbox('Active only', value=True)
         page_size = st.selectbox('Page size', [25,50,100], index=1)
-with col3:
+    with col3:
         diag = st.checkbox("Show diagnostics", value=False)
         raw = st.checkbox("Show raw API text (debug)", value=False)
         assignee_default = st.selectbox("Default assignee", ["","Quincy","Charles","Collin"], index=(['','Quincy','Charles','Collin'].index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in ['Quincy','Charles','Collin'] else 0))
@@ -7787,143 +7787,10 @@ try:
         }
 
     with tabs[TAB['SAM Watch']]:
-    render_sam_watch_v2()
+
+        render_sam_watch_v2()
 
 
-        if save_search:
-            _sam_set_saved_filters([_mk_filter(kw, naics, set_aside, notice, min_due, active_only)])
-            _st.success("Default filter saved")
-
-
-        _st.subheader("Actions")
-        colA, colB, colC, colD = _st.columns([1,1,1,1])
-        with colA:
-            if _st.button("Pull data", use_container_width=True):
-                loaded_rows = []
-                try:
-                    import hashlib
-                    for flt in _sam_get_saved_filters():
-                        df, info = sam_search_v3(flt, limit=200)
-                        if info.get("ok") and not df.empty:
-                            for _, r in df.iterrows():
-                                try:
-                                    nid = str(r.get("sam_notice_id") or "")
-                                    rid = int(hashlib.sha1(nid.encode("utf-8")).hexdigest(), 16) % 1000000000
-                                except Exception:
-                                    rid = int(_rand_id())
-                                loaded_rows.append((
-                                    rid,
-                                    r.get("title"),
-                                    r.get("agency"),
-                                    r.get("response_due"),
-                                    r.get("url"),
-                                    r.get("posted"),
-                                ))
-                    _st.session_state["sam_watch_loaded_rows"] = loaded_rows
-                    _st.success(f"Loaded {len(loaded_rows)} opportunities (not saved)")
-                except Exception as _e_pull:
-                    _st.error(f"Pull failed: {_e_pull}")
-        with colB:
-            opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
-        with colC:
-            if _st.button("Generate quote", use_container_width=True) and opp_id:
-                p = proposal_quick_quote(int(opp_id))
-                _st.success("Draft created" if p else "Draft failed")
-        with colD:
-            if _st.button("Submit package", use_container_width=True) and opp_id:
-                ok = proposal_submit_package(int(opp_id))
-                _st.success("Submitted") if ok else _st.error("Update failed")
-                _st.subheader("Select opportunities to add to Pipeline")
-
-        try:
-            conn = get_db(); cur = conn.cursor()
-            _rows_db = cur.execute("""
-                select id, title, agency, response_due, url, posted
-                from opportunities
-                where coalesce(url,'') != ''
-                order by date(posted) desc, id desc
-                limit 200
-            """).fetchall()
-            rows = _st.session_state.get("sam_watch_loaded_rows") or _rows_db
-            # Use a form so checkbox selections and the submit happen in one transaction (avoids rerun desync).
-            with _st.form("sam_watch_select_form", clear_on_submit=False):
-                row_ids = []
-                if rows:
-                    for rid, title, agency, due, url, posted in rows:
-                        row_ids.append(rid)
-                        c1, c2 = _st.columns([0.08, 0.92])
-                        with c1:
-                            _st.checkbox(
-                                "",
-                                key=_sam_sel_key(rid),
-                                value=_st.session_state.get(_sam_sel_key(rid), False)
-                            )
-                        with c2:
-                            link_md = f"[{title}]({url})"
-                            meta = " | ".join(filter(None, [
-                                f"Agency: {agency}" if agency else "",
-                                f"Due: {due}" if due else "",
-                                f"Posted: {posted}" if posted else ""
-                            ]))
-                            _st.markdown(
-                                link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""),
-                                unsafe_allow_html=True
-                            )
-
-                submitted = _st.form_submit_button("➕ Add Selected to Pipeline", use_container_width=True)
-
-            if submitted:
-                chosen_ids = [rid for rid in row_ids if _st.session_state.get(_sam_sel_key(rid), False)]
-                if not chosen_ids:
-                    _st.info("No rows selected.")
-                else:
-                    added, skipped = 0, 0
-                    for rid, title, agency, due, url, posted in [r for r in rows if r[0] in chosen_ids]:
-                        try:
-                            c2 = conn.cursor()
-                            exists = c2.execute(
-                                "select 1 from deals where title=? and coalesce(due_date,'')=coalesce(?, '') limit 1",
-                                (title, str(due) if due else None)
-                            ).fetchone()
-                            if exists:
-                                skipped += 1
-                                continue
-                            notes = f"Imported from SAM Watch on selection. URL: {url}"
-                            add_deal(
-                                title=title,
-                                stage="No Contact Made",
-                                source="SAM Watch",
-                                url=url,
-                                owner=None,
-                                amount=None,
-                                notes=notes,
-                                agency=agency,
-                                due_date=str(due) if due else None
-                            )
-                            added += 1
-                        except Exception as _e_add:
-                            _st.warning(f"Could not add '{title}': {_e_add}")
-                    _st.success(f"Added {added} deal(s). Skipped {skipped} duplicate(s).")
-                    # Clear only the ones we just added to avoid accidental re-use
-                    for rid in chosen_ids:
-                        _st.session_state.pop(_sam_sel_key(rid), None)
-            else:
-                if not rows:
-                    _st.caption("No opportunities found with links.")
-        except Exception as _e_sel:
-            _st.warning(f"[Selection UI note: {_e_sel}]")
-except Exception as _e_ui:
-    try:
-        import streamlit as _st
-        _st.warning(f"[SAM Watch UI note: {_e_ui}]")
-    except Exception:
-        pass
-
-# === [END MERGE UI] ===
-
-
-# === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
-try:
     with tabs[TAB['Deals']]:
         st.subheader("Deals")
         conn = get_db()
@@ -9131,7 +8998,8 @@ def render_sam_watch_v2():
             options=["Solicitation", "Combined Synopsis/Solicitation", "Presolicitation", "Sources Sought"],
             default=st.session_state.get("_samv2_types", ["Solicitation", "Combined Synopsis/Solicitation"]),
         )
-        set_aside = st.selectbox("Set-Aside", ["Any","Total Small Business","WOSB","SDVOSB","8(a)","HUBZone"], index=0)        st.session_state["_samv2_kw"] = keywords
+        set_aside = st.selectbox("Set-Aside", ["Any","Total Small Business","WOSB","SDVOSB","8(a)","HUBZone"], index=0)
+        st.session_state["_samv2_kw"] = keywords
         st.session_state["_samv2_naics"] = naics
         st.session_state["_samv2_types"] = notice_types
 
@@ -9179,14 +9047,12 @@ if run_pull:
         q["naics"] = naics.strip()
     if set_aside != "Any":
         q["set_aside"] = set_aside
-recs = samv2_search(q)
-        added = samv2_upsert_records(recs)
-        conn = samv2_get_conn()
-        conn.execute("INSERT INTO samv2_pull_log(params_json, pulled_count) VALUES(?,?)", (json.dumps(q), len(recs)))
-        conn.commit(); conn.close()
-        status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new (others updated or deduped).")
-
-
+    recs = samv2_search(q)
+    added = samv2_upsert_records(recs)
+    conn = samv2_get_conn()
+    conn.execute("INSERT INTO samv2_pull_log(params_json, pulled_count) VALUES(?,?)", (json.dumps(q), len(recs)))
+    conn.commit(); conn.close()
+    status_ph.success(f"Loaded {len(recs)} opportunities. Added {added} new (others updated or deduped).")
 st.markdown("### Results")
 
 # Load more control
@@ -9236,43 +9102,40 @@ with col_r:
                     with link_col:
                         if link: st.markdown(f"[Open in SAM.gov]({link})")
                         else: st.text("No SAM link")
-
-with b1:
-    if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
-        opp = {
-            "id": rid, "sol_number": sol, "title": title, "agency": agency,
-            "set_aside": sa, "naics": naics_v, "psc": psc, "posted_date": posted,
-            "due_date": due, "last_modified": mod, "sam_detail_url": link,
-            "description": desc or ""
-        }
-        rfp_analyzer_popup(opp)
-    # Inline details
-    with st.expander("Open Details", expanded=False):
-        st.write(f"**Solicitation**: {sol}  •  **Agency**: {agency or 'N/A'}  •  **Set-Aside**: {sa or 'N/A'}  •  **NAICS**: {naics_v or 'N/A'}  •  **PSC**: {psc or 'N/A'}")
-        st.write(f"**Posted**: {posted or 'N/A'}  •  **Due**: {due or 'N/A'}  •  **Last Modified**: {mod or 'N/A'}")
-        st.write("**Description**")
-        st.write(desc or "No description. Use RFP Analyzer for AI summary.")
-        # Attachments list
-        try:
-            conn2 = samv2_get_conn(); cur2 = conn2.cursor()
-            cur2.execute("SELECT id, filename, url, local_path FROM samv2_docs WHERE opportunity_id=?", (rid,))
-            docs = cur2.fetchall(); conn2.close()
-        except Exception:
-            docs = []
-        if docs:
-            st.write("**Attachments**")
-            for did, fname, url, lpath in docs:
-                cols_doc = st.columns([0.6,0.2,0.2])
-                with cols_doc[0]:
-                    st.text(fname or "attachment")
-                with cols_doc[1]:
-                    if st.button("Summarize", key=f"summ_{did}"):
-                        st.session_state['_doc_analyze'] = {'opportunity_id': rid, 'doc_id': did}
-                with cols_doc[2]:
-                    if url: st.markdown(f"[Open]({url})")
-        else:
-            st.caption("No attachment metadata yet.")
-with b2:
+                    with b1:
+                        if st.button("Ask RFP Analyzer", key=f"ask_{rid}"):
+                            opp = {
+                                "id": rid, "sol_number": sol, "title": title, "agency": agency,
+                                "set_aside": sa, "naics": naics_v, "psc": psc, "posted_date": posted,
+                                "due_date": due, "last_modified": mod, "sam_detail_url": link,
+                                "description": desc or ""
+                            }
+                            rfp_analyzer_popup(opp)
+                        with st.expander("Open Details", expanded=False):
+                            st.write(f"**Solicitation**: {sol or 'N/A'}  •  **Agency**: {agency or 'N/A'}  •  **Set-Aside**: {sa or 'N/A'}  •  **NAICS**: {naics_v or 'N/A'}  •  **PSC**: {psc or 'N/A'}")
+                            st.write(f"**Posted**: {posted or 'N/A'}  •  **Due**: {due or 'N/A'}  •  **Last Modified**: {mod or 'N/A'}")
+                            st.write("**Description**")
+                            st.write(desc or "No description. Use RFP Analyzer for AI summary.")
+                            try:
+                                conn2 = samv2_get_conn(); cur2 = conn2.cursor()
+                                cur2.execute("SELECT id, filename, url, local_path FROM samv2_docs WHERE opportunity_id=?", (rid,))
+                                docs = cur2.fetchall(); conn2.close()
+                            except Exception:
+                                docs = []
+                            if docs:
+                                st.write("**Attachments**")
+                                for did, fname, url, lpath in docs:
+                                    cols_doc = st.columns([0.6,0.2,0.2])
+                                    with cols_doc[0]:
+                                        st.text(fname or "attachment")
+                                    with cols_doc[1]:
+                                        if st.button("Summarize", key=f"summ_{did}"):
+                                            st.session_state['_doc_analyze'] = {'opportunity_id': rid, 'doc_id': did}
+                                    with cols_doc[2]:
+                                        if url: st.markdown(f"[Open]({url})")
+                            else:
+                                st.caption("No attachment metadata yet.")
+                    with b2:
                         if st.button("Start Proposal", key=f"start_{rid}"):
                             payload = samv2_start_proposal(rid)
                             if payload: st.success("Proposal draft saved and builder prefilled.")
@@ -9285,56 +9148,14 @@ with b2:
                         if st.button("Build CLIN Sheet", key=f"clin_{rid}"):
                             rows_guess = samv2_parse_clins_from_docs(rid)
                             path = samv2_build_clin_sheet(rid, rows=rows_guess, subcontractor_mode=False)
-                            st.success(f"CLIN sheet ready: {os.path.basename(path)}"); st.markdown(f"[Download]({path})")
-                            pb = st.session_state.get("proposal_builder_payload")
-                            if isinstance(pb, dict):
-                                pb.setdefault("pricing", {})["file_path"] = path
-                                st.session_state["proposal_builder_payload"] = pb
-                    with b5:
-                        if st.button("Compliance Matrix", key=f"cm_{rid}"):
-                            path = samv2_export_compliance_matrix(rid)
-                            st.success(f"Matrix exported: {os.path.basename(path)}"); st.markdown(f"[Download]({path})")
-                    with b6:
-                        if st.button("Export DOCX", key=f"docx_{rid}"):
-                            payload = st.session_state.get("proposal_builder_payload")
-                            if not payload or not isinstance(payload, dict):
-                                payload = samv2_start_proposal(rid)
-                            name = f"{sol or 'proposal'}_{_dt.datetime.utcnow().strftime('%Y%m%d')}"
-                            path = samv2_export_docx_from_payload(payload, name)
-                            st.success(f"Exported: {os.path.basename(path)}"); st.markdown(f"[Download file]({path})")
-
-    if save_selected:
-        conn = samv2_get_conn(); cur = conn.cursor()
-        saved = 0; skipped = 0
-        for rid, *_ in rows:
-            if st.session_state.get(f"samv2_ck_{rid}", False):
-                try:
-                    cur.execute("INSERT OR IGNORE INTO samv2_pipeline_links(opportunity_id) VALUES(?)", (rid,))
-                    if cur.rowcount > 0: saved += 1
-                    else: skipped += 1
-                except Exception:
-                    skipped += 1
-        conn.commit(); conn.close()
-        st.success(f"Added {saved} deal(s). Skipped {skipped} duplicate(s).")
-
+                            st.success("CLIN sheet created." if path else "CLIN build failed.")
 def _sidebar_launcher():
     return
 
 try:
-    with st.sidebar:
-            if st.button("🚀 Launch SAM Watch V2", key="__samv2_launch"):
-                st.session_state["_samv2_open"] = True
-        if st.session_state.get("_samv2_open"):
-            render_sam_watch_v2()
-    except Exception as ex:
-        _log("Sidebar launcher error: " + str(ex))
-
-try:
     _sidebar_launcher()
 except Exception as ex:
-    _log("SAM V2 init error: " + str(ex))
-
-
+    _log("Sidebar launcher error: " + str(ex))
 def samv2_mark_saved(opportunity_id: int) -> bool:
     try:
         conn = samv2_get_conn(); cur = conn.cursor()
@@ -9432,6 +9253,4 @@ def samv2_doc_analyzer_sidebar(opportunity_id: int, doc_id: int):
             st.sidebar.write(f"**{who}:** {m['content']}")
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
-
-
 
