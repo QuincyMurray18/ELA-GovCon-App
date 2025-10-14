@@ -9257,4 +9257,3 @@ def samv2_doc_analyzer_sidebar(opportunity_id: int, doc_id: int):
             st.sidebar.write(f"**{who}:** {m['content']}")
 
 # === SAM WATCH V2 (AUTO-MERGED) END ===
-
