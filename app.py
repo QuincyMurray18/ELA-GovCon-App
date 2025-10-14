@@ -717,7 +717,7 @@ def _do_login():
 
         if st.button("Sign in", use_container_width=True, key="login_btn"):
             if pin_ok:
-        ss_set("active_user", user)
+                st.session_state["active_user"] = user
                 st.session_state.setdefault("private_mode", True)
                 st.success(f"Signed in as {user}")
             else:
@@ -3716,7 +3716,7 @@ try:
                 if pick_winner and st.button("Pick Winner"):
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
-        ss_set("pricing_base_cost", float(winner_row["total"].iloc[0]))
+                        st.session_state["pricing_base_cost"] = float(winner_row["total"].iloc[0])
                     st.success(f"Winner selected {pick_winner}. Open Pricing Calculator to model markup.")
 except Exception as _e_qc:
     st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
@@ -3987,8 +3987,8 @@ with legacy_tabs[1]:
 
         if st.button("Google Places import"):
             results, info = google_places_search(f"{trade} small business", loc, int(radius_miles*1609.34))
-        ss_set("vendor_results", results or [])
-        ss_set("vendor_info", info or {})
+            st.session_state["vendor_results"] = results or []
+            st.session_state["vendor_info"] = info or {}
             if places_diag:
                 st.write("Places diagnostics:", info); st.code((info or {}).get("raw_preview","") or "", language="json")
 
@@ -4203,7 +4203,7 @@ with legacy_tabs[3]:
     scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
     due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
     if st.button("Generate emails"):
-        ss_set("mail_bodies", [])
+        st.session_state["mail_bodies"] = []
         for name in picks:
             row = df_v[df_v["company"] == name].head(1).to_dict(orient="records")[0]
             to_addr = row.get("email","")
@@ -4658,7 +4658,7 @@ with legacy_tabs[4]:
                             notice_types=pars.get("notice_types",""),
                             active=pars.get("active","true")
                         )
-        ss_set("sam_results_df", df_run)
+                        st.session_state["sam_results_df"] = df_run
                         st.success(f"Found {len(df_run)} results for '{row['name']}'")
                     if c4.button("Run & Ingest", key=f"run_ingest_{row['name']}"):
                         pars = row['params']
@@ -4677,7 +4677,7 @@ with legacy_tabs[4]:
                                 to_save = to_save.drop(columns=["Link"])
                             ins, upd = save_opportunities(to_save, default_assignee=st.session_state.get("assignee_default",""))
                             st.success(f"Ingested {len(df_run)}. New {ins}, updated {upd}.")
-        ss_set("sam_results_df", df_run)
+                            st.session_state["sam_results_df"] = df_run
                         else:
                             st.info("No results to ingest.")
                     if c5.button("Delete", key=f"del_{row['name']}"):
@@ -4856,8 +4856,8 @@ except Exception:
                 keyword=keyword or None, posted_from_days=int(posted_from_days),
                 notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
             )
-        ss_set("sam_results_df", df)
-        ss_set("sam_results_info", info)
+            st.session_state["sam_results_df"] = df
+            st.session_state["sam_results_info"] = info
             # ## Email top results
             try:
                 if email_top and isinstance(df, pd.DataFrame) and not df.empty and email_to_self:
@@ -5007,8 +5007,8 @@ except Exception as _e_sync:
                 [], min_days=0, limit=100, keyword=kw, posted_from_days=60,
                 notice_types="Combined Synopsis/Solicitation,Solicitation", active="true"
             )
-        ss_set("sam_results_df", df)
-        ss_set("sam_results_info", info)
+            st.session_state["sam_results_df"] = df
+            st.session_state["sam_results_info"] = info
             st.success(f"Test search complete for keyword: {kw}")
 
     with cC:
@@ -5076,7 +5076,7 @@ Contact {contact}
 NAICS {", ".join(sorted(set(NAICS_SEEDS)))}
 Certifications Small Business"""
             cap_md = llm(system, prompt, max_tokens=900)
-        ss_set("capability_md", cap_md)
+            st.session_state["capability_md"] = cap_md
 
     with c2:
         if st.button("Clear draft", key="btn_cap_clear_capability_builder"):
@@ -5110,7 +5110,7 @@ with legacy_tabs[7]:
             system = "Write a two page white paper with executive summary, problem, approach, case vignette, and implementation steps. Use clear headings and tight language."
             prompt = f"Title {title}\nThesis {thesis}\nAudience {audience}"
             wp_md = llm(system, prompt, max_tokens=1400)
-        ss_set("whitepaper_md", wp_md)
+            st.session_state["whitepaper_md"] = wp_md
     with col_w2:
         if st.button("Clear white paper draft", key="btn_wp_clear_whitepaper_builder"):
             st.session_state.pop("whitepaper_md", None)
@@ -5666,7 +5666,7 @@ with legacy_tabs[__tabs_base + 3]:
                             if _apply_sqft and _apply_sqft > 0 and _med_sqft:
                                 _hint = float(_apply_sqft) * float(_med_sqft)
                                 if st.button("Set base cost from benchmark median", key="md_bench_setbase"):
-        ss_set("pricing_base_cost", float(_hint))
+                                    st.session_state["pricing_base_cost"] = float(_hint)
                                     st.success(f"Base cost set to ${_hint:,.2f} from benchmark median. Recalculate above.")
 
                     st.dataframe(_df[["award_id","recipient","agency","start","end","amount","term_months","monthly_spend"]].head(50), use_container_width=True)
@@ -5689,7 +5689,7 @@ with legacy_tabs[__tabs_base + 3]:
                                 _med = float(_vals.median())
                                 st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
                                 if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
-        ss_set("pricing_base_cost", _med * float(sqft))
+                                    st.session_state["pricing_base_cost"] = _med * float(sqft)
                                     st.success(f"Base cost set to ${st.session_state['pricing_base_cost']:,.2f} from implied $/sqft median. Recalculate above.")
 
                 if want_calc:
@@ -8011,91 +8011,3 @@ try:
                 st.warning(f"[Deals save note: {_e_deals_save}]")
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
-
-
-# ===== compatibility and consolidation shims =====
-# Do not change behavior. Provide one stable surface for callers.
-
-# Streamlit safe import
-try:
-    import streamlit as st  # type: ignore
-except Exception:  # pragma: no cover
-    st = None  # fallback for non-UI contexts
-
-# Namespaced session helpers
-def ss_set(key, value, ns: str | None = None):
-    """Set session state using SessionNS when available, else fallback."""
-    try:
-        ns_obj = SessionNS(ns or "global")  # type: ignore[name-defined]
-        ns_obj.set(key, value)  # type: ignore[attr-defined]
-    except Exception:
-        if st is not None:
-            st.session_state[key] = value  # type: ignore[index]
-
-def ss_get(key, default=None, ns: str | None = None):
-    """Get session state using SessionNS when available, else fallback."""
-    try:
-        ns_obj = SessionNS(ns or "global")  # type: ignore[name-defined]
-        return ns_obj.get(key, default)  # type: ignore[attr-defined]
-    except Exception:
-        if st is not None:
-            return st.session_state.get(key, default)  # type: ignore[union-attr]
-        return default
-
-# Attachments normalization
-def _normalize_extra_files(files):
-    """Return a normalized list of file-like objects or paths."""
-    if not files:
-        return []
-    norm = []
-    for f in files:
-        if f is None:
-            continue
-        # Streamlit UploadedFile
-        if hasattr(f, "read") and hasattr(f, "name"):
-            try:
-                data = f.read()
-                if hasattr(f, "seek"):
-                    f.seek(0)
-                norm.append({ "name": getattr(f, "name", "file.bin"), "bytes": data })
-                continue
-            except Exception:
-                pass
-        # Bytes payload
-        if isinstance(f, (bytes, bytearray)):
-            norm.append({ "name": "file.bin", "bytes": bytes(f) })
-            continue
-        # Tuple form: (name, bytes)
-        if isinstance(f, tuple) and len(f) == 2 and isinstance(f[0], str):
-            b = f[1]
-            if isinstance(b, (bytes, bytearray)):
-                norm.append({ "name": f[0], "bytes": bytes(b) })
-                continue
-        # Path string
-        if isinstance(f, str):
-            try:
-                import os
-                if os.path.exists(f) and os.path.isfile(f):
-                    with open(f, "rb") as fh:
-                        norm.append({ "name": os.path.basename(f), "bytes": fh.read() })
-                    continue
-            except Exception:
-                pass
-        # Last resort: keep as is
-        norm.append(f)
-    return norm
-
-# Canonical email send alias
-try:
-    _SEND_OUTREACH_EMAIL = send_outreach_email  # type: ignore[name-defined]
-except Exception:
-    def _SEND_OUTREACH_EMAIL(*args, **kwargs):  # type: ignore
-        raise RuntimeError("send_outreach_email is not available")
-
-def send_email(*args, **kwargs):
-    """Thin wrapper. Use in new code. Keeps legacy callers working."""
-    return _SEND_OUTREACH_EMAIL(*args, **kwargs)
-
-# Backward-compatible alias for any older attachment normalizer names
-normalize_attachments = _normalize_extra_files
-# ===== end shims =====
