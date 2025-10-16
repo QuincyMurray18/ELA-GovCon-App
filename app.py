@@ -1,4 +1,3612 @@
-# ===== app.py =====
+# ===== app.py =====    st.session_state.setdefault('deals_refresh', 0)
+
+
+def _strip_markdown_to_plain(txt: str) -> str:
+    """
+    Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
+    """
+    if not txt:
+        return ""
+    import time as _time
+import datetime as _dt
+import json
+import re as _re
+    s = txt
+    # Remove code fences but keep inner text
+    s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
+    # Inline code backticks
+    s = s.replace("`", "")
+    # Bold/italic markers
+    s = s.replace("***", "")
+    s = s.replace("**", "")
+    s = s.replace("*", "")
+    s = s.replace("__", "")
+    s = s.replace("_", "")
+    # Strip heading markers at line starts
+    s = _re.sub(r"^[ \t]*#{1,6}[ \t]*", "", s, flags=_re.MULTILINE)
+    # Strip blockquote markers
+    s = _re.sub(r"^[ \t]*>[ \t]?", "", s, flags=_re.MULTILINE)
+    # Remove list markers
+    s = _re.sub(r"^[ \t]*([-*•]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
+    # Remove table pipes (keep content)
+    s = _re.sub(r"^\|", "", s, flags=_re.MULTILINE)
+    s = _re.sub(r"\|$", "", s, flags=_re.MULTILINE)
+    return s
+
+import os, re, io, json, sqlite3, time
+from datetime import datetime, timedelta
+from urllib.parse import quote_plus, urljoin, urlparse
+
+
+# ===== Proposal drafts utilities =====
+from datetime import datetime
+import os, io
+
+def _ensure_drafts_dir():
+    base = os.path.join(os.getcwd(), "drafts", "proposals")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+def save_proposal_draft(title: str, content_md: str) -> str:
+    base = _ensure_drafts_dir()
+    safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', title.strip() or "untitled")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"{ts}__{safe}.md"
+    path = os.path.join(base, fname)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content_md or "")
+    return path
+
+def list_proposal_drafts():
+    base = _ensure_drafts_dir()
+    items = []
+    for f in sorted(os.listdir(base)):
+        if f.lower().endswith(".md"):
+            full = os.path.join(base, f)
+            try:
+                size = os.path.getsize(full)
+            except Exception:
+                size = 0
+            items.append({"name": f, "path": full, "size": size})
+    return list(reversed(items))  # newest first
+
+def load_proposal_draft(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+def delete_proposal_draft(path: str) -> bool:
+    try:
+        os.remove(path)
+        return True
+    except Exception:
+        return False
+# ===== end Proposal drafts utilities =====
+
+
+def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                     margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import io
+    doc = Document()
+    try:
+        md_text = _clean_placeholders(md_text)
+    except Exception:
+        pass
+        pass
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if logo_bytes:
+        p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
+        run = p_center.add_run()
+        try:
+            from docx.shared import Inches as _Inches
+            run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
+        except Exception:
+            pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+    _render_markdown_to_docx(doc, md_text)
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+
+
+def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                      margins_in: float = 1.0) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import io
+    doc = Document()
+    try:
+        md_text = _clean_placeholders(md_text)
+    except Exception:
+        pass
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+    _render_markdown_to_docx(doc, md_text)
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+
+
+# ===== Improved Markdown rendering helpers =====
+def _add_hr_paragraph(doc):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    p = doc.add_paragraph()
+    pPr = p._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '6')
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), 'auto')
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+    return p
+
+def _add_paragraph_with_inlines(doc, text, style=None):
+    # Supports **bold**, *italic* inline
+    import re as _re
+    p = doc.add_paragraph()
+    if style:
+        try:
+            p.style = doc.styles[style]
+        except Exception:
+            pass
+
+    # Tokenize **bold** and *italic*
+    tokens = []
+    parts = _re.split(r'(\*\*[^\*]+\*\*)', text or '')
+    for part in parts:
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            tokens.append(('bold', part[2:-2]))
+        else:
+            subparts = _re.split(r'(\*[^\*]+\*)', part)
+            for sp in subparts:
+                if sp.startswith('*') and sp.endswith('*') and len(sp) >= 2:
+                    tokens.append(('italic', sp[1:-1]))
+                else:
+                    tokens.append(('text', sp))
+
+    for kind, chunk in tokens:
+        if not chunk:
+            continue
+        run = p.add_run(chunk)
+        if kind == 'bold':
+            run.bold = True
+        elif kind == 'italic':
+            run.italic = True
+    return p
+
+def _render_markdown_to_docx(doc, md_text):
+    import re as _re
+    lines = (md_text or '').splitlines()
+    bullet_buf, num_buf = [], []
+
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            _add_paragraph_with_inlines(doc, item, style="List Bullet")
+        bullet_buf = []
+
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            _add_paragraph_with_inlines(doc, item, style="List Number")
+        num_buf = []
+
+    for raw in lines:
+        line = (raw or '').rstrip()
+
+        # Horizontal rule ---
+        if _re.match(r'^\s*-{3,}\s*$', line):
+            flush_bullets(); flush_numbers()
+            _add_hr_paragraph(doc)
+            continue
+
+        # Blank -> flush lists and add spacer
+        if not line.strip():
+            flush_bullets(); flush_numbers()
+            doc.add_paragraph("")
+            continue
+
+        # Headings (tolerate up to 3 leading spaces)
+        m = _re.match(r'^\s{0,3}(#{1,6})\s+(.*)$', line)
+        if m:
+            flush_bullets(); flush_numbers()
+            hashes, text = m.group(1), m.group(2).strip()
+            level = min(len(hashes), 6)
+            try:
+                doc.add_heading(text, level=level)
+            except Exception:
+                _add_paragraph_with_inlines(doc, text)
+            continue
+
+        # Bullets: -, *, •
+        if _re.match(r'^\s*(\-|\*|•)\s+', line):
+            flush_numbers()
+            bullet_buf.append(_re.sub(r'^\s*(\-|\*|•)\s+', '', line, count=1))
+            continue
+
+        # Numbered: 1. text
+        if _re.match(r'^\s*\d+\.\s+', line):
+            flush_bullets()
+            num_buf.append(_re.sub(r'^\s*\d+\.\s+', '', line, count=1))
+            continue
+
+        # Normal paragraph with inline formatting
+        flush_bullets(); flush_numbers()
+        _add_paragraph_with_inlines(doc, line)
+
+    flush_bullets(); flush_numbers()
+
+
+def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                          margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
+    """
+    Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+    """
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if logo_bytes:
+        p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
+        run = p_center.add_run()
+        try:
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+        except Exception:
+            pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+
+    _render_markdown_to_docx(doc, md_text)
+
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+# ===== end Improved Markdown rendering helpers =====
+
+
+# ===== DOCX helpers (loaded early so they're available to all tabs) =====
+def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                      margins_in: float = 1.0) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import re as _re, io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try:
+            h.style = doc.styles["Heading 1"]
+        except Exception:
+            pass
+    lines = (md_text or "").splitlines()
+    bullet_buf, num_buf = [], []
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Bullet"]
+            except Exception: pass
+        bullet_buf = []
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Number"]
+            except Exception: pass
+        num_buf = []
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            flush_bullets(); flush_numbers(); doc.add_paragraph(""); continue
+        if line.startswith("### "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[4:].strip(), level=3); continue
+        if line.startswith("## "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[3:].strip(), level=2); continue
+        if line.startswith("# "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
+        if _re.match(r"^(\-|\*|•)\s+", line):
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+        if _re.match(r"^\d+\.\s+", line):
+            flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
+        flush_bullets(); flush_numbers(); doc.add_paragraph(line)
+    flush_bullets(); flush_numbers()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+
+def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
+                     margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.oxml.ns import qn
+    import re as _re, io
+    doc = Document()
+    try:
+        section = doc.sections[0]
+        section.top_margin = Inches(margins_in)
+        section.bottom_margin = Inches(margins_in)
+        section.left_margin = Inches(margins_in)
+        section.right_margin = Inches(margins_in)
+    except Exception:
+        pass
+    try:
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = base_font
+        font.size = Pt(base_size_pt)
+        rFonts = style.element.rPr.rFonts
+        rFonts.set(qn('w:ascii'), base_font)
+        rFonts.set(qn('w:hAnsi'), base_font)
+        rFonts.set(qn('w:eastAsia'), base_font)
+    except Exception:
+        pass
+    if logo_bytes:
+        p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
+        run = p_center.add_run()
+        try: run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+        except Exception: pass
+    if title:
+        h = doc.add_heading(title, level=1)
+        try: h.style = doc.styles["Heading 1"]
+        except Exception: pass
+    lines = (md_text or "").splitlines()
+    bullet_buf, num_buf = [], []
+    def flush_bullets():
+        nonlocal bullet_buf
+        for item in bullet_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Bullet"]
+            except Exception: pass
+        bullet_buf = []
+    def flush_numbers():
+        nonlocal num_buf
+        for item in num_buf:
+            p = doc.add_paragraph(item)
+            try: p.style = doc.styles["List Number"]
+            except Exception: pass
+        num_buf = []
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            flush_bullets(); flush_numbers(); doc.add_paragraph(""); continue
+        if line.startswith("### "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[4:].strip(), level=3); continue
+        if line.startswith("## "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[3:].strip(), level=2); continue
+        if line.startswith("# "):
+            flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
+        if _re.match(r"^(\-|\*|•)\s+", line):
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+        if _re.match(r"^\d+\.\s+", line):
+            flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
+        flush_bullets(); flush_numbers(); doc.add_paragraph(line)
+    flush_bullets(); flush_numbers()
+    bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
+# ===== end DOCX helpers =====
+
+
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+
+
+
+
+
+
+
+# === SAFE RERUN HELPER START ===
+def _safe_rerun():
+    import streamlit as st
+    try:
+        # Streamlit >= 1.30
+        st.rerun()
+    except Exception:
+        try:
+            # Older Streamlit
+            _safe_rerun()
+        except Exception:
+            # As a last resort stop, which triggers a rerun on next interaction
+            st.stop()
+# === SAFE RERUN HELPER END ===
+
+
+# === CORE DB EARLY START ===
+import os as _os
+_os.makedirs('data', exist_ok=True)
+
+@st.cache_resource
+def get_db():
+    import sqlite3
+    conn = sqlite3.connect('data/app.db', check_same_thread=False, isolation_level=None)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('PRAGMA synchronous=NORMAL;')
+        conn.execute('PRAGMA temp_store=MEMORY;')
+        conn.execute('PRAGMA foreign_keys=ON;')
+        conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
+    except Exception:
+        pass
+    return conn
+# === CORE DB EARLY END ===
+
+# === TENANCY EARLY BOOTSTRAP START ===
+def _tenancy_phase1_bootstrap():
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS orgs(
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS users(
+            id TEXT PRIMARY KEY,
+            org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+            email TEXT NOT NULL UNIQUE,
+            display_name TEXT,
+            role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
+            created_at TEXT NOT NULL
+        );""")
+        # Seed a default org and 3 users if empty
+        row = cur.execute("SELECT COUNT(*) FROM orgs").fetchone()
+        if row and row[0] == 0:
+            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
+        # Ensure at least one user exists for the default org
+        rowu = cur.execute("SELECT COUNT(*) FROM users").fetchone()
+        if rowu and rowu[0] == 0:
+            users = [
+                ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
+                ('user-collin','org-default','collin@example.com','Collin','Member'),
+                ('user-charles','org-default','charles@example.com','Charles','Viewer'),
+            ]
+            for uid, oid, email, name, role in users:
+                cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                            (uid, oid, email, name, role))
+        conn.commit()
+    except Exception as ex:
+        # Do not break startup on bootstrap failure
+        try: log_json('error', 'tenancy_bootstrap_failed', error=str(ex))
+        except Exception: pass
+
+try:
+    _tenancy_phase1_bootstrap()
+except Exception:
+    pass
+# === TENANCY EARLY BOOTSTRAP END ===
+
+
+# === EARLY DB BOOTSTRAP START ===
+# Ensure get_db exists before any import-time calls.
+# This early definition will be overridden by later phases if they redefine get_db.
+import os as _os
+_os.makedirs("data", exist_ok=True)
+
+if "get_db" not in globals():
+    import streamlit as st
+    @st.cache_resource
+    def get_db():
+        import sqlite3
+        conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA temp_store=MEMORY;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+            conn.execute("CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);")
+        except Exception:
+            pass
+        return conn
+# === EARLY DB BOOTSTRAP END ===
+
+
+# === PHASE 0 CORE START ===
+# Bootstrap: feature flags, API client, SQLite PRAGMAs, secrets loader, structured logging.
+import time as _time
+import json as _json
+import uuid as _uuid
+import contextlib as _contextlib
+from typing import Any as _Any, Dict as _Dict, Optional as _Optional
+
+import streamlit as st
+
+# ---- Structured logging ----
+def log_json(level: str, message: str, **context) -> str:
+    """Emit a single line JSON log. Returns error_id for error levels."""
+    event_id = str(_uuid.uuid4())
+    payload = {
+        "ts": int(_time.time()),
+        "level": level.upper(),
+        "event_id": event_id,
+        "message": message,
+        "context": {k: v for k, v in context.items()},
+    }
+    try:
+        print(_json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        # Ensure logging never breaks app
+        print(str(payload))
+    return event_id if level.lower() in {"error","fatal","critical"} else event_id
+
+# ---- Secrets loader ----
+def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optional[str]:
+    """Safe secrets accessor. Does not raise or leak values in logs."""
+    try:
+        sec = st.secrets.get(section)  # type: ignore[attr-defined]
+        if sec is None:
+            return default
+        val = sec.get(key)
+        return val if val is not None else default
+    except Exception:
+        return default
+
+# ---- Feature flags ----
+, "deals_core"]
+def init_feature_flags():
+    flags = st.session_state.setdefault("feature_flags", {})
+    # Do not remove existing keys. Only set missing to False.
+    for k in _FEATURE_KEYS:
+        flags.setdefault(k, False)
+    # Preexisting flags like 'workspace_enabled' preserved as-is.
+    return flags
+
+# ---- SQLite PRAGMAs and migrations ----
+def _apply_sqlite_pragmas(conn):
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL;")
+        cur.execute("PRAGMA synchronous=NORMAL;")
+        cur.execute("PRAGMA temp_store=MEMORY;")
+        cur.execute("PRAGMA foreign_keys=ON;")
+    except Exception as ex:
+        log_json("error", "sqlite_pragmas_failed", error=str(ex))
+
+def _ensure_migrations_table(conn):
+    try:
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS migrations(
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            applied_at TEXT NOT NULL
+        );""")
+    except Exception as ex:
+        log_json("error", "migrations_table_create_failed", error=str(ex))
+
+def ensure_bootstrap_db():
+    try:
+        conn = get_db()  # Provided by later phases. Cached.
+        _apply_sqlite_pragmas(conn)
+        _ensure_migrations_table(conn)
+        return True
+    except Exception as ex:
+        log_json("error", "bootstrap_db_failed", error=str(ex))
+        return False
+
+# ---- Central API client ----
+class CircuitOpenError(Exception):
+    pass
+
+def create_api_client(base_url: str, api_key: _Optional[str]=None, timeout: int=20, retries: int=3, ttl: int=900):
+    """Return a simple client with GET/POST. GET responses cached for 'ttl' seconds."""
+    import requests  # local import to avoid hard dependency if unused
+
+    # Circuit breaker state stored in session
+    cb = st.session_state.setdefault("_api_cb", {})
+    key = f"cb::{base_url}"
+    state = cb.setdefault(key, {"fail_count": 0, "opened_at": 0.0})
+
+    def _check_circuit():
+        now = _time.time()
+        if state["fail_count"] >= 3:
+            # Circuit open for 60 seconds from last open
+            if now - state["opened_at"] < 60.0:
+                raise CircuitOpenError("circuit_open")
+            else:
+                # half-open: allow a try
+                pass
+
+    def _mark_success():
+        state["fail_count"] = 0
+        state["opened_at"] = 0.0
+
+    def _mark_failure():
+        state["fail_count"] += 1
+        if state["fail_count"] >= 3:
+            state["opened_at"] = _time.time()
+
+    session = requests.Session()
+    session.headers.update({"Accept": "application/json"})
+    if api_key:
+        session.headers.update({"Authorization": f"Bearer {api_key}"})
+
+    def _backoff(attempt):
+        # exponential backoff: 0.25, 0.5, 1, 2 ...
+        delay = min(2.0 ** max(0, attempt - 1) * 0.25, 4.0)
+        _time.sleep(delay)
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _cached_get(cache_key: str):
+        # cache layer isolated by cache_key
+        # Actual HTTP performed outside to pick up dynamic ttl via caller
+        return cache_key
+
+    def _http_get(path: str, params: _Optional[_Dict]=None):
+        _check_circuit()
+        url = base_url.rstrip("/") + "/" + path.lstrip("/")
+        # build a deterministic cache key
+        key_parts = [url]
+        if params:
+            # stable sort
+            key_parts.extend([f"{k}={params[k]}" for k in sorted(params.keys())])
+        cache_key = "|".join(key_parts)
+        # read cache token first
+        token = _cached_get(cache_key) if ttl else None  # token content unused, just gate by key+ttl
+        last_err = None
+        for attempt in range(1, max(1, retries) + 1):
+            try:
+                resp = session.get(url, params=params, timeout=timeout)
+                if 200 <= resp.status_code < 300:
+                    _mark_success()
+                    # store body alongside token by returning it directly
+                    return resp.json() if "application/json" in resp.headers.get("Content-Type","") else resp.text
+                last_err = f"status={resp.status_code}"
+            except CircuitOpenError:
+                raise
+            except Exception as ex:
+                last_err = str(ex)
+            _mark_failure()
+            if attempt < retries:
+                _backoff(attempt)
+        # If we got here, open circuit
+        _mark_failure()
+        state["opened_at"] = _time.time()
+        eid = log_json("error", "api_get_failed", url=url, error=last_err)
+        raise RuntimeError(f"API GET failed. error_id={eid}")
+
+    def _http_post(path: str, json: _Optional[_Dict]=None):
+        _check_circuit()
+        url = base_url.rstrip("/") + "/" + path.lstrip("/")
+        last_err = None
+        for attempt in range(1, max(1, retries) + 1):
+            try:
+                resp = session.post(url, json=json, timeout=timeout)
+                if 200 <= resp.status_code < 300:
+                    _mark_success()
+                    return resp.json() if "application/json" in resp.headers.get("Content-Type","") else resp.text
+                last_err = f"status={resp.status_code}"
+            except CircuitOpenError:
+                raise
+            except Exception as ex:
+                last_err = str(ex)
+            _mark_failure()
+            if attempt < retries:
+                _backoff(attempt)
+        _mark_failure()
+        state["opened_at"] = _time.time()
+        eid = log_json("error", "api_post_failed", url=url, error=last_err)
+        raise RuntimeError(f"API POST failed. error_id={eid}")
+
+    return {
+        "get": _http_get,
+        "post": _http_post,
+        "base_url": base_url,
+        "timeout": timeout,
+        "retries": retries,
+        "ttl": ttl,
+    }
+
+def _ensure_api_factory():
+    if "api_client_factory" not in st.session_state:
+        st.session_state["api_client_factory"] = create_api_client
+    return st.session_state["api_client_factory"]
+
+# ---- Bootstrap runner ----
+def _phase0_bootstrap():
+    # Initialize feature flags first
+    init_feature_flags()
+    # Ensure DB PRAGMAs and migrations table
+    with _contextlib.suppress(Exception):
+        ensure_bootstrap_db()
+    # Register API client factory
+    _ensure_api_factory()
+    st.session_state.setdefault("boot_done", True)
+
+# Run at import time, safe to fail silently
+with _contextlib.suppress(Exception):
+    _phase0_bootstrap()
+# === PHASE 0 CORE END ===
+
+# === LAYOUT PHASE 1 START ===
+
+# Router, query params, shell nav, and feature flags.
+# All new code under feature_flags['workspace_enabled'] == False by default.
+
+import contextlib
+
+# Feature flags stored in session_state to persist within a session
+def _ensure_feature_flags():
+    import streamlit as st
+    if "feature_flags" not in st.session_state:
+        st.session_state["feature_flags"] = {"workspace_enabled": False}
+    # Ensure key exists even if older sessions exist
+    if "workspace_enabled" not in st.session_state["feature_flags"]:
+        st.session_state["feature_flags"]["workspace_enabled"] = False
+    return st.session_state["feature_flags"]
+
+def feature_flags():
+    return _ensure_feature_flags()
+
+# Query param helpers with Streamlit compatibility
+def _qp_get():
+    import streamlit as st
+    with contextlib.suppress(Exception):
+        # Newer Streamlit
+        qp = getattr(st, "query_params", None)
+        if qp is not None:
+            # st.query_params behaves like a dict[str, str]
+            return dict(qp)
+    # Fallback to experimental API which returns dict[str, list[str]]
+    with contextlib.suppress(Exception):
+        data = st.experimental_get_query_params()
+        norm = {k: (v[0] if isinstance(v, list) and v else v) for k, v in data.items()}
+        return norm
+    return {}
+
+def _qp_set(**kwargs):
+    import streamlit as st
+    # Remove keys with None to avoid clutter
+    clean = {k: v for k, v in kwargs.items() if v is not None}
+    # Try new API first
+    with contextlib.suppress(Exception):
+        qp = getattr(st, "query_params", None)
+        if qp is not None:
+            qp.clear()
+            for k, v in clean.items():
+                qp[k] = str(v)
+            return
+    # Fallback
+    with contextlib.suppress(Exception):
+        st.experimental_set_query_params(**clean)
+
+def get_route():
+    import streamlit as st
+    qp = _qp_get()
+    page = qp.get("page") or "dashboard"
+    opp = qp.get("opp")
+    tab = qp.get("tab")
+    # normalize opp id to int when possible
+    try:
+        opp_id = int(opp) if opp is not None and str(opp).isdigit() else None
+    except Exception:
+        opp_id = None
+    st.session_state["route_page"] = page
+    st.session_state["route_opp_id"] = opp_id
+    st.session_state["route_tab"] = tab
+    return {"page": page, "opp_id": opp_id, "tab": tab}
+
+def route_to(page, opp_id=None, tab=None, replace=False):
+    import streamlit as st
+    # Update session state
+    st.session_state["route_page"] = page
+    st.session_state["route_opp_id"] = opp_id
+    st.session_state["route_tab"] = tab
+    # Update URL query params
+    _qp_set(page=page, opp=(opp_id if opp_id is not None else None), tab=(tab if tab else None))
+
+def _get_notice_title_from_db(opp_id):
+    # Best effort lookup. Works even if schema differs.
+    # Falls back to "Opportunity <id>"
+    if opp_id is None:
+        return "Opportunity"
+    title = None
+    try:
+        conn = get_db()  # uses existing cached connection
+        cur = conn.cursor()
+        # Check candidate tables and columns
+        candidates = [
+            ("notices", ["title", "notice_title", "name", "subject"]),
+            ("opportunities", ["title", "name", "subject"]),
+        ]
+        for table, cols in candidates:
+            # Does the table exist
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+            row = cur.fetchone()
+            if not row:
+                continue
+            # Find a valid column
+            cur.execute(f"PRAGMA table_info({table})")
+            cols_present = [r[1] for r in cur.fetchall()]
+            use_col = next((c for c in cols if c in cols_present), None)
+            if not use_col:
+                continue
+            cur.execute(f"SELECT {use_col} FROM {table} WHERE id=?", (opp_id,))
+            r = cur.fetchone()
+            if r and r[0]:
+                title = str(r[0])
+                break
+    except Exception:
+        title = None
+    return title or f"Opportunity {opp_id}"
+
+def _render_top_nav():
+    import streamlit as st
+    ff = feature_flags()
+    if not ff.get("workspace_enabled", False):
+        return
+    pages = [
+        ("dashboard", "Dashboard"),
+        ("sam", "SAM Watch"),
+        ("pipeline", "Pipeline"),
+        ("outreach", "Outreach"),
+        ("library", "Library"),
+        ("admin", "Admin"),
+    ]
+    st.markdown("### Navigation")
+    cols = st.columns(len(pages))
+    route = get_route()
+    for i, (pid, label) in enumerate(pages):
+        with cols[i]:
+            if st.button(label, use_container_width=True):
+                route_to(pid)
+
+def _render_opportunity_workspace():
+    import streamlit as st
+    ff = feature_flags()
+    if not ff.get("workspace_enabled", False):
+        return
+    route = get_route()
+    if route.get("page") != "opportunity":
+        return
+    opp_id = route.get("opp_id")
+    title = _get_notice_title_from_db(opp_id)
+    st.header(title)
+    # Subtab bar as segmented control substitute
+    tabs = ["overview", "documents", "proposal", "team"]
+    labels = ["Overview", "Documents", "Proposal", "Team"]
+    current = route.get("tab") or "overview"
+    # Ensure valid
+    if current not in tabs:
+        current = "overview"
+    idx = tabs.index(current)
+    try:
+        selected = st.radio("Workspace", options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
+    except TypeError:
+        # Streamlit < 1.29 does not have horizontal
+        selected = st.radio("Workspace", options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i])
+    if tabs[selected] != current:
+        route_to("opportunity", opp_id=opp_id, tab=tabs[selected])
+        st.stop()
+    # Empty placeholder sections
+    st.info("Workspace enabled. Placeholder only.")
+
+def _maybe_render_shell():
+    import streamlit as st
+    ff = feature_flags()
+    if not ff.get("workspace_enabled", False):
+        return
+    _render_top_nav()
+    _render_opportunity_workspace()
+    # Try to dispatch to known page renderers without removing existing UI
+    route = get_route()
+    page = route.get("page")
+    dispatch = {
+        "dashboard": "render_dashboard",
+        "sam": "render_sam_watch",
+        "pipeline": "render_pipeline",
+        "outreach": "render_outreach",
+        "library": "render_library",
+        "admin": "render_admin",
+    }
+    func_name = dispatch.get(page)
+    if func_name and func_name in globals() and callable(globals()[func_name]):
+        try:
+            globals()[func_name]()
+        except Exception as ex:
+            st.warning(f"Navigation handler error: {ex}")
+
+# Initialize routing state on import
+try:
+    _ensure_feature_flags()
+    get_route()
+except Exception:
+    pass
+
+# Hook shell after Streamlit lays out base content
+try:
+    _maybe_render_shell()
+except Exception:
+    pass
+
+# === LAYOUT PHASE 1 END ===
+
+# === LAYOUT PHASE 2 START ===
+# Subtabbed opportunity workspace with lazy loading and deep links.
+# Keeps existing app tabs intact. Controlled by feature_flags['workspace_enabled'].
+import contextlib
+import datetime
+import re
+
+def _ensure_route_state_defaults():
+    import streamlit as st
+    st.session_state.setdefault('route_page', 'dashboard')
+    st.session_state.setdefault('route_opp_id', None)
+    st.session_state.setdefault('route_tab', None)
+    st.session_state.setdefault('active_opportunity_tab', None)
+
+def _get_notice_meta_from_db(opp_id):
+    """Return minimal metadata for header: title, agency, due_date, set_aside list."""
+    meta = {'title': None, 'agency': None, 'due_date': None, 'set_asides': []}
+    if opp_id is None:
+        meta['title'] = 'Opportunity'
+        return meta
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        table_candidates = [
+            ('notices', {
+                'title': ['title','notice_title','name','subject'],
+                'agency': ['agency','agency_name','buyer','office'],
+                'due':   ['due_date','response_due','close_date','offer_due'],
+                'set':   ['set_aside','setaside','set_asides','naics_set_aside']
+            }),
+            ('opportunities', {
+                'title': ['title','name','subject'],
+                'agency': ['agency','buyer','office'],
+                'due':   ['due_date','close_date'],
+                'set':   ['set_aside','setasides']
+            })
+        ]
+        for table, cols in table_candidates:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+            if not cur.fetchone():
+                continue
+            cur.execute("PRAGMA table_info(%s)" % table)
+            present = {r[1] for r in cur.fetchall()}
+            def pick(keys):
+                for k in keys:
+                    if k in present:
+                        return k
+                metric_push('parser_time_ms', (_time.perf_counter()-_pt0)*1000.0, {'result':'none'}); return None
+            c_title = pick(cols['title'])
+            c_agency = pick(cols['agency'])
+            c_due = pick(cols['due'])
+            c_set = pick(cols['set'])
+            sel_cols = [c for c in [c_title, c_agency, c_due, c_set] if c]
+            if not sel_cols:
+                continue
+            cur.execute("SELECT %s FROM %s WHERE id=?" % (", ".join(sel_cols), table), (opp_id,))
+            row = cur.fetchone()
+            if row:
+                idx = 0
+                if c_title:
+                    meta['title'] = row[idx]; idx += 1
+                if c_agency:
+                    meta['agency'] = row[idx]; idx += 1
+                if c_due:
+                    meta['due_date'] = row[idx]; idx += 1
+                if c_set:
+                    raw = row[idx]
+                    if isinstance(raw, str):
+                        parts = [p.strip() for p in re.split(r"[;,/|]", raw) if p.strip()]
+                    elif isinstance(raw, (list, tuple)):
+                        parts = list(raw)
+                    else:
+                        parts = []
+                    meta['set_asides'] = parts
+                break
+    except Exception:
+        pass
+    if not meta['title']:
+        meta['title'] = 'Opportunity %s' % opp_id
+    return meta
+
+try:
+    import streamlit as st
+except Exception:
+    class _Stub:
+        def cache_data(self, **kw):
+            def deco(fn): return fn
+            return deco
+    st = _Stub()
+
+@st.cache_data(ttl=900)
+def _load_analyzer_data(opp_id):
+    return {'ready': True, 'opp_id': opp_id}
+
+@st.cache_data(ttl=900)
+def _load_compliance_data(opp_id):
+    return {'ready': True, 'opp_id': opp_id}
+
+@st.cache_data(ttl=900)
+def _load_pricing_data(opp_id):
+    return {'ready': True, 'opp_id': opp_id}
+
+@st.cache_data(ttl=900)
+def _load_vendors_data(opp_id):
+    return {'ready': True, 'opp_id': opp_id}
+
+@st.cache_data(ttl=900)
+def _load_submission_data(opp_id):
+    return {'ready': True, 'opp_id': opp_id}
+
+def render_details(opp_id):
+    import streamlit as st
+    st.subheader('Details')
+    st.write('Opportunity ID:', opp_id)
+
+def render_analyzer(opp_id):
+    import streamlit as st
+    st.subheader('Analyzer')
+    data = _load_analyzer_data(opp_id)
+    st.write(data)
+    try:
+        analyzer_lm_readonly(int(opp_id))
+    except Exception:
+        pass
+
+
+def render_compliance(opp_id):
+    import streamlit as st
+    st.subheader('Compliance')
+    data = _load_compliance_data(opp_id)
+    st.write(data)
+
+def render_proposal(opp_id):
+    import streamlit as st
+    st.subheader('Proposal')
+    st.write({'opp_id': opp_id})
+
+def render_pricing(opp_id):
+    import streamlit as st
+    st.subheader('Pricing')
+    data = _load_pricing_data(opp_id)
+    st.write(data)
+
+def render_vendorsrfq(opp_id):
+    import streamlit as st
+    st.subheader('Vendors RFQ')
+    data = _load_vendors_data(opp_id)
+    st.write(data)
+
+def render_submission(opp_id):
+    import streamlit as st
+    st.subheader('Submission')
+    data = _load_submission_data(opp_id)
+    st.write(data)
+
+def open_details(opp_id):
+    route_to('opportunity', opp_id=opp_id, tab='details')
+
+def open_analyzer(opp_id):
+    route_to('opportunity', opp_id=opp_id, tab='analyzer')
+
+def open_compliance(opp_id):
+    route_to('opportunity', opp_id=opp_id, tab='compliance')
+
+def open_pricing(opp_id):
+    route_to('opportunity', opp_id=opp_id, tab='pricing')
+
+def open_vendors(opp_id):
+    route_to('opportunity', opp_id=opp_id, tab='vendors')
+
+def open_submission(opp_id):
+    route_to('opportunity', opp_id=opp_id, tab='submission')
+
+def _render_badges(set_asides):
+    import streamlit as st
+    if not set_asides:
+        return
+    cols = st.columns(min(5, len(set_asides)))
+    for i, item in enumerate(set_asides[:5]):
+        with cols[i]:
+            st.caption(f'Set-aside: {item}')
+
+def _render_opportunity_workspace():
+    import streamlit as st
+    ff = feature_flags()
+    if not ff.get('workspace_enabled', False):
+        return
+    route = get_route()
+    if route.get('page') != 'opportunity':
+        return
+    _ensure_route_state_defaults()
+    opp_id = route.get('opp_id')
+    meta = _get_notice_meta_from_db(opp_id)
+    st.header(str(meta.get('title', '')))
+    top_cols = st.columns([2,1,1])
+    with top_cols[0]:
+        st.caption(str(meta.get('agency') or ''))
+    with top_cols[1]:
+        due = meta.get('due_date')
+        if due:
+            st.caption(f'Due: {due}')
+    with top_cols[2]:
+        _render_badges(meta.get('set_asides') or [])
+    tabs = ['details','analyzer','compliance','proposal','pricing','vendors','submission']
+    labels = ['Details','Analyzer','Compliance','Proposal','Pricing','VendorsRFQ','Submission']
+    current = route.get('tab') or st.session_state.get('active_opportunity_tab') or 'details'
+    if current not in tabs:
+        current = 'details'
+    idx = tabs.index(current)
+    try:
+        sel = st.radio('Workspace', options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
+    except TypeError:
+        sel = st.radio('Workspace', options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i])
+    new_tab = tabs[sel]
+    if new_tab != current:
+        st.session_state['active_opportunity_tab'] = new_tab
+        route_to('opportunity', opp_id=opp_id, tab=new_tab)
+        st.stop()
+    else:
+        st.session_state['active_opportunity_tab'] = current
+    if current == 'details':
+        render_details(opp_id)
+    elif current == 'analyzer':
+        render_analyzer(opp_id)
+    elif current == 'compliance':
+        render_compliance(opp_id)
+    elif current == 'proposal':
+        render_proposal(opp_id)
+    elif current == 'pricing':
+        render_pricing(opp_id)
+    elif current == 'vendors':
+        render_vendorsrfq(opp_id)
+    elif current == 'submission':
+        render_submission(opp_id)
+# === LAYOUT PHASE 2 END ===
+
+
+
+
+# === Outreach Email (per-user) helpers ===
+import smtplib, base64
+from email.message import EmailMessage
+
+USER_EMAILS = {
+    "Quincy": "quincy.elamgmt@gmail.com",
+    "Charles": "charles.elamgmt@gmail.com",
+    "Collin": "collin.elamgmt@gmail.com",
+}
+
+def _mail_store_path():
+    base = os.path.join(os.getcwd(), "secure_auth")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "mail.json")
+
+def _load_mail_store():
+    try:
+        with open(_mail_store_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_mail_store(store: dict):
+    with open(_mail_store_path(), "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
+
+def set_user_smtp_app_password(user: str, app_password: str):
+    store = _load_mail_store()
+    u = store.get(user, {})
+    u["smtp_host"] = "smtp.gmail.com"
+    u["smtp_port"] = 587
+    u["username"] = USER_EMAILS.get(user, "")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
+    store[user] = u
+    _save_mail_store(store)
+
+def get_user_mail_config(user: str):
+    store = _load_mail_store()
+    rec = store.get(user, {})
+    if not rec:
+        return None
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    return {
+        "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
+        "smtp_port": rec.get("smtp_port", 587),
+        "username": rec.get("username", ""),
+        "password": pw,
+        "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
+    }
+
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
+    cfg = get_user_mail_config(user)
+    if not cfg or not cfg.get("username") or not cfg.get("password"):
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject or ""
+    msg["From"] = cfg["from_addr"]
+
+    def _split(a):
+        if not a:
+            return []
+        if isinstance(a, list):
+            return a
+        return [x.strip() for x in str(a).replace(";", ",").split(",") if x.strip()]
+
+    to_list = _split(to_addrs)
+    cc_list = _split(cc_addrs)
+    bcc_list = _split(bcc_addrs)
+    if not to_list:
+        raise RuntimeError("Please provide at least one recipient in To.")
+
+    msg["To"] = ", ".join(to_list)
+    if cc_list: msg["Cc"] = ", ".join(cc_list)
+
+    import re as _re
+    plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+    msg.set_content(plain or "(no content)")
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
+
+    # Optional read receipts
+    if add_read_receipts:
+        # These headers work only if recipient mail server honors them
+        msg["Disposition-Notification-To"] = cfg["from_addr"]
+        msg["Return-Receipt-To"] = cfg["from_addr"]
+
+    # Optional tracking pixel
+    if tracking_pixel_url and body_html:
+        try:
+            import uuid, urllib.parse as _u
+            tid = tracking_id or str(uuid.uuid4())
+            qp = {"id": tid, "to": ",".join(to_list)}
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            body_html = (body_html or "") + pixel
+            # Replace the last HTML alternative with updated body_html
+            msg.clear_content()
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+            msg.set_content(plain or "(no content)")
+            msg.add_alternative(body_html, subtype="html")
+        except Exception:
+            pass
+
+
+
+    attachments = attachments or []
+    for att in attachments:
+        try:
+            filename = getattr(att, "name", None)
+            content = None
+
+            # Streamlit UploadedFile or file-like object with getvalue or read
+            if hasattr(att, "getvalue"):
+                content = att.getvalue()
+            elif hasattr(att, "read"):
+                try:
+                    att.seek(0)
+                except Exception:
+                    pass
+                content = att.read()
+            # Dict form: {"name": ..., "data": bytes} or {"path": ...}
+            elif isinstance(att, dict):
+                filename = att.get("name", filename or "file")
+                if "data" in att and att["data"] is not None:
+                    content = att["data"]
+                elif "content" in att and att["content"] is not None:
+                    val = att["content"]
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
+                elif "path" in att:
+                    import os
+                    path = att["path"]
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(path)
+            # Raw bytes
+            elif isinstance(att, (bytes, bytearray)):
+                content = bytes(att)
+            # String path
+            elif isinstance(att, str):
+                import os
+                if os.path.exists(att):
+                    with open(att, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(att)
+
+            if content is None:
+                raise ValueError("Unsupported attachment type")
+
+            if not filename:
+                filename = "attachment.bin"
+
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
+        except Exception as e:
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
+
+    all_rcpts = to_list + cc_list + bcc_list
+
+    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
+    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(cfg["username"], cfg["password"])
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
+
+def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
+    # ACTIVE_USER provided by your sign-in block
+    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+# === End Outreach helpers ===
+
+
+# === Multi-user Sign-in & Session Isolation (added by ChatGPT on 2025-10-08) ===
+from functools import wraps
+import uuid
+
+# Configure your users here
+USERS = ["Quincy", "Charles", "Collin"]
+# Optional PINs. Leave empty {} if you want passwordless sign-in.
+
+PINS = {"Quincy": "1111", "Charles": "2222", "Collin": "3333"}
+
+# --- Persistent PIN store (salted) ---
+import json, os, secrets, hashlib
+
+def _pin_storage_path():
+    base = os.path.join(os.getcwd(), "secure_auth")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "pins.json")
+
+def _load_pin_store():
+    path = _pin_storage_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_pin_store(store: dict):
+    path = _pin_storage_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
+
+def _hash_pin(pin: str, salt: str) -> str:
+    return hashlib.sha256((salt + "|" + (pin or "")).encode("utf-8")).hexdigest()
+
+def _get_or_init_pin_store():
+    store = _load_pin_store()
+    # Seed from PINS dict on first run for the defined USERS
+    changed = False
+    for u in USERS:
+        if u not in store:
+            salt = secrets.token_hex(16)
+            store[u] = {"salt": salt, "hash": _hash_pin(PINS.get(u, ""), salt)}
+            changed = True
+    if changed:
+        _save_pin_store(store)
+    return store
+
+def _verify_pin(user: str, pin: str) -> bool:
+    store = _get_or_init_pin_store()
+    rec = store.get(user)
+    if not rec:
+        return False
+    return _hash_pin(pin or "", rec["salt"]) == rec["hash"]
+
+def set_user_pin(user: str, new_pin: str):
+    store = _get_or_init_pin_store()
+    salt = secrets.token_hex(16)
+    store[user] = {"salt": salt, "hash": _hash_pin(new_pin or "", salt)}
+    _save_pin_store(store)
+
+def _do_login():
+    with st.sidebar:
+        st.header("Sign in")
+        user = st.selectbox("User", USERS, index=0, key="login_user_select")
+        pin_ok = True
+        if PINS:
+            pin = st.text_input("PIN", type="password", key="login_pin_input")
+            pin_ok = _verify_pin(user, pin)
+
+        if st.button("Sign in", use_container_width=True, key="login_btn"):
+            if pin_ok:
+                st.session_state["active_user"] = user
+                # Resolve identity into users table and set session ids
+                try:
+                    conn = get_db()
+                    row = conn.execute("SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
+                    if row:
+                        st.session_state["user_id"] = row[0]
+                        st.session_state["org_id"] = row[1]
+                        st.session_state["role"] = row[2]
+                    else:
+                        # fallback create if missing
+                        oid = "org-ela"
+                        conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
+                        uid = f"u-{user.lower()}"
+                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                                     (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
+                        st.session_state["user_id"] = uid
+                        st.session_state["org_id"] = oid
+                        st.session_state["role"] = "Member"
+                    st.session_state.setdefault("private_mode", True)
+                except Exception as _ex:
+                    st.warning(f"Login identity init issue: {_ex}")
+                # Resolve identity into users table and set session ids
+                try:
+                    conn = get_db()
+                    row = conn.execute("SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
+                    if row:
+                        st.session_state["user_id"] = row[0]
+                        st.session_state["org_id"] = row[1]
+                        st.session_state["role"] = row[2]
+                    else:
+                        # Fallback create user mapped to default org
+                        cur = conn.execute("SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
+                        oid = cur[0] if cur else "org-ela"
+                        uid = f"u-{user.lower()}"
+                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
+                        st.session_state["user_id"] = uid
+                        st.session_state["org_id"] = oid
+                        st.session_state["role"] = 'Member'
+                except Exception:
+                    pass
+                st.session_state.setdefault("private_mode", True)
+                st.success(f"Signed in as {user}")
+            else:
+                st.error("Incorrect PIN")
+
+    if "active_user" not in st.session_state:
+        st.stop()
+
+_do_login()
+ACTIVE_USER = st.session_state["active_user"]
+
+if not st.session_state.get("org_id") or not st.session_state.get("user_id"):
+    # Try resolve from active_user
+    try:
+        conn = get_db()
+        name = st.session_state.get("active_user")
+        if name:
+            r = conn.execute("SELECT id, org_id FROM users WHERE display_name=?", (name,)).fetchone()
+            if r:
+                st.session_state["user_id"], st.session_state["org_id"] = r[0], r[1]
+    except Exception:
+        pass
+if not st.session_state.get("org_id"):
+    st.error("No organization set. Sign in again.")
+    st.stop()
+
+
+# --- Post-login controls: Sign out and Switch user ---
+with st.sidebar:
+    # Show current user and offer Sign out
+    if st.session_state.get("active_user"):
+        st.caption(f"Signed in as {st.session_state['active_user']}")
+        if st.button("Sign out", use_container_width=True, key="logout_btn"):
+            # Clear login and PIN and force re-run back to login screen
+            st.session_state.pop("active_user", None)
+            st.session_state.pop("login_pin_input", None)
+            st.rerun()
+
+# If the selection differs from the active user, offer a quick switch
+_selected = st.session_state.get("login_user_select")
+_active = st.session_state.get("active_user")
+if _active and _selected and _selected != _active:
+    with st.sidebar:
+        st.warning(f"You selected {_selected}. To switch from {_active}, click below then sign in.")
+        if st.button(f"Switch to {_selected}", use_container_width=True, key="switch_user_btn"):
+            st.session_state.pop("active_user", None)  # this will trigger the login stop above on next run
+            st.session_state.pop("login_pin_input", None)
+            st.rerun()
+
+
+# --- Namespaced session state helpers ---
+
+# --- Unified Streamlit key helper (namespaced + duplicate-safe) ---
+try:
+    _NS_KEY_COUNTS
+except NameError:
+    _NS_KEY_COUNTS = {}
+def ns_key(key: str) -> str:
+    base = f"{ACTIVE_USER}::{key}"
+    # increment and deduplicate within a single run
+    c = _NS_KEY_COUNTS.get(base, 0) + 1
+    _NS_KEY_COUNTS[base] = c
+    if c == 1:
+        return base
+    return f"{base}__dup{c}"
+
+
+class SessionNS:
+    def __init__(self, user: str):
+        self.user = user
+
+    def _k(self, key: str) -> str:
+        return f"{self.user}::{key}"
+
+    def __getitem__(self, key: str):
+        return st.session_state.get(self._k(key))
+
+    def __setitem__(self, key: str, value):
+        st.session_state[self._k(key)] = value
+
+    def get(self, key: str, default=None):
+        return st.session_state.get(self._k(key), default)
+
+    def setdefault(self, key: str, default):
+        return st.session_state.setdefault(self._k(key), default)
+
+    def pop(self, key: str, default=None):
+        return st.session_state.pop(self._k(key), default)
+
+NS = SessionNS(ACTIVE_USER)
+
+# --- Private workspace & publish queue ---
+with st.sidebar:
+    st.subheader("Workspace")
+
+with st.sidebar:
+    st.subheader("Security")
+    with st.expander("Change My PIN", expanded=False):
+        st.write("Update your sign-in PIN. New PIN must be 4–12 characters.")
+        curr = st.text_input("Current PIN", type="password", key="pin_cur")
+        new1 = st.text_input("New PIN", type="password", key="pin_new1")
+        new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
+        if st.button("Update PIN", use_container_width=True, key="pin_update_btn"):
+            if not _verify_pin(ACTIVE_USER, curr or ''):
+                st.error("Current PIN is incorrect.")
+            elif not new1 or len(new1) < 4 or len(new1) > 12:
+                st.error("New PIN must be 4–12 characters.")
+            elif new1 != new2:
+                st.error("New PINs do not match.")
+            else:
+                set_user_pin(ACTIVE_USER, new1)
+                # Clear any cached login input
+                st.session_state.pop("login_pin_input", None)
+                st.success("Your PIN has been updated. It will be required next time you sign in.")
+
+    st.session_state.setdefault(f"{ACTIVE_USER}::private_mode", True)
+    NS["private_mode"] = st.toggle(
+        "Private mode",
+        value=NS.get("private_mode", True),
+        help="When ON your changes stay private to you until you publish."
+    )
+
+def queue_change(fn, *, label: str):
+    """Queue a change for this user instead of writing to shared data immediately."""
+    NS.setdefault("publish_queue", [])
+    q = NS.get("publish_queue", [])
+    q.append({"id": str(uuid.uuid4()), "label": label, "fn": fn})
+    NS["publish_queue"] = q
+
+def publish_changes():
+    q = NS.get("publish_queue", [])
+    errors = []
+    for item in q:
+        try:
+            item["fn"]()
+        except Exception as e:
+            errors.append((item["label"], e))
+    NS["publish_queue"] = []
+    return errors
+
+def write_or_queue(label, commit_fn):
+    if NS.get("private_mode", True):
+        queue_change(commit_fn, label=label)
+        st.info(f"Saved privately. Publish later. [{label}]")
+    else:
+        commit_fn()
+        st.success(f"Saved to team. [{label}]")
+
+with st.sidebar:
+    if st.button("Publish my changes", use_container_width=True, key="publish_btn"):
+        errs = publish_changes()
+        if not errs:
+            st.success("All your private changes are now published to the team data.")
+        else:
+            st.error("Some changes failed to publish. See below for details.")
+            for label, e in errs:
+                st.exception(RuntimeError(f"{label}: {e}"))
+
+# === End multi-user block ===
+
+# === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
+# Supports per-user "From" emails, stored credentials, and a sidebar composer.
+import smtplib
+from email.message import EmailMessage
+import base64
+
+# Map users to their From addresses
+USER_EMAILS = {
+    "Quincy": "quincy.elamgmt@gmail.com",
+    "Charles": "charles.elamgmt@gmail.com",
+    "Collin": "collin.elamgmt@gmail.com",
+}
+
+def _mail_store_path():
+    base = os.path.join(os.getcwd(), "secure_auth")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "mail.json")
+
+def _load_mail_store():
+    path = _mail_store_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_mail_store(store: dict):
+    path = _mail_store_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
+
+def set_user_smtp_app_password(user: str, app_password: str):
+    store = _load_mail_store()
+    u = store.get(user, {})
+    # Light obfuscation (not true encryption) — recommend using Gmail App Passwords
+    u["smtp_host"] = "smtp.gmail.com"
+    u["smtp_port"] = 587
+    u["username"] = USER_EMAILS.get(user, "")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
+    store[user] = u
+    _save_mail_store(store)
+
+def get_user_mail_config(user: str):
+    store = _load_mail_store()
+    rec = store.get(user, {})
+    if not rec:
+        return None
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    return {
+        "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
+        "smtp_port": rec.get("smtp_port", 587),
+        "username": rec.get("username", ""),
+        "password": pw,
+        "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
+    }
+
+def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
+    cfg = get_user_mail_config(user)
+    if not cfg or not cfg.get("username") or not cfg.get("password"):
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject or ""
+    msg["From"] = cfg["from_addr"]
+    # Parse address lists
+    def _split(a):
+        if not a:
+            return []
+        if isinstance(a, list):
+            return a
+        return [x.strip() for x in str(a).replace(";", ",").split(",") if x.strip()]
+
+    to_list = _split(to_addrs)
+    cc_list = _split(cc_addrs)
+    bcc_list = _split(bcc_addrs)
+    if not to_list:
+        raise RuntimeError("Please provide at least one recipient in To.")
+
+    msg["To"] = ", ".join(to_list)
+    if cc_list: msg["Cc"] = ", ".join(cc_list)
+
+    # HTML body; also set a plain text fallback
+    from html import unescape
+    plain = re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+    msg.set_content(plain or "(no content)")
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
+
+    # Optional read receipts
+    if add_read_receipts:
+        # These headers work only if recipient mail server honors them
+        msg["Disposition-Notification-To"] = cfg["from_addr"]
+        msg["Return-Receipt-To"] = cfg["from_addr"]
+
+    # Optional tracking pixel
+    if tracking_pixel_url and body_html:
+        try:
+            import uuid, urllib.parse as _u
+            tid = tracking_id or str(uuid.uuid4())
+            qp = {"id": tid, "to": ",".join(to_list)}
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            body_html = (body_html or "") + pixel
+            # Replace the last HTML alternative with updated body_html
+            msg.clear_content()
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
+            msg.set_content(plain or "(no content)")
+            msg.add_alternative(body_html, subtype="html")
+        except Exception:
+            pass
+
+
+    # Attachments
+
+    attachments = attachments or []
+    for att in attachments:
+        try:
+            filename = getattr(att, "name", None)
+            content = None
+
+            # Streamlit UploadedFile or file-like object with getvalue or read
+            if hasattr(att, "getvalue"):
+                content = att.getvalue()
+            elif hasattr(att, "read"):
+                try:
+                    att.seek(0)
+                except Exception:
+                    pass
+                content = att.read()
+            # Dict form: {"name": ..., "data": bytes} or {"path": ...}
+            elif isinstance(att, dict):
+                filename = att.get("name", filename or "file")
+                if "data" in att and att["data"] is not None:
+                    content = att["data"]
+                elif "content" in att and att["content"] is not None:
+                    val = att["content"]
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
+                elif "path" in att:
+                    import os
+                    path = att["path"]
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(path)
+            # Raw bytes
+            elif isinstance(att, (bytes, bytearray)):
+                content = bytes(att)
+            # String path
+            elif isinstance(att, str):
+                import os
+                if os.path.exists(att):
+                    with open(att, "rb") as f:
+                        content = f.read()
+                    if not filename:
+                        filename = os.path.basename(att)
+
+            if content is None:
+                raise ValueError("Unsupported attachment type")
+
+            if not filename:
+                filename = "attachment.bin"
+
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
+        except Exception as e:
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
+
+    all_rcpts = to_list + cc_list + bcc_list
+
+    # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
+    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
+    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(cfg["username"], cfg["password"])
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
+
+
+# --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
+
+
+
+
+def _normalize_extra_files(files):
+    """Normalize a list of attachments into dicts with name and raw bytes in data."""
+    out = []
+    try:
+        for f in (files or []):
+            # Already a normalized dict
+            if isinstance(f, dict):
+                name = f.get("name") or f.get("filename") or "file"
+                if "data" in f and f["data"] is not None:
+                    out.append({"name": name, "data": f["data"]})
+                    continue
+                if "content" in f and f["content"] is not None:
+                    val = f["content"]
+                    if isinstance(val, (bytes, bytearray)):
+                        out.append({"name": name, "data": bytes(val)})
+                    elif isinstance(val, str):
+                        import os
+                        if os.path.exists(val):
+                            with open(val, "rb") as fh:
+                                out.append({"name": name, "data": fh.read()})
+                        else:
+                            out.append({"name": name, "data": val.encode("utf-8")})
+                    continue
+                if "path" in f and f["path"]:
+                    import os
+                    path = f["path"]
+                    try:
+                        with open(path, "rb") as fh:
+                            out.append({"name": name or os.path.basename(path), "data": fh.read()})
+                    except Exception:
+                        pass
+                    continue
+
+            # Streamlit UploadedFile or similar
+            if hasattr(f, "getvalue"):
+                out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                continue
+            if hasattr(f, "read"):
+                try:
+                    f.seek(0)
+                except Exception:
+                    pass
+                try:
+                    data = f.read()
+                    out.append({"name": getattr(f, "name", "file"), "data": data})
+                    continue
+                except Exception:
+                    pass
+
+            # File path string
+            if isinstance(f, str):
+                import os
+                if os.path.exists(f):
+                    try:
+                        with open(f, "rb") as fh:
+                            out.append({"name": os.path.basename(f), "data": fh.read()})
+                        continue
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return out
+
+
+
+def _log_contact_outreach(entries):
+    """Append outreach log entries to data/contact_outreach_log.json"""
+    try:
+        import os, json, datetime
+        base = os.path.join(os.getcwd(), "data")
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, "contact_outreach_log.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+        timestamp = datetime.datetime.utcnow().isoformat()+"Z"
+        for e in entries or []:
+            e.setdefault("ts_utc", timestamp)
+        existing.extend(entries or [])
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2)
+        return path
+    except Exception:
+        return None
+
+
+def render_outreach_tools():
+    import streamlit as st
+    import streamlit.components.v1 as components
+    # ---------- Helpers ----------
+    def _normalize_sel_attachments(sel_atts):
+        """Return a list of dicts with just 'name' for display when attachments in the generated item are names/dicts."""
+        out = []
+        base = sel_atts or []
+        try:
+            for a in base:
+                if isinstance(a, dict) and ("name" in a or "filename" in a):
+                    nm = a.get("name") or a.get("filename") or "attachment"
+                    out.append({"name": nm})
+                elif isinstance(a, str):
+                    out.append({"name": a})
+        except Exception:
+            pass
+        return out
+
+
+        out = []
+        try:
+            for f in (files or []):
+                # Already-normalized dict: pass through or convert
+                if isinstance(f, dict):
+                    name = f.get("name") or f.get("filename") or "file"
+                    if "data" in f and f["data"] is not None:
+                        out.append({"name": name, "data": f["data"]})
+                    elif "content" in f and f["content"] is not None:
+                        val = f["content"]
+                        if isinstance(val, (bytes, bytearray)):
+                            out.append({"name": name, "data": bytes(val)})
+                        elif isinstance(val, str):
+                            # If looks like a path, try to read from disk
+                            import os
+                            if os.path.exists(val):
+                                with open(val, "rb") as fh:
+                                    out.append({"name": name, "data": fh.read()})
+                            else:
+                                out.append({"name": name, "data": val.encode("utf-8")})
+                    elif "path" in f and f["path"]:
+                        import os
+                        path = f["path"]
+                        try:
+                            with open(path, "rb") as fh:
+                                out.append({"name": name or os.path.basename(path), "data": fh.read()})
+                        except Exception:
+                            pass
+                    continue
+
+                # Streamlit UploadedFile or similar
+                if hasattr(f, "getvalue"):
+                    out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                    continue
+                if hasattr(f, "read"):
+                    try:
+                        f.seek(0)
+                    except Exception:
+                        pass
+                    try:
+                        data = f.read()
+                        out.append({"name": getattr(f, "name", "file"), "data": data})
+                        continue
+                    except Exception:
+                        pass
+
+                # File path
+                if isinstance(f, str):
+                    import os
+                    if os.path.exists(f):
+                        try:
+                            with open(f, "rb") as fh:
+                                out.append({"name": os.path.basename(f), "data": fh.read()})
+                            continue
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return out
+
+    # Robust local sender that tries multiple implementations
+    def _send_email(user, to, subject, body_html, cc="", bcc="", attachments=None):
+        last_err = None
+        # Preferred modern signature
+        try:
+            return send_outreach_email(user, to, subject, body_html,
+                                       cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+        except Exception as e:
+            last_err = e
+        # Legacy fallback (active-user based)
+        try:
+            return outreach_send_from_active_user(to, subject, body_html,
+                                                  cc=cc, bcc=bcc, attachments=attachments)
+        except Exception as e:
+            last_err = e
+        # Optional extra names if your app exposes them
+        for name in ("send_outreach_message", "send_gmail_message", "send_mail", "outreach_send"):
+            fn = globals().get(name)
+            if callable(fn):
+                try:
+                    return fn(user, to, subject, body_html, cc, bcc, attachments)
+                except Exception as e:
+                    last_err = e
+        raise last_err or RuntimeError("No outreach sender is available")
+
+    # ---------- Stable session keys ----------
+    SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"             # snapshot for the Gmail-style preview card
+    SKEY_ATTACH  = f"{ACTIVE_USER}::outreach::extra_attachments"   # extra attachments uploaded by user (UploadedFile list)
+    SKEY_LASTSIG = f"{ACTIVE_USER}::outreach::last_loaded_sig"
+
+    st.session_state.setdefault(SKEY_PREVIEW, None)
+    st.session_state.setdefault(SKEY_ATTACH, [])
+
+    st.session_state.setdefault(SKEY_LASTSIG, "")
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+
+    # ---------- Header ----------
+    with st.container(border=True):
+        top_l, top_r = st.columns([3,2])
+        with top_l:
+            st.markdown("### ✉️ Outreach")
+            st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
+        with st.container(border=True):
+            mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
+
+
+
+    # ---- Contacts Outreach ----
+    if mode == "Contacts":
+        with st.container(border=True):
+            st.markdown("#### Contacts")
+            # Read receipts + tracking pixel options
+            with st.expander("Delivery & Tracking options", expanded=False):
+                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
+                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
+            # Load contacts from CSV
+            col_c1, col_c2 = st.columns([2,1])
+            with col_c1:
+                search = st.text_input("Search contacts", key="outreach_contact_search")
+            with col_c2:
+                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
+            contacts = []
+            import os, csv
+            # Prefer uploaded CSV
+            if uploaded is not None:
+                try:
+                    txt = uploaded.getvalue().decode("utf-8", errors="ignore")
+                    for row in csv.DictReader(txt.splitlines()):
+                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
+                        if em:
+                            contacts.append({"name": nm, "email": em})
+                except Exception:
+                    pass
+            else:
+                # Try default data/contacts.csv
+                try:
+                    path = os.path.join(os.getcwd(), "data", "contacts.csv")
+                    if os.path.exists(path):
+                        with open(path, "r", encoding="utf-8") as f:
+                            for row in csv.DictReader(f):
+                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
+                                if em:
+                                    contacts.append({"name": nm, "email": em})
+                except Exception:
+                    pass
+
+            # Filter by search
+            s = (search or "").lower().strip()
+            if s:
+                contacts = [c for c in contacts if s in (c.get("name","")+c.get("email","")).lower()]
+
+            # Options
+            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
+            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
+
+            subj = st.text_input("Subject", key="outreach_contact_subject")
+            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
+            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
+
+            if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
+                emails = []
+                label_to_email = {}
+                for c, lbl in zip(contacts, labels):
+                    label_to_email[lbl] = c["email"]
+                for lbl in selected:
+                    em = label_to_email.get(lbl)
+                    if em:
+                        emails.append(em)
+                if not emails:
+                    st.warning("Select at least one contact.")
+                elif not subj or not body:
+                    st.warning("Subject and body are required.")
+                else:
+                    # Normalize files
+                    atts = _normalize_extra_files(c_files)
+                    # Tracking id per batch
+                    import uuid
+                    batch_id = str(uuid.uuid4())
+                    failures = []
+                    sent = 0
+                    for em in emails:
+                        try:
+                            send_outreach_email(
+                                ACTIVE_USER, [em], subj, body,
+                                cc_addrs=None, bcc_addrs=None, attachments=atts,
+                                add_read_receipts=want_rr, tracking_pixel_url=(pixel_url or None),
+                                tracking_id=batch_id + "::" + em
+                            )
+                            sent += 1
+                        except Exception as e:
+                            failures.append((em, str(e)))
+                    # Log
+                    _log_contact_outreach([{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
+                    if failures:
+                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + "; ".join([f"{a} ({b})" for a,b in failures]))
+                    else:
+                        st.success(f"Sent {sent} / {len(emails)}")
+        # Stop rendering vendor section if Contacts mode
+        return
+
+
+        with top_r:
+            pass
+
+    # ---- Account: App Password (still here) ----
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
+            try:
+                set_user_smtp_app_password(ACTIVE_USER, pw)
+                st.success("Saved")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
+
+    st.divider()
+
+    # ---------- Choose Generated Email & Attachments (required) ----------
+    with st.container(border=True):
+        st.markdown("#### Choose Generated Email")
+        mb = st.session_state.get("mail_bodies") or []
+        if not mb:
+            st.info("Generate emails to select one for preview.", icon="ℹ️")
+        else:
+            idx = st.number_input("Select one", min_value=1, max_value=len(mb), value=len(mb), step=1,
+                                  key=ns_key("outreach::pick_idx"))
+            sel = mb[int(idx)-1]
+
+            # Show key fields from the generated email
+            st.caption(f"**To:** {sel.get('to','')}")
+            st.caption(f"**Subject:** {sel.get('subject','')}")
+            scope_disp = sel.get("scope_summary") or sel.get("scope") or ""
+            due_disp = sel.get("quote_due") or sel.get("due") or ""
+            meta_cols = st.columns(2)
+            with meta_cols[0]:
+                st.markdown(f"**Scope Summary:** {scope_disp}")
+            with meta_cols[1]:
+                st.markdown(f"**Quote Due:** {due_disp}")
+
+            # Attachments uploader (REQUIRED) placed below Quote Due
+            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+                                           key=ns_key("outreach::extra_files"))
+            if extra_files is not None:
+                st.session_state[SKEY_ATTACH] = extra_files
+
+            # Generate preview button
+            if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
+                files = st.session_state.get(SKEY_ATTACH) or []
+                if not files:
+                    st.warning("Please upload at least one attachment before generating the preview.")
+                else:
+                    # Build display names from generated attachments + uploaded files
+                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
+                    try:
+                        upload_names = [{"name": getattr(f, "name", "file")} for f in files]
+                    except Exception:
+                        upload_names = []
+                    st.session_state[SKEY_PREVIEW] = {
+                        "to": sel.get("to",""),
+                        "cc": sel.get("cc",""),
+                        "bcc": sel.get("bcc",""),
+                        "subject": sel.get("subject",""),
+                        "body_html": sel.get("body",""),
+                        "from_addr": USER_EMAILS.get(ACTIVE_USER, ""),
+                        "scope_summary": scope_disp,
+                        "quote_due": due_disp,
+                        "attachments": (gen_names or []) + (upload_names or [])
+                    }
+                    st.success("Preview generated below.")
+
+
+            actions2 = st.columns([1, 2, 2, 5])
+            with actions2[1]:
+                if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
+                    files = st.session_state.get(SKEY_ATTACH) or []
+                    if not files:
+                        st.warning("Please upload at least one attachment before sending.")
+                    else:
+                        try:
+                            merged_atts = _normalize_sel_attachments(sel.get("attachments")) + _normalize_extra_files(files)
+                            _send_email(
+                                ACTIVE_USER,
+                                sel.get("to",""),
+                                sel.get("subject",""),
+                                sel.get("body",""),
+                                cc=sel.get("cc",""),
+                                bcc=sel.get("bcc",""),
+                                attachments=merged_atts
+                            )
+                            st.success("Selected email sent.")
+                        except Exception as e:
+                            st.error(f"Failed to send selected: {e}")
+            with actions2[2]:
+                if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
+                    files = st.session_state.get(SKEY_ATTACH) or []
+                    if not files:
+                        st.warning("Please upload at least one attachment before mass sending.")
+                    else:
+                        mb_all = st.session_state.get("mail_bodies") or []
+                        sent = 0
+                        failures = []
+                        for i, itm in enumerate(mb_all, start=1):
+                            try:
+                                merged_atts = _normalize_sel_attachments(itm.get("attachments")) + _normalize_extra_files(files)
+                                _send_email(
+                                    ACTIVE_USER,
+                                    itm.get("to",""),
+                                    itm.get("subject",""),
+                                    itm.get("body",""),
+                                    cc=itm.get("cc",""),
+                                    bcc=itm.get("bcc",""),
+                                    attachments=merged_atts
+                                )
+                                sent += 1
+                            except Exception as e:
+                                failures.append((i, itm.get("subject",""), str(e)))
+                        if failures:
+                            st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join([f"#{i} {subj} ({err})" for i, subj, err in failures]))
+                        else:
+                            st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
+    snap = st.session_state.get(SKEY_PREVIEW)
+    with st.container(border=True):
+        st.markdown("#### Preview")
+        if not snap:
+            st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
+        else:
+            # Header block similar to Gmail
+            hdr_lines = []
+            if snap.get("from_addr"): hdr_lines.append(f"<div><b>From:</b> {snap['from_addr']}</div>")
+            if snap.get("to"):        hdr_lines.append(f"<div><b>To:</b> {snap['to']}</div>")
+            if snap.get("cc"):        hdr_lines.append(f"<div><b>Cc:</b> {snap['cc']}</div>")
+            if snap.get("bcc"):       hdr_lines.append(f"<div><b>Bcc:</b> {snap['bcc']}</div>")
+            if snap.get("subject"):   hdr_lines.append(f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
+
+            # Meta row: Scope Summary & Quote Due
+            meta_bits = []
+            if snap.get("scope_summary"):
+                meta_bits.append("<div style='display:inline-block;border:1px solid #eee;"
+                                 "padding:4px 8px;border-radius:8px;margin-right:8px;'><b>Scope:</b> "
+                                 f"{snap['scope_summary']}</div>")
+            if snap.get("quote_due"):
+                meta_bits.append("<div style='display:inline-block;border:1px solid #eee;"
+                                 "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
+                                 f"{snap['quote_due']}</div>")
+
+
+            # Attachments uploader (positioned below Quote Due)
+            extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
+                                           key=ns_key("outreach::extra_files"))
+            if extra_files is not None:
+                st.session_state[SKEY_ATTACH] = extra_files
+
+            # Body
+            body_html = (snap.get("body_html") or "").strip() or "<p><i>(No body content)</i></p>"
+
+            # Attachments display
+            atts_html = ""
+            atts = snap.get("attachments") or []
+            if atts:
+                items = "".join([f"<li>{(a.get('name') if isinstance(a,dict) else str(a))}</li>" for a in atts])
+                atts_html = ("<div style='margin-top:8px;'><b>Attachments:</b>"
+                             f"<ul style='margin:6px 0 0 20px;'>{items}</ul></div>")
+
+            components.html(f"""
+                <div style="border:1px solid #ddd;border-radius:8px;padding:14px;">
+                    <div style="margin-bottom:8px;">{''.join(hdr_lines)}</div>
+                    <div style="margin-bottom:8px;">{''.join(meta_bits)}</div>
+                    <div style="border:1px solid #eee;padding:10px;border-radius:6px;">{body_html}</div>
+                    {atts_html}
+                </div>
+            """, height=520, scrolling=True)
+
+            # Actions under the preview
+            a1, a2 = st.columns(2)
+            with a1:
+                if st.button("Send email", key=ns_key("outreach::send_from_preview"), use_container_width=True):
+                    try:
+                        _send_email(
+                            ACTIVE_USER,
+                            snap.get("to",""),
+                            snap.get("subject",""),
+                            snap.get("body_html",""),
+                            cc=snap.get("cc",""),
+                            bcc=snap.get("bcc",""),
+                            attachments=st.session_state.get(SKEY_ATTACH) or []
+                        )
+                        st.success("Email sent.")
+                        st.session_state[SKEY_PREVIEW] = None
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+            with a2:
+                if st.button("Close preview", key=ns_key("outreach::close_preview"), use_container_width=True):
+                    st.session_state[SKEY_PREVIEW] = None
+
+def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    key = lambda k: f"{ACTIVE_USER}::outreach::{k}"
+    st.session_state[key("to")] = to or ""
+    st.session_state[key("cc")] = cc or ""
+    st.session_state[key("bcc")] = bcc or ""
+    st.session_state[key("subj")] = subject or ""
+    st.session_state[key("body")] = html or ""
+    st.session_state[key("preview")] = {
+        "to": to or "",
+        "cc": cc or "",
+        "bcc": bcc or "",
+        "subject": subject or "",
+        "body_html": html or "",
+        "attachments": [],
+        "from_addr": from_addr,
+    }
+
+    st.subheader("Email – Outreach")
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    if not from_addr:
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+    else:
+        st.caption(f"From: {from_addr}")
+
+    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
+
+    hc1, hc2, hc3 = st.columns([1,1,2])
+    with hc1:
+        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
+            to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
+            cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
+            bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
+            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
+            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
+            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
+            st.session_state[ns_key("outreach::mail_preview_data")] = {
+                "to": to,
+                "cc": cc,
+                "bcc": bcc,
+                "subject": subj,
+                "body_html": body,
+                "attachments": atts,
+                "from_addr": from_addr,
+            }
+    with hc2:
+        if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
+            st.session_state[ns_key("outreach::mail_preview_data")] = None
+
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
+            set_user_smtp_app_password(ACTIVE_USER, app_pw)
+            st.success("Saved. You can now send emails from the Outreach composer.")
+
+    with st.expander("Quick Outreach Composer", expanded=False):
+        to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"),
+                           placeholder="recipient@example.com, another@domain.com")
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
+                            placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
+                atts = []
+                try:
+                    for f in (files or []):
+                        try:
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                        except Exception:
+                            pass
+                except Exception:
+                    atts = []
+                st.session_state[ns_key("outreach::mail_preview_data")] = {
+                    "to": to or "",
+                    "cc": cc or "",
+                    "bcc": bcc or "",
+                    "subject": subj or "",
+                    "body_html": body or "",
+                    "attachments": atts,
+                    "from_addr": from_addr,
+                }
+        with c2:
+            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
+                try:
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    st.success("Email sent.")
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                        NS.pop(k, None)
+                except Exception as e:
+                    st.error(f"Failed to send: {e}")
+
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+    if preview:
+        import streamlit.components.v1 as components
+        with st.container(border=True):
+            st.markdown("#### Email preview")
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
+            if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
+            if preview.get("cc"): st.markdown(f"**Cc:** {preview['cc']}")
+            if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
+            html = preview.get("body_html") or ""
+            components.html(
+                f"""
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
+                    {html}
+                </div>
+                """,
+                height=400,
+                scrolling=True,
+            )
+        atts = preview.get("attachments") or []
+        if atts:
+            names = [a.get("name","file") for a in atts]
+            st.caption("Attachments: " + ", ".join(names))
+
+        cc1, cc2, _ = st.columns([1,1,2])
+        with cc1:
+            if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
+                class _MemFile:
+                    def __init__(self, name, data):
+                        self.name = name
+                        self._data = data
+                    def getvalue(self):
+                        return self._data
+                mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                try:
+                    send_outreach_email(
+                        ACTIVE_USER,
+                        preview.get("to",""),
+                        preview.get("subject",""),
+                        preview.get("body_html",""),
+                        cc_addrs=preview.get("cc",""),
+                        bcc_addrs=preview.get("bcc",""),
+                        attachments=mem_files
+                    )
+                    st.success("Email sent.")
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                        NS.pop(k, None)
+                except Exception as e:
+                    st.error(f"Failed to send: {e}")
+        with cc2:
+            if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
+                st.session_state[ns_key("outreach::mail_preview_data")] = None
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    if not from_addr:
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+    else:
+        st.caption(f"From: {from_addr}")
+
+    # Global preview state
+    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
+
+    # === Header-level controls ===
+    hc1, hc2, hc3 = st.columns([1,1,2])
+    with hc1:
+        if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
+            # Pull current draft values from session, even if the composer expander is closed
+            to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
+            cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
+            bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
+            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
+            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
+            # Attachments are not easily accessible from header because uploader holds file objects;
+            # keep whatever was already captured if a composer preview was taken, else empty.
+            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
+
+            st.session_state[ns_key("outreach::mail_preview_data")] = {
+                "to": to, "cc": cc, "bcc": bcc,
+                "subject": subj,
+                "body_html": body,
+                "attachments": atts,
+                "from_addr": from_addr,
+            }
+    with hc2:
+        if st.button("Clear preview", key=ns_key("outreach::hdr_preview_clear")):
+            st.session_state[ns_key("outreach::mail_preview_data")] = None
+
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
+            set_user_smtp_app_password(ACTIVE_USER, app_pw)
+            st.success("Saved. You can now send emails from the Outreach composer.")
+
+    # === Quick Outreach Composer ===
+    with st.expander("Quick Outreach Composer", expanded=False):
+        to = st.text_input("To (comma-separated)",
+                           key=ns_key("outreach::mail_to"),
+                           placeholder="recipient@example.com, another@domain.com")
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
+                            placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
+                # Snapshot current fields (including attachments) for a pixel-accurate preview
+                atts = []
+                try:
+                    for f in (files or []):
+                        try:
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                        except Exception:
+                            pass
+                except Exception:
+                    atts = []
+                st.session_state[ns_key("outreach::mail_preview_data")] = {
+                    "to": to or "",
+                    "cc": cc or "",
+                    "bcc": bcc or "",
+                    "subject": subj or "",
+                    "body_html": body or "",
+                    "attachments": atts,
+                    "from_addr": from_addr,
+                }
+        with c2:
+            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
+                try:
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    st.success("Email sent.")
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                        NS.pop(k, None)
+                except Exception as e:
+                    st.error(f"Failed to send: {e}")
+
+    # === Unified Preview Block (used by both header-level and composer-level triggers) ===
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+    if preview:
+        import streamlit.components.v1 as components
+        with st.container(border=True):
+            st.markdown("#### Email preview")
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
+            if preview.get("to"):
+                st.markdown(f"**To:** {preview['to']}")
+            if preview.get("cc"):
+                st.markdown(f"**Cc:** {preview['cc']}")
+            if preview.get("bcc"):
+                st.markdown(f"**Bcc:** {preview['bcc']}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
+
+            html = preview.get("body_html") or ""
+            components.html(
+                f"""
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
+                    {html}
+                </div>
+                """,
+                height=400,
+                scrolling=True,
+            )
+
+            atts = preview.get("attachments") or []
+            if atts:
+                names = [a.get("name","file") for a in atts]
+                st.caption("Attachments: " + ", ".join(names))
+
+            cc1, cc2, cc3 = st.columns([1,1,2])
+            with cc1:
+                if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
+                    class _MemFile:
+                        def __init__(self, name, data):
+                            self.name = name
+                            self._data = data
+                        def getvalue(self):
+                            return self._data
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                    try:
+                        send_outreach_email(
+                            ACTIVE_USER,
+                            preview.get("to",""),
+                            preview.get("subject",""),
+                            preview.get("body_html",""),
+                            cc_addrs=preview.get("cc",""),
+                            bcc_addrs=preview.get("bcc",""),
+                            attachments=mem_files
+                        )
+                        st.success("Email sent.")
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
+                        for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                            NS.pop(k, None)
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+            with cc2:
+                if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    if not from_addr:
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+    else:
+        st.caption(f"From: {from_addr}")
+
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
+            set_user_smtp_app_password(ACTIVE_USER, app_pw)
+            st.success("Saved. You can now send emails from the Outreach composer.")
+
+    # Preview state
+    st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
+
+    with st.expander("Quick Outreach Composer", expanded=False):
+        to = st.text_input("To (comma-separated)",
+                           key=ns_key("outreach::mail_to"),
+                           placeholder="recipient@example.com, another@domain.com")
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
+                            placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
+                # Store a snapshot of the compose fields in session so a rerun preserves the preview
+                # For attachments, store name and raw bytes so we can reconstruct file-like objects later.
+                atts = []
+                try:
+                    for f in (files or []):
+                        try:
+                            atts.append({
+                                "name": getattr(f, "name", "file"),
+                                "data": f.getvalue()
+                            })
+                        except Exception:
+                            pass
+                except Exception:
+                    atts = []
+                st.session_state[ns_key("outreach::mail_preview_data")] = {
+                    "to": to or "",
+                    "cc": cc or "",
+                    "bcc": bcc or "",
+                    "subject": subj or "",
+                    "body_html": body or "",
+                    "attachments": atts,
+                    "from_addr": from_addr,
+                }
+        with c2:
+            if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
+                try:
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    st.success("Email sent.")
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                        NS.pop(k, None)
+                except Exception as e:
+                    st.error(f"Failed to send: {e}")
+
+    # If a preview has been requested, render it exactly like the HTML body will appear.
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+    if preview:
+        import streamlit.components.v1 as components
+
+        with st.container(border=True):
+            st.markdown("#### Email preview")
+            # Header preview
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
+            if preview.get("to"):
+                st.markdown(f"**To:** {preview['to']}")
+            if preview.get("cc"):
+                st.markdown(f"**Cc:** {preview['cc']}")
+            if preview.get("bcc"):
+                st.markdown(f"**Bcc:** {preview['bcc']}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
+
+            # Render the HTML body using a component so styles and tags are honored
+            html = preview.get("body_html") or ""
+            components.html(
+                f"""
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
+                    {html}
+                </div>
+                """,
+                height=400,
+                scrolling=True,
+            )
+
+            # Show attachment list if any
+            atts = preview.get("attachments") or []
+            if atts:
+                names = [a.get("name","file") for a in atts]
+                st.caption("Attachments: " + ", ".join(names))
+
+            # Confirm send buttons
+            cc1, cc2, cc3 = st.columns([1,1,2])
+            with cc1:
+                if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
+                    # Rebuild simple in memory files compatible with send_outreach_email expectations
+                    class _MemFile:
+                        def __init__(self, name, data):
+                            self.name = name
+                            self._data = data
+                        def getvalue(self):
+                            return self._data
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                    try:
+                        send_outreach_email(
+                            ACTIVE_USER,
+                            preview.get("to",""),
+                            preview.get("subject",""),
+                            preview.get("body_html",""),
+                            cc_addrs=preview.get("cc",""),
+                            bcc_addrs=preview.get("bcc",""),
+                            attachments=mem_files
+                        )
+                        st.success("Email sent.")
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
+                        # Clear compose fields
+                        for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                            NS.pop(k, None)
+                    except Exception as e:
+                        st.error(f"Failed to send: {e}")
+            with cc2:
+                if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
+    from_addr = USER_EMAILS.get(ACTIVE_USER, "")
+    if not from_addr:
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
+    else:
+        st.caption(f"From: {from_addr}")
+
+    with st.expander("Set/Update my Gmail App Password", expanded=False):
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
+            set_user_smtp_app_password(ACTIVE_USER, app_pw)
+            st.success("Saved. You can now send emails from the Outreach composer.")
+
+    with st.expander("Quick Outreach Composer", expanded=False):
+        to = st.text_input("To (comma-separated)",
+                           key=ns_key("outreach::mail_to"),
+                           placeholder="recipient@example.com, another@domain.com")
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
+                            placeholder="<p>Hello...</p>")
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
+            try:
+                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                st.success("Email sent.")
+                for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
+                    NS.pop(k, None)
+            except Exception as e:
+                st.error(f"Failed to send: {e}")
+
+def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
+    return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
+# === End Outreach Email block (moved) ===
+
+
+
+
+import requests
+from PyPDF2 import PdfReader
+import docx
+from sklearn.feature_extraction.text import TfidfVectorizer
+# === OCR and clause risk helpers (injected) ===
+try:
+    import pytesseract  # optional
+    from pdf2image import convert_from_bytes
+except Exception:
+    pytesseract = None
+    convert_from_bytes = None
+
+CLAUSE_RISKS = {
+    "liquidated damages": "May require payments for delays. Propose realistic schedule and mitigation plan.",
+    "termination for convenience": "Government can end the contract at any time. Manage inventory and subcontracts carefully.",
+    "termination for default": "Strict performance risk. Include QA steps and corrective action plan.",
+    "excessive bonding": "High bonding can strain cash flow. Ask if alternatives are allowed.",
+    "unusual penalties": "Flag for legal review. Request clarification if ambiguous.",
+    "indemnification": "Risk transfer to contractor. Verify insurance coverage.",
+    "personal services": "May conflict with FAR rules if not intended. Confirm classification.",
+    "pay when paid": "Cash flow risk for subs. Negotiate fair terms.",
+    "liability cap absent": "Unlimited liability. Seek cap or clarify scope.",
+}
+def _find_clause_risks(text: str, top_k: int = 6):
+    text_l = (text or "").lower()
+    hits = []
+    for key, hint in CLAUSE_RISKS.items():
+        if key in text_l:
+            hits.append({"clause": key, "hint": hint})
+    return hits[:top_k]
+
+def _ocr_pdf_bytes(pdf_bytes: bytes) -> str:
+    if not (pytesseract and convert_from_bytes):
+        return ""
+    try:
+        pages = convert_from_bytes(pdf_bytes, dpi=200)
+        out = []
+        for img in pages[:30]:
+            out.append(pytesseract.image_to_string(img))
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
+# Optional HTML parsing for email scraper
+try:
+    from bs4 import BeautifulSoup  # pip install beautifulsoup4
+except Exception:
+    BeautifulSoup = None
+
+# ---------- Safe key loader ----------
+def _get_key(name: str) -> str:
+    v = os.getenv(name, "")
+    if v:
+        return v
+    try:
+        return st.secrets[name]
+    except Exception:
+        return ""
+
+OPENAI_API_KEY     = (_get_key("OPENAI_API_KEY") or "").strip()
+GOOGLE_PLACES_KEY  = (_get_key("GOOGLE_PLACES_API_KEY") or "").strip()
+SAM_API_KEY        = (_get_key("SAM_API_KEY") or "").strip()
+MS_TENANT_ID       = (_get_key("MS_TENANT_ID") or "").strip()
+MS_CLIENT_ID       = (_get_key("MS_CLIENT_ID") or "").strip()
+MS_CLIENT_SECRET   = (_get_key("MS_CLIENT_SECRET") or "").strip()
+
+# ---------- OpenAI client ----------
+try:
+    import openai as _openai_pkg
+    from openai import OpenAI  # openai>=1.40.0 recommended
+    _openai_version = getattr(_openai_pkg, "__version__", "unknown")
+except Exception as e:
+    st.warning("OpenAI SDK missing or too old. Chat features disabled until installed.")
+    OpenAI = None
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
+_OPENAI_FALLBACK_MODELS = [
+    OPENAI_MODEL,
+    "gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
+    "gpt-5-mini","gpt-5-mini-2025-08-07",
+    "gpt-5-nano","gpt-5-nano-2025-08-07",
+    "gpt-4o-mini","gpt-4o",
+]
+
+
+def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
+                        smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str,
+                        reply_to: str | None = None) -> None:
+    """Top level SMTP sender. Keeps email helpers available across the app."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart()
+    msg['From'] = from_addr
+    msg['To'] = to_addr
+    msg['Subject'] = subject
+    if reply_to:
+        msg['Reply-To'] = reply_to
+    msg.attach(MIMEText(body, 'plain'))
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_addr, [to_addr], msg.as_string())
+
+
+def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
+    """
+    Gmail sender using Streamlit secrets.
+    Falls back to Microsoft Graph if Gmail is not configured.
+    Returns "Sent" or "Preview" string to avoid crashes.
+    """
+    try:
+        smtp_user = st.secrets.get("smtp_user")
+        smtp_pass = st.secrets.get("smtp_pass")
+    except Exception:
+        smtp_user = smtp_pass = None
+
+    if smtp_user and smtp_pass:
+        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
+        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
+        try:
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+            return "Sent"
+        except Exception as e:
+            try:
+                st.warning(f"Gmail SMTP send failed: {e}")
+            except Exception:
+                pass
+    # Fallback to Graph or preview
+    try:
+        sender_upn = get_setting("ms_sender_upn", "")
+    except Exception:
+        sender_upn = ""
+    try:
+        res = send_via_graph(to_addr, subject, body, sender_upn=sender_upn)
+        return res if isinstance(res, str) else "Sent"
+    except Exception:
+        try:
+            import streamlit as _st
+            _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
+        except Exception:
+            pass
+        return "Preview"
+
+st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
+
+# ---- Date helpers for SAM search ----
+
+# ---- SAM date parsing helper ----
+try:
+    _ = _parse_sam_date
+except NameError:
+    from datetime import datetime
+    def _parse_sam_date(s):
+        """Parse common SAM.gov date/time strings into datetime; return original on failure."""
+        if s is None:
+            return None
+        if isinstance(s, datetime):
+            return s
+        txt = str(s).strip()
+        # Try a few common SAM formats
+        fmts = [
+            "%m/%d/%Y %I:%M %p %Z",   # 09/30/2025 02:00 PM ET
+            "%m/%d/%Y %H:%M %Z",      # 09/30/2025 14:00 ET
+            "%m/%d/%Y %I:%M %p",      # 09/30/2025 02:00 PM
+            "%m/%d/%Y %H:%M",         # 09/30/2025 14:00
+            "%m/%d/%Y",               # 09/30/2025
+            "%Y-%m-%dT%H:%M:%SZ",     # 2025-09-30T18:00:00Z
+            "%Y-%m-%d"                # 2025-09-30
+        ]
+        for f in fmts:
+            try:
+                return datetime.strptime(txt, f)
+            except Exception:
+                pass
+        return txt
+try:
+    _ = _us_date
+except NameError:
+    from datetime import datetime
+    def _us_date(dt):
+        try:
+            return dt.strftime("%m/%d/%Y")
+        except Exception:
+            # If dt is a string or not a datetime, return as-is
+            return str(dt)
+
+
+# ---- Hoisted SAM helper (duplicate for e# (early use) ----
+
+# ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
+from datetime import datetime
+
+def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None) -> str:
+    """
+    Send mail using Microsoft Graph with application permissions (client credentials).
+    Uses /users/{sender}/sendMail. Returns "Sent" on success or a short diagnostic string on error.
+    Env/settings used:
+      - MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET
+      - MS_SENDER_UPN or settings key ms_sender_upn
+    """
+    try:
+        import os, requests
+        from urllib.parse import quote_plus
+    except Exception as _e_imp:
+        return f"Graph send error: missing dependency ({_e_imp})"
+
+    # Load config: prefer env, then settings table if available
+    try:
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
+    except Exception:
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or ""
+
+    # MS_* may already be loaded at module level; fall back to env/settings if empty
+    try:
+        _tenant = os.getenv("MS_TENANT_ID") or get_setting("MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
+    except Exception:
+        _tenant = os.getenv("MS_TENANT_ID") or ""
+    try:
+        _client_id = os.getenv("MS_CLIENT_ID") or get_setting("MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
+    except Exception:
+        _client_id = os.getenv("MS_CLIENT_ID") or ""
+    try:
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting("MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
+    except Exception:
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or ""
+
+    if not to_addr:
+        return "Missing recipient email"
+    if not (_tenant and _client_id and _client_secret):
+        return "Graph not configured. Set MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET"
+    if not sender:
+        return "Missing sender mailbox. Set MS_SENDER_UPN or settings key ms_sender_upn"
+
+    # Acquire app-only token
+    try:
+        token_r = requests.post(
+            f"https://login.microsoftonline.com/{_tenant}/oauth2/v2.0/token",
+            data={
+                "client_id": _client_id,
+                "client_secret": _client_secret,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "client_credentials",
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        return f"Graph token exception: {e}"
+
+    if token_r.status_code != 200:
+        return f"Graph token error {token_r.status_code}: {token_r.text[:300]}"
+    try:
+        token = token_r.json().get("access_token")
+    except Exception:
+        token = None
+    if not token:
+        return f"Graph token error: {token_r.text[:300]}"
+
+    # Build payload
+    payload = {
+        "message": {
+            "subject": subject or "",
+            "body": {"contentType": "Text", "content": body or ""},
+            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+            "from": {"emailAddress": {"address": sender}},
+        },
+        "saveToSentItems": True,  # boolean must be used
+    }
+
+    send_url = f"https://graph.microsoft.com/v1.0/users/{quote_plus(sender)}/sendMail"
+    try:
+        r = requests.post(
+            send_url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+    except Exception as e:
+        return f"Graph send exception: {e}"
+
+    if r.status_code in (200, 202):
+        return "Sent"
+
+    # surface helpful diagnostics
+    try:
+        err_json = r.json()
+        err_txt = str(err_json)[:500]
+    except Exception:
+        err_txt = (r.text or "")[:500]
+    return f"Graph send error {r.status_code}: {err_txt}"
+
+
+
+
+# === Market pricing data helpers (robust) ===
+def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200, st_debug=None):
+    import requests, pandas as pd, json
+    url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    type_codes = ["A","B","C","D"]
+    def make_filters(n, p, k, start, end):
+        f = {"time_period": [{"start_date": start, "end_date": end}], "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
+        if n: f["naics_codes"] = [n]
+        if p: f["psc_codes"] = [p]
+        if k: f["keywords"] = [k]
+        return f
+    if not date_from or not date_to:
+        from datetime import datetime, timedelta
+        end = datetime.utcnow().date().strftime("%Y-%m-%d")
+        start = (datetime.utcnow().date() - timedelta(days=365*2)).strftime("%Y-%m-%d")
+        date_from, date_to = date_from or start, date_to or end
+    attempts = [("full", make_filters(naics, psc, keyword, date_from, date_to)),
+                ("no_psc", make_filters(naics, "", keyword, date_from, date_to)),
+                ("no_naics", make_filters("", psc, keyword, date_from, date_to)),
+                ("keyword_only", make_filters("", "", keyword or "", date_from, date_to)),
+                ("bare", make_filters("", "", "", date_from, date_to))]
+    last_detail = ""
+    for name, flt in attempts:
+        payload = {"filters": flt, "fields": ["Award ID","Recipient Name","Start Date","End Date","Award Amount","Awarding Agency","NAICS Code","PSC Code"],
+                   "page": 1, "limit": max(1, min(int(limit), 500)), "sort": "Award Amount", "order": "desc"}
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=30)
+            status = r.status_code
+            js = r.json() if status < 500 else {}
+            rows = js.get("results", []) or []
+            if rows:
+                data = [{"award_id": it.get("Award ID"),
+                         "recipient": it.get("Recipient Name"),
+                         "start": it.get("Start Date"),
+                         "end": it.get("End Date"),
+                         "amount": it.get("Award Amount"),
+                         "agency": it.get("Awarding Agency"),
+                         "naics": it.get("NAICS Code"),
+                         "psc": it.get("PSC Code")} for it in rows]
+                diag = f"Attempt {name}: HTTP {status}, rows={len(rows)}"
+                if st_debug is not None:
+                    st_debug.code(json.dumps(payload, indent=2))
+                    st_debug.caption(diag)
+                return pd.DataFrame(data), diag
+            else:
+                last_detail = f"Attempt {name}: HTTP {status}, empty; message: {js.get('detail') or js.get('messages') or ''}"
+        except Exception as e:
+            last_detail = f"Attempt {name}: exception {e}"
+    if st_debug is not None:
+        st_debug.caption(last_detail)
+    return pd.DataFrame(), last_detail
+
+def summarize_award_prices(df):
+    import numpy as np, pandas as pd
+    if df is None or df.empty or "amount" not in df.columns: return {}
+    vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
+    if vals.empty: return {}
+    return {"count": int(vals.size), "min": float(vals.min()), "p25": float(np.percentile(vals,25)),
+            "median": float(np.percentile(vals,50)), "p75": float(np.percentile(vals,75)),
+            "max": float(vals.max()), "mean": float(vals.mean())}
+
+def gsa_calc_rates(query: str, page: int = 1):
+    import requests, pandas as pd
+    url = "https://api.gsa.gov/technology/calc/search"
+    params = {"q": query, "page": page}
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        js = r.json()
+        items = js.get("results", []) or []
+        rows = [{"vendor": it.get("vendor_name"), "labor_category": it.get("labor_category"),
+                 "education": it.get("education_level"), "min_years_exp": it.get("min_years_experience"),
+                 "hourly_ceiling": it.get("current_price"), "schedule": it.get("schedule"), "sin": it.get("sin")} for it in items]
+        return pd.DataFrame(rows)
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
+def _coerce_dt(x):
+    if isinstance(x, datetime):
+        return x
+    try:
+        y = _parse_sam_date(x)
+        return y if isinstance(y, datetime) else None
+    except Exception:
+        return None
+
+def sam_search(
+    naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
+    notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
+):
+    if not SAM_API_KEY:
+        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+    base = "https://api.sam.gov/opportunities/v2/search"
+    today = datetime.utcnow().date()
+    min_due_date = today + timedelta(days=min_days)
+    posted_from = _us_date(today - timedelta(days=posted_from_days))
+    posted_to   = _us_date(today)
+
+    params = {
+        "api_key": SAM_API_KEY,
+        "limit": str(limit),
+        "response": "json",
+        "sort": "-publishedDate",
+        "active": active,
+        "postedFrom": posted_from,   # MM/dd/yyyy
+        "postedTo": posted_to,       # MM/dd/yyyy
+    }
+    # Enforce only Solicitation + Combined when notice_types is blank
+    if not notice_types:
+        notice_types = "Combined Synopsis/Solicitation,Solicitation"
+    params["noticeType"] = notice_types
+
+    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
+    if keyword:      params["keywords"] = keyword
+
+    try:
+        headers = {"X-Api-Key": SAM_API_KEY}
+        r = requests.get(base, params=params, headers=headers, timeout=40)
+        status = r.status_code
+        raw_preview = (r.text or "")[:1000]
+        try:
+            data = r.json()
+        except Exception:
+            return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
+        if status != 200:
+            err_msg = ""
+            if isinstance(data, dict):
+                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
+            return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
+        if isinstance(data, dict) and data.get("message"):
+            return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
+
+        items = data.get("opportunitiesData", []) or []
+        rows = []
+        for opp in items:
+            due_str = opp.get("responseDeadLine") or ""
+            d = _parse_sam_date(due_str)
+            d_dt = _coerce_dt(d)
+            min_dt = _coerce_dt(min_due_date)
+            if min_dt is None:
+                due_ok = True  # allow when min date unknown
+            else:
+                due_ok = (d_dt is None) or (d_dt >= min_dt)
+            if not due_ok: continue
+            docs = opp.get("documents", []) or []
+            rows.append({
+                "sam_notice_id": opp.get("noticeId"),
+                "title": opp.get("title"),
+                "agency": opp.get("organizationName"),
+                "naics": ",".join(opp.get("naicsCodes", [])),
+                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+                "response_due": due_str,
+                "posted": opp.get("publishedDate",""),
+                "type": opp.get("type",""),
+                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
+            })
+        df = pd.DataFrame(rows)
+        info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
+                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+                            "postedFrom": posted_from, "postedTo": posted_to,
+                            "min_due_days": min_days, "noticeType": notice_types,
+                            "active": active, "limit": limit}}
+        if df.empty:
+            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+        return df, info
+    except requests.RequestException as e:
+        return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
+
+
+
+# ---- Hoisted helper implementations (duplicate for e# === SAM Watch → Contacts auto sync helpers ===
+
+def _contacts_upsert(name: str = "", org: str = "", role: str = "", email: str = "", phone: str = "", source: str = "", notes: str = "") -> tuple:
+    # Insert or light update into contacts.
+    # Returns (action, id) where action is "insert" or "update".
+    # Upsert rule prefers email match. If no email then uses name and org.
+    try:
+        conn = get_db(); cur = conn.cursor()
+    except Exception:
+        return ("error", None)
+
+    email = (email or "").strip()
+    name = (name or "").strip()
+    org = (org or "").strip()
+    role = (role or "").strip()
+    phone = (phone or "").strip()
+    source = (source or "SAM.gov").strip() or "SAM.gov"
+    notes = (notes or "").strip()
+
+    row = None
+    try:
+        if email:
+            row = cur.execute("select id from contacts where lower(ifnull(email,'')) = lower(?) limit 1", (email,)).fetchone()
+        if not row and (name and org):
+            row = cur.execute("select id from contacts where lower(ifnull(name,''))=lower(?) and lower(ifnull(org,''))=lower(?) limit 1", (name, org)).fetchone()
+    except Exception:
+        row = None
+
+    if row:
+        cid = int(row[0])
+        try:
+            cur.execute(
+                "update contacts set name=coalesce(nullif(?, ''), name), org=coalesce(nullif(?, ''), org), role=coalesce(nullif(?, ''), role), email=coalesce(nullif(?, ''), email), phone=coalesce(nullif(?, ''), phone), source=coalesce(nullif(?, ''), source), notes=case when ifnull(notes,'')='' then ? else notes end where id=?",
+                (name, org, role, email, phone, source, notes, cid)
+            )
+            conn.commit()
+        except Exception:
+            pass
+        return ("update", cid)
+
+    try:
+        cur.execute(
+            "insert into contacts(name, org, role, email, phone, source, notes) values(?,?,?,?,?,?,?)",
+            (name, org, role, email, phone, source, notes)
+        )
+        conn.commit()
+        return ("insert", cur.lastrowid)
+    except Exception:
+        return ("error", None)
+
+
+def _extract_contacts_from_sam_row(r) -> list:
+    # Best effort extraction of POC and CO from a SAM Watch DataFrame row.
+    # Returns list of dicts suitable for _contacts_upsert.
+    def _g(keys):
+        for k in keys:
+            try:
+                v = r.get(k)
+            except Exception:
+                v = None
+            if v not in (None, float("nan")):
+                s = str(v).strip()
+                if s:
+                    return s
+        return ""
+
+    import re
+    agency = _g(["agency", "office", "department", "organization"]) or ""
+
+    poc_name = _g(["poc_name", "primary_poc_name", "pointOfContact", "primaryPointOfContact", "contact_name"]) or ""
+    poc_email = _g(["poc_email", "primary_poc_email", "pointOfContactEmail", "contact_email"]) or ""
+    poc_phone = _g(["poc_phone", "primary_poc_phone", "pointOfContactPhone", "contact_phone"]) or ""
+
+    co_name = _g(["co_name", "contracting_officer", "contractingOfficer", "buyer_name"]) or ""
+    co_email = _g(["co_email", "contracting_officer_email", "buyer_email"]) or ""
+    co_phone = _g(["co_phone", "contracting_officer_phone", "buyer_phone"]) or ""
+
+    blob = _g(["description", "summary", "text", "body"]) or ""
+    emails = []
+    if blob:
+        emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob)
+
+    out = []
+    if poc_email or poc_name or poc_phone:
+        out.append({"name": poc_name, "org": agency, "role": "POC", "email": poc_email, "phone": poc_phone, "source": "SAM.gov"})
+    if co_email or co_name or co_phone:
+        out.append({"name": co_name, "org": agency, "role": "CO", "email": co_email, "phone": co_phone, "source": "SAM.gov"})
+
+    if not any(c.get("email") for c in out) and emails:
+        out.append({"name": "", "org": agency, "role": "POC", "email": emails[0], "phone": "", "source": "SAM.gov", "notes": "from description"})
+
+    seen = set(); dedup = []
+    for c in out:
+        key = (c.get("email") or c.get("name"), c.get("org"))
+        if key in seen:
+            continue
+        seen.add(key); dedup.append(c)
+    return dedup
+
+
+# (early use) ----
+def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
+    """
+    Google Places Text Search + Details (phone + website).
+    Returns (list_of_vendors, info). Emails are NOT provided by Places.
+    """
+    if not GOOGLE_PLACES_KEY:
+        return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
+    try:
+        # 1) Text Search
+        search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
+        rs = requests.get(search_url, params=search_params, timeout=25)
+        status_code = rs.status_code
+        data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
+        api_status = data.get("status","")
+        results = data.get("results", []) or []
+
+        if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
+            return ([] if strict else results), {
+                "ok": False, "reason": api_status or "http_error", "http": status_code,
+                "api_status": api_status, "count": len(results),
+                "raw_preview": (rs.text or "")[:800],
+                "note": "Enable billing + 'Places API' in Google Cloud."
+            }
+
+        # 2) Details per result
+        out = []
+        for item in results:
+            place_id = item.get("place_id")
+            phone, website = "", ""
+            if place_id:
+                det_url = "https://maps.googleapis.com/maps/api/place/details/json"
+                det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
+                rd = requests.get(det_url, params=det_params, timeout=20)
+                det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
+                det = det_json.get("result", {})
+                phone = det.get("formatted_phone_number", "") or ""
+                website = det.get("website", "") or ""
+
+            out.append({
+                "company": item.get("name"),
+                "naics": "",
+                "trades": "",
+                "phone": phone,
+                "email": "",  # Emails not provided by Google Places
+                "website": website,
+                "city": location.split(",")[0].strip() if "," in location else location,
+                "state": location.split(",")[-1].strip() if "," in location else "",
+                "certifications": "",
+                "set_asides": "",
+                "notes": item.get("formatted_address",""),
+                "source": "GooglePlaces",
+            })
+        info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
+                "raw_preview": (rs.text or "")[:800]}
+        return out, info
+    except Exception as e:
+        return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
+
+def linkedin_company_search(keyword: str) -> str:
+    return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
+
+def build_context(max_rows=6):
+    conn = get_db()
+    g = pd.read_sql_query("select * from goals limit 1", conn)
+    goals_line = ""
+    if not g.empty:
+        rr = g.iloc[0]
+        goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
+                      f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
+    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    opp = pd.read_sql_query(
+        "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
+        conn, params=(max_rows,)
+    )
+    opp_lines = ["- " + " | ".join(filter(None, [
+        str(r["title"])[:80], str(r["agency"])[:40],
+        f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
+    ])) for _, r in opp.iterrows()]
+    vend = pd.read_sql_query(
+        """select trim(substr(naics,1,6)) as code, count(*) as cnt
+           from vendors where ifnull(naics,'')<>''
+           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
+        conn, params=(max_rows,)
+    )
+    vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
+    return "\n".join([
+        f"Company: {get_setting('company_name','ELA Management LLC')}",
+        f"Home location: {get_setting('home_loc','Houston, TX')}",
+        f"Goals: {goals_line or 'not set'}",
+        f"NAICS watch: {naics_line}",
+        "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
+        *opp_lines,
+        "Vendor coverage (top NAICS):" if not vend.empty else "Vendor coverage: (none)",
+        *vend_lines,
+    ])
+
+# ---------- External integrations ----------
+
+
+
+# ---- Safety helpers (fallbacks to avoid NameError at first render) ----
+try:
+    _ = linkedin_company_search
+except NameError:
+    def linkedin_company_search(q: str) -> str:
+        return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(q)}"
+
+
+try:
+    _ = google_places_search
+except NameError:
+    def google_places_search(*args, **kwargs):
+        """
+        Fallback stub when real google_places_search isn't loaded yet.
+        Accepts flexible signatures, e.g. (query, location, radius_meters).
+        Returns (results, info) where results is a list and info is a dict.
+        """
+        try:
+            query = args[0] if len(args) >= 1 else kwargs.get("query","")
+            loc = args[1] if len(args) >= 2 else kwargs.get("location","")
+            radius_m = args[2] if len(args) >= 3 else kwargs.get("radius_meters", 1609)
+        except Exception:
+            query, loc, radius_m = "", "", 1609
+        url = f"https://www.google.com/maps/search/{quote_plus(str(query)+' '+str(loc))}"
+        # Provide an empty result set and metadata so callers expecting tuple unpacking won't crash
+        return [], {"url": url, "note": "Fallback google_places_search stub used", "radius_m": radius_m}
+
+try:
+    _ = build_context
+except NameError:
+    def build_context(max_rows: int = 6) -> str:
+        return ""
+
+st.title("GovCon Copilot Pro")
+
+# Health card
+try:
+    render_health_card()
+except Exception:
+    pass
+
+def _render_identity_chip():
+    try:
+        conn = get_db()
+        import streamlit as st
+        uid = st.session_state.get("user_id")
+        oid = st.session_state.get("org_id")
+        uname = None
+        role = None
+        oname = None
+        if uid:
+            r = conn.execute("SELECT display_name, role FROM users WHERE id=?", (uid,)).fetchone()
+            if r: uname, role = r[0], r[1]
+        if oid:
+            r = conn.execute("SELECT name FROM orgs WHERE id=?", (oid,)).fetchone()
+            if r: oname = r[0]
+        if oname or uname:
+            c1, c2, c3 = st.columns([0.6,0.2,0.2])
+            with c3:
+                st.caption(f"Org: {oname or 'unknown'}  •  User: {uname or 'unknown'}  •  Role: {role or 'unknown'}")
+    except Exception as _ex:
+        import streamlit as st
+        st.caption("identity: n/a")
+_render_identity_chip()
+st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+DB_PATH = "data/app.db"
+
+NAICS_SEEDS = [
+    "561210","721110","562991","326191","336611","531120","531","722310","561990","722514","561612",
+    "561730","311511","238990","311812","561720","811210","236118","238220","237990","311423",
+    "562910","236220","332420","238320","541380","541519","561710","423730","238210","562211",
+    "541214","541330","541512","541511","541370","611430","611699","611310","611710","562111","562119",
+    "624230","488999","485510","485410","488510","541614","332994","334220","336992","561320","561311","541214"
+]
+
+SCHEMA = {
+    "vendors": """
+    create table if not exists vendors (
+        id integer primary key,
+        company text, naics text, trades text, phone text, email text, website text,
+        city text, state text, certifications text, set_asides text, notes text, source text,
+        created_at text default current_timestamp, updated_at text default current_timestamp
+    );
+    """,
+    "opportunities": """
+    # ===== app.py =====    st.session_state.setdefault('deals_refresh', 0)
+
 
 def _strip_markdown_to_plain(txt: str) -> str:
     """
@@ -625,9 +4233,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
         return default
 
 # ---- Feature flags ----
-_FEATURE_KEYS = [
-    "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking", "rfp_schema"]
+, "deals_core"]
 def init_feature_flags():
     flags = st.session_state.setdefault("feature_flags", {})
     # Do not remove existing keys. Only set missing to False.
@@ -1398,11 +5004,13 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
     all_rcpts = to_list + cc_list + bcc_list
 
+    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     # ACTIVE_USER provided by your sign-in block
@@ -1855,11 +5463,13 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     all_rcpts = to_list + cc_list + bcc_list
 
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
+    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 
 # --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
@@ -3792,7 +7402,13 @@ def normalize_vendor_website(website: str, display_link: str = None):
 
 def ensure_indexes(conn):
     cur = conn.cursor()
-    try: cur.execute("create index if not exists idx_opp_notice on opportunities(sam_notice_id)")
+    try: cur.execute("create index if not exists idx_opp_notice on opportunities(sam_notice_id)
+
+    try:
+        conn.execute("ALTER TABLE opportunities ADD COLUMN source text")
+    except Exception:
+        pass
+")
     except Exception: pass
     try: cur.execute("create index if not exists idx_outreach_vendor on outreach_log(vendor_id)")
     except Exception: pass
@@ -7433,11 +11049,17 @@ def render_sam_watch_ingest():
         with c2:
             if st.form_submit_button("Dismiss"):
                 for nid in selected_ids:
-                    set_notice_state(user_id, nid, "dismissed")
+                    set_notice_state(user_id, nid, "dismissed"); audit('dismiss', user_id, 'notice', str(nid))
         with c3:
             if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
+        with c4:
+            if feature_flags().get("compliance_gate", False) and st.form_submit_button("Compliance"):
+                if selected_ids:
+                    st.session_state["selected_notice_id"] = int(selected_ids[0])
+                    st.session_state["compliance_tab_open"] = True
+    
                 for nid in selected_ids:
-                    toggle_pipeline_star(user_id, nid)
+                    toggle_pipeline_star(user_id, nid); audit('star_toggle', user_id, 'notice', str(nid))
         # Diff controls
         if st.session_state.get("feature_flags", {}).get("amend_tracking"):
             d1, d2 = st.columns([1,5])
@@ -7449,6 +11071,7 @@ def render_sam_watch_ingest():
 
     # Render diff panel below
     render_diff_panel()
+    render_compliance_panel()
 
     # Footer paging
     p1, p2, p3 = st.columns([1,1,6])
@@ -8089,6 +11712,7 @@ def build_rfpv1_from_notice(notice_id: int) -> dict | None:
 
     # submission due datetime: only include if already ISO with tz
     if isinstance(due, str) and _is_iso_with_tz(due):
+    _pt0 = _time.perf_counter()
         # Try locate cite from rfp_chunks
         cite = None
         try:
@@ -8102,7 +11726,7 @@ def build_rfpv1_from_notice(notice_id: int) -> dict | None:
         data["submission"]["due_datetime"] = due
         if cite: data["submission"]["cite"] = cite
 
-    return data
+    metric_push('parser_time_ms', (_time.perf_counter()-_pt0)*1000.0, {'result':'ok'}); return data
 
 # Hook: after parse_rfp success, optionally build and store schema JSON
 def _rfp_phase1_maybe_store(nid: int):
@@ -8113,10 +11737,730 @@ def _rfp_phase1_maybe_store(nid: int):
     if not doc:
         return
     res = save_rfp_json(int(nid), doc)
+    try:
+        if feature_flags().get('compliance_v2', False) and res.get('ok'):
+            doc = build_rfpv1_from_notice(int(nid))
+            if doc:
+                build_lm_checklist(int(nid), doc)
+    except Exception as _seed_ex:
+        log_event('warn','lm_seed_failed', notice_id=int(nid), err=str(_seed_ex))
+    try:
+        if res.get('ok'):
+        try:
+            cnt = relock_on_amendment(int(nid))
+            import streamlit as st
+            st.session_state['amend_impact_count'] = cnt
+        except Exception:
+            pass
+            ensure_needs_review_if_green(int(nid))
+    except Exception:
+        pass
+
     if res.get("ok"):
         st.session_state["rfp_schema_ready"] = True
     else:
         log_event("warn","rfp_json_not_saved", notice_id=int(nid), errors=res.get("errors"))
+
+# === COMPLIANCE GATE PHASE 9 ===
+def ensure_compliance_schema():
+    conn = get_db()
+    cur = conn.cursor()
+    # lm_checklist
+    cur.execute("""CREATE TABLE IF NOT EXISTS lm_checklist(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        factor TEXT,
+        subfactor TEXT,
+        requirement TEXT NOT NULL,
+        source_page TEXT,
+        owner_id TEXT,
+        due_date TEXT,
+        status TEXT NOT NULL CHECK(status IN('Red','Yellow','Green')),
+        notes TEXT
+    );""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_lm_notice ON lm_checklist(notice_id);")
+    # required_docs
+    cur.execute("""CREATE TABLE IF NOT EXISTS required_docs(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        template_key TEXT,
+        required INTEGER NOT NULL DEFAULT 1,
+        provided INTEGER NOT NULL DEFAULT 0,
+        file_id TEXT
+    );""")
+    # signoffs
+    cur.execute("""CREATE TABLE IF NOT EXISTS signoffs(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN('Tech','Price','Contracts')),
+        user_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN('Pending','Approved','Rejected')),
+        ts TEXT NOT NULL
+    );""")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_signoff_role ON signoffs(notice_id, role);")
+    # qa_log
+    cur.execute("""CREATE TABLE IF NOT EXISTS qa_log(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,
+        asked_at TEXT,
+        deadline TEXT,
+        submitted_file_id TEXT
+    );""")
+    # notices.compliance_state column add if missing
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(notices)")}
+        if "compliance_state" not in cols:
+            conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
+    except Exception:
+        pass
+    conn.commit()
+
+def get_compliance_state(nid: int):
+    ensure_compliance_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    # checklist
+    rows = cur.execute("SELECT status FROM lm_checklist WHERE notice_id=?", (int(nid),)).fetchall()
+    all_green = bool(rows) and all((r[0]=='Green') for r in rows)
+    # required docs
+    docs = cur.execute("SELECT required, provided FROM required_docs WHERE notice_id=?", (int(nid),)).fetchall()
+    req_ok = all((int(r)==0 or int(p)==1) for r,p in docs) if docs else False
+    # signoffs
+    signs = cur.execute("SELECT role, status FROM signoffs WHERE notice_id=?", (int(nid),)).fetchall()
+    roles = {r:s for r,s in signs}
+    sign_ok = all(roles.get(r)=='Approved' for r in ['Tech','Price','Contracts'])
+    ok = all_green and req_ok and sign_ok
+    # collect unmet reasons
+    unmet = []
+    if not all_green:
+        unmet.append("Checklist items not all Green")
+    if not req_ok:
+        unmet.append("Required documents missing")
+    if not sign_ok:
+        unmet.append("All signoffs not Approved")
+    # current stored state
+    cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(nid),))
+    srow = cur.fetchone()
+    stored = srow[0] if srow else "Unreviewed"
+    return ok, unmet, stored
+
+def recompute_and_store_compliance(nid: int):
+    ensure_compliance_schema()
+    ok, unmet, stored = get_compliance_state(int(nid))
+    new_state = 'Green' if ok else 'Needs review'
+    conn = get_db()
+    conn.execute("UPDATE notices SET compliance_state=? WHERE id=?", (new_state, int(nid)))
+    conn.commit()
+    return new_state, unmet
+
+def ensure_needs_review_if_green(nid: int):
+    ensure_compliance_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(nid),))
+    row = cur.fetchone()
+    if not row: 
+        return
+    if row[0] == 'Green':
+        conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(nid),))
+        conn.commit()
+
+def upsert_checklist_row(nid:int, data:dict):
+    ensure_compliance_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    if data.get("id"):
+        cols = ["factor","subfactor","requirement","source_page","owner_id","due_date","status","notes"]
+        sets = ", ".join(f"{c}=?" for c in cols)
+        vals = [data.get(c) for c in cols] + [int(data["id"])]
+        cur.execute(f"UPDATE lm_checklist SET {sets} WHERE id=?", vals)
+    else:
+        cur.execute("""INSERT INTO lm_checklist(notice_id,factor,subfactor,requirement,source_page,owner_id,due_date,status,notes)
+                    VALUES(?,?,?,?,?,?,?,?,?)""", (int(nid), data.get("factor"), data.get("subfactor"), data.get("requirement"),
+                    data.get("source_page"), data.get("owner_id"), data.get("due_date"), data.get("status") or 'Red', data.get("notes")))
+    conn.commit()
+    recompute_and_store_compliance(int(nid))
+
+def upsert_required_doc(nid:int, data:dict):
+    ensure_compliance_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    if data.get("id"):
+        cols = ["name","template_key","required","provided","file_id"]
+        sets = ", ".join(f"{c}=?" for c in cols)
+        vals = [data.get(c) for c in cols] + [int(data["id"])]
+        cur.execute(f"UPDATE required_docs SET {sets} WHERE id=?", vals)
+    else:
+        cur.execute("""INSERT INTO required_docs(notice_id,name,template_key,required,provided,file_id)
+                    VALUES(?,?,?,?,?,?)""", (int(nid), data.get("name"), data.get("template_key"), int(data.get("required",1)),
+                    int(data.get("provided",0)), data.get("file_id")))
+    conn.commit()
+    recompute_and_store_compliance(int(nid))
+
+def set_signoff(nid:int, role:str, status:str, user_id:str):
+    ensure_compliance_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    ts = utc_now_iso() if 'utc_now_iso' in globals() else dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    # upsert
+    cur.execute("""INSERT INTO signoffs(notice_id, role, user_id, status, ts)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(notice_id, role) DO UPDATE SET user_id=excluded.user_id, status=excluded.status, ts=excluded.ts""",
+                (int(nid), role, user_id or "unknown", status, ts))
+    conn.commit()
+    recompute_and_store_compliance(int(nid))
+
+def add_qa_row(nid:int, question:str, deadline:str=None, submitted_file_id:str=None):
+    ensure_compliance_schema()
+    conn = get_db()
+    conn.execute("""INSERT INTO qa_log(notice_id, question, asked_at, deadline, submitted_file_id)
+                VALUES(?,?,?,?,?)""", (int(nid), question, dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), deadline, submitted_file_id))
+    conn.commit()
+
+def render_compliance_panel():
+    import streamlit as st
+    if not feature_flags().get("compliance_gate", False):
+        return
+    if not st.session_state.get("compliance_tab_open") or not st.session_state.get("selected_notice_id"):
+        return
+    ensure_compliance_schema()
+    nid = int(st.session_state["selected_notice_id"])
+    st.markdown("---")
+    st.subheader("Compliance")
+    # Amendment impact banner
+    try:
+        cnt = int(st.session_state.get('amend_impact_count') or 0)
+        if cnt > 0:
+            st.warning(f"Amendment impacted {cnt} checklist row(s). Review required.")
+    except Exception:
+        pass
+
+    # Current state
+    ok, unmet, stored = get_compliance_state(nid)
+    st.caption(f"State: {stored}. {'All clear' if ok else 'Blocked'}")
+    # Gate box
+    try:
+        if feature_flags().get('compliance_gate_v2', False):
+            ok2, unmet2 = gate_status(nid)
+            counts = _gate_counts(nid)
+            st.markdown("#### Gate")
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Green", counts.get("Green",0))
+            c2.metric("Yellow", counts.get("Yellow",0))
+            c3.metric("Red", counts.get("Red",0))
+            c4.markdown("🔓 Unlocked" if ok2 else "🔒 Locked")
+            if not ok2 and unmet2:
+                st.info("Gate reasons: " + "; ".join(unmet2))
+    except Exception as _gx:
+        st.caption(f"[Gate box error: {_gx}]")
+
+    if unmet:
+        st.warning("Unmet: " + "; ".join(unmet))
+    # Checklist editor
+    st.markdown("#### L and M checklist")
+    conn = get_db()
+    import pandas as pd
+    
+    # Bulk assign by factor
+    try:
+        if feature_flags().get('compliance_gate_v2', False):
+            factors = pd.read_sql_query("select distinct factor from lm_checklist where notice_id=? order by factor", conn, params=(nid,))
+            if not factors.empty:
+                b1,b2,b3,b4 = st.columns([2,2,2,1])
+                with b1:
+                    sel_factor = st.selectbox("Factor", options=factors['factor'].dropna().tolist())
+                with b2:
+                    new_owner = st.text_input("Assign owner")
+                with b3:
+                    new_due = st.text_input("Assign due date")
+                with b4:
+                    if st.button("Apply", key="bulk_assign"):
+                        bulk_assign_by_factor(nid, sel_factor, new_owner or None, new_due or None)
+                        st.success("Bulk assignment applied.")
+                        st.rerun()
+    except Exception as _bu:
+        st.caption(f"[Bulk assign error: {_bu}]")
+df = pd.read_sql_query("select id, factor, subfactor, requirement, source_page, owner_id, due_date, status, notes from lm_checklist where notice_id=? order by id", conn, params=(nid,))
+    edited = st.data_editor(df, use_container_width=True, num_rows="dynamic",
+                            column_config={
+                                "status": st.column_config.SelectboxColumn(options=["Red","Yellow","Green"]),
+                                "due_date": st.column_config.TextColumn(help="YYYY-MM-DD or ISO datetime")
+                            },
+                            key=f"lm_edit_{nid}")
+    if st.button("Save checklist"):
+        # detect new or edited rows by comparing ids
+        existing_ids = set(df["id"].tolist())
+        for _, row in edited.iterrows():
+            data = row.to_dict()
+            if pd.isna(data.get("id")):
+                data["id"] = None
+            upsert_checklist_row(nid, data)
+        
+        # Enforce Green requires evidence and linked docs provided when v2 gate active
+        if feature_flags().get('compliance_gate_v2', False):
+            for _, row in edited.iterrows():
+                if str(row.get("status")) == "Green":
+                    okv, msg = before_set_status_green(nid, int(row.get("id")) if not pd.isna(row.get("id")) else -1)
+                    if not okv:
+                        st.warning(f"Row {int(row.get('id') or 0)} cannot be Green: {msg}")
+                        try:
+                            conn.execute("update lm_checklist set status='Yellow' where id=?", (int(row.get("id")),))
+                            conn.commit()
+                        except Exception:
+                            pass
+st.success("Checklist saved.")
+        st.session_state["compliance_tab_open"] = True
+        st.rerun()
+    # Required docs
+    st.markdown("#### Required documents")
+    df2 = pd.read_sql_query("select id, name, template_key, required, provided, file_id from required_docs where notice_id=? order by id", conn, params=(nid,))
+    edited2 = st.data_editor(df2, use_container_width=True, num_rows="dynamic",
+                             column_config={
+                                "required": st.column_config.CheckboxColumn(),
+                                "provided": st.column_config.CheckboxColumn(),
+                             },
+                             key=f"rd_edit_{nid}")
+    if st.button("Save documents"):
+        for _, row in edited2.iterrows():
+            data = row.to_dict()
+            if pd.isna(data.get("id")):
+                data["id"] = None
+            upsert_required_doc(nid, data)
+        st.success("Documents saved.")
+        st.session_state["compliance_tab_open"] = True
+        st.rerun()
+    # Signoffs
+    st.markdown("#### Signoffs")
+    roles = ["Tech","Price","Contracts"]
+    cols = st.columns(len(roles))
+    uid = st.session_state.get("user_id") or st.session_state.get("current_user_id") or "unknown"
+    for i, role in enumerate(roles):
+        with cols[i]:
+            if st.button(f"Approve {role}"):
+                set_signoff(nid, role, "Approved", str(uid))
+                st.rerun()
+            if st.button(f"Reject {role}"):
+                set_signoff(nid, role, "Rejected", str(uid))
+                st.rerun()
+    # Q and A log
+    st.markdown("#### Q and A")
+    q = st.text_input("Question")
+    d = st.text_input("Deadline")
+    if st.button("Add Q and A"):
+        if q.strip():
+            add_qa_row(nid, q.strip(), deadline=d or None)
+            st.success("Added.")
+            st.rerun()
+    qa = pd.read_sql_query("select id, question, asked_at, deadline, submitted_file_id from qa_log where notice_id=? order by id desc", conn, params=(nid,))
+    st.dataframe(qa, use_container_width=True, hide_index=True)
+    # Audit drawer
+    render_compliance_audit_drawer(nid)
+
+    # v2 controls and viewer
+    _compliance_v2_controls_in_panel(nid)
+    render_compliance_v2_evidence_viewer()
+
+
+
+
+# === COMPLIANCE PHASE 1 (v2) ===
+import hashlib as _hashlib
+
+def _safe_sha1(s: str) -> str:
+    try:
+        return _hashlib.sha1((s or '').encode('utf-8')).hexdigest()
+    except Exception:
+        return None
+
+def compliance_v2_schema_upgrade():
+    ensure_compliance_schema()  # base tables from Phase 9
+    conn = get_db()
+    cur = conn.cursor()
+    # Add new columns with guards
+    try:
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(lm_checklist)").fetchall()}
+        if "req_id" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN req_id TEXT")
+        if "cite_file" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN cite_file TEXT")
+        if "cite_page" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN cite_page INTEGER")
+        if "evidence_file_id" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN evidence_file_id INTEGER REFERENCES notice_files(id)")
+        if "evidence_page" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN evidence_page INTEGER")
+        if "evidence_section_id" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN evidence_section_id INTEGER REFERENCES proposal_sections(id)")
+        if "weight" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN weight REAL DEFAULT 1")
+        if "last_updated_by" not in cols:
+            cur.execute("ALTER TABLE lm_checklist ADD COLUMN last_updated_by TEXT")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_lm_req ON lm_checklist(notice_id, req_id)")
+    except Exception:
+        pass
+    conn.commit()
+
+def _norm_req_text(txt: str) -> str:
+    if not isinstance(txt, str):
+        return ""
+    t = txt.strip().lower()
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+def build_lm_checklist(notice_id: int, rfp_json: dict):
+    """Seed checklist from Analyzer JSON.
+    Stable req_id = sha1(normalized requirement text plus factor).
+    Inserts only new rows. No duplicate on rerun due to unique index.
+    """
+    if not feature_flags().get('compliance_v2', False):
+        return {'ok': False, 'disabled': True}
+    compliance_v2_schema_upgrade()
+    conn = get_db()
+    cur = conn.cursor()
+    nid = int(notice_id)
+    # Heuristic extraction of L and M requirements from rfp_json
+    # Expect structure like data['sections']['Factors'] -> list of items with factor, subfactor, requirements[]
+    sections = (rfp_json or {}).get('sections') or {}
+    factors = sections.get('Factors') or sections.get('factors') or []
+    inserted = 0
+    for item in factors:
+        factor = item.get('factor') or item.get('name') or item.get('title') or ''
+        subitems = item.get('subfactors') or item.get('subs') or []
+        reqs = []
+        # Some schemas have requirements directly on factor
+        if item.get('requirements'):
+            for r in item['requirements']:
+                reqs.append( (factor, None, str(r.get('text') or r) , r.get('cite_file'), r.get('cite_page')) )
+        # Subfactors with requirements
+        for sub in subitems:
+            subf = sub.get('subfactor') or sub.get('name') or sub.get('title') or ''
+            for r in sub.get('requirements') or []:
+                reqs.append( (factor, subf, str(r.get('text') or r), r.get('cite_file'), r.get('cite_page')) )
+        # Fallback: if 'L' or 'M' string hints exist
+        if not reqs and item:
+            txt = str(item)
+            if 'section l' in txt.lower() or 'section m' in txt.lower():
+                reqs.append( (factor, None, _norm_req_text(txt)[:200], None, None) )
+        # Insert rows
+        for fac, subf, req_text, cfile, cpage in reqs:
+            norm = _norm_req_text(req_text) + '|' + (_norm_req_text(fac) or '')
+            rid = _safe_sha1(norm) or None
+            if not rid:
+                continue
+            try:
+                cur.execute("""INSERT OR IGNORE INTO lm_checklist(
+                    notice_id, req_id, factor, subfactor, requirement, cite_file, cite_page, status
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (nid, rid, fac or None, subf or None, req_text.strip(), cfile, int(cpage) if cpage else None, 'Red'))
+                if cur.rowcount:
+                    inserted += 1
+            except Exception:
+                pass
+    conn.commit()
+    return {'ok': True, 'inserted': inserted}
+
+def render_compliance_v2_evidence_viewer():
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('compliance_v2', False):
+        return
+    if not st.session_state.get('evidence_panel_open'):
+        return
+    file_id = st.session_state.get('current_evidence_file_id')
+    page = st.session_state.get('current_evidence_page')
+    if not file_id:
+        return
+    st.markdown("### Evidence Viewer")
+    conn = get_db()
+    row = conn.execute("select id, file_name, url, content_type, local_path from notice_files where id=?", (int(file_id),)).fetchone()
+    if not row:
+        st.info("File not found.")
+        return
+    _, fname, url, ctype, local_path = row
+    st.caption(f"{fname} • page {page if page else '?'}")
+    # Simple preview: try to extract text of the page for quick context
+    try:
+        import PyPDF2
+        path = local_path or None
+        if path:
+            with open(path, 'rb') as f:
+                r = PyPDF2.PdfReader(f)
+                pg = int(page)-1 if page else 0
+                if 0 <= pg < len(r.pages):
+                    text = r.pages[pg].extract_text() or "(no text extractable)"
+                    st.text_area("Page text", value=text, height=240)
+        else:
+            st.info("File not cached locally. Open in system viewer.")
+    except Exception as ex:
+        st.caption(f"[PDF preview unavailable: {ex}]")
+    if url:
+        st.link_button("Open original", url)
+
+def _compliance_v2_controls_in_panel(nid: int):
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('compliance_v2', False):
+        return
+    compliance_v2_schema_upgrade()
+    conn = get_db()
+    st.markdown("#### L and M checklist (v2)")
+    df = pd.read_sql_query("select id, req_id, factor, subfactor, requirement, cite_file, cite_page, evidence_file_id, evidence_page, status, owner_id, due_date from lm_checklist where notice_id=? order by id", conn, params=(int(nid),))
+    # Show grid with no Analyzer editing. We allow status here in Compliance tab.
+    edited = st.data_editor(df, use_container_width=True, num_rows=0,
+                            column_config={
+                                "status": st.column_config.SelectboxColumn(options=["Red","Yellow","Green"]),
+                                "due_date": st.column_config.TextColumn(),
+                            },
+                            key=f"lm_v2_edit_{nid}")
+    # Evidence actions per selected row
+    sel = st.multiselect("Select row(s) to set evidence", options=df['id'].tolist(), key=f"lm_v2_sel_{nid}")
+    c1,c2 = st.columns(2)
+    with c1:
+        if st.button("Set evidence") and sel:
+            # simple picker: choose file and page
+            files = pd.read_sql_query("select id, file_name from notice_files where notice_id=? order by id desc", conn, params=(int(nid),))
+            file_id = st.selectbox("File", options=files['id'].tolist(), format_func=lambda x: files.set_index('id').loc[x,'file_name'] if not files.empty else str(x), key=f"ev_file_{nid}")
+            page = st.number_input("Page", min_value=1, step=1, value=1, key=f"ev_page_{nid}")
+            if st.button("Save evidence", key=f"ev_save_{nid}"):
+                for rid in sel:
+                    conn.execute("update lm_checklist set evidence_file_id=?, evidence_page=?, last_updated_by=? where id=?", (int(file_id), int(page), str(st.session_state.get('user_id') or 'unknown'), int(rid)))
+                conn.commit()
+                st.success("Evidence saved.")
+                st.session_state['compliance_tab_open'] = True
+                st.rerun()
+    with c2:
+        if st.button("View evidence") and sel:
+            # open viewer for first selected
+            rid = int(sel[0])
+            row = conn.execute("select evidence_file_id, evidence_page from lm_checklist where id=?", (rid,)).fetchone()
+            if row and row[0]:
+                st.session_state['evidence_panel_open'] = True
+                st.session_state['current_evidence_file_id'] = int(row[0])
+                st.session_state['current_evidence_page'] = int(row[1] or 1)
+                st.experimental_rerun()
+
+def analyzer_lm_readonly(nid: int):
+    """Read-only L and M in Analyzer with Open in Compliance button."""
+    if not feature_flags().get('compliance_v2', False):
+        return
+    import streamlit as st, pandas as pd
+    compliance_v2_schema_upgrade()
+    conn = get_db()
+    df = pd.read_sql_query("select factor, subfactor, requirement, cite_file, cite_page, status from lm_checklist where notice_id=? order by id", conn, params=(int(nid),))
+    st.markdown("#### Section L & M requirements (read-only)")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    if st.button("Open in Compliance"):
+        st.session_state['selected_notice_id'] = int(nid)
+        st.session_state['compliance_tab_open'] = True
+        st.experimental_rerun()
+
+
+
+# === COMPLIANCE PHASE 2 (Gate v2) ===
+def ensure_compliance_gate_v2_schema():
+    ensure_compliance_schema()
+    compliance_v2_schema_upgrade()
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS lm_doc_links(
+            id INTEGER PRIMARY KEY,
+            notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+            req_id TEXT NOT NULL,
+            required_doc_id INTEGER REFERENCES required_docs(id),
+            UNIQUE(notice_id, req_id, required_doc_id)
+        );""" )
+    except Exception:
+        pass
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS section_requirements(
+            id INTEGER PRIMARY KEY,
+            proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+            section_key TEXT NOT NULL,
+            req_id TEXT NOT NULL,
+            UNIQUE(proposal_id, section_key, req_id)
+        );""" )
+    except Exception:
+        pass
+    conn.commit()
+
+def before_set_status_green(nid:int, row_id:int):
+    if not feature_flags().get('compliance_gate_v2', False):
+        return True, ''
+    ensure_compliance_gate_v2_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    r = cur.execute("select req_id, evidence_file_id, evidence_section_id from lm_checklist where id=? and notice_id=?", (int(row_id), int(nid))).fetchone()
+    if not r:
+        return False, "Checklist row missing"
+    req_id, ev_file, ev_sec = r
+    if not ev_file and not ev_sec:
+        return False, "Evidence required"
+    missing_docs = []
+    for rid, in cur.execute("select required_doc_id from lm_doc_links where notice_id=? and req_id=?", (int(nid), req_id)).fetchall():
+        d = cur.execute("select provided, name from required_docs where id=?", (int(rid),)).fetchone()
+        if d and int(d[0]) != 1:
+            missing_docs.append(d[1] or f"doc:{rid}")
+    if missing_docs:
+        return False, "Missing docs: " + ", ".join(missing_docs)
+    return True, ''
+
+def gate_status(nid:int):
+    ensure_compliance_gate_v2_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    unmet = []
+    signs = {r:s for r,s in cur.execute("select role, status from signoffs where notice_id=?", (int(nid),)).fetchall()}
+    if not all(signs.get(r) == 'Approved' for r in ['Tech','Price','Contracts']):
+        unmet.append("All signoffs must be Approved")
+    links = cur.execute("select distinct required_doc_id from lm_doc_links where notice_id=?", (int(nid),)).fetchall()
+    if links:
+        doc_ids = [int(x[0]) for x in links if x and x[0] is not None]
+        if doc_ids:
+            q = "select provided, name from required_docs where id in (" + ",".join(str(i) for i in doc_ids) + ")"
+            missing = [name for provided,name in cur.execute(q).fetchall() if int(provided)!=1]
+            if missing:
+                unmet.append("Required docs not provided: " + ", ".join(missing))
+    rows = cur.execute("select id, status, evidence_file_id, evidence_section_id from lm_checklist where notice_id=?", (int(nid),)).fetchall()
+    if not rows:
+        unmet.append("Checklist empty")
+    else:
+        if any(r[1] != 'Green' for r in rows):
+            unmet.append("All checklist rows must be Green")
+        evidence_missing = [str(r[0]) for r in rows if r[1]=='Green' and not (r[2] or r[3])]
+        if evidence_missing:
+            unmet.append("Green rows missing evidence: " + ", ".join(evidence_missing))
+    return (len(unmet)==0), unmet
+
+def _gate_counts(nid:int):
+    conn = get_db()
+    cur = conn.cursor()
+    rows = cur.execute("select status, count(*) from lm_checklist where notice_id=? group by status", (int(nid),)).fetchall()
+    d = {'Red':0,'Yellow':0,'Green':0}
+    for s,c in rows:
+        if s in d: d[s]=int(c)
+    return d
+
+def bulk_assign_by_factor(nid:int, factor:str, owner_id:str|None, due_date:str|None):
+    ensure_compliance_gate_v2_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("update lm_checklist set owner_id=?, due_date=?, last_updated_by=? where notice_id=? and factor=?",
+                (owner_id, due_date, str(owner_id or ''), int(nid), factor))
+    conn.commit()
+    return True
+
+
+
+# === COMPLIANCE PHASE 3: Relock, Audit, Reminders, Snapshot ===
+def ensure_compliance_audit_schema():
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS compliance_audit(
+      id INTEGER PRIMARY KEY,
+      notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+      user_id TEXT,
+      ts TEXT NOT NULL,
+      action TEXT NOT NULL,
+      req_id TEXT,
+      before_json TEXT,
+      after_json TEXT
+    );""" )
+    conn.commit()
+
+def _audit_log(nid:int, action:str, user_id:str|None, req_id:str|None, before:dict|None, after:dict|None):
+    ensure_compliance_audit_schema()
+    conn = get_db()
+    b = json.dumps(before or {}, ensure_ascii=False)
+    a = json.dumps(after or {}, ensure_ascii=False)
+    conn.execute("INSERT INTO compliance_audit(notice_id, user_id, ts, action, req_id, before_json, after_json) VALUES(?,?,?,?,?,?,?)",
+                 (int(nid), user_id or '', utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat() + 'Z', action, req_id or '', b, a))
+    conn.commit()
+
+def relock_on_amendment(nid:int):
+    if not feature_flags().get('compliance_relock', False):
+        return 0
+    ensure_compliance_schema()
+    conn = get_db(); cur = conn.cursor()
+    try:
+        versions = _load_versions(int(nid))
+        if len(versions) < 2:
+            return 0
+        prev = versions[1]['payload']; curr = versions[0]['payload']
+        prev_files = (prev or {}).get('files') or []
+        curr_files = (curr or {}).get('files') or []
+        dif = _diff_files(prev_files, curr_files)
+        changed = set(dif.get('added',[]) + dif.get('removed',[]))
+    except Exception:
+        changed = set()
+    if not changed:
+        return 0
+    rows = cur.execute("SELECT id, req_id, status, cite_file, cite_page FROM lm_checklist WHERE notice_id=?", (int(nid),)).fetchall()
+    impacted = [r for r in rows if r[3] and r[3] in changed]
+    for rid, req_id, status, cfile, cpage in impacted:
+        before = {"status": status, "cite_file": cfile, "cite_page": cpage}
+        try:
+            cur.execute("UPDATE lm_checklist SET status='Yellow' WHERE id=?", (int(rid),))
+            _audit_log(int(nid), "relock", st.session_state.get("user_id") if 'st' in globals() else None, req_id, before, {"status":"Yellow","reason":"Amendment affected file"})
+        except Exception:
+            pass
+    if impacted:
+        try:
+            conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(nid),))
+            conn.commit()
+        except Exception:
+            pass
+    return len(impacted)
+
+def schedule_compliance_emails():
+    if not feature_flags().get('email_enabled', False):
+        return 0
+    ensure_compliance_schema()
+    conn = get_db(); cur = conn.cursor()
+    now = _dt.datetime.utcnow()
+    rows = cur.execute("SELECT lc.notice_id, lc.id, lc.owner_id, lc.due_date, lc.status, n.title FROM lm_checklist lc JOIN notices n ON n.id=lc.notice_id WHERE lc.due_date IS NOT NULL AND lc.status != 'Green'").fetchall()
+    enq = 0
+    for nid, rid, owner, due, status, title in rows:
+        try:
+            dd = _dt.datetime.fromisoformat(str(due).replace('Z',''))
+        except Exception:
+            dd = None
+        if dd and dd < now:
+            to_addr = USER_EMAILS.get(owner, '') if 'USER_EMAILS' in globals() else ''
+            if to_addr:
+                subj = f"Compliance due: {title} row {rid}"
+                link = f"/app?notice_id={nid}&tab=compliance"
+                body = f"Row {rid} is due and still {status}. Open: {link}"
+                try:
+                    conn.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?,?)",
+                                 (to_addr, subj, body, now.isoformat()+ 'Z'))
+                    enq += 1
+                except Exception:
+                    pass
+    conn.commit()
+    return enq
+
+def render_compliance_audit_drawer(nid:int):
+    import streamlit as st, pandas as pd
+    ensure_compliance_audit_schema()
+    if not st.session_state.get('audit_drawer_open'):
+        return
+    st.markdown("#### Audit trail")
+    conn = get_db()
+    df = pd.read_sql_query("SELECT ts, action, user_id, req_id, before_json, after_json FROM compliance_audit WHERE notice_id=? ORDER BY id DESC LIMIT 200", conn, params=(int(nid),))
+    st.dataframe(df, use_container_width=True, hide_index=True)
+# === END COMPLIANCE PHASE 3 ===
+
+
+# === END COMPLIANCE PHASE 2 ===
+
+
+# === END COMPLIANCE PHASE 1 ===
+
+
+# === END COMPLIANCE GATE PHASE 9 ===
 # ===== end RFP Phase 1 =====
 
 # ===== RFP Parser Phase 2 =====
@@ -8362,7 +12706,7 @@ def record_notice_version(notice_id: int, n: dict):
     summary = "Auto detected change"
     conn.execute("INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
                  (int(notice_id), amend_no, posted, url, vhash, summary))
-    # Mark compliance
+    \n    try:\n        conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id = ?", (int(notice_id),))\n        conn.commit()\n    except Exception:\n        pass\n# Mark compliance
     try:
         conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(notice_id),))
     except Exception:
@@ -8579,8 +12923,9 @@ def _init_feature_flags_session():
         "rfp_analyzer_panel": False,
         "amend_tracking": False,
         "workspace_enabled": feature_flags.get("workspace_enabled", False) if 'feature_flags' in globals() else False,
-        "rfp_schema": False
-        , "rfp_parser": False}
+        "rfp_schema": False,
+        "deals_core": True,
+        "rfp_parser": False}
     # Global mirror for backward compatibility
     try:
         ff = dict(feature_flags) if 'feature_flags' in globals() else {}
@@ -9358,6 +13703,10 @@ def render_proposal_builder():
 
         # Export DOCX with guardrails
         if export_docx:
+        try:
+            audit('export', st.session_state.get('user_id'), 'notice', str(st.session_state.get('selected_notice_id')))
+        except Exception:
+            pass
             from docx import Document
             from docx.shared import Inches, Pt
             from docx.oxml.ns import qn
@@ -9725,6 +14074,160 @@ def update_deal(id_: int, **fields):
     conn.commit()
     return cur.rowcount > 0
 
+
+# === DEALS PHASE 3: Activities + Calendar ===
+def ensure_deal_activities_schema(conn):
+    cur = conn.cursor()
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS deal_activities(
+            id INTEGER PRIMARY KEY,
+            deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            title TEXT,
+            body TEXT,
+            due_at TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_by TEXT
+        );""")
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_dact_deal ON deal_activities(deal_id);""" )
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_dact_due ON deal_activities(due_at);""" )
+    except Exception:
+        pass
+    conn.commit()
+
+def list_activities(deal_id=None, include_completed=True, q=""):
+    conn = get_db()
+    ensure_deal_activities_schema(conn)
+    sql = "SELECT id, deal_id, type, COALESCE(title,'') as title, COALESCE(body,'') as body, due_at, completed_at, created_at, created_by FROM deal_activities WHERE 1=1"
+    params = []
+    if deal_id:
+        sql += " AND deal_id = ?"
+        params.append(int(deal_id))
+    if not include_completed:
+        sql += " AND completed_at IS NULL"
+    if q:
+        sql += " AND (title LIKE ? OR body LIKE ?)"
+        params += [f"%{q}%", f"%{q}%"]
+    sql += " ORDER BY COALESCE(due_at, created_at) ASC, id DESC"
+    import pandas as _pd
+    try:
+        df = _pd.read_sql_query(sql, get_db(), params=params)
+    except Exception:
+        df = _pd.DataFrame(columns=["id","deal_id","type","title","body","due_at","completed_at","created_at","created_by"])  # empty
+    return df
+
+def create_activity(deal_id:int, type_:str, title:str="", body:str="", due_at:str=None, created_by:str=None):
+    conn = get_db()
+    ensure_deal_activities_schema(conn)
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO deal_activities(deal_id,type,title,body,due_at,created_by)
+                 VALUES(?,?,?,?,?,?)""", (int(deal_id), type_, title or None, body or None, due_at, created_by))
+    conn.commit()
+    # enqueue reminder if task with due_at and email_queue exists
+    try:
+        if type_ == 'task' and due_at:
+            subj = f"Task due for deal {deal_id}: {title or body or '(no title)'}"
+            msg = f"Task due at {due_at}:\n\n{body or title or ''}"
+            cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?, datetime('now'))",
+                        (st.session_state.get('user_email') or 'alerts@localhost', subj, msg))
+            conn.commit()
+    except Exception:
+        pass
+    return True
+
+def update_activity(act_id:int, **fields):
+    if not fields: return False
+    allowed = {"title","body","due_at","completed_at","type"}
+    sets = []
+    vals = []
+    for k,v in fields.items():
+        if k in allowed:
+            sets.append(f"{k} = ?")
+            vals.append(v)
+    if not sets: return False
+    sql = "UPDATE deal_activities SET " + ", ".join(sets) + " WHERE id = ?"
+    vals.append(int(act_id))
+    conn = get_db()
+    ensure_deal_activities_schema(conn)
+    conn.execute(sql, vals)
+    conn.commit()
+    return True
+
+def delete_activity(act_id:int):
+    conn = get_db()
+    ensure_deal_activities_schema(conn)
+    conn.execute("DELETE FROM deal_activities WHERE id = ?", (int(act_id),))
+    conn.commit()
+    return True
+
+def _render_deals_activities_and_calendar():
+    import streamlit as st
+    conn = get_db()
+    ensure_deal_activities_schema(conn)
+    # Quick actions
+    st.markdown("### Activities")
+    c1,c2,c3,c4 = st.columns([2,1,2,2])
+    with c1:
+        deal_id = st.number_input("Deal ID", min_value=1, step=1, value=1, key="qa_deal_id")
+    with c2:
+        type_ = st.selectbox("Type", ["call","note","task"], key="qa_type")
+    with c3:
+        title = st.text_input("Title", key="qa_title")
+    with c4:
+        due_at = st.text_input("Due (YYYY-MM-DD HH:MM)", key="qa_due") if type_=="task" else st.text_input("Due (optional)", key="qa_due2")
+    body = st.text_area("Notes", key="qa_body", height=80)
+    b1,b2,b3 = st.columns(3)
+    if b1.button("Log call"):
+        create_activity(deal_id, "call", title or "Call", body or "", None, st.session_state.get("user_id"))
+        st.success("Call logged."); st.session_state["deals_refresh"] = st.session_state.get("deals_refresh",0) + 1; st.rerun()
+    if b2.button("Add note"):
+        create_activity(deal_id, "note", title or "Note", body or "", None, st.session_state.get("user_id"))
+        st.success("Note added."); st.session_state["deals_refresh"] += 1; st.rerun()
+    if b3.button("Create task"):
+        create_activity(deal_id, "task", title or "Task", body or "", due_at or None, st.session_state.get("user_id"))
+        st.success("Task created and reminder enqueued."); st.session_state["deals_refresh"] += 1; st.rerun()
+
+    # Activity list with inline complete/delete
+    st.markdown("#### Open items")
+    q = st.text_input("Filter", key="dact_q")
+    df_open = list_activities(include_completed=False, q=q)
+    st.dataframe(df_open, use_container_width=True, hide_index=True)
+    # Inline complete
+    act_id = st.number_input("Complete activity ID", min_value=0, step=1, value=0, key="comp_id")
+    if st.button("Mark complete") and act_id:
+        update_activity(int(act_id), completed_at=dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+        st.session_state["deals_refresh"] += 1; st.rerun()
+
+    # Calendar view
+    st.divider()
+    st.markdown("### Calendar")
+    import pandas as _pd
+    df_tasks = list_activities(include_completed=False)
+    df_tasks = df_tasks[df_tasks["type"]=="task"].copy()
+    if not df_tasks.empty:
+        # Normalize dates
+        def _norm(s):
+            try:
+                return _pd.to_datetime(s)
+            except Exception:
+                return _pd.NaT
+        df_tasks["start"] = df_tasks["due_at"].apply(_norm)
+        df_tasks["end"] = df_tasks["start"]
+        df_tasks["name"] = df_tasks["title"].fillna("Task")
+        try:
+            import plotly.express as px
+            fig = px.timeline(df_tasks, x_start="start", x_end="end", y="deal_id", hover_name="name", hover_data=["body","id"])
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.dataframe(df_tasks[["deal_id","title","due_at"]], use_container_width=True, hide_index=True)
+    else:
+        st.info("No upcoming tasks.")
+# === END DEALS PHASE 3 ===
+
+
+
+
 def delete_deal(id_: int):
     conn = get_db()
     ensure_deals_table(conn)
@@ -9911,6 +14414,57 @@ try:
                     st.rerun()
                 else:
                     st.error("Delete failed or ID not found.")
+
+        # --- Activities + Calendar (flagged) ---
+        ff = feature_flags()
+        if ff.get('deals_activities', True):
+            st.divider()
+            _render_deals_activities_and_calendar()
+
+        # --- Forecast + Signals (flagged) ---
+        try:
+            ff = feature_flags()
+        except Exception:
+            ff = {}
+        if ff.get('deals_forecast', True):
+            st.divider()
+            st.markdown("### Forecast and Signals")
+            qf = st.text_input("Search for forecast", key="forecast_q")
+            df_all = _list_deals_for_forecast(qf)
+            bm, bq = forecast_weighted(df_all)
+            c1,c2 = st.columns(2)
+            with c1:
+                st.markdown("#### Weighted by month")
+                st.dataframe(bm, use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("#### Weighted by quarter")
+                st.dataframe(bq, use_container_width=True, hide_index=True)
+            # Optional chart
+            try:
+                import plotly.express as px
+                if not bm.empty:
+                    figm = px.bar(bm, x="period", y="weighted_total", title="Weighted pipeline by month")
+                    st.plotly_chart(figm, use_container_width=True)
+            except Exception:
+                pass
+            # SLA blockers
+            st.markdown("#### SLA and blockers")
+            bl = compute_sla_blockers()
+            if bl:
+                import pandas as pd
+                dfb = pd.DataFrame(bl, columns=["deal_id","title","reason"])
+                st.dataframe(dfb, use_container_width=True, hide_index=True)
+            else:
+                st.info("No SLA blockers detected.")
+            # Win prob updater
+            st.markdown("#### Update win probability from signals")
+            upd_id = st.number_input("Deal ID", min_value=0, step=1, value=0, key="upd_win_id")
+            if st.button("Update win_prob"):
+                if upd_id:
+                    ok = update_win_prob_from_signals(int(upd_id))
+                    st.success("Updated." if ok else "No change.") 
+                    st.session_state['deals_refresh'] = st.session_state.get('deals_refresh',0)+1
+                    st.rerun()
 except Exception as _e_deals:
     try:
         st.caption(f"[Deals tab note: {_e_deals}]")
@@ -10646,82 +15200,243 @@ except Exception as _e_ui:
 
 
 # === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
+
+# === Deals tab – GO DEALS PHASE 2: Kanban + List ===
 try:
-    with tabs[TAB['Deals']]:
-        st.subheader("Deals")
-        conn = get_db()
+    # Ensure flag exists
+    ff = st.session_state.setdefault("feature_flags", {})
+    ff.setdefault("deals_core", True)
+    ff.setdefault("deals_kanban", True)
+    # Ensure refresh token exists
+    st.session_state.setdefault('deals_refresh', 0)
+
+    def _has_col(conn, table, col):
         try:
-            df_deals = pd.read_sql_query("select * from opportunities order by COALESCE(due_date, posted) asc, posted desc", conn)
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            return any(r[1] == col for r in cur.fetchall())
         except Exception:
-            df_deals = pd.DataFrame()
+            return False
 
-        # Ensure expected cols
-        for _col, _default in {"assignee":"", "status":"New", "notes":""}.items():
-            if _col not in df_deals.columns:
-                df_deals[_col] = _default
-
-        # Build Link from first URL in notes
-        import re as _re_deals
-        def _extract_url_deals(_s):
-            try:
-                m = _re_deals.search(r"(https?://\S+)", str(_s))
-                return m.group(1).rstrip("),.;]") if m else ""
-            except Exception:
-                return ""
-        df_deals["Link"] = df_deals.get("notes", pd.Series("", index=df_deals.index)).apply(_extract_url_deals)
-
-        # Optional filters
-        c1, c2 = st.columns(2)
-        with c1:
-            _assignees = [""] + sorted([x for x in df_deals.get("assignee", pd.Series()).dropna().unique().tolist() if x])
-            a_filter = st.selectbox("Filter by assignee", _assignees, index=0)
-        with c2:
-            s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
+    def _add_col_if_missing(conn, table, col_def):
         try:
-            if a_filter:
-                df_deals = df_deals[df_deals["assignee"].fillna("")==a_filter]
-            if s_filter:
-                df_deals = df_deals[df_deals["status"].fillna("")==s_filter]
+            col_name = col_def.split()[0]
+            if not _has_col(conn, table, col_name):
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
         except Exception:
             pass
 
-        edit_deals = st.data_editor(
-            df_deals,
-            column_config={
-                "status": st.column_config.SelectboxColumn("status", options=["New","Reviewing","Bidding","Submitted"]),
-                "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
-            },
-            use_container_width=True, num_rows="dynamic", key="deals_grid"
-        )
+    # Migrations for opportunities and stage history
+    try:
+        conn = get_db()
+        conn.execute("""create table if not exists stage_history(
+            id integer primary key,
+            opp_id integer not null,
+            old_stage text,
+            new_stage text,
+            changed_at text default current_timestamp,
+            changed_by text
+        );""")
+        for coldef in [
+            "stage text default 'New'",
+            "next_action text",
+            "due_at text",
+            "compliance_state text",
+            "rfq_coverage real"
+        ]:
+            _add_col_if_missing(conn, "opportunities", coldef)
+    except Exception as _e_schema:
+        st.warning(f"[Deals schema note: {_e_schema}]")
 
-        if st.button("Save Deals updates"):
-            # Do not persist the derived Link column
-            try:
-                edit_deals = edit_deals.drop(columns=["Link"], errors="ignore")
-            except Exception:
-                pass
+    # Loader keyed on refresh
+    @st.cache_data(show_spinner=False)
+    def _load_deals(refresh_token:int):
+        try:
+            conn = get_db()
+            df = pd.read_sql_query("""
+                select
+                    id, notice_id, title, agency, office, sub_tier,
+                    naics, set_aside, posted, response_due,
+                    stage, next_action, due_at, compliance_state, rfq_coverage,
+                    value_estimate, place_state, place_city
+                from opportunities
+                order by coalesce(response_due, posted) asc, posted desc
+            """, conn)
+            return df
+        except Exception as e:
+            st.caption(f"[Deals load note: {e}]")
+            return pd.DataFrame()
 
-            # Persist minimal safe fields back to opportunities by id
+    df_deals = _load_deals(st.session_state.get('deals_refresh', 0)).copy()
+
+    # Stage catalog
+    DEFAULT_STAGES = [
+        "New",
+        "Qualify",
+        "Pursue",
+        "RFQ Out",
+        "Pricing",
+        "Review",
+        "Submitted",
+        "Awarded",
+        "Closed Lost"
+    ]
+    stages = st.session_state.setdefault("deal_stages", DEFAULT_STAGES)
+
+    # Small helpers
+    def _badge(txt, kind="muted"):
+        color = {"ok":"green","warn":"orange","bad":"red","muted":"gray"}.get(kind, "gray")
+        return f"<span style='padding:2px 6px;border-radius:999px;background:{color};color:white;font-size:12px'>{txt}</span>"
+
+    def _persist_stage(opp_id:int, new_stage:str):
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            old = cur.execute("select stage from opportunities where id=?", (opp_id,)).fetchone()
+            old_stage = old[0] if old else None
+            cur.execute("update opportunities set stage=?, updated_at=current_timestamp where id=?", (new_stage, opp_id))
+            cur.execute("insert into stage_history(opp_id, old_stage, new_stage, changed_by) values(?,?,?,?)",
+                        (opp_id, old_stage, new_stage, st.session_state.get("active_user","")))
+            conn.commit()
+            st.session_state['deals_refresh'] += 1
+            st.experimental_rerun()
+        except Exception as e:
+            st.warning(f"[Stage persist note: {e}]")
+
+    def _persist_inline(opp_id:int, next_action:str, due_at):
+        try:
+            due_str = str(due_at) if due_at else None
+            conn = get_db()
+            conn.execute("update opportunities set next_action=?, due_at=?, updated_at=current_timestamp where id=?",
+                         (next_action, due_str, opp_id))
+            st.session_state['deals_refresh'] += 1
+        except Exception as e:
+            st.warning(f"[Inline persist note: {e}]")
+
+    with tabs[TAB['Deals']]:
+        st.subheader("Deals")
+
+        view = st.segmented_control("View", options=["Kanban","List"], key="deals_view", default="Kanban") if ff.get("deals_kanban") else "List"
+
+        if view == "Kanban":
+            # Try true drag and drop if streamlit_sortables is installed
+            used_drag = False
             try:
-                cur = conn.cursor()
-                if "id" in edit_deals.columns:
-                    for _, r in edit_deals.iterrows():
+                from streamlit_sortables import sort_items
+                groups = {}
+                for stg in stages:
+                    g = df_deals[df_deals['stage'].fillna("New") == stg]
+                    groups[stg] = [
+                        f"{int(r.id)} │ {str(r.title)[:60]}"
+                        for _, r in g.iterrows()
+                    ]
+                order = sort_items(groups, multi_containers=True, direction="vertical", key="kanban_sortables")
+                used_drag = True
+                # Determine moved items by comparing assignment
+                current_owner = {}
+                for stg, items in groups.items():
+                    for label in items:
+                        oid = int(label.split("│",1)[0].strip())
+                        current_owner[oid] = stg
+                new_owner = {}
+                for stg, items in order.items():
+                    for label in items:
                         try:
-                            cur.execute(
-                                "update opportunities set assignee=?, status=?, notes=? where id=?",
-                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"]))
-                            )
+                            oid = int(label.split("│",1)[0].strip())
                         except Exception:
                             continue
-                    conn.commit()
-                    st.success("Deals saved.")
+                        new_owner[oid] = stg
+                moved = [(oid, current_owner.get(oid), new_owner.get(oid)) for oid in new_owner if new_owner.get(oid) != current_owner.get(oid)]
+                if moved:
+                    # Persist first change then rerun
+                    oid, old_s, new_s = moved[0]
+                    _persist_stage(oid, new_s)
+            except Exception as _e_drag:
+                used_drag = False
+                st.caption("[Kanban drag unavailable. Falling back to click to move.]")
+
+            # Fallback UI columns with move controls
+            if not used_drag:
+                cols = st.columns(len(stages))
+                for idx, stg in enumerate(stages):
+                    with cols[idx]:
+                        st.markdown(f"**{stg}**")
+                        g = df_deals[df_deals['stage'].fillna("New") == stg]
+                        for _, r in g.iterrows():
+                            with st.container(border=True):
+                                st.caption(f"{r.agency or ''}")
+                                st.write(str(r.title))
+                                # Badges
+                                comp = str(r.compliance_state or "unknown").title()
+                                rfq = r.rfq_coverage if pd.notna(r.get("rfq_coverage")) else None
+                                b1 = _badge(comp, "ok" if comp.lower()=="pass" else "warn" if comp.lower()=="partial" else "bad")
+                                b2 = _badge(f"RFQ {int(rfq)}%" if rfq is not None else "RFQ 0%", "ok" if (rfq or 0) >= 80 else "warn" if (rfq or 0) >= 40 else "bad")
+                                st.markdown(b1 + " " + b2, unsafe_allow_html=True)
+                                move_to = st.selectbox("Move to", stages, index=stages.index(stg), key=f"mv_{int(r.id)}")
+                                if move_to != stg:
+                                    if st.button("Update", key=f"mv_btn_{int(r.id)}"):
+                                        _persist_stage(int(r.id), move_to)
+
+        else:
+            # List view with filters and inline edits
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                stage_f = st.multiselect("Stage", stages, default=st.session_state.get("deals_stage_filter", stages))
+                st.session_state["deals_stage_filter"] = stage_f
+            with c2:
+                agency_f = st.text_input("Agency contains", st.session_state.get("deals_agency_filter",""))
+                st.session_state["deals_agency_filter"] = agency_f
+            with c3:
+                search = st.text_input("Search title or NAICS", st.session_state.get("deals_search",""))
+                st.session_state["deals_search"] = search
+
+            df = df_deals.copy()
+            if stage_f:
+                df = df[df['stage'].fillna("New").isin(stage_f)]
+            if agency_f:
+                df = df[df['agency'].fillna("").str.contains(agency_f, case=False, na=False)]
+            if search:
+                df = df[
+                    df['title'].fillna("").str.contains(search, case=False, na=False)
+                    | df['naics'].fillna("").str.contains(search, case=False, na=False)
+                ]
+
+            # Build editable subset
+            edit_cols = ['id','title','agency','stage','next_action','due_at','compliance_state','rfq_coverage','response_due']
+            for c in edit_cols:
+                if c not in df.columns:
+                    df[c] = None
+            df_view = df[edit_cols].sort_values(by=['response_due','id'], na_position='last')
+
+            edited = st.data_editor(
+                df_view,
+                hide_index=True,
+                use_container_width=True,
+                disabled=['id','title','agency','compliance_state','rfq_coverage','response_due'],
+                key="deals_editor"
+            )
+
+            # Detect and persist inline changes
+            try:
+                merged = edited.merge(df_view, on='id', how='left', suffixes=('', '_old'))
+                dirty = []
+                for _, row in merged.iterrows():
+                    if str(row.get('next_action')) != str(row.get('next_action_old')) or str(row.get('due_at')) != str(row.get('due_at_old')) or str(row.get('stage')) != str(row.get('stage_old')):
+                        dirty.append(row)
+                if dirty:
+                    if st.button("Save changes"):
+                        for row in dirty:
+                            oid = int(row['id'])
+                            if str(row.get('stage')) != str(row.get('stage_old')):
+                                _persist_stage(oid, str(row.get('stage') or 'New'))
+                            _persist_inline(oid, str(row.get('next_action') or ''), row.get('due_at'))
+                        st.experimental_rerun()
                 else:
-                    st.info("No ID column found; cannot save changes.")
-            except Exception as _e_deals_save:
-                st.warning(f"[Deals save note: {_e_deals_save}]")
+                    st.caption("No edits pending.")
+            except Exception as _e_merge:
+                st.caption(f"[Deals persist note: {_e_merge}]")
+
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
-
 # ===== Layout Phase 2: Opportunity workspace subtabs =====
 # Deep-link helpers
 def open_details(opp): route_to("opportunity", opp_id=opp, tab="Details")
@@ -11367,6 +16082,26 @@ def set_notice_state(user_id: str, notice_id: int, state: str):
                  ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""", (user_id, notice_id, state, ts))
     conn.commit()
 
+
+def upsert_opportunity_from_notice(user_id: str, notice_id: int) -> None:
+    conn = get_db(); cur = conn.cursor()
+    # Pull notice with SAM fields
+    nr = cur.execute("select id, sam_notice_id, title, agency, naics, psc, place_city, place_state, posted_at, due_at, notice_type, url from notices where id=?", (notice_id,)).fetchone()
+    if not nr:
+        return
+    nid, sam_notice_id, title, agency, naics, psc, place_city, place_state, posted_at, due_at, notice_type, url = nr
+    place_of_performance = ", ".join([x for x in [place_city, place_state] if x])
+    # Upsert into opportunities. Treat sam_notice_id as unique driver.
+    exists = cur.execute("select id from opportunities where sam_notice_id=? limit 1", (sam_notice_id,)).fetchone()
+    if exists:
+        cur.execute("update opportunities set title=?, agency=?, naics=?, psc=?, place_of_performance=?, response_due=?, posted=?, type=?, url=?, source=COALESCE(source,'sam_star') where sam_notice_id=?",
+                    (title, agency, naics, psc, place_of_performance, due_at, posted_at, notice_type, url, sam_notice_id))
+    else:
+        cur.execute("""insert into opportunities
+            (sam_notice_id, title, agency, naics, psc, place_of_performance, response_due, posted, type, url, attachments_json, status, source)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'New', 'sam_star')""",
+            (sam_notice_id, title, agency, naics, psc, place_of_performance, due_at, posted_at, notice_type, url))
+    conn.commit()
 def toggle_pipeline_star(user_id: str, notice_id: int) -> bool:
     conn = get_db()
     cur = conn.cursor()
@@ -12483,6 +17218,47 @@ def route_to(page, opp_id=None, tab=None):
 # Feature flags accessor
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
+
+# Observability flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('observability', False)
+except Exception:
+    pass
+
+
+# Compliance relock and email flags defaults
+try:
+    ff = feature_flags()
+    ff.setdefault('compliance_relock', False)
+    ff.setdefault('email_enabled', False)
+except Exception:
+    pass
+
+
+# Compliance gate v2 flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('compliance_gate_v2', False)
+except Exception:
+    pass
+
+
+# Compliance v2 flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('compliance_v2', False)
+except Exception:
+    pass
+
+
+# Default feature flags for compliance gate
+try:
+    ff = feature_flags()
+    ff.setdefault('compliance_gate', False)
+except Exception:
+    pass
+
 
 # --- Page renderers ---
 def _render_nav():
@@ -14136,9 +18912,20 @@ def render_proposal_wizard(notice_id: int):
             st.warning(f"Placeholder issues in {len(bad)} sections")
         st.button("Export (disabled until compliance is Green)", disabled=not ok)
         if ok and st.button("Export now"):
-            cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
-                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), _jsonp5.dumps({"placeholders": bad})))
-            conn.commit()
+            _t0 = _time.perf_counter()
+            
+            # Build snapshot of checklist and signoffs
+            snap_rows = pd.read_sql_query("select req_id, factor, subfactor, requirement, status, owner_id, due_date, evidence_file_id, evidence_page from lm_checklist where notice_id=?", conn, params=(int(notice_id),))
+            snap_sigs = pd.read_sql_query("select role, status, user_id, ts from signoffs where notice_id=?", conn, params=(int(notice_id),))
+            snapshot = json.dumps({"checklist": snap_rows.to_dict(orient="records"), "signoffs": snap_sigs.to_dict(orient="records")}, ensure_ascii=False)
+cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
+                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), snapshot))
+            
+            try:
+                metric_push('export_duration_ms', (_time.perf_counter()-_t0)*1000.0, {'type': 'docx'})
+            except Exception:
+                pass
+conn.commit()
             st.success("Export queued")
     cols = st.columns(3)
     with cols[0]:
@@ -16509,3 +21296,304 @@ def render_vendors(opp_id: int):
     except Exception:
         pass
 # === VENDOR RFQ HOOKS PHASE 8 END ===
+
+
+
+# === DEALS PHASE 4: Forecast + Signals ===
+def _ensure_deals_phase4_schema():
+    conn = get_db()
+    ensure_deals_table(conn)
+    cur = conn.cursor()
+    try:
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(deals)").fetchall()}
+        if "win_prob" not in cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN win_prob REAL DEFAULT 0.3")
+        if "next_action" not in cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN next_action TEXT")
+        if "due_at" not in cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN due_at TEXT")
+        if "compliance_state" not in cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN compliance_state TEXT")
+        if "rfq_coverage" not in cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN rfq_coverage REAL")
+        if "last_touch" not in cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN last_touch TEXT")
+    except Exception:
+        pass
+    conn.commit()
+
+def _list_deals_for_forecast(q=None):
+    _ensure_deals_phase4_schema()
+    conn = get_db()
+    import pandas as pd
+    sql = "select id, title, stage, owner, amount, agency, due_date, due_at, win_prob, compliance_state, rfq_coverage from deals"
+    params = []
+    if q:
+        sql += " where title like ? or agency like ?"
+        params = [f"%{q}%", f"%{q}%"]
+    try:
+        df = pd.read_sql_query(sql, conn, params=params)
+    except Exception:
+        df = pd.DataFrame(columns=["id","title","stage","owner","amount","agency","due_date","due_at","win_prob","compliance_state","rfq_coverage"])
+    return df
+
+def _coerce_date_series(s):
+    import pandas as pd
+    try:
+        return pd.to_datetime(s, errors="coerce")
+    except Exception:
+        return pd.to_datetime([])
+
+def deal_weighted_amount(row):
+    try:
+        amt = float(row.get("amount") or 0.0)
+        p = float(row.get("win_prob") or 0.0)
+        return max(0.0, amt) * min(max(p, 0.0), 1.0)
+    except Exception:
+        return 0.0
+
+def forecast_weighted(df):
+    import pandas as pd
+    if df.empty: 
+        return pd.DataFrame(columns=["period","weighted_total"]), pd.DataFrame(columns=["period","weighted_total"])
+    dates = _coerce_date_series(df["due_at"].fillna(df["due_date"]))
+    df2 = df.copy()
+    df2["due_norm"] = dates
+    df2["weighted"] = df2.apply(deal_weighted_amount, axis=1)
+    df2 = df2.dropna(subset=["due_norm"])
+    df2["month"] = df2["due_norm"].dt.to_period("M").astype(str)
+    by_month = df2.groupby("month")["weighted"].sum().reset_index().rename(columns={"month":"period","weighted":"weighted_total"})
+    df2["quarter"] = df2["due_norm"].dt.to_period("Q").astype(str)
+    by_q = df2.groupby("quarter")["weighted"].sum().reset_index().rename(columns={"quarter":"period","weighted":"weighted_total"})
+    return by_month, by_q
+
+def update_win_prob_from_signals(deal_id):
+    _ensure_deals_phase4_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    row = cur.execute("select win_prob, compliance_state, rfq_coverage from deals where id = ?", (int(deal_id),)).fetchone()
+    if not row: 
+        return False
+    win_prob, comp, cov = row
+    try:
+        base = float(win_prob or 0.3)
+        comp_adj = {"green":0.20, "yellow":0.05, "red":-0.10}.get((comp or "").lower(), 0.0)
+        covf = float(cov) if cov is not None else 0.0
+        cov_adj = max(-0.15, min(0.15, (covf - 0.5) * 0.30))
+        new_p = min(0.95, max(0.05, base + comp_adj + cov_adj))
+        cur.execute("update deals set win_prob = ?, updated_at = datetime('now') where id = ?", (new_p, int(deal_id)))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+def compute_sla_blockers():
+    _ensure_deals_phase4_schema()
+    conn = get_db()
+    cur = conn.cursor()
+    blockers = []
+    try:
+        rows = cur.execute("select id, title, owner, amount, due_at, due_date, updated_at from deals").fetchall()
+        import datetime as _dt
+        now = _dt.datetime.utcnow()
+        for id_, title, owner, amount, due_at, due_date, updated_at in rows:
+            due = None
+            for d in [due_at, due_date]:
+                if d:
+                    try:
+                        from datetime import datetime as _d2
+                        due = _d2.fromisoformat(str(d).replace('Z',''))
+                        break
+                    except Exception:
+                        pass
+            try:
+                upd = _d2.fromisoformat(str(updated_at).replace('Z','')) if updated_at else None
+            except Exception:
+                upd = None
+            if due and due < now:
+                blockers.append((id_, title, "Overdue"))
+            if not owner:
+                blockers.append((id_, title, "No owner"))
+            try:
+                if not amount or float(amount) <= 0:
+                    blockers.append((id_, title, "No amount"))
+            except Exception:
+                blockers.append((id_, title, "No amount"))
+            try:
+                if upd and (now - upd).days > 7:
+                    blockers.append((id_, title, "Stale"))
+            except Exception:
+                pass
+        try:
+            ensure_deal_activities_schema(conn)
+            task_rows = cur.execute("select da.deal_id, d.title, da.id, da.due_at from deal_activities da join deals d on d.id = da.deal_id where da.type='task' and da.completed_at is null").fetchall()
+            for did, dtitle, aid, due in task_rows:
+                try:
+                    from datetime import datetime as _d2
+                    if due and _d2.fromisoformat(str(due).replace('Z','')) < now:
+                        blockers.append((did, dtitle, "Task overdue"))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return blockers
+# === END DEALS PHASE 4 ===
+
+
+
+# === PHASE 10: Observability ===
+def ensure_observability_schema():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS metrics(
+        id INTEGER PRIMARY KEY,
+        ts TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        labels_json TEXT
+    );""" )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);")
+    cur.execute("""CREATE TABLE IF NOT EXISTS audit_log(
+        id INTEGER PRIMARY KEY,
+        ts TEXT NOT NULL,
+        user_id TEXT,
+        action TEXT NOT NULL,
+        entity TEXT,
+        entity_id TEXT,
+        meta_json TEXT
+    );""" )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);")
+    cur.execute("""CREATE TABLE IF NOT EXISTS error_events(
+        id INTEGER PRIMARY KEY,
+        ts TEXT NOT NULL,
+        error_id TEXT NOT NULL,
+        message TEXT NOT NULL,
+        context_json TEXT
+    );""" )
+    conn.commit()
+
+def metric_push(name: str, value: float, labels: dict|None=None):
+    if not feature_flags().get('observability', False):
+        return
+    ensure_observability_schema()
+    conn = get_db()
+    conn.execute("INSERT INTO metrics(ts,name,value,labels_json) VALUES(?,?,?,?)",
+                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(name), float(value), json.dumps(labels or {})))
+    conn.commit()
+
+class metric_timer:
+    def __init__(self, name:str, labels:dict|None=None):
+        self.name = name; self.labels = labels or {}; self.start = None
+    def __enter__(self):
+        self.start = _time.perf_counter()
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        dur_ms = (_time.perf_counter() - self.start) * 1000.0 if self.start else 0.0
+        metric_push(self.name, dur_ms, self.labels | {"unit":"ms"})
+        if exc:
+            error_event(self.name + ".error", str(exc), {"labels": self.labels})
+        return False
+
+def audit(action:str, user_id:str|None=None, entity:str|None=None, entity_id:str|None=None, meta:dict|None=None):
+    if not feature_flags().get('observability', False):
+        return
+    ensure_observability_schema()
+    conn = get_db()
+    conn.execute("INSERT INTO audit_log(ts,user_id,action,entity,entity_id,meta_json) VALUES(?,?,?,?,?,?)",
+                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z',
+                  str(user_id or ''), str(action), str(entity or ''), str(entity_id or ''), json.dumps(meta or {})))
+    conn.commit()
+
+def error_event(error_id:str, message:str, ctx:dict|None=None):
+    if not feature_flags().get('observability', False):
+        return
+    ensure_observability_schema()
+    conn = get_db()
+    conn.execute("INSERT INTO error_events(ts,error_id,message,context_json) VALUES(?,?,?,?)",
+                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(error_id), str(message), json.dumps(ctx or {})))
+    conn.commit()
+
+def render_health_card():
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('observability', False):
+        return
+    ensure_observability_schema()
+    conn = get_db()
+    since = (_dt.datetime.utcnow() - _dt.timedelta(days=1)).isoformat()+'Z'
+    def _avg(name):
+        try:
+            return conn.execute("select avg(value) from metrics where name=? and ts>=?", (name, since)).fetchone()[0]
+        except Exception:
+            return None
+    def _last_time(name):
+        try:
+            return conn.execute("select max(ts) from metrics where name=?", (name,)).fetchone()[0]
+        except Exception:
+            return None
+    api_ms = _avg("api_latency_ms") or 0
+    cache_hits = conn.execute("select count(*) from metrics where name='cache_hit' and value=1 and ts>=?", (since,)).fetchone()[0]
+    cache_total = conn.execute("select count(*) from metrics where name='cache_hit' and ts>=?", (since,)).fetchone()[0]
+    cache_pct = (100.0*cache_hits/cache_total) if cache_total else 0.0
+    email_ok = conn.execute("select count(*) from metrics where name='email_success' and value=1 and ts>=?", (since,)).fetchone()[0]
+    email_total = conn.execute("select count(*) from metrics where name='email_success' and ts>=?", (since,)).fetchone()[0]
+    email_rate = (100.0*email_ok/email_total) if email_total else 0.0
+    last_export = _last_time("export_duration_ms") or "n/a"
+    last_parser_err = conn.execute("select max(ts) from error_events where error_id like 'parser%'" ).fetchone()[0] if True else None
+    st.markdown("### Health")
+    c1,c2,c3 = st.columns(3)
+    c1.metric("API avg latency", f"{api_ms:.0f} ms")
+    c2.metric("Cache hit", f"{cache_pct:.0f}%")
+    c3.metric("Email delivery", f"{email_rate:.0f}%")
+    c4,c5 = st.columns(2)
+    c4.metric("Last export", last_export)
+    c5.metric("Last parser error", last_parser_err or "none")
+
+def render_admin_observability():
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('observability', False):
+        return
+    ensure_observability_schema()
+    st.subheader("Admin • Logs and Metrics")
+    d1, d2 = st.columns(2)
+    with d1:
+        start = st.text_input("Start ISO", value=(_dt.datetime.utcnow() - _dt.timedelta(days=7)).isoformat()+'Z')
+    with d2:
+        end = st.text_input("End ISO", value=_dt.datetime.utcnow().isoformat()+'Z')
+    u = st.text_input("User filter")
+    conn = get_db()
+    st.markdown("#### Audit log")
+    q = "select ts,user_id,action,entity,entity_id,meta_json from audit_log where ts between ? and ?"
+    params = [start, end]
+    if u:
+        q += " and user_id like ?"; params.append(f"%{u}%")
+    try:
+        import pandas as pd
+        df = pd.read_sql_query(q + " order by id desc limit 1000", conn, params=params)
+    except Exception:
+        df = None
+    if df is not None:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    st.markdown("#### Metrics")
+    mname = st.text_input("Metric name")
+    mq = "select ts,name,value,labels_json from metrics where ts between ? and ?"
+    mparams = [start, end]
+    if mname:
+        mq += " and name=?"; mparams.append(mname)
+    try:
+        dm = pd.read_sql_query(mq + " order by id desc limit 1000", conn, params=mparams)
+    except Exception:
+        dm = None
+    if dm is not None:
+        st.dataframe(dm, use_container_width=True, hide_index=True)
+# === END PHASE 10 ===
+
+
+# Admin view injection
+try:
+    import streamlit as st
+    if feature_flags().get('observability', False) and st.sidebar.checkbox("Open Admin Observability"):
+        render_admin_observability()
+except Exception:
+    pass
