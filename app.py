@@ -13530,3 +13530,141 @@ try:
 except Exception:
     pass
 # === PERSIST PHASE 5 END ===
+
+
+
+# === SAM WATCH MINIMAL FALLBACK START ===
+import json as _json_sam
+import datetime as _dt
+import requests as _req
+
+def _sam_api_key():
+    import os, streamlit as st
+    try:
+        return st.secrets["sam"]["key"]
+    except Exception:
+        return os.environ.get("SAM_API_KEY")
+
+def _sam_fetch(filters: dict, page: int, size: int):
+    key = _sam_api_key()
+    if not key:
+        return {"ok": False, "error": "missing_api_key"}
+    base = "https://api.sam.gov/opportunities/v2/search"
+    params = {"api_key": key, "limit": int(size), "offset": int(page) * int(size)}
+    if filters.get("keywords"):
+        params["q"] = filters["keywords"]
+    if filters.get("types"):
+        params["notice_type"] = ",".join(filters["types"])
+    if filters.get("naics"):
+        params["naics"] = ",".join(filters["naics"])
+    if filters.get("psc"):
+        params["psc"] = ",".join(filters["psc"])
+    if filters.get("agency"):
+        params["agency"] = filters["agency"]
+    if filters.get("place_state"):
+        params["state"] = filters["place_state"]
+    try:
+        r = _req.get(base, params=params, timeout=10)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"http_{r.status_code}", "body": r.text[:500]}
+        data = r.json()
+        return {"ok": True, "data": data}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+
+def _sam_upsert_rows(payload) -> int:
+    """Insert or update minimal notice rows from SAM payload."""
+    conn = get_db(); cur = conn.cursor()
+    count = 0
+    items = []
+    if isinstance(payload, dict):
+        items = payload.get("opportunitiesData") or payload.get("data") or payload.get("results") or []
+    elif isinstance(payload, list):
+        items = payload
+    for it in items:
+        sid = str(it.get("noticeId") or it.get("solicitationNumber") or it.get("id") or "")
+        title = it.get("title") or it.get("name") or ""
+        agency = (it.get("agency") or {}).get("name") if isinstance(it.get("agency"), dict) else (it.get("agency") or "")
+        notice_type = it.get("type") or it.get("noticeType") or ""
+        naics = ",".join(it.get("naicsCodes") or []) if isinstance(it.get("naicsCodes"), list) else (it.get("naics") or "")
+        psc = ",".join(it.get("pscCodes") or []) if isinstance(it.get("pscCodes"), list) else (it.get("psc") or "")
+        posted_at = it.get("postedDate") or it.get("publishDate") or ""
+        due_at = it.get("responseDate") or it.get("dueDate") or ""
+        url = it.get("url") or it.get("link") or ""
+        set_aside = it.get("setAside") or ""
+        place_city = (it.get("placeOfPerformance") or {}).get("city") if isinstance(it.get("placeOfPerformance"), dict) else ""
+        place_state = (it.get("placeOfPerformance") or {}).get("state") if isinstance(it.get("placeOfPerformance"), dict) else ""
+        try:
+            cur.execute("""INSERT INTO notices(sam_notice_id, notice_type, title, agency, naics, psc, set_aside,                    place_city, place_state, posted_at, due_at, status, url, last_fetched_at)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)ON CONFLICT(sam_notice_id) DO UPDATE SET  notice_type=excluded.notice_type,  title=excluded.title,  agency=excluded.agency,  naics=excluded.naics,  psc=excluded.psc,  set_aside=excluded.set_aside,  place_city=excluded.place_city,  place_state=excluded.place_state,  posted_at=excluded.posted_at,  due_at=excluded.due_at,  url=excluded.url,  last_fetched_at=excluded.last_fetched_at""", (sid, notice_type, title, agency, naics, psc, set_aside,       place_city, place_state, posted_at, due_at, None, url, _dt.datetime.utcnow().isoformat()))
+            count += 1
+        except Exception:
+            try:
+                cur.execute("INSERT OR IGNORE INTO notices(sam_notice_id, notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, status, url, last_fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (sid, notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, None, url, _dt.datetime.utcnow().isoformat()))
+                cur.execute("UPDATE notices SET notice_type=?, title=?, agency=?, naics=?, psc=?, set_aside=?, place_city=?, place_state=?, posted_at=?, due_at=?, url=?, last_fetched_at=? WHERE sam_notice_id=?",
+                            (notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, url, _dt.datetime.utcnow().isoformat(), sid))
+                count += 1
+            except Exception:
+                pass
+    conn.commit()
+    return count
+
+def render_sam_watch_minimal_ui():
+    import streamlit as st
+    st.subheader("SAM Watch")
+    key_present = bool(_sam_api_key())
+    if not key_present:
+        st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
+    with st.form("sam_min_search", clear_on_submit=False):
+        kw = st.text_input("Keywords")
+        types = st.multiselect("Types", ["Solicitation","Sources Sought","Presolicitation","Combined Synopsis/Solicitation"])
+        size = st.selectbox("Page size", [25,50,100], index=1)
+        submitted = st.form_submit_button("Search")
+    if submitted:
+        res = _sam_fetch({"keywords": kw, "types": types}, 0, size)
+        if not res.get("ok"):
+            st.error(f"Search failed: {res.get('error')}")
+            if res.get("body"): st.code(res["body"][:500])
+            return
+        data = res["data"]
+        try:
+            inserted = _sam_upsert_rows(data)
+        except Exception as ex:
+            st.error(f"Insert failed: {ex}")
+            inserted = 0
+        st.caption(f"Fetched and upserted {inserted} notices.")
+        try:
+            me = st.session_state.get("user_id")
+            out = list_notices({"keywords": kw, "types": types}, page=0, page_size=size, current_user_id=me, show_hidden=False)
+            rows = out.get("items", [])
+        except Exception:
+            conn = get_db(); cur = conn.cursor()
+            rows = cur.execute("SELECT id, title, agency, notice_type, due_at FROM notices ORDER BY posted_at DESC LIMIT ?", (int(size),)).fetchall()
+            rows = [{"id": r[0], "title": r[1], "agency": r[2], "notice_type": r[3], "due_at": r[4]} for r in rows]
+        if not rows:
+            st.info("No results.")
+            return
+        for r in rows:
+            with st.container(border=True):
+                st.write(r.get("title")); st.caption(f"{r.get('agency','')} • {r.get('notice_type','')} • Due {r.get('due_at','')}")
+
+# Integrate fallback into render_sam()
+try:
+    _tmp_render_sam = render_sam
+except Exception:
+    _tmp_render_sam = None
+
+def render_sam():
+    import streamlit as st
+    try:
+        if feature_flags().get("sam_ingest_core", False):
+            try:
+                render_sam_watch_phase1_ui()  # if present
+                return
+            except Exception as ex:
+                st.warning(f"SAM Phase1 UI failed: {ex}")
+        render_sam_watch_minimal_ui()
+    except Exception as ex:
+        st.error(f"SAM UI error: {ex}")
+# === SAM WATCH MINIMAL FALLBACK END ===
+
