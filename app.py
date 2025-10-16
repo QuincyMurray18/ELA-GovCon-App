@@ -7090,7 +7090,7 @@ except NameError:
 
         """
 
-        Fallback stub when real google_places_search isn't loaded yet.
+#         Fallback stub when real google_places_search isn't loaded yet.
 
         Accepts flexible signatures, e.g. (query, location, radius_meters).
 
@@ -14302,7 +14302,7 @@ except NameError:
 
         """
 
-        Fallback stub when real google_places_search isn't loaded yet.
+#         Fallback stub when real google_places_search isn't loaded yet.
 
         Accepts flexible signatures, e.g. (query, location, radius_meters).
 
