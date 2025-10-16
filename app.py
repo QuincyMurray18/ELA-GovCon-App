@@ -496,6 +496,52 @@ def get_db():
     return conn
 # === CORE DB EARLY END ===
 
+# === TENANCY EARLY BOOTSTRAP START ===
+def _tenancy_phase1_bootstrap():
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS orgs(
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS users(
+            id TEXT PRIMARY KEY,
+            org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+            email TEXT NOT NULL UNIQUE,
+            display_name TEXT,
+            role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
+            created_at TEXT NOT NULL
+        );""")
+        # Seed a default org and 3 users if empty
+        row = cur.execute("SELECT COUNT(*) FROM orgs").fetchone()
+        if row and row[0] == 0:
+            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
+        # Ensure at least one user exists for the default org
+        rowu = cur.execute("SELECT COUNT(*) FROM users").fetchone()
+        if rowu and rowu[0] == 0:
+            users = [
+                ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
+                ('user-collin','org-default','collin@example.com','Collin','Member'),
+                ('user-charles','org-default','charles@example.com','Charles','Viewer'),
+            ]
+            for uid, oid, email, name, role in users:
+                cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                            (uid, oid, email, name, role))
+        conn.commit()
+    except Exception as ex:
+        # Do not break startup on bootstrap failure
+        try: log_json('error', 'tenancy_bootstrap_failed', error=str(ex))
+        except Exception: pass
+
+try:
+    _tenancy_phase1_bootstrap()
+except Exception:
+    pass
+# === TENANCY EARLY BOOTSTRAP END ===
+
+
 # === EARLY DB BOOTSTRAP START ===
 # Ensure get_db exists before any import-time calls.
 # This early definition will be overridden by later phases if they redefine get_db.
