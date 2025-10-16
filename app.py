@@ -476,6 +476,26 @@ import streamlit as st
 
 
 
+
+# === CORE DB EARLY START ===
+import os as _os
+_os.makedirs('data', exist_ok=True)
+
+@st.cache_resource
+def get_db():
+    import sqlite3
+    conn = sqlite3.connect('data/app.db', check_same_thread=False, isolation_level=None)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('PRAGMA synchronous=NORMAL;')
+        conn.execute('PRAGMA temp_store=MEMORY;')
+        conn.execute('PRAGMA foreign_keys=ON;')
+        conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
+    except Exception:
+        pass
+    return conn
+# === CORE DB EARLY END ===
+
 # === EARLY DB BOOTSTRAP START ===
 # Ensure get_db exists before any import-time calls.
 # This early definition will be overridden by later phases if they redefine get_db.
@@ -12341,3 +12361,27 @@ def _maybe_render_shell():
     if _orig__maybe_render_shell_p3:
         _orig__maybe_render_shell_p3()
 # === SAM PHASE 3 AMENDMENTS END ===
+
+
+# === DEV AUTOLOGIN START ===
+def _dev_autologin():
+    try:
+        # Only when no identity present
+        if not st.session_state.get('org_id') and not st.session_state.get('user_id'):
+            conn = get_db()
+            orgs = conn.execute('SELECT id FROM orgs').fetchall()
+            if len(orgs) == 1:
+                org_id = orgs[0][0]
+                user = conn.execute('SELECT id, role FROM users WHERE org_id=? LIMIT 1', (org_id,)).fetchone()
+                if user:
+                    st.session_state['org_id'] = org_id
+                    st.session_state['user_id'] = user[0]
+                    st.session_state['role'] = user[1]
+    except Exception:
+        pass
+
+try:
+    _dev_autologin()
+except Exception:
+    pass
+# === DEV AUTOLOGIN END ===
