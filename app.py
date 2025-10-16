@@ -2956,79 +2956,6 @@ def ensure_indexes(conn):
     except Exception: pass
     conn.commit()
 
-
-# ===== Tenancy Phase 3: Scoped DAL =====
-def current_user_id():
-    import streamlit as st
-    return st.session_state.get("user_id") or st.session_state.get("active_user") or "anon"
-
-def current_org_id():
-    import streamlit as st
-    oid = st.session_state.get("org_id") or st.session_state.get("org") or None
-    if oid:
-        return oid
-    r = get_db().execute("SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
-    return r[0] if r else "default-org"
-
-def _append_org_filter(sql: str, alias: str | None = None) -> str:
-    target = f"{alias+'.' if alias else ''}org_id = ?"  # positional placeholders
-    low = sql.lower()
-    if " org_id " in low or " org_id=" in low or ".org_id" in low:
-        return sql
-    if " where " in low:
-        return sql + " AND " + target
-    else:
-        return sql + " WHERE " + target
-
-def q_select(sql: str, params: list | tuple = (), one: bool = False, alias: str | None = None, require_org: bool = True):
-    conn = get_db()
-    fin_sql = _append_org_filter(sql, alias) if require_org else sql
-    fin_params = list(params) + ([current_org_id()] if require_org else [])
-    cur = conn.execute(fin_sql, tuple(fin_params))
-    return (cur.fetchone() if one else cur.fetchall())
-
-def q_insert(table: str, data: dict):
-    d = dict(data or {})
-    d.setdefault("org_id", current_org_id())
-    d.setdefault("owner_id", current_user_id())
-    keys = list(d.keys())
-    vals = [d[k] for k in keys]
-    placeholders = ",".join(["?"] * len(keys))
-    sql = f"INSERT INTO {table}({','.join(keys)}) VALUES({placeholders})"
-    conn = get_db()
-    cur = conn.execute(sql, tuple(vals))
-    return cur.lastrowid
-
-def q_update(table: str, data: dict, where: dict):
-    if not where or "id" not in where:
-        raise ValueError("q_update requires id in where")
-    conn = get_db()
-    d = dict(data or {})
-    if "version" in where:
-        d["version"] = int(where["version"]) + 1
-    sets = ", ".join([f"{k}=?" for k in d.keys()])
-    args = [d[k] for k in d.keys()]
-    sql = f"UPDATE {table} SET {sets} WHERE id=?"
-    args.append(int(where["id"]))
-    sql += " AND org_id=?"
-    args.append(current_org_id())
-    if "version" in where:
-        sql += " AND version=?"
-        args.append(int(where["version"]))
-    cur = conn.execute(sql, tuple(args))
-    return cur.rowcount
-
-def q_delete(table: str, where: dict):
-    if not where or "id" not in where:
-        raise ValueError("q_delete requires id in where")
-    conn = get_db()
-    sql = f"DELETE FROM {table} WHERE id=? AND org_id=?"
-    args = (int(where["id"]), current_org_id())
-    cur = conn.execute(sql, args)
-    return cur.rowcount
-# ===== end Tenancy Phase 3 =====
-
-
 def get_db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -5993,1798 +5920,89 @@ def sam_search(
     naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
     notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
 ):
-    """Legacy stub. Use fetch_notices instead."""
-    return {}
+    if not SAM_API_KEY:
+        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+    base = "https://api.sam.gov/opportunities/v2/search"
+    today = datetime.utcnow().date()
+    min_due_date = today + timedelta(days=min_days)
+    posted_from = _us_date(today - timedelta(days=posted_from_days))
+    posted_to   = _us_date(today)
 
-
-# ===== Phase 0 Bootstrap =====
-
-# ===== SAM Ingest Phase 1 =====
-import math
-
-def ensure_sam_ingest_tables():
-    conn = get_db()
-    # notices table: extend existing if present, else create
-    conn.execute("""CREATE TABLE IF NOT EXISTS notices(
-        id INTEGER PRIMARY KEY,
-        sam_notice_id TEXT NOT NULL,
-        notice_type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        agency TEXT,
-        naics TEXT,
-        psc TEXT,
-        set_aside TEXT,
-        place_city TEXT,
-        place_state TEXT,
-        posted_at TEXT,
-        due_at TEXT,
-        status TEXT,
-        url TEXT,
-        last_fetched_at TEXT
-    )""")
-    # Add columns if existing table lacks them
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(notices)")}
-    add_cols = []
-    for cdef in [
-        ("sam_notice_id","TEXT NOT NULL"),
-        ("notice_type","TEXT NOT NULL"),
-        ("title","TEXT NOT NULL"),
-        ("agency","TEXT"),
-        ("naics","TEXT"),
-        ("psc","TEXT"),
-        ("set_aside","TEXT"),
-        ("place_city","TEXT"),
-        ("place_state","TEXT"),
-        ("posted_at","TEXT"),
-        ("due_at","TEXT"),
-        ("status","TEXT"),
-        ("url","TEXT"),
-        ("last_fetched_at","TEXT"),
-    ]:
-        if cdef[0] not in cols:
-            add_cols.append(f"ALTER TABLE notices ADD COLUMN {cdef[0]} {cdef[1]}")
-    for sql in add_cols:
-        try:
-            conn.execute(sql)
-        except Exception:
-            pass
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_notices_notice_id ON notices(sam_notice_id)")
-
-    # notice_files
-    conn.execute("""CREATE TABLE IF NOT EXISTS notice_files(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        file_name TEXT,
-        file_url TEXT,
-        checksum TEXT,
-        bytes INTEGER,
-        created_at TEXT
-    )""")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_notice_files ON notice_files(notice_id, file_url)")
-
-    # notice_status per-user
-    conn.execute("""CREATE TABLE IF NOT EXISTS notice_status(
-        user_id TEXT NOT NULL,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        state TEXT NOT NULL CHECK(state IN ('saved','dismissed')),
-        ts TEXT NOT NULL,
-        UNIQUE(user_id, notice_id)
-    )""")
-
-    # user_prefs
-    conn.execute("""CREATE TABLE IF NOT EXISTS user_prefs(
-        user_id TEXT PRIMARY KEY,
-        sam_page_size INTEGER DEFAULT 50,
-        email_default_recipients TEXT
-    )""")
-
-    # pipeline
-    conn.execute("""CREATE TABLE IF NOT EXISTS pipeline_deals(
-        id INTEGER PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        stage TEXT DEFAULT 'Lead',
-        created_at TEXT NOT NULL,
-        UNIQUE(user_id, notice_id)
-    )""")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_user ON pipeline_deals(user_id)")
-
-    # helpful indexes
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notices_due_at ON notices(due_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notices_naics ON notices(naics)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notices_psc ON notices(psc)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notices_agency ON notices(agency)")
-
-ensure_sam_ingest_tables()
-
-def _sam_client():
-    # api.data.gov wrapper for SAM
-    key = get_secret("sam","key") or get_secret("sam","api_key") or get_secret("sam","SAM_API_KEY")
-    base = "https://api.sam.gov/prod/opportunities/v2/search"
-    return create_api_client(base, api_key=None, timeout=10, retries=2, ttl=900), key
-
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_notices(filters: dict, page: int, page_size: int, org_id=None, user_id=None):
-    org_id = org_id or current_org_id()
-    user_id = user_id or current_user_id()
-    """
-    Call SAM search API. Returns tuple (results, total_estimate).
-    Filters: keywords, types, naics(list), psc(list), agency, place_city, place_state
-    Page is 1-based. Aggregate API pages to reach page_size.
-    """
-    api, key = _sam_client()
-    if not key:
-        return {"error":"missing_api_key"}, 0
-    # Map filters to params. SAM API accepts multiple notice types and codes.
     params = {
-        "api_key": key,
-        "page": max(0, int(page)-1),
-        "limit": min(100, max(1, int(page_size))),
+        "api_key": SAM_API_KEY,
+        "limit": str(limit),
+        "response": "json",
+        "sort": "-publishedDate",
+        "active": active,
+        "postedFrom": posted_from,   # MM/dd/yyyy
+        "postedTo": posted_to,       # MM/dd/yyyy
     }
-    kw = (filters or {}).get("keywords") or ""
-    if kw:
-        # SAM uses "q" for keyword search
-        params["q"] = kw
-    types = (filters or {}).get("types") or []
-    if isinstance(types, str):
-        types = [t.strip() for t in types.split(",") if t.strip()]
-    if types:
-        # Common SAM field is "notice_type"
-        params["notice_type"] = ",".join(types)
-    naics = (filters or {}).get("naics") or []
-    if isinstance(naics, str):
-        naics = [n.strip() for n in naics.split(",") if n.strip()]
-    if naics:
-        params["naics"] = ",".join(naics)
-    psc = (filters or {}).get("psc") or []
-    if isinstance(psc, str):
-        psc = [p.strip() for p in psc.split(",") if p.strip()]
-    if psc:
-        params["psc"] = ",".join(psc)
-    agency = (filters or {}).get("agency") or ""
-    if agency:
-        params["agency"] = agency
-    if (filters or {}).get("place_city"):
-        params["city"] = filters["place_city"]
-    if (filters or {}).get("place_state"):
-        params["state"] = filters["place_state"]
+    # Enforce only Solicitation + Combined when notice_types is blank
+    if not notice_types:
+        notice_types = "Combined Synopsis/Solicitation,Solicitation"
+    params["noticeType"] = notice_types
 
-    # Pull once. If API pages differently, this still returns up to page_size.
-    res = api["get"]("", params)
-    if "error" in res:
-        return res, 0
-    data = res.get("json") or {}
-    # SAM typically returns "opportunitiesData" and "totalRecords"
-    items = data.get("opportunitiesData") or data.get("data") or data.get("results") or []
-    total = data.get("totalRecords") or data.get("numFound") or len(items)
-    # Normalize minimal fields
-    norm = []
-    for it in items:
-        # Handle different shapes defensively
-        sid = str(it.get("noticeId") or it.get("id") or it.get("notice_id") or it.get("solicitationNumber") or "")
-        ntype = it.get("type") or it.get("noticeType") or it.get("notice_type") or ""
-        title = it.get("title") or it.get("subject") or it.get("noticeTitle") or ""
-        ag = it.get("agency") or it.get("department") or it.get("orgName") or ""
-        na = it.get("naics") or it.get("naicsCode") or ""
-        ps = it.get("psc") or it.get("pscCode") or ""
-        sa = it.get("setAside") or it.get("typeOfSetAside") or ""
-        posted = it.get("postedDate") or it.get("publishDate") or it.get("date") or ""
-        due = it.get("responseDate") or it.get("closeDate") or it.get("dueDate") or ""
-        status = it.get("status") or it.get("active") or ""
-        url = it.get("uiLink") or it.get("url") or ""
-        place = it.get("placeOfPerformance") or {}
-        city = place.get("city") if isinstance(place, dict) else ""
-        state = place.get("state") if isinstance(place, dict) else ""
-        atts = it.get("attachments") or it.get("files") or []
-        norm.append({
-            "sam_notice_id": sid,
-            "notice_type": ntype,
-            "title": title,
-            "agency": ag,
-            "naics": na,
-            "psc": ps,
-            "set_aside": sa,
-            "place_city": city,
-            "place_state": state,
-            "posted_at": posted,
-            "due_at": due,
-            "status": str(status),
-            "url": url,
-            "attachments": atts,
-        })
-    return {"items": norm}, int(total or 0)
+    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
+    if keyword:      params["keywords"] = keyword
 
-def upsert_notice(n: dict):
-    conn = get_db()
-    org_id = current_org_id()
-    owner_id = current_user_id()
-    sid = n.get("sam_notice_id") or n.get("id") or n.get("notice_id")
-    row = conn.execute("SELECT id, version FROM notices WHERE org_id=? AND sam_notice_id=?", (org_id, str(sid))).fetchone()
-    if row:
-        nid, ver = int(row[0]), int(row[1] or 0)
-        data = {
-            "notice_type": n.get("notice_type") or n.get("type") or "",
-            "title": n.get("title") or "",
-            "agency": n.get("agency") or "",
-            "naics": n.get("naics") or "",
-            "psc": n.get("psc") or "",
-            "set_aside": n.get("set_aside") or "",
-            "place_city": (n.get("place") or {}).get("city") if isinstance(n.get("place"), dict) else n.get("place_city"),
-            "place_state": (n.get("place") or {}).get("state") if isinstance(n.get("place"), dict) else n.get("place_state"),
-            "posted_at": n.get("posted_at") or "",
-            "due_at": n.get("due_at") or "",
-            "status": n.get("status") or "",
-            "url": n.get("url") or n.get("notice_url") or "",
-            "last_fetched_at": utc_now_iso(),
-            "owner_id": owner_id
-        }
-        q_update("notices", data, {"id": nid, "version": ver})
-    else:
-        nid = q_insert("notices", {
-            "sam_notice_id": str(sid),
-            "notice_type": n.get("notice_type") or n.get("type") or "",
-            "title": n.get("title") or "",
-            "agency": n.get("agency") or "",
-            "naics": n.get("naics") or "",
-            "psc": n.get("psc") or "",
-            "set_aside": n.get("set_aside") or "",
-            "place_city": (n.get("place") or {}).get("city") if isinstance(n.get("place"), dict) else n.get("place_city"),
-            "place_state": (n.get("place") or {}).get("state") if isinstance(n.get("place"), dict) else n.get("place_state"),
-            "posted_at": n.get("posted_at") or "",
-            "due_at": n.get("due_at") or "",
-            "status": n.get("status") or "",
-            "url": n.get("url") or n.get("notice_url") or "",
-            "last_fetched_at": utc_now_iso(),
-            "visibility": "team"
-        })
-    atts = n.get("attachments") or n.get("files") or []
-    for a in atts:
-        furl = a.get("url") or a.get("href") or a.get("file_url")
-        fname = a.get("name") or a.get("file_name") or (furl.split("/")[-1] if furl else None)
-        if not furl or not fname:
-            continue
-        r = conn.execute("SELECT id FROM notice_files WHERE org_id=? AND notice_id=? AND file_url=?", (org_id, int(nid), furl)).fetchone()
-        if not r:
-            q_insert("notice_files", {"notice_id": int(nid), "file_name": fname, "file_url": furl, "created_at": utc_now_iso()})
     try:
-        record_notice_version(nid, n)
-    except Exception as _ex:
-        log_event("warn","record_notice_version_failed", err=str(_ex))
-    return nid
-
-def list_notices(filters: dict, page: int, page_size: int, include_hidden: bool, user_id: str):
-    """
-    Read from DB with simple filters and user hidden state handling.
-    Returns (rows, total_estimate)
-    """
-    ensure_sam_ingest_tables()
-    conn = get_db()
-    where = []
-    vals = []
-    if filters.get("keywords"):
-        where.append("(title LIKE ? OR agency LIKE ?)")
-        vals += [f"%{filters['keywords']}%", f"%{filters['keywords']}%"]
-    if filters.get("types"):
-        # types is list
-        t = filters["types"]
-        if isinstance(t, str):
-            t = [x.strip() for x in t.split(",") if x.strip()]
-        if t:
-            where.append("(" + " OR ".join(["notice_type=?" for _ in t]) + ")")
-            vals += t
-    if filters.get("naics"):
-        n = filters["naics"]
-        if isinstance(n, str):
-            n = [x.strip() for x in n.split(",") if x.strip()]
-        for code in n:
-            where.append("naics LIKE ?")
-            vals.append(f"%{code}%")
-    if filters.get("psc"):
-        p = filters["psc"]
-        if isinstance(p, str):
-            p = [x.strip() for x in p.split(",") if x.strip()]
-        for code in p:
-            where.append("psc LIKE ?")
-            vals.append(f"%{code}%")
-    if filters.get("agency"):
-        where.append("agency LIKE ?")
-        vals.append(f"%{filters['agency']}%")
-    if filters.get("place_state"):
-        where.append("place_state LIKE ?")
-        vals.append(f"%{filters['place_state']}%")
-    if filters.get("place_city"):
-        where.append("place_city LIKE ?")
-        vals.append(f"%{filters['place_city']}%")
-
-    wh = "WHERE " + " AND ".join(where) if where else ""
-    # Hidden filter
-    hidden_join = ""
-    hidden_cond = ""
-    if not include_hidden:
-        hidden_join = "LEFT JOIN notice_status ns ON ns.notice_id = n.id AND ns.user_id=?"
-        hidden_cond = "AND COALESCE(ns.state,'')=''"
-        vals = [user_id] + vals
-
-    # Count estimate
-    total = conn.execute(f"SELECT COUNT(1) FROM notices n {hidden_join} {wh} {hidden_cond}", tuple(vals)).fetchone()[0]
-
-    # Pagination
-    page = max(1, int(page))
-    page_size = max(1, int(page_size))
-    offset = (page-1)*page_size
-
-    org_id = current_org_id()
-    rows = conn.execute(
-        f"""SELECT n.id, n.sam_notice_id, n.notice_type, n.title, n.agency, n.naics, n.psc, n.set_aside,
-                   n.place_city, n.place_state, n.posted_at, n.due_at, n.status, n.url,
-                   EXISTS(SELECT 1 FROM pipeline_deals pd WHERE pd.user_id=? AND pd.notice_id=n.id AND pd.org_id=?) AS starred,
-                   COALESCE((SELECT state FROM notice_status WHERE user_id=? AND notice_id=n.id AND org_id=?),'') AS my_state,
-                   (SELECT COUNT(1) FROM amendments a WHERE a.notice_id=n.id) AS amendments_count,
-                   COALESCE(n.compliance_state,'Unreviewed') AS compliance_state
-            FROM notices n
-            {hidden_join}
-            WHERE n.org_id=? AND (n.visibility!='private' OR n.owner_id=?)
-            {wh} {hidden_cond}
-            ORDER BY date(n.posted_at) DESC, n.id DESC
-            LIMIT ? OFFSET ?
-        """,
-        tuple([user_id, org_id, user_id, org_id, org_id, user_id] + vals + [page_size, offset])
-    ).fetchall()
-
-
-    # Shape rows
-    shaped = []
-    for r in rows:
-        shaped.append({
-            "id": r[0],
-            "sam_notice_id": r[1],
-            "type": r[2],
-            "title": r[3],
-            "agency": r[4],
-            "naics": r[5],
-            "psc": r[6],
-            "set_aside": r[7],
-            "place": ", ".join([x for x in [r[8], r[9]] if x]),
-            "posted": r[10],
-            "due": r[11],
-            "status": r[12],
-            "url": r[13],
-            "starred": bool(r[14]),
-            "state": r[15],
-            "amendments_count": int(r[16]),
-            "compliance_state": r[17],
-        })
-    return shaped, int(total)
-
-def set_notice_state(user_id: str, notice_id: int, state: str):
-    conn = get_db()
-    org_id = current_org_id()
-    conn.execute("""INSERT INTO notice_status(user_id, notice_id, state, ts, org_id, owner_id)
-                    VALUES(?,?,?,?,?,?)
-                    ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""",
-                 (user_id, int(notice_id), state, utc_now_iso(), org_id, user_id))
-    return False
-    conn.execute("INSERT OR IGNORE INTO pipeline_deals(user_id, notice_id, created_at) VALUES(?,?,?)",
-                 (user_id, int(notice_id), utc_now_iso()))
-    return True
-
-def get_user_page_size(user_id: str, default: int = 50) -> int:
-    conn = get_db()
-    r = conn.execute("SELECT sam_page_size FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
-    if not r or not r[0]:
-        return default
-    return int(r[0])
-
-def set_user_page_size(user_id: str, value: int):
-    conn = get_db()
-    val = int(value or 50)
-    conn.execute("INSERT INTO user_prefs(user_id, sam_page_size) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET sam_page_size=excluded.sam_page_size",
-                 (user_id, val))
-
-def render_sam_watch_ingest():
-    import streamlit as st
-    import pandas as pd
-    if not st.session_state.get("feature_flags", {}).get("sam_ingest_core"):
-        return
-    ensure_sam_ingest_tables()
-    user_id = st.session_state.get("user_id") or st.session_state.get("active_user") or "anon"
-    # Filters panel
-    st.subheader("SAM Watch")
-    with st.expander("Filters", expanded=True):
-        c1, c2, c3 = st.columns([2,2,2])
-        with c1:
-            kw = st.text_input("Keywords", key="sam_kw", value=(st.session_state.get("sam_filters", {}) or {}).get("keywords",""))
-            types = st.multiselect("Notice types", options=["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"], key="sam_types",
-                                   default=(st.session_state.get("sam_filters", {}) or {}).get("types", []))
-        with c2:
-            naics = st.text_input("NAICS (comma sep)", key="sam_naics", value="")
-            psc = st.text_input("PSC (optional, comma sep)", key="sam_psc", value="")
-        with c3:
-            agency = st.text_input("Agency (optional)", key="sam_agency", value="")
-            state = st.text_input("State (optional 2-letter)", key="sam_state", value="")
-            city = st.text_input("City (optional)", key="sam_city", value="")
-        c4, c5 = st.columns([3,1])
-        with c4:
-            st.caption("Posted window control present but off by default")
-        with c5:
-            show_hidden = st.toggle("Show hidden", value=False, key="sam_show_hidden")
-
-        # Page size control
-        page_size = 50
-        if st.session_state.get("feature_flags", {}).get("sam_page_size"):
-            saved_ps = get_user_page_size(user_id, 50)
-            page_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(saved_ps if saved_ps in [25,50,100] else 50))
-            if page_size != saved_ps:
-                set_user_page_size(user_id, page_size)
-        else:
-            st.caption("Page size: 50")
-
-        # Actions
-        a1, a2, a3 = st.columns([1,1,6])
-        do_search = False
-        with a1:
-            if st.button("Search", type="primary"):
-                do_search = True
-        with a2:
-            if st.button("Reset"):
-                st.session_state["sam_filters"] = {}
-                st.session_state["sam_page"] = 1
-                st.experimental_rerun()
-
-    # Maintain filters in session
-    st.session_state["sam_filters"] = {
-        "keywords": kw,
-        "types": types,
-        "naics": [x.strip() for x in naics.split(",") if x.strip()],
-        "psc": [x.strip() for x in psc.split(",") if x.strip()],
-        "agency": agency.strip(),
-        "place_state": state.strip(),
-        "place_city": city.strip(),
-    }
-    filters = st.session_state["sam_filters"]
-    # Paging
-    page = int(st.session_state.get("sam_page") or 1)
-    # Trigger fetch
-    if do_search:
-        res, total = fetch_notices(filters, page=1, page_size=page_size, org_id=current_org_id(), user_id=user_id)
-        if "error" in res:
-            st.error(f"SAM API error: {res['error']} (id may be in logs)")
-        else:
-            # Upsert all
-            cnt = 0
-            for item in res.get("items", []):
-                try:
-                    upsert_notice(item); cnt += 1
-                except Exception as ex:
-                    log_event("error", "upsert_notice_failed", err=str(ex), sid=item.get("sam_notice_id"))
-            st.success(f"Ingested {cnt} notices.")
-
-    # List from DB respecting hidden state
-    rows, total = list_notices(filters, page=page, page_size=page_size, include_hidden=show_hidden, user_id=user_id)
-
-    # Results table
-    st.caption(f"{total} total. Page {page}.")
-    df = pd.DataFrame([{
-        "Type": r["type"],
-        "Title": r["title"],
-        "Agency": r["agency"],
-        "NAICS": r["naics"],
-        "PSC": r["psc"],
-        "Posted": r["posted"],
-        "Due": r["due"],
-        "Set-aside": r["set_aside"],
-        "Place": r["place"],
-        "Status": r["status"],
-        "Star": "⭐" if r["starred"] else "",
-        "State": r["state"],
-        "URL": r["url"],
-        "ID": r["id"],
-    } for r in rows])
-
-    # Extra columns if amendments tracking is on
-    if st.session_state.get("feature_flags", {}).get("amend_tracking"):
+        headers = {"X-Api-Key": SAM_API_KEY}
+        r = requests.get(base, params=params, headers=headers, timeout=40)
+        status = r.status_code
+        raw_preview = (r.text or "")[:1000]
         try:
-            df["Amendments"] = [int(r.get("amendments_count",0)) for r in rows]
-            df["Compliance"] = [r.get("compliance_state","") for r in rows]
+            data = r.json()
         except Exception:
-            pass
+            return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
+        if status != 200:
+            err_msg = ""
+            if isinstance(data, dict):
+                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
+            return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
+        if isinstance(data, dict) and data.get("message"):
+            return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
 
-    # Actions per row via form with multiselect of ids
-    with st.form("sam_actions"):
-        st.dataframe(df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
-        c1, c2, c3, c4 = st.columns([1,1,1,6])
-        sel_ids = st.multiselect("Select rows by Title to act on", options=[r["Title"] for r in df.to_dict("records")], key="sam_sel_titles")
-        # Map selected titles to ids
-        id_map = {r["Title"]: r["ID"] for r in df.to_dict("records")}
-        selected_ids = [id_map[t] for t in sel_ids if t in id_map]
-        did = None
-        with c1:
-            if st.form_submit_button("Save"):
-                for nid in selected_ids:
-                    set_notice_state(user_id, nid, "saved")
-        with c2:
-            if st.form_submit_button("Dismiss"):
-                for nid in selected_ids:
-                    set_notice_state(user_id, nid, "dismissed")
-        with c3:
-            if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
-                for nid in selected_ids:
-                    toggle_pipeline_star(user_id, nid)
-        # Diff controls
-        if st.session_state.get("feature_flags", {}).get("amend_tracking"):
-            d1, d2 = st.columns([1,5])
-            with d1:
-                if st.form_submit_button("Open Diff"):
-                    if selected_ids:
-                        st.session_state["selected_notice_id"] = int(selected_ids[0])
-                        st.session_state["diff_tab_open"] = True
-
-    # Render diff panel below
-    render_diff_panel()
-
-    # Footer paging
-    p1, p2, p3 = st.columns([1,1,6])
-    with p1:
-        if st.button("Prev") and page > 1:
-            st.session_state["sam_page"] = page - 1
-            st.experimental_rerun()
-    with p2:
-        if st.button("Next") and (page * page_size) < total:
-            st.session_state["sam_page"] = page + 1
-            st.experimental_rerun()
-    with p3:
-        if st.button("Load more"):
-            # Load next API page and ingest
-            res, _ = fetch_notices(filters, page=page+1, page_size=page_size, org_id=current_org_id(), user_id=user_id)
-            if "error" not in res:
-                for item in res.get("items", []):
-                    try:
-                        upsert_notice(item)
-                    except Exception as ex:
-                        log_event("error","upsert_notice_failed", err=str(ex))
-            st.session_state["sam_page"] = page + 1
-            st.experimental_rerun()
-
-# ===== end SAM Ingest Phase 1 =====
-
-# ===== RFP Analyzer Phase 2 =====
-import threading, queue, hashlib, requests
-
-def ensure_rfp_tables():
-    conn = get_db()
-    conn.execute("""CREATE TABLE IF NOT EXISTS rfp_summaries(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        version_hash TEXT NOT NULL,
-        summary_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(notice_id, version_hash)
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS file_parses(
-        id INTEGER PRIMARY KEY,
-        notice_file_id INTEGER NOT NULL REFERENCES notice_files(id) ON DELETE CASCADE,
-        checksum TEXT NOT NULL,
-        parsed_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(notice_file_id, checksum)
-    )""")
-    # Try create FTS5, ignore if not supported
-    try:
-        conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS rfp_chunks USING fts5(
-            notice_id UNINDEXED,
-            file_name,
-            page UNINDEXED,
-            text
-        )""")
-    except Exception:
-        pass
-ensure_rfp_tables()
-
-RFP_SUMMARY_SCHEMA = {
-    "type": "object",
-    "required": ["notice_id","version_hash","sections","files"],
-    "properties": {
-        "notice_id": {"type":"integer"},
-        "version_hash": {"type":"string"},
-        "sections": {
-            "type":"object",
-            "properties": {
-                "Brief": {"type":"array"},
-                "Factors": {"type":"array"},
-                "Clauses": {"type":"array"},
-                "Dates": {"type":"array"},
-                "Forms": {"type":"array"},
-                "Milestones": {"type":"array"}
-            },
-            "additionalProperties": True
-        },
-        "files": {"type":"array"}
-    }
-}
-
-def _validate_summary_json(obj: dict) -> bool:
-    # Minimal validator without external jsonschema dependency
-    try:
-        if not isinstance(obj, dict): return False
-        for k in ["notice_id","version_hash","sections","files"]:
-            if k not in obj: return False
-        if not isinstance(obj["notice_id"], int): return False
-        if not isinstance(obj["version_hash"], str): return False
-        if not isinstance(obj["sections"], dict): return False
-        if not isinstance(obj["files"], list): return False
-        return True
-    except Exception:
-        return False
-
-def _get_notice_meta(nid: int):
-    conn = get_db()
-    r = q_select("SELECT title, agency, due_at FROM notices WHERE id=?", (int(nid),), one=True)
-    return {"title": r[0] if r else f"Notice {nid}", "agency": r[1] if r else "", "due": r[2] if r else ""}
-
-def _notice_files(nid: int):
-    return q_select("SELECT id, file_name, file_url, checksum, COALESCE(bytes,0) FROM notice_files WHERE notice_id=?", (int(nid),))
-
-def _combined_checksum(nid: int) -> str:
-    h = hashlib.sha256()
-    for _, name, url, cks, _ in _notice_files(nid):
-        h.update((cks or "").encode("utf-8"))
-        h.update((url or "").encode("utf-8"))
-        h.update((name or "").encode("utf-8"))
-    return h.hexdigest()
-
-def _download_file(url: str, timeout: int = 30):
-    try:
-        r = requests.get(url, timeout=timeout, stream=True)
-        r.raise_for_status()
-        b = r.content
-        return b, None
-    except Exception as ex:
-        return None, str(ex)
-
-def _parse_pdf_bytes(b: bytes) -> list:
-    # Return list of dicts: {"page": i, "text": "..."}
-    pages = []
-    try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(__import__("io").BytesIO(b))
-        for i, p in enumerate(reader.pages, start=1):
-            try:
-                txt = p.extract_text() or ""
-            except Exception:
-                txt = ""
-            pages.append({"page": i, "text": txt})
-        return pages
-    except Exception:
-        # Fallback single page blob
-        pages.append({"page": 1, "text": ""})
-        return pages
-
-def _parse_docx_bytes(b: bytes) -> list:
-    try:
-        from docx import Document
-        import io as _io
-        doc = Document(_io.BytesIO(b))
-        text = "\n".join([p.text for p in doc.paragraphs])
-        return [{"page": 1, "text": text}]
-    except Exception:
-        return [{"page": 1, "text": ""}]
-
-def _detect_type_by_name(name: str) -> str:
-    n = (name or "").lower()
-    if n.endswith(".pdf"): return "pdf"
-    if n.endswith(".docx"): return "docx"
-    return "bin"
-
-def _index_chunks(nid: int, fname: str, pages: list):
-    conn = get_db()
-    try:
-        for p in pages:
-            try:
-                conn.execute("INSERT INTO rfp_chunks(org_id, notice_id, file_name, page, text) VALUES(?,?,?,?,?)",
-                             (current_org_id(), int(nid), fname, int(p.get("page") or 1), p.get("text") or ""))
-            except Exception:
-                conn.execute("INSERT INTO rfp_chunks(notice_id, file_name, page, text) VALUES(?,?,?,?)",
-                             (int(nid), fname, int(p.get("page") or 1), p.get("text") or ""))
-    except Exception:
-        pass
-
-def parse_rfp(notice_id: int) -> dict:
-    """
-    Download files, compute checksums, parse, index, and store summary JSON.
-    Cached by notice_id + combined file checksum.
-    """
-    ensure_rfp_tables()
-    conn = get_db()
-    files = _notice_files(notice_id)
-    if not files:
-        return err_with_id("no_files_for_notice", notice_id=notice_id)
-    vhash = _combined_checksum(notice_id)
-
-    # Cached summary
-    r = conn.execute("SELECT summary_json FROM rfp_summaries WHERE notice_id=? AND version_hash=?", (int(notice_id), vhash)).fetchone()
-    if r:
-        try:
-            res = {"cached": True, "summary": json.loads(r[0])}
-            try:
-                _rfp_phase1_maybe_store(int(notice_id))
-            except Exception as _ex:
-                log_event("warn","rfp_phase1_store_failed", err=str(_ex))
-            return res
-        except Exception:
-            pass
-
-    # Fresh parse
-    conn.execute("DELETE FROM rfp_chunks WHERE notice_id=?", (int(notice_id),))
-    files_out = []
-    sections = {"Brief": [], "Factors": [], "Clauses": [], "Dates": [], "Forms": [], "Milestones": []}
-
-    for fid, name, url, cks, size in files:
-        if not url:
-            continue
-        b, err = _download_file(url, timeout=30)
-        if err:
-            log_event("warn","file_download_failed", url=url, notice_id=notice_id)
-            continue
-        # Compute checksum if missing or mismatch
-        sha = hashlib.sha256(b).hexdigest()
-        if not cks or cks != sha:
-            try:
-                conn.execute("UPDATE notice_files SET checksum=?, bytes=? WHERE id=?", (sha, len(b), int(fid)))
-            except Exception:
-                pass
-        # Parse by type
-        ftype = _detect_type_by_name(name or url)
-        if ftype == "pdf":
-            pages = _parse_pdf_bytes(b)
-        elif ftype == "docx":
-            pages = _parse_docx_bytes(b)
-        else:
-            pages = [{"page": 1, "text": ""}]
-        # Index chunks
-        _index_chunks(notice_id, name or url.split("/")[-1], pages)
-        files_out.append({"file_id": int(fid), "name": name or "", "pages": len(pages)})
-        # Naive extraction for sections (placeholder keyword scans)
-        for p in pages:
-            t = (p.get("text") or "").strip()
-            if not t:
-                continue
-            lt = t.lower()
-            if "section l" in lt or "instructions to offerors" in lt:
-                sections["Brief"].append({"hit": "Section L", "file": name, "page": p["page"]})
-            if "section m" in lt or "evaluation factors" in lt:
-                sections["Factors"].append({"hit": "Section M", "file": name, "page": p["page"]})
-            if "far " in lt or "dfars " in lt or "clause" in lt:
-                sections["Clauses"].append({"hit": "Clause ref", "file": name, "page": p["page"]})
-            if "due date" in lt or "offers due" in lt or "closing date" in lt:
-                sections["Dates"].append({"hit": "Due date mention", "file": name, "page": p["page"]})
-            if "sf1449" in lt or "sf 1449" in lt or "form" in lt:
-                sections["Forms"].append({"hit": "Form mention", "file": name, "page": p["page"]})
-            if "milestone" in lt or "schedule" in lt:
-                sections["Milestones"].append({"hit": "Milestone", "file": name, "page": p["page"]})
-
-    summary = {"notice_id": int(notice_id), "version_hash": vhash, "sections": sections, "files": files_out}
-    try:
-        _rfp_phase1_maybe_store(int(notice_id))
-    except Exception as _ex:
-        log_event("warn","rfp_phase1_store_failed", err=str(_ex))
-
-    if not _validate_summary_json(summary):
-        return err_with_id("invalid_summary_json", notice_id=notice_id)
-
-    # Store
-    now = utc_now_iso()
-    conn.execute("INSERT OR IGNORE INTO rfp_summaries(notice_id, version_hash, summary_json, created_at) VALUES(?,?,?,?)",
-                 (int(notice_id), vhash, json.dumps(summary, ensure_ascii=False), now))
-    return {"cached": False, "summary": summary}
-
-# Worker management
-_rfp_worker_lock = threading.Lock()
-def start_rfp_worker(notice_id: int):
-    import streamlit as st
-    with _rfp_worker_lock:
-        st.session_state["rfp_worker_status"] = {"state":"running","started_at":_now_iso(),"notice_id":int(notice_id)}
-        def _run():
-            try:
-                res = parse_rfp(int(notice_id))
-                st.session_state["rfp_worker_status"] = {"state":"done","result":res,"notice_id":int(notice_id),"finished_at":_now_iso()}
-            except Exception as ex:
-                st.session_state["rfp_worker_status"] = {"state":"error","error":str(ex),"notice_id":int(notice_id),"finished_at":_now_iso()}
-        th = threading.Thread(target=_run, daemon=True)
-        th.start()
-
-def _qa_from_chunks(notice_id: int, q: str, limit: int = 5):
-    conn = get_db()
-    # Prefer FTS if available
-    try:
-        rows = conn.execute("SELECT file_name, page, snippet(rfp_chunks, 3, '[', ']', '…', 8) FROM rfp_chunks WHERE org_id=? AND notice_id=? AND rfp_chunks MATCH ? LIMIT ?",
-                            (current_org_id(), int(notice_id), q, int(limit))).fetchall()
-        if rows:
-            return [{"file": r[0], "page": r[1], "snippet": r[2]} for r in rows]
-    except Exception:
-        pass
-    # Fallback: search summary JSON
-    r = conn.execute("SELECT summary_json FROM rfp_summaries WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
-    if not r:
-        return []
-    try:
-        s = json.loads(r[0])
-        blobs = json.dumps(s, ensure_ascii=False)
-        # naive find locations
-        out = []
-        idx = blobs.lower().find(q.lower())
-        if idx != -1:
-            out.append({"file":"summary","page":0,"snippet":blobs[max(0,idx-60):idx+120]})
-        return out
-    except Exception:
-        return []
-
-def render_rfp_panel():
-    import streamlit as st
-    if not st.session_state.get("feature_flags", {}).get("rfp_analyzer_panel"):
-        return
-    if not st.session_state.get("rfp_panel_open") or not st.session_state.get("current_notice_id"):
-        return
-    nid = int(st.session_state["current_notice_id"])
-    meta = _get_notice_meta(nid)
-    st.markdown("---")
-    st.subheader("RFP Analyzer")
-    st.caption(f"{meta['title']}  •  {meta['agency']}  •  Due {meta['due'] or 'n/a'}")
-
-    # Controls
-    c1, c2 = st.columns([1,1])
-    with c1:
-        if st.button("Run Parse"): start_rfp_parser_worker(nid)
-    with c2:
-        if st.button("Close Panel"):
-            st.session_state["rfp_panel_open"] = False
-            return
-
-    # Status
-    st.write("Status:", st.session_state.get("rfp_worker_status", {}).get("state","idle"))
-    if st.session_state.get("rfp_worker_status", {}).get("state") == "error":
-        st.error(f"Parser error. Error id in logs.")
-    # Show cached or parsed sections
-    conn = get_db()
-    r = conn.execute("SELECT summary_json FROM rfp_summaries WHERE notice_id=? ORDER BY id DESC LIMIT 1", (nid,)).fetchone()
-    if r:
-        try:
-            s = json.loads(r[0])
-            with st.expander("Brief", expanded=True): st.write(s.get("sections",{}).get("Brief",[]) or "No hits yet.")
-            with st.expander("Factors"): st.write(s.get("sections",{}).get("Factors",[]) or "None")
-            with st.expander("Clauses"): st.write(s.get("sections",{}).get("Clauses",[]) or "None")
-            with st.expander("Dates"): st.write(s.get("sections",{}).get("Dates",[]) or "None")
-            with st.expander("Forms"): st.write(s.get("sections",{}).get("Forms",[]) or "None")
-            with st.expander("Milestones"): st.write(s.get("sections",{}).get("Milestones",[]) or "None")
-        except Exception:
-            st.info("No summary parsed yet.")
-
-    # Q and A
-    st.markdown("**Ask only from parsed docs**")
-    q = st.text_input("Your question", key="rfp_q")
-    if st.button("Ask"):
-        if not q.strip():
-            st.warning("Enter a question")
-        else:
-            hits = _qa_from_chunks(nid, q.strip(), limit=5)
-            if not hits:
-                st.info("No matching passages in parsed files.")
+        items = data.get("opportunitiesData", []) or []
+        rows = []
+        for opp in items:
+            due_str = opp.get("responseDeadLine") or ""
+            d = _parse_sam_date(due_str)
+            d_dt = _coerce_dt(d)
+            min_dt = _coerce_dt(min_due_date)
+            if min_dt is None:
+                due_ok = True  # allow when min date unknown
             else:
-                for h in hits:
-                    st.write(f"{h['file']} p{h['page']}: {h['snippet']}")
-
-    # Parser tabs when enabled
-    if st.session_state.get("feature_flags", {}).get("rfp_parser"):
-        data = _load_latest_rfp_json(nid)
-        t1, t2, t3, t4, t5 = st.tabs(["Summary","L and M","Clauses","Forms","Submission"])
-        with t1:
-            st.json(data or {"info":"no parsed data"})
-        with t2:
-            st.write((data or {}).get("lm_requirements") or "No L/M parsed")
-        with t3:
-            st.write((data or {}).get("clauses") or "No clauses parsed")
-        with t4:
-            st.write((data or {}).get("deliverables_forms") or "No forms parsed")
-        with t5:
-            st.write((data or {}).get("submission") or "No submission parsed")
-
-# UI hook inside SAM Watch list
-def _sam_row_open_analyzer_ui(df):
-    import streamlit as st
-    # Selection to open panel
-    titles = [r["Title"] for r in df.to_dict("records")]
-    id_map = {r["Title"]: r["ID"] for r in df.to_dict("records")}
-    c1, c2 = st.columns([3,1])
-    with c1:
-        pick = st.selectbox("Open RFP Analyzer for:", options=titles, index=0 if titles else None, key="rfp_pick_title")
-    with c2:
-        if st.button("Ask RFP Analyzer"):
-            if pick in id_map:
-                st.session_state["rfp_panel_open"] = True
-                st.session_state["current_notice_id"] = id_map[pick]
-                # Keep panel open across reruns
-                st.session_state["rfp_cache_key"] = f"nid:{id_map[pick]}::{_combined_checksum(id_map[pick])}"
-# ===== end RFP Analyzer Phase 2 =====
-
-# ===== RFP Phase 1: Schema + Validator =====
-def ensure_rfp_schema_tables():
-    conn = get_db()
-    conn.execute("""CREATE TABLE IF NOT EXISTS rfp_schema_versions(
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        version TEXT NOT NULL,
-        schema_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(name, version)
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS rfp_json(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        schema_name TEXT NOT NULL,
-        schema_version TEXT NOT NULL,
-        version_hash TEXT NOT NULL,
-        data_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(notice_id, version_hash)
-    )""")
-
-RFP_SCHEMA_NAME = "RFPv1"
-RFP_SCHEMA_VERSION = "1.0"
-RFP_SCHEMA_JSON = {
-  "type":"object",
-  "required":["header","sections","lm_requirements","submission"],
-  "properties":{
-    "header":{"type":"object","required":["notice_id","title"],"properties":{
-      "notice_id":{"type":"string"},
-      "title":{"type":"string"},
-      "agency":{"type":"string"},
-      "type":{"type":"string"},
-      "set_aside":{"type":"string"},
-      "place":{"type":"string"},
-      "pocs":{"type":"array","items":{"type":"object","properties":{
-        "name":{"type":"string"},"email":{"type":"string"},"phone":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}}}}
-    }},
-    "volumes":{"type":"array","items":{"type":"object","required":["name"],"properties":{
-      "name":{"type":"string"},"required":{"type":"boolean"},"page_limit":{"type":"integer"},"file_type":{"type":"string"},"font":{"type":"string"},"spacing":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "sections":{"type":"array","items":{"type":"object","required":["key","title"],"properties":{
-      "key":{"type":"string"},"title":{"type":"string"},"parent_volume":{"type":"string"},
-      "required":{"type":"boolean"},"page_limit":{"type":"integer"},
-      "instructions":{"type":"array","items":{"type":"string"}},
-      "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "lm_requirements":{"type":"array","items":{"type":"object","required":["id","text"],"properties":{
-      "id":{"type":"string"},"text":{"type":"string"},"factor":{"type":"string"},"subfactor":{"type":"string"},
-      "evaluation_criterion":{"type":"string"},"must_address":{"type":"array","items":{"type":"string"}},
-      "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "deliverables_forms":{"type":"array","items":{"type":"object","required":["name"],"properties":{
-      "name":{"type":"string"},"form_no":{"type":"string"},"fillable":{"type":"boolean"},
-      "where_to_upload":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "submission":{"type":"object","required":["due_datetime"],"properties":{
-      "method":{"type":"string"},"portals":{"type":"array","items":{"type":"string"}},
-      "email":{"type":"string"},"subject_line_format":{"type":"string"},
-      "due_datetime":{"type":"string"},"timezone":{"type":"string"},
-      "copies":{"type":"integer"},"file_naming_rules":{"type":"string"},
-      "zip_rules":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }},
-    "milestones":{"type":"array","items":{"type":"object","properties":{
-      "name":{"type":"string"},"due_datetime":{"type":"string"},
-      "origin":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "clauses":{"type":"array","items":{"type":"object","properties":{
-      "ref":{"type":"string"},"title":{"type":"string"},"section":{"type":"string"},
-      "mandatory":{"type":"boolean"},"notes":{"type":"string"},
-      "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "sow_tasks":{"type":"array","items":{"type":"object","properties":{
-      "task_id":{"type":"string"},"text":{"type":"string"},"location":{"type":"string"},
-      "hours_hint":{"type":"number"},"labor_cats_hint":{"type":"array","items":{"type":"string"}},
-      "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}},
-    "price_structure":{"type":"object","properties":{
-      "clins":{"type":"array","items":{"type":"object","properties":{
-        "clin":{"type":"string"},"desc":{"type":"string"},"uom":{"type":"string"},
-        "qty_hint":{"type":"number"},"options":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-      }}},
-      "wage_determinations":{"type":"array","items":{"type":"object","properties":{
-        "type":{"type":"string"},"id":{"type":"string"},"county_state":{"type":"string"},
-        "labor_cats":{"type":"array","items":{"type":"string"}},"rates":{"type":"string"},"fringe":{"type":"string"},
-        "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-      }}}
-    }},
-    "past_perf_rules":{"type":"object","properties":{
-      "count":{"type":"integer"},"years_back":{"type":"integer"},"relevance_dims":{"type":"string"},
-      "format":{"type":"string"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }},
-    "staffing_rules":{"type":"object","properties":{
-      "key_personnel":{"type":"string"},"certs":{"type":"string"},"clearances":{"type":"string"},
-      "badging":{"type":"string"},"training":{"type":"string"},
-      "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }},
-    "accessibility_rules":{"type":"object","properties":{
-      "req_508":{"type":"boolean"},"pdf_tags":{"type":"boolean"},"bookmarks":{"type":"boolean"},
-      "alt_text":{"type":"boolean"},"cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }},
-    "risks_assumptions":{"type":"array","items":{"type":"object","properties":{
-      "risk":{"type":"string"},"impact":{"type":"string"},"mitigation":{"type":"string"},
-      "cite":{"type":"object","properties":{"file":{"type":"string"},"page":{"type":"integer"}}}
-    }}}
-  }
-}
-
-def _store_rfp_schema_if_missing():
-    ensure_rfp_schema_tables()
-    conn = get_db()
-    r = conn.execute("SELECT 1 FROM rfp_schema_versions WHERE name=? AND version=?", (RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION)).fetchone()
-    if not r:
-        conn.execute("INSERT INTO rfp_schema_versions(name, version, schema_json, created_at) VALUES(?,?,?,?)",
-                     (RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION, json.dumps(RFP_SCHEMA_JSON, ensure_ascii=False), utc_now_iso()))
-
-def _is_iso_with_tz(s: str) -> bool:
-    import re as _re
-    if not isinstance(s, str):
-        return False
-    return bool(_re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$", s))
-
-def _require_cite(obj) -> bool:
-    if not isinstance(obj, dict):
-        return False
-    c = obj.get("cite")
-    if not isinstance(c, dict):
-        return False
-    if not isinstance(c.get("file"), str) or not c.get("file"):
-        return False
-    pg = c.get("page")
-    try:
-        return int(pg) >= 1
-    except Exception:
-        return False
-
-def validate_rfpv1(data: dict) -> tuple[bool, list]:
-    errs = []
-    if not isinstance(data, dict):
-        return False, ["root not object"]
-    # required roots
-    for k in ["header","sections","lm_requirements","submission"]:
-        if k not in data:
-            errs.append(f"missing {k}")
-    hdr = data.get("header") or {}
-    if not isinstance(hdr, dict):
-        errs.append("header not object")
-    else:
-        for k in ["notice_id","title"]:
-            if not isinstance(hdr.get(k), str) or not hdr.get(k):
-                errs.append(f"header.{k} missing or not string")
-        # header.pocs cites if present
-        if "pocs" in hdr:
-            if not isinstance(hdr["pocs"], list):
-                errs.append("header.pocs not array")
-            else:
-                for i, poc in enumerate(hdr["pocs"]):
-                    if any(poc.get(x) for x in ["name","email","phone"]):
-                        if not _require_cite(poc):
-                            errs.append(f"header.pocs[{i}] missing cite")
-    # arrays with cite enforcement
-    def _check_array(name):
-        arr = data.get(name)
-        if arr is None:
-            return
-        if not isinstance(arr, list):
-            errs.append(f"{name} not array")
-            return
-        for i, item in enumerate(arr):
-            if not isinstance(item, dict):
-                errs.append(f"{name}[{i}] not object")
-            else:
-                if "cite" in item and not _require_cite(item):
-                    errs.append(f"{name}[{i}] bad cite")
-    for arrname in ["volumes","sections","lm_requirements","deliverables_forms","milestones","clauses","sow_tasks"]:
-        _check_array(arrname)
-    # price_structure nested arrays
-    ps = data.get("price_structure")
-    if ps is not None and isinstance(ps, dict):
-        for arrname in ["clins","wage_determinations"]:
-            arr = ps.get(arrname)
-            if arr is not None:
-                if not isinstance(arr, list):
-                    errs.append(f"price_structure.{arrname} not array")
-                else:
-                    for i, item in enumerate(arr):
-                        if "cite" in item and not _require_cite(item):
-                            errs.append(f"price_structure.{arrname}[{i}] bad cite")
-    # submission
-    sub = data.get("submission") or {}
-    if not isinstance(sub, dict):
-        errs.append("submission not object")
-    else:
-        if not _is_iso_with_tz(sub.get("due_datetime","")):
-            errs.append("submission.due_datetime not ISO with timezone")
-        if "cite" in sub and not _require_cite(sub):
-            errs.append("submission bad cite")
-    return (len(errs) == 0), errs
-
-def _rfp_version_hash_for_notice(nid: int) -> str:
-    # Use combined file checksum if available, else sha of notice fields
-    try:
-        return _combined_checksum(int(nid))
-    except Exception:
-        conn = get_db()
-        r = conn.execute("SELECT sam_notice_id, title, due_at FROM notices WHERE id=?", (int(nid),)).fetchone()
-        s = json.dumps({"sid": r[0] if r else "", "title": r[1] if r else "", "due": r[2] if r else ""}, sort_keys=True)
-        import hashlib
-        return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-def save_rfp_json(notice_id: int, data: dict):
-    """
-    Validate against RFPv1 1.0 and store to rfp_json keyed by version_hash.
-    Returns dict(ok, errors?).
-    """
-    import streamlit as st
-    if not st.session_state.get("feature_flags", {}).get("rfp_schema"):
-        return {"ok": False, "disabled": True}
-    _store_rfp_schema_if_missing()
-    ok, errs = validate_rfpv1(data)
-    if not ok:
-        return {"ok": False, "errors": errs}
-    conn = get_db()
-    vhash = _rfp_version_hash_for_notice(int(notice_id))
-    conn.execute("""INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at)
-                    VALUES(?,?,?,?,?,?)""",
-                 (int(notice_id), RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION, vhash, json.dumps(data, ensure_ascii=False), utc_now_iso()))
-    return {"ok": True, "version_hash": vhash}
-
-def build_rfpv1_from_notice(notice_id: int) -> dict | None:
-    """
-    Minimal adapter: uses notices table and rfp_chunks to cite due date if possible.
-    Omits fields without sources. Does not guess.
-    """
-    conn = get_db()
-    r = conn.execute("SELECT sam_notice_id, title, agency, notice_type, set_aside, place_city, place_state, due_at FROM notices WHERE id=?", (int(notice_id),)).fetchone()
-    if not r:
-        return None
-    sid, title, agency, ntype, set_aside, city, state, due = r
-    place = ", ".join([x for x in [city or "", state or ""] if x])
-    data = {
-        "header": {
-            "notice_id": str(sid or notice_id),
-            "title": str(title or f"Notice {notice_id}"),
-        },
-        "sections": [],
-        "lm_requirements": [],
-        "submission": {}
-    }
-    if agency: data["header"]["agency"] = agency
-    if ntype: data["header"]["type"] = ntype
-    if set_aside: data["header"]["set_aside"] = set_aside
-    if place: data["header"]["place"] = place
-
-    # submission due datetime: only include if already ISO with tz
-    if isinstance(due, str) and _is_iso_with_tz(due):
-        # Try locate cite from rfp_chunks
-        cite = None
-        try:
-            # search for the date part
-            date_part = due.split("T")[0]
-            rows = conn.execute("SELECT file_name, page FROM rfp_chunks WHERE notice_id=? AND text LIKE ? LIMIT 1", (int(notice_id), f"%{date_part}%")).fetchall()
-            if rows:
-                cite = {"file": rows[0][0], "page": int(rows[0][1])}
-        except Exception:
-            pass
-        data["submission"]["due_datetime"] = due
-        if cite: data["submission"]["cite"] = cite
-
-    return data
-
-# Hook: after parse_rfp success, optionally build and store schema JSON
-def _rfp_phase1_maybe_store(nid: int):
-    import streamlit as st
-    if not st.session_state.get("feature_flags", {}).get("rfp_schema"):
-        return
-    doc = build_rfpv1_from_notice(int(nid))
-    if not doc:
-        return
-    res = save_rfp_json(int(nid), doc)
-    if res.get("ok"):
-        st.session_state["rfp_schema_ready"] = True
-    else:
-        log_event("warn","rfp_json_not_saved", notice_id=int(nid), errors=res.get("errors"))
-# ===== end RFP Phase 1 =====
-
-# ===== RFP Parser Phase 2 =====
-import re as _re
-from typing import List, Dict, Tuple
-
-def _norm_iso(s: str) -> str | None:
-    if _is_iso_with_tz(s):
-        return s
-    if isinstance(s, str) and _re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", s):
-        return s + "Z"
-    return None
-
-def _ensure_file_parse_and_index(nid: int, fid: int, name: str, url: str) -> List[Dict]:
-    conn = get_db()
-    b, err = _download_file(url, timeout=30)
-    if err or not b:
-        raise RuntimeError(f"download_failed:{err}")
-    sha = hashlib.sha256(b).hexdigest()
-    r = conn.execute("SELECT parsed_json FROM file_parses WHERE notice_file_id=? AND checksum=?", (int(fid), sha)).fetchone()
-    if r:
-        try: pages = json.loads(r[0])
-        except Exception: pages = []
-    else:
-        ftype = _detect_type_by_name(name or url)
-        if ftype == "pdf": pages = _parse_pdf_bytes(b)
-        elif ftype == "docx": pages = _parse_docx_bytes(b)
-        else: pages = [{"page": 1, "text": b.decode('utf-8', errors='ignore') if isinstance(b, (bytes, bytearray)) else ""}]
-        conn.execute("INSERT OR IGNORE INTO file_parses(notice_file_id, checksum, parsed_json, created_at) VALUES(?,?,?,?)",
-                     (int(fid), sha, json.dumps(pages, ensure_ascii=False), utc_now_iso()))
-        try: conn.execute("UPDATE notice_files SET checksum=?, bytes=? WHERE id=?", (sha, len(b), int(fid)))
-        except Exception: pass
-    try: conn.execute("DELETE FROM rfp_chunks WHERE notice_id=? AND file_name=?", (int(nid), name or url.split('/')[-1]))
-    except Exception: pass
-    _index_chunks(int(nid), name or url.split('/')[-1], pages)
-    return pages
-
-_L_KEYS = ["section l", "instructions to offerors", "proposal instructions"]
-_M_KEYS = ["section m", "evaluation factors", "basis of award"]
-
-def _extract_lm(pages: List[Dict], fname: str) -> Tuple[List[Dict], List[Dict]]:
-    lm_reqs, sections = [], []
-    for p in pages:
-        text = (p.get("text") or "")
-        low = text.lower()
-        if any(k in low for k in _L_KEYS) or any(k in low for k in _M_KEYS):
-            for line in text.splitlines():
-                m = _re.search(r"\b([LM]\.\d+(?:\.\d+)*)\b(.*)", line.strip())
-                if m:
-                    sec_id, txt = m.group(1), m.group(2).strip()
-                    key = "L" if sec_id.startswith("L") else "M"
-                    item = {"id": sec_id, "text": txt, "cite": {"file": fname, "page": int(p.get("page") or 1)}}
-                    if key == "L":
-                        sections.append({"key": sec_id, "title": txt[:80], "instructions": [txt] if txt else [], "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-                    else:
-                        lm_reqs.append(item)
-            m = _re.search(r"\b(page\s*limit|no\s*more\s*than\s*\d+\s*pages?)", low)
-            if m: sections.append({"key": "page_limit", "title": "Page Limit", "instructions": [m.group(0)], "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-            for key, pat in [("font", r"\bfont\s*(?:size)?\s*\d{1,2}\b"), ("spacing", r"\b(single|double)\s*spac") , ("copies", r"\b(\d+)\s*copies\b")]:
-                m2 = _re.search(pat, low)
-                if m2: sections.append({"key": key, "title": key.title(), "instructions": [m2.group(0)], "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-    return sections, lm_reqs
-
-def _extract_clauses(pages: List[Dict], fname: str) -> List[Dict]:
-    out, pat = [], _re.compile(r"\b(FAR|DFARS)\s*\d{2}\.\d{3}-\d{1,2}\b")
-    for p in pages:
-        text = p.get("text") or ""
-        for m in pat.finditer(text): out.append({"ref": m.group(0), "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-    return out
-
-def _extract_forms(pages: List[Dict], fname: str) -> List[Dict]:
-    out = []
-    for p in pages:
-        low = (p.get("text") or "").lower()
-        if "sf 1449" in low or "sf1449" in low: out.append({"name": "SF 1449", "form_no": "SF1449", "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-        if "sf 33" in low or "sf33" in low: out.append({"name": "SF 33", "form_no": "SF33", "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-        if "attachment" in low and ".pdf" in low: out.append({"name": "Attachment", "cite": {"file": fname, "page": int(p.get("page") or 1)}})
-    return out
-
-def _extract_submission(pages: List[Dict], fname: str) -> Dict:
-    sub = {}
-    for p in pages:
-        text, low = p.get("text") or "", (p.get("text") or "").lower()
-        if "due" in low or "submission" in low or "closing" in low:
-            m = _re.search(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?)\b", text)
-            if m and not sub.get("due_datetime"):
-                iso = _norm_iso(m.group(1))
-                if iso: sub["due_datetime"], sub["cite"] = iso, {"file": fname, "page": int(p.get("page") or 1)}
-            if "email" in low: sub["method"] = "email"
-            if "sam.gov" in low or "piee" in low: sub["method"] = "portal"
-            m2 = _re.search(r"(subject[:\s].{0,100})", text, flags=_re.IGNORECASE)
-            if m2: sub["subject_line_format"] = m2.group(1).strip()
-            m3 = _re.search(r"(file\s*naming.{0,120})", text, flags=_re.IGNORECASE)
-            if m3: sub["file_naming_rules"] = m3.group(1).strip()
-            m4 = _re.search(r"\b(\d+)\s*copies\b", low)
-            if m4:
-                try: sub["copies"] = int(m4.group(1))
-                except Exception: pass
-    return sub
-
-def parse_rfp_v1(notice_id: int) -> dict:
-    if not st.session_state.get("feature_flags", {}).get("rfp_parser"):
-        return {"ok": False, "disabled": True}
-    ensure_rfp_schema_tables()
-    nid = int(notice_id)
-    vhash = _rfp_version_hash_for_notice(nid)
-    conn = get_db()
-    r = conn.execute("SELECT data_json FROM rfp_json WHERE notice_id=? AND version_hash=?", (nid, vhash)).fetchone()
-    if r:
-        try: return {"ok": True, "cached": True, "data": json.loads(r[0]), "version_hash": vhash}
-        except Exception: pass
-
-    files = _notice_files(nid)
-    if not files: return err_with_id("no_files_for_notice", notice_id=nid)
-
-    header = _get_notice_meta(nid)
-    data = {"header": {"notice_id": str(conn.execute("SELECT sam_notice_id FROM notices WHERE id=?", (nid,)).fetchone()[0] or nid), "title": header.get("title","")}, "sections": [], "lm_requirements": [], "submission": {}}
-    if header.get("agency"): data["header"]["agency"] = header["agency"]
-
-    clauses, forms, submission = [], [], {}
-
-    for fid, name, url, cks, size in files:
-        fname = name or (url.split("/")[-1] if url else f"file_{fid}")
-        pages = _ensure_file_parse_and_index(nid, int(fid), fname, url)
-        secs, lms = _extract_lm(pages, fname)
-        data["sections"].extend(secs); data["lm_requirements"].extend(lms)
-        clauses.extend(_extract_clauses(pages, fname))
-        forms.extend(_extract_forms(pages, fname))
-        sub = _extract_submission(pages, fname)
-        if sub and "due_datetime" in sub and not submission.get("due_datetime"): submission = sub
-
-    if clauses: data["clauses"] = clauses
-    if forms: data["deliverables_forms"] = forms
-    if submission: data["submission"] = submission
-
-    ok, errs = validate_rfpv1(data)
-    if not ok: return {"ok": False, "errors": errs}
-    res = save_rfp_json(nid, data)
-    if not res.get("ok"): return {"ok": False, "errors": res.get("errors")}
-    return {"ok": True, "cached": False, "data": data, "version_hash": res.get("version_hash")}
-
-def start_rfp_parser_worker(notice_id: int):
-    import streamlit as st
-    def _run():
-        st.session_state["rfp_parser_status"] = {"state":"running","notice_id": int(notice_id), "started_at": _now_iso()}
-        try:
-            res = parse_rfp_v1(int(notice_id))
-            st.session_state["rfp_parser_status"] = {"state":"done","notice_id": int(notice_id), "result": res, "finished_at": _now_iso()}
-        except Exception as ex:
-            st.session_state["rfp_parser_status"] = {"state":"error","notice_id": int(notice_id), "error": str(ex), "finished_at": _now_iso()}
-    th = threading.Thread(target=_run, daemon=True); th.start()
-
-def _load_latest_rfp_json(nid: int) -> dict | None:
-    conn = get_db()
-    r = conn.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(nid),)).fetchone()
-    if not r: return None
-    try: return json.loads(r[0])
-    except Exception: return None
-# ===== end RFP Parser Phase 2 =====
-
-
-
-
-
-# ===== Amend Tracking Phase 3 =====
-import difflib
-
-def ensure_amend_tables():
-    conn = get_db()
-    # versions
-    conn.execute("""CREATE TABLE IF NOT EXISTS notice_versions(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        fetched_at TEXT NOT NULL,
-        version_hash TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-    )""")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notice_versions_notice ON notice_versions(notice_id)")
-    # amendments
-    conn.execute("""CREATE TABLE IF NOT EXISTS amendments(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        amend_number TEXT,
-        posted_at TEXT,
-        url TEXT,
-        version_hash TEXT NOT NULL,
-        summary TEXT
-    )""")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_amendments_notice ON amendments(notice_id)")
-    # watchers optional
-    conn.execute("""CREATE TABLE IF NOT EXISTS watchers(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        user_id TEXT NOT NULL,
-        notify_email TEXT,
-        active INTEGER NOT NULL DEFAULT 1
-    )""")
-    # compliance_state column on notices
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(notices)")}
-    if "compliance_state" not in cols:
-        try:
-            conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
-        except Exception:
-            pass
-
-ensure_amend_tables()
-
-def _core_payload_for_hash(n: dict) -> dict:
-    # Use stable subset plus file urls
-    fields = ["sam_notice_id","notice_type","title","agency","naics","psc","set_aside","place_city","place_state","posted_at","due_at","status","url"]
-    core = {k: n.get(k) for k in fields}
-    atts = n.get("attachments") or []
-    core["files"] = sorted([a.get("url") or a.get("href") or "" for a in atts])
-    return core
-
-def _payload_version_hash(core: dict) -> str:
-    import hashlib, json
-    s = json.dumps(core, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-def record_notice_version(notice_id: int, n: dict):
-    """
-    Compute version hash from core fields and attachments list.
-    If changed from the latest version, insert version row and create amendment, set compliance_state.
-    """
-    if not n or not isinstance(n, dict):
-        return None
-    ensure_amend_tables()
-    conn = get_db()
-    core = _core_payload_for_hash(n)
-    vhash = _payload_version_hash(core)
-    prev = conn.execute("SELECT version_hash, payload_json FROM notice_versions WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
-    if prev and prev[0] == vhash:
-        return vhash  # no change
-    # Insert version
-    now = utc_now_iso()
-    conn.execute("INSERT INTO notice_versions(notice_id, fetched_at, version_hash, payload_json) VALUES(?,?,?,?)",
-                 (int(notice_id), now, vhash, json.dumps(core, ensure_ascii=False)))
-    # Create amendment row
-    amend_no = None
-    posted = n.get("posted_at") or None
-    url = n.get("url") or None
-    summary = "Auto detected change"
-    conn.execute("INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
-                 (int(notice_id), amend_no, posted, url, vhash, summary))
-    # Mark compliance
-    try:
-        conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(notice_id),))
-    except Exception:
-        pass
-    return vhash
-
-def _load_versions(notice_id: int):
-    conn = get_db()
-    rows = conn.execute("SELECT id, fetched_at, version_hash, payload_json FROM notice_versions WHERE notice_id=? ORDER BY id DESC LIMIT 2", (int(notice_id),)).fetchall()
-    out = []
-    for r in rows:
-        try:
-            out.append({"id": r[0], "fetched_at": r[1], "hash": r[2], "payload": json.loads(r[3])})
-        except Exception:
-            out.append({"id": r[0], "fetched_at": r[1], "hash": r[2], "payload": {}})
-    return out
-
-def _diff_fields(prev: dict, curr: dict):
-    keys = ["title","agency","naics","psc","set_aside","posted_at","due_at","status","place_city","place_state"]
-    changes = []
-    for k in keys:
-        if (prev or {}).get(k) != (curr or {}).get(k):
-            changes.append({
-                "field": k,
-                "before": (prev or {}).get(k),
-                "after": (curr or {}).get(k),
-                "diff": "\n".join(difflib.unified_diff(
-                    [str((prev or {}).get(k) or "")],
-                    [str((curr or {}).get(k) or "")],
-                    lineterm=""
-                ))
+                due_ok = (d_dt is None) or (d_dt >= min_dt)
+            if not due_ok: continue
+            docs = opp.get("documents", []) or []
+            rows.append({
+                "sam_notice_id": opp.get("noticeId"),
+                "title": opp.get("title"),
+                "agency": opp.get("organizationName"),
+                "naics": ",".join(opp.get("naicsCodes", [])),
+                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+                "response_due": due_str,
+                "posted": opp.get("publishedDate",""),
+                "type": opp.get("type",""),
+                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
             })
-    return changes
-
-def _diff_files(prev_files: list, curr_files: list):
-    ps = set(prev_files or [])
-    cs = set(curr_files or [])
-    added = sorted(list(cs - ps))
-    removed = sorted(list(ps - cs))
-    unchanged = ps & cs
-    return {"added": added, "removed": removed, "unchanged": sorted(list(unchanged))}
-
-def get_amend_count(notice_id: int) -> int:
-    conn = get_db()
-    return int(conn.execute("SELECT COUNT(1) FROM amendments WHERE notice_id=?", (int(notice_id),)).fetchone()[0])
-
-def render_diff_panel():
-    import streamlit as st
-    if not st.session_state.get("feature_flags", {}).get("amend_tracking"):
-        return
-    if not st.session_state.get("diff_tab_open") or not st.session_state.get("selected_notice_id"):
-        return
-    nid = int(st.session_state["selected_notice_id"])
-    st.markdown("---")
-    st.subheader("Amendments Diff")
-    versions = _load_versions(nid)
-    if len(versions) < 1:
-        st.info("No versions yet for this notice.")
-        return
-    curr = versions[0]["payload"]
-    prev = versions[1]["payload"] if len(versions) > 1 else {}
-    # Field deltas
-    field_changes = _diff_fields(prev, curr)
-    st.write("Field changes:", field_changes or "No field changes.")
-    # File deltas
-    prev_files = (prev or {}).get("files") or []
-    curr_files = (curr or {}).get("files") or []
-    fd = _diff_files(prev_files, curr_files)
-    st.write("Files added:", fd["added"] or "None")
-    st.write("Files removed:", fd["removed"] or "None")
-    # Mark reviewed placeholder
-    if st.button("Mark reviewed"):
-        # Placeholder: session-only clear
-        reviewed = set(st.session_state.get("_amend_reviewed", []))
-        reviewed.add(versions[0]["hash"])
-        st.session_state["_amend_reviewed"] = list(reviewed)
-        st.session_state["diff_tab_open"] = False
-        st.success("Marked reviewed for this session.")
-# ===== end Amend Tracking Phase 3 =====
+        df = pd.DataFrame(rows)
+        info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
+                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+                            "postedFrom": posted_from, "postedTo": posted_to,
+                            "min_due_days": min_days, "noticeType": notice_types,
+                            "active": active, "limit": limit}}
+        if df.empty:
+            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+        return df, info
+    except requests.RequestException as e:
+        return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
 
 
 
 
-
-
-import sys, uuid, json, time, traceback
-
-# Structured logging
-def _now_iso():
-    return utc_now_iso() if 'utc_now_iso' in globals() else __import__('datetime').datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-def log_event(level: str, message: str, **context):
-    lvl = str(level).lower()
-    evt = {
-        "ts": _now_iso(),
-        "level": lvl,
-        "msg": message,
-        "ctx": {k: ("***" if "secret" in k.lower() else v) for k, v in (context or {}).items()},
-    }
-    line = json.dumps(evt, ensure_ascii=False)
-    try:
-        print(line, file=sys.stderr)
-    except Exception:
-        pass
-    return evt
-
-def err_with_id(message: str, **context):
-    eid = str(uuid.uuid4())
-    evt = log_event("error", message, error_id=eid, **context)
-    return {"error": message, "error_id": eid}
-
-# Secrets access
-def get_secret(section: str, key: str, default=None):
-    try:
-        import streamlit as st
-        sec = st.secrets.get(section, None)
-        if isinstance(sec, dict) and key in sec:
-            return sec[key]
-        # Fallback flat lookup
-        return st.secrets.get(key, default)
-    except Exception:
-        return default
-
-# Central API client factory with retry, cache, and circuit breaker
-def create_api_client(base_url: str, api_key: str = None, timeout: int = 30, retries: int = 3, ttl: int = 900):
-    import streamlit as st
-    import requests
-    base_url = str(base_url).rstrip("/")
-    # Circuit breaker state in session to survive reruns
-    if "_api_cb" not in st.session_state:
-        st.session_state["_api_cb"] = {}
-    cb = st.session_state["_api_cb"].setdefault(base_url, {"fails": 0, "until": 0})
-
-    def _headers():
-        h = {"Accept": "application/json"}
-        if api_key:
-            h["Authorization"] = f"Bearer {api_key}"
-        return h
-
-    def _circuit_open():
-        return time.time() < cb.get("until", 0)
-
-    def _trip_circuit():
-        cb["fails"] = 3
-        cb["until"] = time.time() + 60  # 60 seconds open
-
-    def _reset_circuit():
-        cb["fails"] = 0
-        cb["until"] = 0
-
-    # Cached GET helper local to this client
-    @st.cache_data(ttl=ttl, show_spinner=False)
-    def _cached_get(url: str, params_tuple: tuple, headers_tuple: tuple):
-        try:
-            resp = requests.get(url, params=dict(params_tuple), headers=dict(headers_tuple), timeout=timeout)
-            resp.raise_for_status()
-            try:
-                return {"status": resp.status_code, "json": resp.json()}
-            except Exception:
-                return {"status": resp.status_code, "text": resp.text}
-        except Exception as ex:
-            # Do not expose secrets
-            return {"error": str(ex)}
-
-    def get(path: str, params: dict = None):
-        url = f"{base_url}/{str(path).lstrip('/')}"
-        if _circuit_open():
-            return err_with_id("circuit_open", base_url=base_url)
-        p = params or {}
-        # Retry loop with exponential backoff
-        last_err = None
-        for attempt in range(max(1, int(retries))):
-            res = _cached_get(url, tuple(sorted(p.items())), tuple(sorted(_headers().items())))
-            if "error" not in res:
-                _reset_circuit()
-                return res
-            last_err = res["error"]
-            cb["fails"] += 1
-            if cb["fails"] >= 3:
-                _trip_circuit()
-                break
-            time.sleep(min(2 ** attempt, 8))
-        return err_with_id("request_failed", base_url=base_url, path=path, err=last_err)
-
-    def post(path: str, json_body: dict = None):
-        # No cache on POST
-        import requests
-        url = f"{base_url}/{str(path).lstrip('/')}"
-        if _circuit_open():
-            return err_with_id("circuit_open", base_url=base_url)
-        try:
-            r = requests.post(url, json=json_body or {}, headers=_headers(), timeout=timeout)
-            r.raise_for_status()
-            try:
-                _reset_circuit()
-                return {"status": r.status_code, "json": r.json()}
-            except Exception:
-                _reset_circuit()
-                return {"status": r.status_code, "text": r.text}
-        except Exception as ex:
-            cb["fails"] += 1
-            if cb["fails"] >= 3:
-                _trip_circuit()
-            return err_with_id("request_failed", base_url=base_url, path=path, err=str(ex))
-
-    return {"get": get, "post": post, "base_url": base_url, "timeout": timeout}
-
-def _init_feature_flags_session():
-    import streamlit as st
-    defaults = {
-        "sam_ingest_core": False,
-        "sam_page_size": False,
-        "pipeline_star": False,
-        "rfp_analyzer_panel": False,
-        "amend_tracking": False,
-        "workspace_enabled": feature_flags.get("workspace_enabled", False) if 'feature_flags' in globals() else False,
-        "rfp_schema": False
-        , "rfp_parser": False}
-    # Global mirror for backward compatibility
-    try:
-        ff = dict(feature_flags) if 'feature_flags' in globals() else {}
-    except Exception:
-        ff = {}
-    for k, v in defaults.items():
-        ff.setdefault(k, v)
-    globals()["feature_flags"] = ff
-    # Session copy
-    if "feature_flags" not in st.session_state or not isinstance(st.session_state.get("feature_flags"), dict):
-        st.session_state["feature_flags"] = {}
-    for k, v in defaults.items():
-        st.session_state["feature_flags"].setdefault(k, v)
-
-def _bootstrap_phase0():
-    # Ensure PRAGMAs, migrations, flags, and client factory are ready
-    import streamlit as st
-    try:
-        conn = get_db()
-        # Verify PRAGMAs
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA temp_store=MEMORY")
-            conn.execute("PRAGMA foreign_keys=ON")
-        except Exception as ex:
-            log_event("warn", "pragma_set_failed", err=str(ex))
-        # Ensure migrations table exists
-        conn.execute("""CREATE TABLE IF NOT EXISTS migrations(
-            id INTEGER PRIMARY KEY,
-            name TEXT UNIQUE,
-            applied_at TEXT NOT NULL
-        )""")
-        _init_feature_flags_session()
-        # Expose api client factory in session
-        st.session_state["api_client_factory"] = create_api_client
-        st.session_state["boot_done"] = True
-    except Exception as ex:
-        log_event("error", "bootstrap_failed", err=str(ex), tb=traceback.format_exc())
-        st.session_state["boot_done"] = False
-
-# Run bootstrap very early, but after imports exist
-try:
-    _bootstrap_phase0()
-except Exception as _ex:
-    log_event("error", "bootstrap_call_failed", err=str(_ex))
-# ===== end Phase 0 Bootstrap =====
-
-# LEGACY_REMOVED :
-# LEGACY_REMOVED     if not SAM_API_KEY:
-# LEGACY_REMOVED         return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
-# LEGACY_REMOVED     base = "https://api.sam.gov/opportunities/v2/search"
-# LEGACY_REMOVED     today = datetime.utcnow().date()
-# LEGACY_REMOVED     min_due_date = today + timedelta(days=min_days)
-# LEGACY_REMOVED     posted_from = _us_date(today - timedelta(days=posted_from_days))
-# LEGACY_REMOVED     posted_to   = _us_date(today)
-# LEGACY_REMOVED 
-# LEGACY_REMOVED     params = {
-# LEGACY_REMOVED         "api_key": SAM_API_KEY,
-# LEGACY_REMOVED         "limit": str(limit),
-# LEGACY_REMOVED         "response": "json",
-# LEGACY_REMOVED         "sort": "-publishedDate",
-# LEGACY_REMOVED         "active": active,
-# LEGACY_REMOVED         "postedFrom": posted_from,   # MM/dd/yyyy
-# LEGACY_REMOVED         "postedTo": posted_to,       # MM/dd/yyyy
-# LEGACY_REMOVED     }
-# LEGACY_REMOVED     # Enforce only Solicitation + Combined when notice_types is blank
-# LEGACY_REMOVED     if not notice_types:
-# LEGACY_REMOVED         notice_types = "Combined Synopsis/Solicitation,Solicitation"
-# LEGACY_REMOVED     params["noticeType"] = notice_types
-# LEGACY_REMOVED 
-# LEGACY_REMOVED     if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
-# LEGACY_REMOVED     if keyword:      params["keywords"] = keyword
-# LEGACY_REMOVED 
-# LEGACY_REMOVED     try:
-# LEGACY_REMOVED         headers = {"X-Api-Key": SAM_API_KEY}
-# LEGACY_REMOVED         r = requests.get(base, params=params, headers=headers, timeout=40)
-# LEGACY_REMOVED         status = r.status_code
-# LEGACY_REMOVED         raw_preview = (r.text or "")[:1000]
-# LEGACY_REMOVED         try:
-# LEGACY_REMOVED             data = r.json()
-# LEGACY_REMOVED         except Exception:
-# LEGACY_REMOVED             return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
-# LEGACY_REMOVED         if status != 200:
-# LEGACY_REMOVED             err_msg = ""
-# LEGACY_REMOVED             if isinstance(data, dict):
-# LEGACY_REMOVED                 err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
-# LEGACY_REMOVED             return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
-# LEGACY_REMOVED         if isinstance(data, dict) and data.get("message"):
-# LEGACY_REMOVED             return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
-# LEGACY_REMOVED 
-# LEGACY_REMOVED         items = data.get("opportunitiesData", []) or []
-# LEGACY_REMOVED         rows = []
-# LEGACY_REMOVED         for opp in items:
-# LEGACY_REMOVED             due_str = opp.get("responseDeadLine") or ""
-# LEGACY_REMOVED             d = _parse_sam_date(due_str)
-# LEGACY_REMOVED             d_dt = _coerce_dt(d)
-# LEGACY_REMOVED             min_dt = _coerce_dt(min_due_date)
-# LEGACY_REMOVED             if min_dt is None:
-# LEGACY_REMOVED                 due_ok = True  # allow when min date unknown
-# LEGACY_REMOVED             else:
-# LEGACY_REMOVED                 due_ok = (d_dt is None) or (d_dt >= min_dt)
-# LEGACY_REMOVED             if not due_ok: continue
-# LEGACY_REMOVED             docs = opp.get("documents", []) or []
-# LEGACY_REMOVED             rows.append({
-# LEGACY_REMOVED                 "sam_notice_id": opp.get("noticeId"),
-# LEGACY_REMOVED                 "title": opp.get("title"),
-# LEGACY_REMOVED                 "agency": opp.get("organizationName"),
-# LEGACY_REMOVED                 "naics": ",".join(opp.get("naicsCodes", [])),
-# LEGACY_REMOVED                 "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-# LEGACY_REMOVED                 "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
-# LEGACY_REMOVED                 "response_due": due_str,
-# LEGACY_REMOVED                 "posted": opp.get("publishedDate",""),
-# LEGACY_REMOVED                 "type": opp.get("type",""),
-# LEGACY_REMOVED                 "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-# LEGACY_REMOVED                 "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
-# LEGACY_REMOVED             })
-# LEGACY_REMOVED         df = pd.DataFrame(rows)
-# LEGACY_REMOVED         info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
-# LEGACY_REMOVED                 "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
-# LEGACY_REMOVED                             "postedFrom": posted_from, "postedTo": posted_to,
-# LEGACY_REMOVED                             "min_due_days": min_days, "noticeType": notice_types,
-# LEGACY_REMOVED                             "active": active, "limit": limit}}
-# LEGACY_REMOVED         if df.empty:
-# LEGACY_REMOVED             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
-# LEGACY_REMOVED         return df, info
-# LEGACY_REMOVED     except requests.RequestException as e:
-# LEGACY_REMOVED         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
-# LEGACY_REMOVED 
-# LEGACY_REMOVED 
-# LEGACY_REMOVED 
-# LEGACY_REMOVED 
 def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
@@ -9567,7 +7785,9 @@ try:
 
     with tabs[TAB['SAM Watch']]:
         _st.header("SAM Watch")
+        
         _st.subheader("Filters")
+
         with _st.form("simple_filters", clear_on_submit=False):
             c1, c2, c3 = _st.columns([2,2,2])
             with c1:
@@ -9794,129 +8014,323 @@ try:
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
 
-# ===== Layout Phase 2: Opportunity workspace subtabs =====
-# Deep-link helpers
-def open_details(opp): route_to("opportunity", opp_id=opp, tab="Details")
-def open_analyzer(opp): route_to("opportunity", opp_id=opp, tab="Analyzer")
-def open_compliance(opp): route_to("opportunity", opp_id=opp, tab="Compliance")
-def open_proposal_tab(opp): route_to("opportunity", opp_id=opp, tab="Proposal")
-def open_pricing(opp): route_to("opportunity", opp_id=opp, tab="Pricing")
-def open_vendors(opp): route_to("opportunity", opp_id=opp, tab="VendorsRFQ")
-def open_submission(opp): route_to("opportunity", opp_id=opp, tab="Submission")
+# ===== Persist Phase 5: Durable Jobs =====
+def ensure_jobs_tables():
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS jobs(
+      id INTEGER PRIMARY KEY,
+      org_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN('queued','running','done','error')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)")
+    # Upgrade status machine columns on legacy tables if present
+    for t in ["email_queue", "search_runs", "rfq_events"]:
+        try:
+            cols = {r[1]: r for r in conn.execute(f"PRAGMA table_info({t})")}
+        except Exception:
+            continue
+        if not cols:
+            continue
+        def _alter(col, ddl):
+            if col not in cols:
+                try:
+                    conn.execute(f"ALTER TABLE {t} ADD COLUMN {col} {ddl}")
+                except Exception:
+                    pass
+        _alter("status", "TEXT DEFAULT 'queued' CHECK(status IN('queued','running','done','error'))")
+        _alter("attempts", "INTEGER DEFAULT 0")
+        _alter("last_error", "TEXT")
+        _alter("updated_at", "TEXT")
+        try:
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_status ON {t}(status)")
+        except Exception:
+            pass
 
-# Header derivation helpers. Do not cache authoritative DB rows; only transform cached.
-def _opp_header_data(opp_id: int):
-    row = get_notice(int(opp_id)) if opp_id is not None else None
-    d = row["data"] if row and isinstance(row.get("data"), dict) else {}
-    title = d.get("title") or d.get("notice_title") or d.get("subject") or f"Opportunity {opp_id}"
-    agency = d.get("agency") or d.get("department") or d.get("org_name") or d.get("office") or ""
-    due = d.get("due_date") or d.get("response_due") or d.get("close_date") or d.get("responseDate") or ""
-    set_asides = []
-    for k in ["set_aside","setAside","naics_set_aside","solicitation_set_aside","type_of_set_aside"]:
-        v = d.get(k)
-        if v:
-            set_asides.append(str(v))
-    set_asides = list(dict.fromkeys(set_asides))[:4]
-    return {"title": title, "agency": agency, "due": due, "set_asides": set_asides}
+def enqueue_job(kind: str, payload: dict, org_id: str | None = None) -> int:
+    conn = get_db()
+    org = org_id or current_org_id()
+    now = utc_now_iso()
+    jid = conn.execute(
+        "INSERT INTO jobs(org_id, kind, payload_json, status, attempts, created_at, updated_at) VALUES(?,?,?,?,0,?,?)",
+        (org, str(kind), json.dumps(payload, ensure_ascii=False), "queued", now, now),
+    ).lastrowid
+    return int(jid)
 
-# Cached compute of badges only
-@st.cache_data(ttl=900, show_spinner=False)
-def _badge_pack(opp_id: int):
-    hdr = _opp_header_data(opp_id)
-    return {"agency": hdr["agency"], "due": hdr["due"], "set_asides": hdr["set_asides"]}
+def _lease_one_job(kind: str | None = None, stale_minutes: int = 15):
+    """
+    Atomically claim a queued job, or a stale running job older than stale_minutes.
+    Returns row (id, kind, payload_json, attempts) or None.
+    """
+    conn = get_db()
+    cutoff = iso_minus_minutes(stale_minutes)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Prefer queued
+        q = "SELECT id, kind, payload_json, attempts FROM jobs WHERE status='queued' AND org_id=?"
+        args = [current_org_id()]
+        if kind:
+            q += " AND kind=?"
+            args.append(kind)
+        q += " ORDER BY created_at LIMIT 1"
+        r = conn.execute(q, tuple(args)).fetchone()
+        if not r:
+            # Try stale running
+            q2 = "SELECT id, kind, payload_json, attempts FROM jobs WHERE status='running' AND updated_at<? AND org_id=?"
+            args2 = [cutoff, current_org_id()]
+            if kind:
+                q2 += " AND kind=?"
+                args2.append(kind)
+            q2 += " ORDER BY updated_at LIMIT 1"
+            r = conn.execute(q2, tuple(args2)).fetchone()
+        if not r:
+            conn.execute("COMMIT")
+            return None
+        jid = int(r[0])
+        conn.execute("UPDATE jobs SET status='running', attempts=attempts+1, updated_at=? WHERE id=?", (utc_now_iso(), jid))
+        conn.execute("COMMIT")
+        return r
+    except Exception:
+        try: conn.execute("ROLLBACK")
+        except Exception: pass
+        return None
 
-def _workspace_header(opp_id: int):
-    import streamlit as st
-    hdr = _opp_header_data(opp_id)
-    st.header(hdr["title"])
-    badges = _badge_pack(opp_id)
-    cols = st.columns(3)
-    with cols[0]:
-        st.caption(f"Agency: **{badges['agency'] or 'n/a'}**")
-    with cols[1]:
-        st.caption(f"Due: **{badges['due'] or 'n/a'}**")
-    with cols[2]:
-        if badges["set_asides"]:
-            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"]))
-        else:
-            st.caption("Set-aside: **n/a**")
+def complete_job(job_id: int):
+    conn = get_db()
+    conn.execute("UPDATE jobs SET status='done', updated_at=? WHERE id=?", (utc_now_iso(), int(job_id)))
 
-# Subtab skeletons. Each receives opp_id and renders only when active.
-def render_details(opp_id: int):
-    import streamlit as st
-    st.write("Details panel placeholder.")
+def fail_job(job_id: int, err: str):
+    conn = get_db()
+    conn.execute("UPDATE jobs SET status='error', last_error=?, updated_at=? WHERE id=?", (str(err)[:2000], utc_now_iso(), int(job_id)))
 
-def render_analyzer(opp_id: int):
-    import streamlit as st
-    # Example lazy pattern placeholder
-    @st.cache_data(ttl=900, show_spinner=False)
-    def _heavy_analyzer_compute(opp):
-        # Placeholder transform. Real logic lives elsewhere.
-        return {"ok": True, "opp": opp}
-    res = _heavy_analyzer_compute(opp_id)
-    st.write("Analyzer ready.", res)
+def _process_job_row(row):
+    jid, kind, payload_json, attempts = int(row[0]), str(row[1]), row[2], int(row[3] or 0)
+    try:
+        payload = json.loads(payload_json or "{}")
+    except Exception:
+        payload = {}
+    # Dispatch by kind
+    if kind == "parse_rfp":
+        nid = int(payload.get("notice_id"))
+        res = parse_rfp_v1(nid)
+        if not res.get("ok"):
+            raise RuntimeError(f"parse_failed:{res.get('errors') or res}")
+    elif kind == "run_saved_searches":
+        run_saved_searches()
+        nid = int(payload.get("notice_id"))
+        res = parse_rfp_v1(nid)
+        if not res.get("ok"):
+            raise RuntimeError(f"parse_failed:{res.get('errors') or res}")
+    elif kind == "build_pack":
+        # placeholder
+        pass
+    else:
+        # unknown kinds count as success to avoid poison
+        pass
+    complete_job(jid)
 
-def render_compliance(opp_id: int):
-    import streamlit as st
-    st.write("Compliance matrix placeholder.")
+def start_job_runner(max_loops: int = 5, kind: str | None = None):
+    """
+    Lightweight worker: lease+run up to max_loops jobs then exit.
+    Safe to call at startup and after enqueue.
+    """
+    import threading, streamlit as st, time
+    def _run():
+        loops = 0
+        while loops < int(max_loops):
+            row = _lease_one_job(kind=kind)
+            if not row:
+                break
+            try:
+                _process_job_row(row)
+            except Exception as ex:
+                try:
+                    fail_job(int(row[0]), str(ex))
+                except Exception:
+                    pass
+            loops += 1
+            # cooperative yield
+            time.sleep(0.01)
+        st.session_state["job_runner_last"] = utc_now_iso()
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
 
-def render_proposal(opp_id: int):
-    import streamlit as st
-    st.write("Proposal builder placeholder.")
+# Helpers for ISO times
+def iso_minus_minutes(minutes: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=int(minutes))).isoformat()
 
-def render_pricing(opp_id: int):
-    import streamlit as st
-    st.write("Pricing worksheet placeholder.")
+# Hook: ensure jobs table on import
+ensure_jobs_tables()
+# ===== end Persist Phase 5 =====
 
-def render_vendors_rfq(opp_id: int):
-    import streamlit as st
-    st.write("Vendors and RFQ placeholder.")
 
-def render_submission(opp_id: int):
-    import streamlit as st
-    st.write("Submission checklist placeholder.")
+# ===== Phase 4: Saved Searches + Email Alerts (backend) =====
+def ensure_saved_search_alerts_schema():
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS saved_searches(
+        id INTEGER PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        query_json TEXT NOT NULL,
+        cadence TEXT NOT NULL CHECK(cadence IN('daily','weekly','monthly')),
+        recipients TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        last_run_at TEXT
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_searches_user ON saved_searches(user_id)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS search_runs(
+        id INTEGER PRIMARY KEY,
+        saved_search_id INTEGER NOT NULL REFERENCES saved_searches(id) ON DELETE CASCADE,
+        ran_at TEXT NOT NULL,
+        new_hits_count INTEGER NOT NULL,
+        log_json TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS search_hits(
+        id INTEGER PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES search_runs(id) ON DELETE CASCADE,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS email_queue(
+        id INTEGER PRIMARY KEY,
+        to_addr TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_email_status ON email_queue(status)")
 
-def _subtab_bar(active: str, opp_id: int):
-    import streamlit as st
-    tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
-    # Persist in session
-    st.session_state["active_opportunity_tab"] = active
-    cols = st.columns(len(tabs))
-    for i, t in enumerate(tabs):
-        with cols[i]:
-            if st.button(t, type=("primary" if t == active else "secondary")):
-                route_to("opportunity", opp_id=opp_id, tab=t, rerun=True)
+def _get_app_base_url():
+    try:
+        return get_secret("app", "base_url") or ""
+    except Exception:
+        return ""
 
-def _render_opportunity_workspace():
-    import streamlit as st
-    if not feature_flags.get('workspace_enabled'):
-        return
-    r = get_route()
-    if r["page"] != "opportunity":
-        return
-    opp_id = r["opp"]
-    if opp_id is None:
-        st.warning("No opportunity selected.")
-        return
-    # Header
-    _workspace_header(opp_id)
-    # Subtabs
-    tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
-    active = r["tab"] if r["tab"] in tabs else (st.session_state.get("active_opportunity_tab") or tabs[0])
-    _subtab_bar(active, opp_id)
-    # Lazy render for active only
-    if active == "Details":
-        render_details(opp_id)
-    elif active == "Analyzer":
-        render_analyzer(opp_id)
-    elif active == "Compliance":
-        render_compliance(opp_id)
-    elif active == "Proposal":
-        render_proposal(opp_id)
-    elif active == "Pricing":
-        render_pricing(opp_id)
-    elif active == "VendorsRFQ":
-        render_vendors_rfq(opp_id)
-    elif active == "Submission":
-        render_submission(opp_id)
-# ===== end Layout Phase 2 =====
+def _notice_deep_link(nid: int) -> str:
+    base = _get_app_base_url()
+    qp = f"?page=SAM%20Watch&notice={int(nid)}&rfp=1"
+    return (base.rstrip('/') + '/' + qp.lstrip('?')).replace('//?', '/?') if base else qp
+
+def saved_searches_list(user_id: str):
+    ensure_saved_search_alerts_schema()
+    return q_select("SELECT id, name, cadence, recipients, active, last_run_at, query_json FROM saved_searches WHERE user_id=?", (user_id,), require_org=False)
+
+def saved_searches_upsert(user_id: str, name: str, filters: dict, cadence: str, recipients_csv: str, active: int = 1, search_id: int | None = None):
+    ensure_saved_search_alerts_schema()
+    data = {
+        "user_id": str(user_id),
+        "name": name.strip(),
+        "query_json": json.dumps(filters or {}, ensure_ascii=False),
+        "cadence": cadence,
+        "recipients": recipients_csv,
+        "active": int(active),
+        "last_run_at": None
+    }
+    if search_id:
+        return q_update("saved_searches", data, {"id": int(search_id)})
+    else:
+        return q_insert("saved_searches", data)
+
+def saved_searches_delete(search_id: int):
+    ensure_saved_search_alerts_schema()
+    return q_delete("saved_searches", {"id": int(search_id)})
+
+def _cadence_due(cadence: str, last_run_at: str | None) -> bool:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if not last_run_at:
+        return True
+    try:
+        prev = datetime.fromisoformat(last_run_at)
+    except Exception:
+        return True
+    delta = {"daily": 1, "weekly": 7, "monthly": 30}.get(cadence, 7)
+    return (now - prev).days >= delta
+
+def _posted_after_cutoff(posted_at: str | None, cadence: str, last_run_at: str | None) -> bool:
+    from datetime import datetime, timezone, timedelta
+    if not posted_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(posted_at.replace('Z', '+00:00')) if 'T' in posted_at else datetime.fromisoformat(posted_at)
+    except Exception:
+        return False
+    if last_run_at:
+        try:
+            prev = datetime.fromisoformat(last_run_at.replace('Z', '+00:00'))
+            return dt > prev
+        except Exception:
+            pass
+    days = {"daily": 1, "weekly": 7, "monthly": 30}.get(cadence, 7)
+    return (datetime.now(datetime.utcnow().astimezone().tzinfo) - dt).days <= days
+
+def run_saved_searches(kind: str | None = None):
+    ensure_saved_search_alerts_schema()
+    # all active in org
+    rows = q_select("SELECT id, user_id, name, query_json, cadence, recipients, active, last_run_at FROM saved_searches WHERE active=1", ())
+    for r in rows:
+        sid, suid, name, qjson, cadence, recipients, active, last_run = int(r[0]), r[1], r[2], r[3], r[4], r[5], int(r[6] or 0), r[7]
+        if not _cadence_due(cadence, last_run):
+            continue
+        try:
+            filters = json.loads(qjson or "{}")
+        except Exception:
+            filters = {}
+        res, total = fetch_notices(filters, page=1, page_size=50, org_id=current_org_id(), user_id=suid)
+        items = res.get("items", []) if isinstance(res, dict) else []
+        new_items = [it for it in items if _posted_after_cutoff(it.get("posted_at") or it.get("posted"), cadence, last_run)]
+        new_ids = []
+        for it in new_items:
+            try:
+                nid = upsert_notice(it)
+                new_ids.append(int(nid))
+            except Exception:
+                pass
+        run_id = q_insert("search_runs", {"saved_search_id": sid, "ran_at": utc_now_iso(), "new_hits_count": len(new_ids), "log_json": json.dumps({"total": total})})
+        for nid in new_ids:
+            q_insert("search_hits", {"run_id": int(run_id), "notice_id": int(nid)})
+        if new_ids and recipients:
+            subj = f"SAM Watch: {len(new_ids)} new for \"{name}\""
+            body_lines = [f"{len(new_ids)} new results for '{name}':", ""]
+            for nid in new_ids[:20]:
+                rr = q_select("SELECT title, url FROM notices WHERE id=?", (int(nid),), one=True)
+                title = rr[0] if rr else f"Notice {nid}"
+                sam_url = rr[1] if rr else ""
+                body_lines.append(f"- {title}\n  App: {_notice_deep_link(nid)}\n  SAM: {sam_url}")
+            body = "\n".join(body_lines)
+            for addr in [x.strip() for x in recipients.split(",") if x.strip()]:
+                q_insert("email_queue", {"to_addr": addr, "subject": subj, "body": body, "created_at": utc_now_iso()})
+        q_update("saved_searches", {"last_run_at": utc_now_iso()}, {"id": sid})
+
+def dry_run_saved_search(search_id: int):
+    ensure_saved_search_alerts_schema()
+    r = q_select("SELECT id, name, query_json, cadence, last_run_at FROM saved_searches WHERE id=?", (int(search_id),), one=True, require_org=False)
+    if not r:
+        return {"ok": False, "error": "not found"}
+    sid, name, qjson, cadence, last_run = int(r[0]), r[1], r[2], r[3], r[4]
+    try:
+        filters = json.loads(qjson or "{}")
+    except Exception:
+        filters = {}
+    res, total = fetch_notices(filters, page=1, page_size=50, org_id=current_org_id(), user_id=current_user_id())
+    items = res.get("items", []) if isinstance(res, dict) else []
+    new_items = [it for it in items if _posted_after_cutoff(it.get("posted_at") or it.get("posted"), cadence, last_run)]
+    preview = []
+    for it in new_items[:50]:
+        try:
+            nid = upsert_notice(it)
+            rr = q_select("SELECT id, title, url FROM notices WHERE sam_notice_id=?", (str(it.get("sam_notice_id") or it.get("id") or it.get("notice_id")),), one=True, require_org=True)
+            if rr:
+                preview.append({"id": int(rr[0]), "title": rr[1], "app_link": _notice_deep_link(int(rr[0])), "sam_url": rr[2]})
+        except Exception:
+            pass
+    return {"ok": True, "name": name, "count": len(preview), "items": preview}
+# ===== end Phase 4 =====
