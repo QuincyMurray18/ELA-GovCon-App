@@ -11030,12 +11030,6 @@ def render_sam_watch_ingest():
                     set_notice_state(user_id, nid, "dismissed")
         with c3:
             if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
-        with c4:
-            if feature_flags().get("compliance_gate", False) and st.form_submit_button("Compliance"):
-                if selected_ids:
-                    st.session_state["selected_notice_id"] = int(selected_ids[0])
-                    st.session_state["compliance_tab_open"] = True
-    
                 for nid in selected_ids:
                     toggle_pipeline_star(user_id, nid)
         # Diff controls
@@ -11049,7 +11043,6 @@ def render_sam_watch_ingest():
 
     # Render diff panel below
     render_diff_panel()
-    render_compliance_panel()
 
     # Footer paging
     p1, p2, p3 = st.columns([1,1,6])
@@ -11714,255 +11707,10 @@ def _rfp_phase1_maybe_store(nid: int):
     if not doc:
         return
     res = save_rfp_json(int(nid), doc)
-    try:
-        if res.get('ok'):
-            ensure_needs_review_if_green(int(nid))
-    except Exception:
-        pass
-
     if res.get("ok"):
         st.session_state["rfp_schema_ready"] = True
     else:
         log_event("warn","rfp_json_not_saved", notice_id=int(nid), errors=res.get("errors"))
-
-# === COMPLIANCE GATE PHASE 9 ===
-def ensure_compliance_schema():
-    conn = get_db()
-    cur = conn.cursor()
-    # lm_checklist
-    cur.execute("""CREATE TABLE IF NOT EXISTS lm_checklist(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        factor TEXT,
-        subfactor TEXT,
-        requirement TEXT NOT NULL,
-        source_page TEXT,
-        owner_id TEXT,
-        due_date TEXT,
-        status TEXT NOT NULL CHECK(status IN('Red','Yellow','Green')),
-        notes TEXT
-    );""")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_lm_notice ON lm_checklist(notice_id);")
-    # required_docs
-    cur.execute("""CREATE TABLE IF NOT EXISTS required_docs(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        template_key TEXT,
-        required INTEGER NOT NULL DEFAULT 1,
-        provided INTEGER NOT NULL DEFAULT 0,
-        file_id TEXT
-    );""")
-    # signoffs
-    cur.execute("""CREATE TABLE IF NOT EXISTS signoffs(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        role TEXT NOT NULL CHECK(role IN('Tech','Price','Contracts')),
-        user_id TEXT NOT NULL,
-        status TEXT NOT NULL CHECK(status IN('Pending','Approved','Rejected')),
-        ts TEXT NOT NULL
-    );""")
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_signoff_role ON signoffs(notice_id, role);")
-    # qa_log
-    cur.execute("""CREATE TABLE IF NOT EXISTS qa_log(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        question TEXT NOT NULL,
-        asked_at TEXT,
-        deadline TEXT,
-        submitted_file_id TEXT
-    );""")
-    # notices.compliance_state column add if missing
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(notices)")}
-        if "compliance_state" not in cols:
-            conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
-    except Exception:
-        pass
-    conn.commit()
-
-def get_compliance_state(nid: int):
-    ensure_compliance_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    # checklist
-    rows = cur.execute("SELECT status FROM lm_checklist WHERE notice_id=?", (int(nid),)).fetchall()
-    all_green = bool(rows) and all((r[0]=='Green') for r in rows)
-    # required docs
-    docs = cur.execute("SELECT required, provided FROM required_docs WHERE notice_id=?", (int(nid),)).fetchall()
-    req_ok = all((int(r)==0 or int(p)==1) for r,p in docs) if docs else False
-    # signoffs
-    signs = cur.execute("SELECT role, status FROM signoffs WHERE notice_id=?", (int(nid),)).fetchall()
-    roles = {r:s for r,s in signs}
-    sign_ok = all(roles.get(r)=='Approved' for r in ['Tech','Price','Contracts'])
-    ok = all_green and req_ok and sign_ok
-    # collect unmet reasons
-    unmet = []
-    if not all_green:
-        unmet.append("Checklist items not all Green")
-    if not req_ok:
-        unmet.append("Required documents missing")
-    if not sign_ok:
-        unmet.append("All signoffs not Approved")
-    # current stored state
-    cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(nid),))
-    srow = cur.fetchone()
-    stored = srow[0] if srow else "Unreviewed"
-    return ok, unmet, stored
-
-def recompute_and_store_compliance(nid: int):
-    ensure_compliance_schema()
-    ok, unmet, stored = get_compliance_state(int(nid))
-    new_state = 'Green' if ok else 'Needs review'
-    conn = get_db()
-    conn.execute("UPDATE notices SET compliance_state=? WHERE id=?", (new_state, int(nid)))
-    conn.commit()
-    return new_state, unmet
-
-def ensure_needs_review_if_green(nid: int):
-    ensure_compliance_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(nid),))
-    row = cur.fetchone()
-    if not row: 
-        return
-    if row[0] == 'Green':
-        conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(nid),))
-        conn.commit()
-
-def upsert_checklist_row(nid:int, data:dict):
-    ensure_compliance_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    if data.get("id"):
-        cols = ["factor","subfactor","requirement","source_page","owner_id","due_date","status","notes"]
-        sets = ", ".join(f"{c}=?" for c in cols)
-        vals = [data.get(c) for c in cols] + [int(data["id"])]
-        cur.execute(f"UPDATE lm_checklist SET {sets} WHERE id=?", vals)
-    else:
-        cur.execute("""INSERT INTO lm_checklist(notice_id,factor,subfactor,requirement,source_page,owner_id,due_date,status,notes)
-                    VALUES(?,?,?,?,?,?,?,?,?)""", (int(nid), data.get("factor"), data.get("subfactor"), data.get("requirement"),
-                    data.get("source_page"), data.get("owner_id"), data.get("due_date"), data.get("status") or 'Red', data.get("notes")))
-    conn.commit()
-    recompute_and_store_compliance(int(nid))
-
-def upsert_required_doc(nid:int, data:dict):
-    ensure_compliance_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    if data.get("id"):
-        cols = ["name","template_key","required","provided","file_id"]
-        sets = ", ".join(f"{c}=?" for c in cols)
-        vals = [data.get(c) for c in cols] + [int(data["id"])]
-        cur.execute(f"UPDATE required_docs SET {sets} WHERE id=?", vals)
-    else:
-        cur.execute("""INSERT INTO required_docs(notice_id,name,template_key,required,provided,file_id)
-                    VALUES(?,?,?,?,?,?)""", (int(nid), data.get("name"), data.get("template_key"), int(data.get("required",1)),
-                    int(data.get("provided",0)), data.get("file_id")))
-    conn.commit()
-    recompute_and_store_compliance(int(nid))
-
-def set_signoff(nid:int, role:str, status:str, user_id:str):
-    ensure_compliance_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    ts = utc_now_iso() if 'utc_now_iso' in globals() else dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    # upsert
-    cur.execute("""INSERT INTO signoffs(notice_id, role, user_id, status, ts)
-                VALUES(?,?,?,?,?)
-                ON CONFLICT(notice_id, role) DO UPDATE SET user_id=excluded.user_id, status=excluded.status, ts=excluded.ts""",
-                (int(nid), role, user_id or "unknown", status, ts))
-    conn.commit()
-    recompute_and_store_compliance(int(nid))
-
-def add_qa_row(nid:int, question:str, deadline:str=None, submitted_file_id:str=None):
-    ensure_compliance_schema()
-    conn = get_db()
-    conn.execute("""INSERT INTO qa_log(notice_id, question, asked_at, deadline, submitted_file_id)
-                VALUES(?,?,?,?,?)""", (int(nid), question, dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), deadline, submitted_file_id))
-    conn.commit()
-
-def render_compliance_panel():
-    import streamlit as st
-    if not feature_flags().get("compliance_gate", False):
-        return
-    if not st.session_state.get("compliance_tab_open") or not st.session_state.get("selected_notice_id"):
-        return
-    ensure_compliance_schema()
-    nid = int(st.session_state["selected_notice_id"])
-    st.markdown("---")
-    st.subheader("Compliance")
-    # Current state
-    ok, unmet, stored = get_compliance_state(nid)
-    st.caption(f"State: {stored}. {'All clear' if ok else 'Blocked'}")
-    if unmet:
-        st.warning("Unmet: " + "; ".join(unmet))
-    # Checklist editor
-    st.markdown("#### L and M checklist")
-    conn = get_db()
-    import pandas as pd
-    df = pd.read_sql_query("select id, factor, subfactor, requirement, source_page, owner_id, due_date, status, notes from lm_checklist where notice_id=? order by id", conn, params=(nid,))
-    edited = st.data_editor(df, use_container_width=True, num_rows="dynamic",
-                            column_config={
-                                "status": st.column_config.SelectboxColumn(options=["Red","Yellow","Green"]),
-                                "due_date": st.column_config.TextColumn(help="YYYY-MM-DD or ISO datetime")
-                            },
-                            key=f"lm_edit_{nid}")
-    if st.button("Save checklist"):
-        # detect new or edited rows by comparing ids
-        existing_ids = set(df["id"].tolist())
-        for _, row in edited.iterrows():
-            data = row.to_dict()
-            if pd.isna(data.get("id")):
-                data["id"] = None
-            upsert_checklist_row(nid, data)
-        st.success("Checklist saved.")
-        st.session_state["compliance_tab_open"] = True
-        st.rerun()
-    # Required docs
-    st.markdown("#### Required documents")
-    df2 = pd.read_sql_query("select id, name, template_key, required, provided, file_id from required_docs where notice_id=? order by id", conn, params=(nid,))
-    edited2 = st.data_editor(df2, use_container_width=True, num_rows="dynamic",
-                             column_config={
-                                "required": st.column_config.CheckboxColumn(),
-                                "provided": st.column_config.CheckboxColumn(),
-                             },
-                             key=f"rd_edit_{nid}")
-    if st.button("Save documents"):
-        for _, row in edited2.iterrows():
-            data = row.to_dict()
-            if pd.isna(data.get("id")):
-                data["id"] = None
-            upsert_required_doc(nid, data)
-        st.success("Documents saved.")
-        st.session_state["compliance_tab_open"] = True
-        st.rerun()
-    # Signoffs
-    st.markdown("#### Signoffs")
-    roles = ["Tech","Price","Contracts"]
-    cols = st.columns(len(roles))
-    uid = st.session_state.get("user_id") or st.session_state.get("current_user_id") or "unknown"
-    for i, role in enumerate(roles):
-        with cols[i]:
-            if st.button(f"Approve {role}"):
-                set_signoff(nid, role, "Approved", str(uid))
-                st.rerun()
-            if st.button(f"Reject {role}"):
-                set_signoff(nid, role, "Rejected", str(uid))
-                st.rerun()
-    # Q and A log
-    st.markdown("#### Q and A")
-    q = st.text_input("Question")
-    d = st.text_input("Deadline")
-    if st.button("Add Q and A"):
-        if q.strip():
-            add_qa_row(nid, q.strip(), deadline=d or None)
-            st.success("Added.")
-            st.rerun()
-    qa = pd.read_sql_query("select id, question, asked_at, deadline, submitted_file_id from qa_log where notice_id=? order by id desc", conn, params=(nid,))
-    st.dataframe(qa, use_container_width=True, hide_index=True)
-# === END COMPLIANCE GATE PHASE 9 ===
 # ===== end RFP Phase 1 =====
 
 # ===== RFP Parser Phase 2 =====
@@ -12208,7 +11956,7 @@ def record_notice_version(notice_id: int, n: dict):
     summary = "Auto detected change"
     conn.execute("INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
                  (int(notice_id), amend_no, posted, url, vhash, summary))
-    \n    try:\n        conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id = ?", (int(notice_id),))\n        conn.commit()\n    except Exception:\n        pass\n# Mark compliance
+    # Mark compliance
     try:
         conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(notice_id),))
     except Exception:
@@ -13918,51 +13666,6 @@ try:
         if ff.get('deals_activities', True):
             st.divider()
             _render_deals_activities_and_calendar()
-
-        # --- Forecast + Signals (flagged) ---
-        try:
-            ff = feature_flags()
-        except Exception:
-            ff = {}
-        if ff.get('deals_forecast', True):
-            st.divider()
-            st.markdown("### Forecast and Signals")
-            qf = st.text_input("Search for forecast", key="forecast_q")
-            df_all = _list_deals_for_forecast(qf)
-            bm, bq = forecast_weighted(df_all)
-            c1,c2 = st.columns(2)
-            with c1:
-                st.markdown("#### Weighted by month")
-                st.dataframe(bm, use_container_width=True, hide_index=True)
-            with c2:
-                st.markdown("#### Weighted by quarter")
-                st.dataframe(bq, use_container_width=True, hide_index=True)
-            # Optional chart
-            try:
-                import plotly.express as px
-                if not bm.empty:
-                    figm = px.bar(bm, x="period", y="weighted_total", title="Weighted pipeline by month")
-                    st.plotly_chart(figm, use_container_width=True)
-            except Exception:
-                pass
-            # SLA blockers
-            st.markdown("#### SLA and blockers")
-            bl = compute_sla_blockers()
-            if bl:
-                import pandas as pd
-                dfb = pd.DataFrame(bl, columns=["deal_id","title","reason"])
-                st.dataframe(dfb, use_container_width=True, hide_index=True)
-            else:
-                st.info("No SLA blockers detected.")
-            # Win prob updater
-            st.markdown("#### Update win probability from signals")
-            upd_id = st.number_input("Deal ID", min_value=0, step=1, value=0, key="upd_win_id")
-            if st.button("Update win_prob"):
-                if upd_id:
-                    ok = update_win_prob_from_signals(int(upd_id))
-                    st.success("Updated." if ok else "No change.") 
-                    st.session_state['deals_refresh'] = st.session_state.get('deals_refresh',0)+1
-                    st.rerun()
 except Exception as _e_deals:
     try:
         st.caption(f"[Deals tab note: {_e_deals}]")
@@ -16716,14 +16419,6 @@ def route_to(page, opp_id=None, tab=None):
 # Feature flags accessor
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
-
-# Default feature flags for compliance gate
-try:
-    ff = feature_flags()
-    ff.setdefault('compliance_gate', False)
-except Exception:
-    pass
-
 
 # --- Page renderers ---
 def _render_nav():
@@ -20750,147 +20445,3 @@ def render_vendors(opp_id: int):
     except Exception:
         pass
 # === VENDOR RFQ HOOKS PHASE 8 END ===
-
-
-
-# === DEALS PHASE 4: Forecast + Signals ===
-def _ensure_deals_phase4_schema():
-    conn = get_db()
-    ensure_deals_table(conn)
-    cur = conn.cursor()
-    try:
-        cols = {r[1] for r in cur.execute("PRAGMA table_info(deals)").fetchall()}
-        if "win_prob" not in cols:
-            cur.execute("ALTER TABLE deals ADD COLUMN win_prob REAL DEFAULT 0.3")
-        if "next_action" not in cols:
-            cur.execute("ALTER TABLE deals ADD COLUMN next_action TEXT")
-        if "due_at" not in cols:
-            cur.execute("ALTER TABLE deals ADD COLUMN due_at TEXT")
-        if "compliance_state" not in cols:
-            cur.execute("ALTER TABLE deals ADD COLUMN compliance_state TEXT")
-        if "rfq_coverage" not in cols:
-            cur.execute("ALTER TABLE deals ADD COLUMN rfq_coverage REAL")
-        if "last_touch" not in cols:
-            cur.execute("ALTER TABLE deals ADD COLUMN last_touch TEXT")
-    except Exception:
-        pass
-    conn.commit()
-
-def _list_deals_for_forecast(q=None):
-    _ensure_deals_phase4_schema()
-    conn = get_db()
-    import pandas as pd
-    sql = "select id, title, stage, owner, amount, agency, due_date, due_at, win_prob, compliance_state, rfq_coverage from deals"
-    params = []
-    if q:
-        sql += " where title like ? or agency like ?"
-        params = [f"%{q}%", f"%{q}%"]
-    try:
-        df = pd.read_sql_query(sql, conn, params=params)
-    except Exception:
-        df = pd.DataFrame(columns=["id","title","stage","owner","amount","agency","due_date","due_at","win_prob","compliance_state","rfq_coverage"])
-    return df
-
-def _coerce_date_series(s):
-    import pandas as pd
-    try:
-        return pd.to_datetime(s, errors="coerce")
-    except Exception:
-        return pd.to_datetime([])
-
-def deal_weighted_amount(row):
-    try:
-        amt = float(row.get("amount") or 0.0)
-        p = float(row.get("win_prob") or 0.0)
-        return max(0.0, amt) * min(max(p, 0.0), 1.0)
-    except Exception:
-        return 0.0
-
-def forecast_weighted(df):
-    import pandas as pd
-    if df.empty: 
-        return pd.DataFrame(columns=["period","weighted_total"]), pd.DataFrame(columns=["period","weighted_total"])
-    dates = _coerce_date_series(df["due_at"].fillna(df["due_date"]))
-    df2 = df.copy()
-    df2["due_norm"] = dates
-    df2["weighted"] = df2.apply(deal_weighted_amount, axis=1)
-    df2 = df2.dropna(subset=["due_norm"])
-    df2["month"] = df2["due_norm"].dt.to_period("M").astype(str)
-    by_month = df2.groupby("month")["weighted"].sum().reset_index().rename(columns={"month":"period","weighted":"weighted_total"})
-    df2["quarter"] = df2["due_norm"].dt.to_period("Q").astype(str)
-    by_q = df2.groupby("quarter")["weighted"].sum().reset_index().rename(columns={"quarter":"period","weighted":"weighted_total"})
-    return by_month, by_q
-
-def update_win_prob_from_signals(deal_id):
-    _ensure_deals_phase4_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    row = cur.execute("select win_prob, compliance_state, rfq_coverage from deals where id = ?", (int(deal_id),)).fetchone()
-    if not row: 
-        return False
-    win_prob, comp, cov = row
-    try:
-        base = float(win_prob or 0.3)
-        comp_adj = {"green":0.20, "yellow":0.05, "red":-0.10}.get((comp or "").lower(), 0.0)
-        covf = float(cov) if cov is not None else 0.0
-        cov_adj = max(-0.15, min(0.15, (covf - 0.5) * 0.30))
-        new_p = min(0.95, max(0.05, base + comp_adj + cov_adj))
-        cur.execute("update deals set win_prob = ?, updated_at = datetime('now') where id = ?", (new_p, int(deal_id)))
-        conn.commit()
-        return True
-    except Exception:
-        return False
-
-def compute_sla_blockers():
-    _ensure_deals_phase4_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    blockers = []
-    try:
-        rows = cur.execute("select id, title, owner, amount, due_at, due_date, updated_at from deals").fetchall()
-        import datetime as _dt
-        now = _dt.datetime.utcnow()
-        for id_, title, owner, amount, due_at, due_date, updated_at in rows:
-            due = None
-            for d in [due_at, due_date]:
-                if d:
-                    try:
-                        from datetime import datetime as _d2
-                        due = _d2.fromisoformat(str(d).replace('Z',''))
-                        break
-                    except Exception:
-                        pass
-            try:
-                upd = _d2.fromisoformat(str(updated_at).replace('Z','')) if updated_at else None
-            except Exception:
-                upd = None
-            if due and due < now:
-                blockers.append((id_, title, "Overdue"))
-            if not owner:
-                blockers.append((id_, title, "No owner"))
-            try:
-                if not amount or float(amount) <= 0:
-                    blockers.append((id_, title, "No amount"))
-            except Exception:
-                blockers.append((id_, title, "No amount"))
-            try:
-                if upd and (now - upd).days > 7:
-                    blockers.append((id_, title, "Stale"))
-            except Exception:
-                pass
-        try:
-            ensure_deal_activities_schema(conn)
-            task_rows = cur.execute("select da.deal_id, d.title, da.id, da.due_at from deal_activities da join deals d on d.id = da.deal_id where da.type='task' and da.completed_at is null").fetchall()
-            for did, dtitle, aid, due in task_rows:
-                try:
-                    from datetime import datetime as _d2
-                    if due and _d2.fromisoformat(str(due).replace('Z','')) < now:
-                        blockers.append((did, dtitle, "Task overdue"))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return blockers
-# === END DEALS PHASE 4 ===
