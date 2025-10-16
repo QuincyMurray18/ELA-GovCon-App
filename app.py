@@ -1,39 +1,6 @@
 # ===== app.py =====    st.session_state.setdefault('deals_refresh', 0)
 
 
-import hashlib
-import secrets
-from sklearn.feature_extraction.text import TfidfVectorizer
-import docx
-from PyPDF2 import PdfReader
-import requests
-import base64
-import smtplib
-import uuid
-from functools import wraps
-from email.message import EmailMessage
-import datetime
-import contextlib
-import time
-import sqlite3
-import json
-import re
-import io
-import os
-from typing import Any as _Any, Dict as _Dict, Optional as _Optional
-import contextlib as _contextlib
-import uuid as _uuid
-import json as _json
-import time as _time
-import os as _os
-import streamlit as st
-import numpy as np
-import pandas as pd
-from datetime import datetime
-from urllib.parse import quote_plus, urljoin, urlparse
-from datetime import datetime, timedelta
-
-
 def _strip_markdown_to_plain(txt: str) -> str:
     """
     Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
@@ -41,10 +8,9 @@ def _strip_markdown_to_plain(txt: str) -> str:
     if not txt:
         return ""
     import time as _time
-    import datetime as _dt
-    import json
-    import re as _re
-
+import datetime as _dt
+import json
+import re as _re
     s = txt
     # Remove code fences but keep inner text
     s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
@@ -67,15 +33,19 @@ def _strip_markdown_to_plain(txt: str) -> str:
     s = _re.sub(r"\|$", "", s, flags=_re.MULTILINE)
     return s
 
+import os, re, io, json, sqlite3, time
+from datetime import datetime, timedelta
+from urllib.parse import quote_plus, urljoin, urlparse
+
 
 # ===== Proposal drafts utilities =====
-
+from datetime import datetime
+import os, io
 
 def _ensure_drafts_dir():
     base = os.path.join(os.getcwd(), "drafts", "proposals")
     os.makedirs(base, exist_ok=True)
     return base
-
 
 def save_proposal_draft(title: str, content_md: str) -> str:
     base = _ensure_drafts_dir()
@@ -86,7 +56,6 @@ def save_proposal_draft(title: str, content_md: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content_md or "")
     return path
-
 
 def list_proposal_drafts():
     base = _ensure_drafts_dir()
@@ -101,14 +70,12 @@ def list_proposal_drafts():
             items.append({"name": f, "path": full, "size": size})
     return list(reversed(items))  # newest first
 
-
 def load_proposal_draft(path: str) -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
         return ""
-
 
 def delete_proposal_draft(path: str) -> bool:
     try:
@@ -154,8 +121,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         run = p_center.add_run()
         try:
             from docx.shared import Inches as _Inches
-            run.add_picture(io.BytesIO(logo_bytes),
-                            width=_Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
         except Exception:
             pass
     if title:
@@ -220,7 +186,6 @@ def _add_hr_paragraph(doc):
     pPr.append(pBdr)
     return p
 
-
 def _add_paragraph_with_inlines(doc, text, style=None):
     # Supports **bold**, *italic* inline
     import re as _re
@@ -254,7 +219,6 @@ def _add_paragraph_with_inlines(doc, text, style=None):
         elif kind == 'italic':
             run.italic = True
     return p
-
 
 def _render_markdown_to_docx(doc, md_text):
     import re as _re
@@ -352,8 +316,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
         try:
-            run.add_picture(io.BytesIO(logo_bytes),
-                            width=Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
         except Exception:
             pass
     if title:
@@ -377,8 +340,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
     from docx import Document
     from docx.shared import Pt, Inches
     from docx.oxml.ns import qn
-    import re as _re
-    import io
+    import re as _re, io
     doc = Document()
     try:
         section = doc.sections[0]
@@ -407,7 +369,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
             pass
     lines = (md_text or "").splitlines()
     bullet_buf, num_buf = [], []
-
     def flush_bullets():
         nonlocal bullet_buf
         for item in bullet_buf:
@@ -415,7 +376,6 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
             try: p.style = doc.styles["List Bullet"]
             except Exception: pass
         bullet_buf = []
-
     def flush_numbers():
         nonlocal num_buf
         for item in num_buf:
@@ -441,14 +401,12 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
     flush_bullets(); flush_numbers()
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
-
 def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                      margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     from docx import Document
     from docx.shared import Pt, Inches
     from docx.oxml.ns import qn
-    import re as _re
-    import io
+    import re as _re, io
     doc = Document()
     try:
         section = doc.sections[0]
@@ -480,7 +438,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         except Exception: pass
     lines = (md_text or "").splitlines()
     bullet_buf, num_buf = [], []
-
     def flush_bullets():
         nonlocal bullet_buf
         for item in bullet_buf:
@@ -488,7 +445,6 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
             try: p.style = doc.styles["List Bullet"]
             except Exception: pass
         bullet_buf = []
-
     def flush_numbers():
         nonlocal num_buf
         for item in num_buf:
@@ -516,6 +472,17 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 # ===== end DOCX helpers =====
 
 
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+
+
+
+
+
+
+
 # === SAFE RERUN HELPER START ===
 def _safe_rerun():
     import streamlit as st
@@ -533,29 +500,25 @@ def _safe_rerun():
 
 
 # === CORE DB EARLY START ===
+import os as _os
 _os.makedirs('data', exist_ok=True)
-
 
 @st.cache_resource
 def get_db():
     import sqlite3
-    conn = sqlite3.connect(
-        'data/app.db', check_same_thread=False, isolation_level=None)
+    conn = sqlite3.connect('data/app.db', check_same_thread=False, isolation_level=None)
     try:
         conn.execute('PRAGMA journal_mode=WAL;')
         conn.execute('PRAGMA synchronous=NORMAL;')
         conn.execute('PRAGMA temp_store=MEMORY;')
         conn.execute('PRAGMA foreign_keys=ON;')
-        conn.execute(
-            'CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
+        conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
     except Exception:
         pass
     return conn
 # === CORE DB EARLY END ===
 
 # === TENANCY EARLY BOOTSTRAP START ===
-
-
 def _tenancy_phase1_bootstrap():
     try:
         conn = get_db()
@@ -576,18 +539,14 @@ def _tenancy_phase1_bootstrap():
         # Seed a default org and 3 users if empty
         row = cur.execute("SELECT COUNT(*) FROM orgs").fetchone()
         if row and row[0] == 0:
-            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))",
-                        ('org-default', 'Default Org'))
+            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
         # Ensure at least one user exists for the default org
         rowu = cur.execute("SELECT COUNT(*) FROM users").fetchone()
         if rowu and rowu[0] == 0:
             users = [
-                ('user-quincy', 'org-default',
-                 'quincy@example.com', 'Quincy', 'Admin'),
-                ('user-collin', 'org-default',
-                 'collin@example.com', 'Collin', 'Member'),
-                ('user-charles', 'org-default',
-                 'charles@example.com', 'Charles', 'Viewer'),
+                ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
+                ('user-collin','org-default','collin@example.com','Collin','Member'),
+                ('user-charles','org-default','charles@example.com','Charles','Viewer'),
             ]
             for uid, oid, email, name, role in users:
                 cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
@@ -597,7 +556,6 @@ def _tenancy_phase1_bootstrap():
         # Do not break startup on bootstrap failure
         try: log_json('error', 'tenancy_bootstrap_failed', error=str(ex))
         except Exception: pass
-
 
 try:
     _tenancy_phase1_bootstrap()
@@ -609,23 +567,21 @@ except Exception:
 # === EARLY DB BOOTSTRAP START ===
 # Ensure get_db exists before any import-time calls.
 # This early definition will be overridden by later phases if they redefine get_db.
+import os as _os
 _os.makedirs("data", exist_ok=True)
 
 if "get_db" not in globals():
     import streamlit as st
-
     @st.cache_resource
     def get_db():
         import sqlite3
-        conn = sqlite3.connect(
-            "data/app.db", check_same_thread=False, isolation_level=None)
+        conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA temp_store=MEMORY;")
             conn.execute("PRAGMA foreign_keys=ON;")
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);")
+            conn.execute("CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);")
         except Exception:
             pass
         return conn
@@ -634,10 +590,15 @@ if "get_db" not in globals():
 
 # === PHASE 0 CORE START ===
 # Bootstrap: feature flags, API client, SQLite PRAGMAs, secrets loader, structured logging.
+import time as _time
+import json as _json
+import uuid as _uuid
+import contextlib as _contextlib
+from typing import Any as _Any, Dict as _Dict, Optional as _Optional
 
+import streamlit as st
 
 # ---- Structured logging ----
-
 def log_json(level: str, message: str, **context) -> str:
     """Emit a single line JSON log. Returns error_id for error levels."""
     event_id = str(_uuid.uuid4())
@@ -653,12 +614,10 @@ def log_json(level: str, message: str, **context) -> str:
     except Exception:
         # Ensure logging never breaks app
         print(str(payload))
-    return event_id if level.lower() in {"error", "fatal", "critical"} else event_id
+    return event_id if level.lower() in {"error","fatal","critical"} else event_id
 
 # ---- Secrets loader ----
-
-
-def get_secret(section: str, key: str, default: _Optional[str] = None) -> _Optional[str]:
+def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optional[str]:
     """Safe secrets accessor. Does not raise or leak values in logs."""
     try:
         sec = st.secrets.get(section)  # type: ignore[attr-defined]
@@ -669,11 +628,8 @@ def get_secret(section: str, key: str, default: _Optional[str] = None) -> _Optio
     except Exception:
         return default
 
-
 # ---- Feature flags ----
-, ["deals_core"]
-
-
+, "deals_core"]
 def init_feature_flags():
     flags = st.session_state.setdefault("feature_flags", {})
     # Do not remove existing keys. Only set missing to False.
@@ -683,8 +639,6 @@ def init_feature_flags():
     return flags
 
 # ---- SQLite PRAGMAs and migrations ----
-
-
 def _apply_sqlite_pragmas(conn):
     try:
         cur = conn.cursor()
@@ -694,7 +648,6 @@ def _apply_sqlite_pragmas(conn):
         cur.execute("PRAGMA foreign_keys=ON;")
     except Exception as ex:
         log_json("error", "sqlite_pragmas_failed", error=str(ex))
-
 
 def _ensure_migrations_table(conn):
     try:
@@ -707,7 +660,6 @@ def _ensure_migrations_table(conn):
     except Exception as ex:
         log_json("error", "migrations_table_create_failed", error=str(ex))
 
-
 def ensure_bootstrap_db():
     try:
         conn = get_db()  # Provided by later phases. Cached.
@@ -719,13 +671,10 @@ def ensure_bootstrap_db():
         return False
 
 # ---- Central API client ----
-
-
 class CircuitOpenError(Exception):
     pass
 
-
-def create_api_client(base_url: str, api_key: _Optional[str] = None, timeout: int = 20, retries: int = 3, ttl: int = 900):
+def create_api_client(base_url: str, api_key: _Optional[str]=None, timeout: int=20, retries: int=3, ttl: int=900):
     """Return a simple client with GET/POST. GET responses cached for 'ttl' seconds."""
     import requests  # local import to avoid hard dependency if unused
 
@@ -769,19 +718,17 @@ def create_api_client(base_url: str, api_key: _Optional[str] = None, timeout: in
         # Actual HTTP performed outside to pick up dynamic ttl via caller
         return cache_key
 
-    def _http_get(path: str, params: _Optional[_Dict] = None):
+    def _http_get(path: str, params: _Optional[_Dict]=None):
         _check_circuit()
         url = base_url.rstrip("/") + "/" + path.lstrip("/")
         # build a deterministic cache key
         key_parts = [url]
         if params:
             # stable sort
-            key_parts.extend(
-                [f"{k}={params[k]}" for k in sorted(params.keys())])
+            key_parts.extend([f"{k}={params[k]}" for k in sorted(params.keys())])
         cache_key = "|".join(key_parts)
         # read cache token first
-        # token content unused, just gate by key+ttl
-        token = _cached_get(cache_key) if ttl else None
+        token = _cached_get(cache_key) if ttl else None  # token content unused, just gate by key+ttl
         last_err = None
         for attempt in range(1, max(1, retries) + 1):
             try:
@@ -789,7 +736,7 @@ def create_api_client(base_url: str, api_key: _Optional[str] = None, timeout: in
                 if 200 <= resp.status_code < 300:
                     _mark_success()
                     # store body alongside token by returning it directly
-                    return resp.json() if "application/json" in resp.headers.get("Content-Type", "") else resp.text
+                    return resp.json() if "application/json" in resp.headers.get("Content-Type","") else resp.text
                 last_err = f"status={resp.status_code}"
             except CircuitOpenError:
                 raise
@@ -804,7 +751,7 @@ def create_api_client(base_url: str, api_key: _Optional[str] = None, timeout: in
         eid = log_json("error", "api_get_failed", url=url, error=last_err)
         raise RuntimeError(f"API GET failed. error_id={eid}")
 
-    def _http_post(path: str, json: _Optional[_Dict] = None):
+    def _http_post(path: str, json: _Optional[_Dict]=None):
         _check_circuit()
         url = base_url.rstrip("/") + "/" + path.lstrip("/")
         last_err = None
@@ -813,7 +760,7 @@ def create_api_client(base_url: str, api_key: _Optional[str] = None, timeout: in
                 resp = session.post(url, json=json, timeout=timeout)
                 if 200 <= resp.status_code < 300:
                     _mark_success()
-                    return resp.json() if "application/json" in resp.headers.get("Content-Type", "") else resp.text
+                    return resp.json() if "application/json" in resp.headers.get("Content-Type","") else resp.text
                 last_err = f"status={resp.status_code}"
             except CircuitOpenError:
                 raise
@@ -836,15 +783,12 @@ def create_api_client(base_url: str, api_key: _Optional[str] = None, timeout: in
         "ttl": ttl,
     }
 
-
 def _ensure_api_factory():
     if "api_client_factory" not in st.session_state:
         st.session_state["api_client_factory"] = create_api_client
     return st.session_state["api_client_factory"]
 
 # ---- Bootstrap runner ----
-
-
 def _phase0_bootstrap():
     # Initialize feature flags first
     init_feature_flags()
@@ -854,7 +798,6 @@ def _phase0_bootstrap():
     # Register API client factory
     _ensure_api_factory()
     st.session_state.setdefault("boot_done", True)
-
 
 # Run at import time, safe to fail silently
 with _contextlib.suppress(Exception):
@@ -866,9 +809,9 @@ with _contextlib.suppress(Exception):
 # Router, query params, shell nav, and feature flags.
 # All new code under feature_flags['workspace_enabled'] == False by default.
 
+import contextlib
 
 # Feature flags stored in session_state to persist within a session
-
 def _ensure_feature_flags():
     import streamlit as st
     if "feature_flags" not in st.session_state:
@@ -878,13 +821,10 @@ def _ensure_feature_flags():
         st.session_state["feature_flags"]["workspace_enabled"] = False
     return st.session_state["feature_flags"]
 
-
 def feature_flags():
     return _ensure_feature_flags()
 
 # Query param helpers with Streamlit compatibility
-
-
 def _qp_get():
     import streamlit as st
     with contextlib.suppress(Exception):
@@ -896,11 +836,9 @@ def _qp_get():
     # Fallback to experimental API which returns dict[str, list[str]]
     with contextlib.suppress(Exception):
         data = st.experimental_get_query_params()
-        norm = {k: (v[0] if isinstance(v, list) and v else v)
-                    for k, v in data.items()}
+        norm = {k: (v[0] if isinstance(v, list) and v else v) for k, v in data.items()}
         return norm
     return {}
-
 
 def _qp_set(**kwargs):
     import streamlit as st
@@ -918,7 +856,6 @@ def _qp_set(**kwargs):
     with contextlib.suppress(Exception):
         st.experimental_set_query_params(**clean)
 
-
 def get_route():
     import streamlit as st
     qp = _qp_get()
@@ -935,7 +872,6 @@ def get_route():
     st.session_state["route_tab"] = tab
     return {"page": page, "opp_id": opp_id, "tab": tab}
 
-
 def route_to(page, opp_id=None, tab=None, replace=False):
     import streamlit as st
     # Update session state
@@ -943,9 +879,7 @@ def route_to(page, opp_id=None, tab=None, replace=False):
     st.session_state["route_opp_id"] = opp_id
     st.session_state["route_tab"] = tab
     # Update URL query params
-    _qp_set(page=page, opp=(opp_id if opp_id is not None else None),
-            tab=(tab if tab else None))
-
+    _qp_set(page=page, opp=(opp_id if opp_id is not None else None), tab=(tab if tab else None))
 
 def _get_notice_title_from_db(opp_id):
     # Best effort lookup. Works even if schema differs.
@@ -963,8 +897,7 @@ def _get_notice_title_from_db(opp_id):
         ]
         for table, cols in candidates:
             # Does the table exist
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
             row = cur.fetchone()
             if not row:
                 continue
@@ -982,7 +915,6 @@ def _get_notice_title_from_db(opp_id):
     except Exception:
         title = None
     return title or f"Opportunity {opp_id}"
-
 
 def _render_top_nav():
     import streamlit as st
@@ -1005,7 +937,6 @@ def _render_top_nav():
             if st.button(label, use_container_width=True):
                 route_to(pid)
 
-
 def _render_opportunity_workspace():
     import streamlit as st
     ff = feature_flags()
@@ -1026,18 +957,15 @@ def _render_opportunity_workspace():
         current = "overview"
     idx = tabs.index(current)
     try:
-        selected = st.radio("Workspace", options=list(
-            range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
+        selected = st.radio("Workspace", options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
     except TypeError:
         # Streamlit < 1.29 does not have horizontal
-        selected = st.radio("Workspace", options=list(
-            range(len(tabs))), index=idx, format_func=lambda i: labels[i])
+        selected = st.radio("Workspace", options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i])
     if tabs[selected] != current:
         route_to("opportunity", opp_id=opp_id, tab=tabs[selected])
         st.stop()
     # Empty placeholder sections
     st.info("Workspace enabled. Placeholder only.")
-
 
 def _maybe_render_shell():
     import streamlit as st
@@ -1064,7 +992,6 @@ def _maybe_render_shell():
         except Exception as ex:
             st.warning(f"Navigation handler error: {ex}")
 
-
 # Initialize routing state on import
 try:
     _ensure_feature_flags()
@@ -1083,7 +1010,9 @@ except Exception:
 # === LAYOUT PHASE 2 START ===
 # Subtabbed opportunity workspace with lazy loading and deep links.
 # Keeps existing app tabs intact. Controlled by feature_flags['workspace_enabled'].
-
+import contextlib
+import datetime
+import re
 
 def _ensure_route_state_defaults():
     import streamlit as st
@@ -1091,7 +1020,6 @@ def _ensure_route_state_defaults():
     st.session_state.setdefault('route_opp_id', None)
     st.session_state.setdefault('route_tab', None)
     st.session_state.setdefault('active_opportunity_tab', None)
-
 
 def _get_notice_meta_from_db(opp_id):
     """Return minimal metadata for header: title, agency, due_date, set_aside list."""
@@ -1104,31 +1032,29 @@ def _get_notice_meta_from_db(opp_id):
         cur = conn.cursor()
         table_candidates = [
             ('notices', {
-                'title': ['title', 'notice_title', 'name', 'subject'],
-                'agency': ['agency', 'agency_name', 'buyer', 'office'],
-                'due':   ['due_date', 'response_due', 'close_date', 'offer_due'],
-                'set':   ['set_aside', 'setaside', 'set_asides', 'naics_set_aside']
+                'title': ['title','notice_title','name','subject'],
+                'agency': ['agency','agency_name','buyer','office'],
+                'due':   ['due_date','response_due','close_date','offer_due'],
+                'set':   ['set_aside','setaside','set_asides','naics_set_aside']
             }),
             ('opportunities', {
-                'title': ['title', 'name', 'subject'],
-                'agency': ['agency', 'buyer', 'office'],
-                'due':   ['due_date', 'close_date'],
-                'set':   ['set_aside', 'setasides']
+                'title': ['title','name','subject'],
+                'agency': ['agency','buyer','office'],
+                'due':   ['due_date','close_date'],
+                'set':   ['set_aside','setasides']
             })
         ]
         for table, cols in table_candidates:
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
             if not cur.fetchone():
                 continue
             cur.execute("PRAGMA table_info(%s)" % table)
             present = {r[1] for r in cur.fetchall()}
-
             def pick(keys):
                 for k in keys:
                     if k in present:
                         return k
-                metric_push('parser_time_ms', (_time.perf_counter()-_pt0)*1000.0, {'result': 'none'}); return None
+                metric_push('parser_time_ms', (_time.perf_counter()-_pt0)*1000.0, {'result':'none'}); return None
             c_title = pick(cols['title'])
             c_agency = pick(cols['agency'])
             c_due = pick(cols['due'])
@@ -1136,8 +1062,7 @@ def _get_notice_meta_from_db(opp_id):
             sel_cols = [c for c in [c_title, c_agency, c_due, c_set] if c]
             if not sel_cols:
                 continue
-            cur.execute("SELECT %s FROM %s WHERE id=?" %
-                        (", ".join(sel_cols), table), (opp_id,))
+            cur.execute("SELECT %s FROM %s WHERE id=?" % (", ".join(sel_cols), table), (opp_id,))
             row = cur.fetchone()
             if row:
                 idx = 0
@@ -1150,8 +1075,7 @@ def _get_notice_meta_from_db(opp_id):
                 if c_set:
                     raw = row[idx]
                     if isinstance(raw, str):
-                        parts = [p.strip()
-                                         for p in re.split(r"[;,/|]", raw) if p.strip()]
+                        parts = [p.strip() for p in re.split(r"[;,/|]", raw) if p.strip()]
                     elif isinstance(raw, (list, tuple)):
                         parts = list(raw)
                     else:
@@ -1164,7 +1088,6 @@ def _get_notice_meta_from_db(opp_id):
         meta['title'] = 'Opportunity %s' % opp_id
     return meta
 
-
 try:
     import streamlit as st
 except Exception:
@@ -1174,37 +1097,30 @@ except Exception:
             return deco
     st = _Stub()
 
-
 @st.cache_data(ttl=900)
 def _load_analyzer_data(opp_id):
     return {'ready': True, 'opp_id': opp_id}
-
 
 @st.cache_data(ttl=900)
 def _load_compliance_data(opp_id):
     return {'ready': True, 'opp_id': opp_id}
 
-
 @st.cache_data(ttl=900)
 def _load_pricing_data(opp_id):
     return {'ready': True, 'opp_id': opp_id}
-
 
 @st.cache_data(ttl=900)
 def _load_vendors_data(opp_id):
     return {'ready': True, 'opp_id': opp_id}
 
-
 @st.cache_data(ttl=900)
 def _load_submission_data(opp_id):
     return {'ready': True, 'opp_id': opp_id}
-
 
 def render_details(opp_id):
     import streamlit as st
     st.subheader('Details')
     st.write('Opportunity ID:', opp_id)
-
 
 def render_analyzer(opp_id):
     import streamlit as st
@@ -1252,18 +1168,21 @@ def render_analyzer(opp_id):
         pass
 
 
+
+
+
+
+
 def render_compliance(opp_id):
     import streamlit as st
     st.subheader('Compliance')
     data = _load_compliance_data(opp_id)
     st.write(data)
 
-
 def render_proposal(opp_id):
     import streamlit as st
     st.subheader('Proposal')
     st.write({'opp_id': opp_id})
-
 
 def render_pricing(opp_id):
     import streamlit as st
@@ -1271,13 +1190,11 @@ def render_pricing(opp_id):
     data = _load_pricing_data(opp_id)
     st.write(data)
 
-
 def render_vendorsrfq(opp_id):
     import streamlit as st
     st.subheader('Vendors RFQ')
     data = _load_vendors_data(opp_id)
     st.write(data)
-
 
 def render_submission(opp_id):
     import streamlit as st
@@ -1285,30 +1202,23 @@ def render_submission(opp_id):
     data = _load_submission_data(opp_id)
     st.write(data)
 
-
 def open_details(opp_id):
     route_to('opportunity', opp_id=opp_id, tab='details')
-
 
 def open_analyzer(opp_id):
     route_to('opportunity', opp_id=opp_id, tab='analyzer')
 
-
 def open_compliance(opp_id):
     route_to('opportunity', opp_id=opp_id, tab='compliance')
-
 
 def open_pricing(opp_id):
     route_to('opportunity', opp_id=opp_id, tab='pricing')
 
-
 def open_vendors(opp_id):
     route_to('opportunity', opp_id=opp_id, tab='vendors')
 
-
 def open_submission(opp_id):
     route_to('opportunity', opp_id=opp_id, tab='submission')
-
 
 def _render_badges(set_asides):
     import streamlit as st
@@ -1318,7 +1228,6 @@ def _render_badges(set_asides):
     for i, item in enumerate(set_asides[:5]):
         with cols[i]:
             st.caption(f'Set-aside: {item}')
-
 
 def _render_opportunity_workspace():
     import streamlit as st
@@ -1332,7 +1241,7 @@ def _render_opportunity_workspace():
     opp_id = route.get('opp_id')
     meta = _get_notice_meta_from_db(opp_id)
     st.header(str(meta.get('title', '')))
-    top_cols = st.columns([2, 1, 1])
+    top_cols = st.columns([2,1,1])
     with top_cols[0]:
         st.caption(str(meta.get('agency') or ''))
     with top_cols[1]:
@@ -1341,21 +1250,16 @@ def _render_opportunity_workspace():
             st.caption(f'Due: {due}')
     with top_cols[2]:
         _render_badges(meta.get('set_asides') or [])
-    tabs = ['details', 'analyzer', 'compliance',
-        'proposal', 'pricing', 'vendors', 'submission']
-    labels = ['Details', 'Analyzer', 'Compliance',
-        'Proposal', 'Pricing', 'VendorsRFQ', 'Submission']
-    current = route.get('tab') or st.session_state.get(
-        'active_opportunity_tab') or 'details'
+    tabs = ['details','analyzer','compliance','proposal','pricing','vendors','submission']
+    labels = ['Details','Analyzer','Compliance','Proposal','Pricing','VendorsRFQ','Submission']
+    current = route.get('tab') or st.session_state.get('active_opportunity_tab') or 'details'
     if current not in tabs:
         current = 'details'
     idx = tabs.index(current)
     try:
-        sel = st.radio('Workspace', options=list(range(len(tabs))),
-                       index=idx, format_func=lambda i: labels[i], horizontal=True)
+        sel = st.radio('Workspace', options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
     except TypeError:
-        sel = st.radio('Workspace', options=list(range(len(tabs))),
-                       index=idx, format_func=lambda i: labels[i])
+        sel = st.radio('Workspace', options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i])
     new_tab = tabs[sel]
     if new_tab != current:
         st.session_state['active_opportunity_tab'] = new_tab
@@ -1380,7 +1284,11 @@ def _render_opportunity_workspace():
 # === LAYOUT PHASE 2 END ===
 
 
+
+
 # === Outreach Email (per-user) helpers ===
+import smtplib, base64
+from email.message import EmailMessage
 
 USER_EMAILS = {
     "Quincy": "quincy.elamgmt@gmail.com",
@@ -1388,12 +1296,10 @@ USER_EMAILS = {
     "Collin": "collin.elamgmt@gmail.com",
 }
 
-
 def _mail_store_path():
     base = os.path.join(os.getcwd(), "secure_auth")
     os.makedirs(base, exist_ok=True)
     return os.path.join(base, "mail.json")
-
 
 def _load_mail_store():
     try:
@@ -1402,11 +1308,9 @@ def _load_mail_store():
     except Exception:
         return {}
 
-
 def _save_mail_store(store: dict):
     with open(_mail_store_path(), "w", encoding="utf-8") as f:
         json.dump(store, f, indent=2)
-
 
 def set_user_smtp_app_password(user: str, app_password: str):
     store = _load_mail_store()
@@ -1414,19 +1318,16 @@ def set_user_smtp_app_password(user: str, app_password: str):
     u["smtp_host"] = "smtp.gmail.com"
     u["smtp_port"] = 587
     u["username"] = USER_EMAILS.get(user, "")
-    u["app_password_b64"] = base64.b64encode(
-        (app_password or "").encode("utf-8")).decode("ascii")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
     store[user] = u
     _save_mail_store(store)
-
 
 def get_user_mail_config(user: str):
     store = _load_mail_store()
     rec = store.get(user, {})
     if not rec:
         return None
-    pw = base64.b64decode(rec.get("app_password_b64", "").encode(
-        "ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
     return {
         "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
         "smtp_port": rec.get("smtp_port", 587),
@@ -1435,12 +1336,10 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-
 def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
-        raise RuntimeError(
-            f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
 
     msg = EmailMessage()
     msg["Subject"] = subject or ""
@@ -1477,21 +1376,20 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     # Optional tracking pixel
     if tracking_pixel_url and body_html:
         try:
-            import uuid
-            import urllib.parse as _u
+            import uuid, urllib.parse as _u
             tid = tracking_id or str(uuid.uuid4())
             qp = {"id": tid, "to": ",".join(to_list)}
-            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace(
-                '{', '')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
             body_html = (body_html or "") + pixel
             # Replace the last HTML alternative with updated body_html
             msg.clear_content()
-            plain = _re.sub(
-                "<[^<]+?>", "", body_html or "") if body_html else ""
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
             msg.set_content(plain or "(no content)")
             msg.add_alternative(body_html, subtype="html")
         except Exception:
             pass
+
+
 
     attachments = attachments or []
     for att in attachments:
@@ -1515,8 +1413,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
                     content = att["data"]
                 elif "content" in att and att["content"] is not None:
                     val = att["content"]
-                    content = val.getvalue() if hasattr(val, "getvalue") else (
-                        val.read() if hasattr(val, "read") else val)
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
                 elif "path" in att:
                     import os
                     path = att["path"]
@@ -1542,23 +1439,19 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             if not filename:
                 filename = "attachment.bin"
 
-            msg.add_attachment(content, maintype="application",
-                               subtype="octet-stream", filename=filename)
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(
-                f"Failed to attach {getattr(att, 'name', getattr(att, 'path', 'file'))}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
-    with metric_timer('email_send_ms', {'fn': 'send_outreach_email'}):
+    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
-        server.send_message(
-            msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
         metric_push('email_success', 1, {'to': str(len(all_rcpts))})
-
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     # ACTIVE_USER provided by your sign-in block
@@ -1567,6 +1460,8 @@ def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, at
 
 
 # === Multi-user Sign-in & Session Isolation (added by ChatGPT on 2025-10-08) ===
+from functools import wraps
+import uuid
 
 # Configure your users here
 USERS = ["Quincy", "Charles", "Collin"]
@@ -1575,13 +1470,12 @@ USERS = ["Quincy", "Charles", "Collin"]
 PINS = {"Quincy": "1111", "Charles": "2222", "Collin": "3333"}
 
 # --- Persistent PIN store (salted) ---
-
+import json, os, secrets, hashlib
 
 def _pin_storage_path():
     base = os.path.join(os.getcwd(), "secure_auth")
     os.makedirs(base, exist_ok=True)
     return os.path.join(base, "pins.json")
-
 
 def _load_pin_store():
     path = _pin_storage_path()
@@ -1593,16 +1487,13 @@ def _load_pin_store():
             return {}
     return {}
 
-
 def _save_pin_store(store: dict):
     path = _pin_storage_path()
     with open(path, "w", encoding="utf-8") as f:
         json.dump(store, f, indent=2)
 
-
 def _hash_pin(pin: str, salt: str) -> str:
     return hashlib.sha256((salt + "|" + (pin or "")).encode("utf-8")).hexdigest()
-
 
 def _get_or_init_pin_store():
     store = _load_pin_store()
@@ -1617,7 +1508,6 @@ def _get_or_init_pin_store():
         _save_pin_store(store)
     return store
 
-
 def _verify_pin(user: str, pin: str) -> bool:
     store = _get_or_init_pin_store()
     rec = store.get(user)
@@ -1625,13 +1515,11 @@ def _verify_pin(user: str, pin: str) -> bool:
         return False
     return _hash_pin(pin or "", rec["salt"]) == rec["hash"]
 
-
 def set_user_pin(user: str, new_pin: str):
     store = _get_or_init_pin_store()
     salt = secrets.token_hex(16)
     store[user] = {"salt": salt, "hash": _hash_pin(new_pin or "", salt)}
     _save_pin_store(store)
-
 
 def _do_login():
     with st.sidebar:
@@ -1648,8 +1536,7 @@ def _do_login():
                 # Resolve identity into users table and set session ids
                 try:
                     conn = get_db()
-                    row = conn.execute(
-                        "SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
+                    row = conn.execute("SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
                     if row:
                         st.session_state["user_id"] = row[0]
                         st.session_state["org_id"] = row[1]
@@ -1657,8 +1544,7 @@ def _do_login():
                     else:
                         # fallback create if missing
                         oid = "org-ela"
-                        conn.execute(
-                            "INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
+                        conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
                                      (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
@@ -1671,16 +1557,14 @@ def _do_login():
                 # Resolve identity into users table and set session ids
                 try:
                     conn = get_db()
-                    row = conn.execute(
-                        "SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
+                    row = conn.execute("SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
                     if row:
                         st.session_state["user_id"] = row[0]
                         st.session_state["org_id"] = row[1]
                         st.session_state["role"] = row[2]
                     else:
                         # Fallback create user mapped to default org
-                        cur = conn.execute(
-                            "SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
+                        cur = conn.execute("SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
                         oid = cur[0] if cur else "org-ela"
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
@@ -1698,7 +1582,6 @@ def _do_login():
     if "active_user" not in st.session_state:
         st.stop()
 
-
 _do_login()
 ACTIVE_USER = st.session_state["active_user"]
 
@@ -1708,8 +1591,7 @@ if not st.session_state.get("org_id") or not st.session_state.get("user_id"):
         conn = get_db()
         name = st.session_state.get("active_user")
         if name:
-            r = conn.execute(
-                "SELECT id, org_id FROM users WHERE display_name=?", (name,)).fetchone()
+            r = conn.execute("SELECT id, org_id FROM users WHERE display_name=?", (name,)).fetchone()
             if r:
                 st.session_state["user_id"], st.session_state["org_id"] = r[0], r[1]
     except Exception:
@@ -1735,11 +1617,9 @@ _selected = st.session_state.get("login_user_select")
 _active = st.session_state.get("active_user")
 if _active and _selected and _selected != _active:
     with st.sidebar:
-        st.warning(
-            f"You selected {_selected}. To switch from {_active}, click below then sign in.")
+        st.warning(f"You selected {_selected}. To switch from {_active}, click below then sign in.")
         if st.button(f"Switch to {_selected}", use_container_width=True, key="switch_user_btn"):
-            # this will trigger the login stop above on next run
-            st.session_state.pop("active_user", None)
+            st.session_state.pop("active_user", None)  # this will trigger the login stop above on next run
             st.session_state.pop("login_pin_input", None)
             st.rerun()
 
@@ -1751,8 +1631,6 @@ try:
     _NS_KEY_COUNTS
 except NameError:
     _NS_KEY_COUNTS = {}
-
-
 def ns_key(key: str) -> str:
     base = f"{ACTIVE_USER}::{key}"
     # increment and deduplicate within a single run
@@ -1785,7 +1663,6 @@ class SessionNS:
     def pop(self, key: str, default=None):
         return st.session_state.pop(self._k(key), default)
 
-
 NS = SessionNS(ACTIVE_USER)
 
 # --- Private workspace & publish queue ---
@@ -1798,8 +1675,7 @@ with st.sidebar:
         st.write("Update your sign-in PIN. New PIN must be 4–12 characters.")
         curr = st.text_input("Current PIN", type="password", key="pin_cur")
         new1 = st.text_input("New PIN", type="password", key="pin_new1")
-        new2 = st.text_input(
-            "Confirm New PIN", type="password", key="pin_new2")
+        new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
         if st.button("Update PIN", use_container_width=True, key="pin_update_btn"):
             if not _verify_pin(ACTIVE_USER, curr or ''):
                 st.error("Current PIN is incorrect.")
@@ -1811,8 +1687,7 @@ with st.sidebar:
                 set_user_pin(ACTIVE_USER, new1)
                 # Clear any cached login input
                 st.session_state.pop("login_pin_input", None)
-                st.success(
-                    "Your PIN has been updated. It will be required next time you sign in.")
+                st.success("Your PIN has been updated. It will be required next time you sign in.")
 
     st.session_state.setdefault(f"{ACTIVE_USER}::private_mode", True)
     NS["private_mode"] = st.toggle(
@@ -1821,14 +1696,12 @@ with st.sidebar:
         help="When ON your changes stay private to you until you publish."
     )
 
-
 def queue_change(fn, *, label: str):
     """Queue a change for this user instead of writing to shared data immediately."""
     NS.setdefault("publish_queue", [])
     q = NS.get("publish_queue", [])
     q.append({"id": str(uuid.uuid4()), "label": label, "fn": fn})
     NS["publish_queue"] = q
-
 
 def publish_changes():
     q = NS.get("publish_queue", [])
@@ -1841,7 +1714,6 @@ def publish_changes():
     NS["publish_queue"] = []
     return errors
 
-
 def write_or_queue(label, commit_fn):
     if NS.get("private_mode", True):
         queue_change(commit_fn, label=label)
@@ -1850,13 +1722,11 @@ def write_or_queue(label, commit_fn):
         commit_fn()
         st.success(f"Saved to team. [{label}]")
 
-
 with st.sidebar:
     if st.button("Publish my changes", use_container_width=True, key="publish_btn"):
         errs = publish_changes()
         if not errs:
-            st.success(
-                "All your private changes are now published to the team data.")
+            st.success("All your private changes are now published to the team data.")
         else:
             st.error("Some changes failed to publish. See below for details.")
             for label, e in errs:
@@ -1866,6 +1736,9 @@ with st.sidebar:
 
 # === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
 # Supports per-user "From" emails, stored credentials, and a sidebar composer.
+import smtplib
+from email.message import EmailMessage
+import base64
 
 # Map users to their From addresses
 USER_EMAILS = {
@@ -1874,12 +1747,10 @@ USER_EMAILS = {
     "Collin": "collin.elamgmt@gmail.com",
 }
 
-
 def _mail_store_path():
     base = os.path.join(os.getcwd(), "secure_auth")
     os.makedirs(base, exist_ok=True)
     return os.path.join(base, "mail.json")
-
 
 def _load_mail_store():
     path = _mail_store_path()
@@ -1891,12 +1762,10 @@ def _load_mail_store():
             return {}
     return {}
 
-
 def _save_mail_store(store: dict):
     path = _mail_store_path()
     with open(path, "w", encoding="utf-8") as f:
         json.dump(store, f, indent=2)
-
 
 def set_user_smtp_app_password(user: str, app_password: str):
     store = _load_mail_store()
@@ -1905,19 +1774,16 @@ def set_user_smtp_app_password(user: str, app_password: str):
     u["smtp_host"] = "smtp.gmail.com"
     u["smtp_port"] = 587
     u["username"] = USER_EMAILS.get(user, "")
-    u["app_password_b64"] = base64.b64encode(
-        (app_password or "").encode("utf-8")).decode("ascii")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
     store[user] = u
     _save_mail_store(store)
-
 
 def get_user_mail_config(user: str):
     store = _load_mail_store()
     rec = store.get(user, {})
     if not rec:
         return None
-    pw = base64.b64decode(rec.get("app_password_b64", "").encode(
-        "ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
     return {
         "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
         "smtp_port": rec.get("smtp_port", 587),
@@ -1926,18 +1792,15 @@ def get_user_mail_config(user: str):
         "from_addr": USER_EMAILS.get(user, rec.get("username", "")),
     }
 
-
 def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
-        raise RuntimeError(
-            f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
 
     msg = EmailMessage()
     msg["Subject"] = subject or ""
     msg["From"] = cfg["from_addr"]
     # Parse address lists
-
     def _split(a):
         if not a:
             return []
@@ -1970,21 +1833,19 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     # Optional tracking pixel
     if tracking_pixel_url and body_html:
         try:
-            import uuid
-            import urllib.parse as _u
+            import uuid, urllib.parse as _u
             tid = tracking_id or str(uuid.uuid4())
             qp = {"id": tid, "to": ",".join(to_list)}
-            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace(
-                '{', '')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
             body_html = (body_html or "") + pixel
             # Replace the last HTML alternative with updated body_html
             msg.clear_content()
-            plain = _re.sub(
-                "<[^<]+?>", "", body_html or "") if body_html else ""
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
             msg.set_content(plain or "(no content)")
             msg.add_alternative(body_html, subtype="html")
         except Exception:
             pass
+
 
     # Attachments
 
@@ -2010,8 +1871,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
                     content = att["data"]
                 elif "content" in att and att["content"] is not None:
                     val = att["content"]
-                    content = val.getvalue() if hasattr(val, "getvalue") else (
-                        val.read() if hasattr(val, "read") else val)
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
                 elif "path" in att:
                     import os
                     path = att["path"]
@@ -2037,26 +1897,25 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             if not filename:
                 filename = "attachment.bin"
 
-            msg.add_attachment(content, maintype="application",
-                               subtype="octet-stream", filename=filename)
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(
-                f"Failed to attach {getattr(att, 'name', getattr(att, 'path', 'file'))}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
-    with metric_timer('email_send_ms', {'fn': 'send_outreach_email'}):
+    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
-        server.send_message(
-            msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
         metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 
 # --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
+
+
 
 
 def _normalize_extra_files(files):
@@ -2080,24 +1939,21 @@ def _normalize_extra_files(files):
                             with open(val, "rb") as fh:
                                 out.append({"name": name, "data": fh.read()})
                         else:
-                            out.append(
-                                {"name": name, "data": val.encode("utf-8")})
+                            out.append({"name": name, "data": val.encode("utf-8")})
                     continue
                 if "path" in f and f["path"]:
                     import os
                     path = f["path"]
                     try:
                         with open(path, "rb") as fh:
-                            out.append(
-                                {"name": name or os.path.basename(path), "data": fh.read()})
+                            out.append({"name": name or os.path.basename(path), "data": fh.read()})
                     except Exception:
                         pass
                     continue
 
             # Streamlit UploadedFile or similar
             if hasattr(f, "getvalue"):
-                out.append(
-                    {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                 continue
             if hasattr(f, "read"):
                 try:
@@ -2106,8 +1962,7 @@ def _normalize_extra_files(files):
                     pass
                 try:
                     data = f.read()
-                    out.append(
-                        {"name": getattr(f, "name", "file"), "data": data})
+                    out.append({"name": getattr(f, "name", "file"), "data": data})
                     continue
                 except Exception:
                     pass
@@ -2118,8 +1973,7 @@ def _normalize_extra_files(files):
                 if os.path.exists(f):
                     try:
                         with open(f, "rb") as fh:
-                            out.append(
-                                {"name": os.path.basename(f), "data": fh.read()})
+                            out.append({"name": os.path.basename(f), "data": fh.read()})
                         continue
                     except Exception:
                         pass
@@ -2128,12 +1982,11 @@ def _normalize_extra_files(files):
     return out
 
 
+
 def _log_contact_outreach(entries):
     """Append outreach log entries to data/contact_outreach_log.json"""
     try:
-        import os
-        import json
-        import datetime
+        import os, json, datetime
         base = os.path.join(os.getcwd(), "data")
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, "contact_outreach_log.json")
@@ -2157,7 +2010,6 @@ def render_outreach_tools():
     import streamlit as st
     import streamlit.components.v1 as components
     # ---------- Helpers ----------
-
     def _normalize_sel_attachments(sel_atts):
         """Return a list of dicts with just 'name' for display when attachments in the generated item are names/dicts."""
         out = []
@@ -2172,6 +2024,7 @@ def render_outreach_tools():
         except Exception:
             pass
         return out
+
 
         out = []
         try:
@@ -2190,26 +2043,22 @@ def render_outreach_tools():
                             import os
                             if os.path.exists(val):
                                 with open(val, "rb") as fh:
-                                    out.append(
-                                        {"name": name, "data": fh.read()})
+                                    out.append({"name": name, "data": fh.read()})
                             else:
-                                out.append(
-                                    {"name": name, "data": val.encode("utf-8")})
+                                out.append({"name": name, "data": val.encode("utf-8")})
                     elif "path" in f and f["path"]:
                         import os
                         path = f["path"]
                         try:
                             with open(path, "rb") as fh:
-                                out.append(
-                                    {"name": name or os.path.basename(path), "data": fh.read()})
+                                out.append({"name": name or os.path.basename(path), "data": fh.read()})
                         except Exception:
                             pass
                     continue
 
                 # Streamlit UploadedFile or similar
                 if hasattr(f, "getvalue"):
-                    out.append(
-                        {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                    out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                     continue
                 if hasattr(f, "read"):
                     try:
@@ -2218,8 +2067,7 @@ def render_outreach_tools():
                         pass
                     try:
                         data = f.read()
-                        out.append(
-                            {"name": getattr(f, "name", "file"), "data": data})
+                        out.append({"name": getattr(f, "name", "file"), "data": data})
                         continue
                     except Exception:
                         pass
@@ -2230,8 +2078,7 @@ def render_outreach_tools():
                     if os.path.exists(f):
                         try:
                             with open(f, "rb") as fh:
-                                out.append(
-                                    {"name": os.path.basename(f), "data": fh.read()})
+                                out.append({"name": os.path.basename(f), "data": fh.read()})
                             continue
                         except Exception:
                             pass
@@ -2265,10 +2112,8 @@ def render_outreach_tools():
         raise last_err or RuntimeError("No outreach sender is available")
 
     # ---------- Stable session keys ----------
-    # snapshot for the Gmail-style preview card
-    SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"
-    # extra attachments uploaded by user (UploadedFile list)
-    SKEY_ATTACH = f"{ACTIVE_USER}::outreach::extra_attachments"
+    SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"             # snapshot for the Gmail-style preview card
+    SKEY_ATTACH  = f"{ACTIVE_USER}::outreach::extra_attachments"   # extra attachments uploaded by user (UploadedFile list)
     SKEY_LASTSIG = f"{ACTIVE_USER}::outreach::last_loaded_sig"
 
     st.session_state.setdefault(SKEY_PREVIEW, None)
@@ -2279,14 +2124,14 @@ def render_outreach_tools():
 
     # ---------- Header ----------
     with st.container(border=True):
-        top_l, top_r = st.columns([3, 2])
+        top_l, top_r = st.columns([3,2])
         with top_l:
             st.markdown("### ✉️ Outreach")
-            st.caption(
-                f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
+            st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with st.container(border=True):
-            mode = st.radio("Send to", [
-                            "Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
+            mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
+
+
 
     # ---- Contacts Outreach ----
     if mode == "Contacts":
@@ -2294,30 +2139,23 @@ def render_outreach_tools():
             st.markdown("#### Contacts")
             # Read receipts + tracking pixel options
             with st.expander("Delivery & Tracking options", expanded=False):
-                want_rr = st.checkbox(
-                    "Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
-                pixel_url = st.text_input(
-                    "Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
+                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
+                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
             # Load contacts from CSV
-            col_c1, col_c2 = st.columns([2, 1])
+            col_c1, col_c2 = st.columns([2,1])
             with col_c1:
-                search = st.text_input(
-                    "Search contacts", key="outreach_contact_search")
+                search = st.text_input("Search contacts", key="outreach_contact_search")
             with col_c2:
-                uploaded = st.file_uploader(
-                    "", type=["csv"], key="outreach_contacts_csv")
+                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
             contacts = []
-            import os
-            import csv
+            import os, csv
             # Prefer uploaded CSV
             if uploaded is not None:
                 try:
                     txt = uploaded.getvalue().decode("utf-8", errors="ignore")
                     for row in csv.DictReader(txt.splitlines()):
-                        nm = row.get("name") or row.get(
-                            "Name") or row.get("full_name") or ""
-                        em = row.get("email") or row.get(
-                            "Email") or row.get("mail") or ""
+                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
                         if em:
                             contacts.append({"name": nm, "email": em})
                 except Exception:
@@ -2329,10 +2167,8 @@ def render_outreach_tools():
                     if os.path.exists(path):
                         with open(path, "r", encoding="utf-8") as f:
                             for row in csv.DictReader(f):
-                                nm = row.get("name") or row.get(
-                                    "Name") or row.get("full_name") or ""
-                                em = row.get("email") or row.get(
-                                    "Email") or row.get("mail") or ""
+                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
                                 if em:
                                     contacts.append({"name": nm, "email": em})
                 except Exception:
@@ -2341,20 +2177,15 @@ def render_outreach_tools():
             # Filter by search
             s = (search or "").lower().strip()
             if s:
-                contacts = [c for c in contacts if s in (
-                    c.get("name", "")+c.get("email", "")).lower()]
+                contacts = [c for c in contacts if s in (c.get("name","")+c.get("email","")).lower()]
 
             # Options
-            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get(
-                "name") else c["email"] for c in contacts]
-            selected = st.multiselect(
-                "Recipients", labels, key="outreach_contact_sel")
+            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
+            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
 
             subj = st.text_input("Subject", key="outreach_contact_subject")
-            body = st.text_area("Body (HTML allowed)",
-                                key="outreach_contact_body", height=220)
-            c_files = st.file_uploader(
-                "Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
+            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
+            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
 
             if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
                 emails = []
@@ -2382,31 +2213,28 @@ def render_outreach_tools():
                             send_outreach_email(
                                 ACTIVE_USER, [em], subj, body,
                                 cc_addrs=None, bcc_addrs=None, attachments=atts,
-                                add_read_receipts=want_rr, tracking_pixel_url=(
-                                    pixel_url or None),
+                                add_read_receipts=want_rr, tracking_pixel_url=(pixel_url or None),
                                 tracking_id=batch_id + "::" + em
                             )
                             sent += 1
                         except Exception as e:
                             failures.append((em, str(e)))
                     # Log
-                    _log_contact_outreach(
-                        [{"mode": "contacts", "to": em, "subject": subj, "batch_id": batch_id} for em in emails])
+                    _log_contact_outreach([{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
                     if failures:
-                        st.error(f"Sent {sent} / {len(emails)}. Failures: " +
-                                 "; ".join([f"{a} ({b})" for a, b in failures]))
+                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + "; ".join([f"{a} ({b})" for a,b in failures]))
                     else:
                         st.success(f"Sent {sent} / {len(emails)}")
         # Stop rendering vendor section if Contacts mode
         return
+
 
         with top_r:
             pass
 
     # ---- Account: App Password (still here) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        pw = st.text_input("Gmail App Password", type="password",
-                           key=ns_key("outreach::gmail_app_pw"))
+        pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             try:
                 set_user_smtp_app_password(ACTIVE_USER, pw)
@@ -2428,8 +2256,8 @@ def render_outreach_tools():
             sel = mb[int(idx)-1]
 
             # Show key fields from the generated email
-            st.caption(f"**To:** {sel.get('to', '')}")
-            st.caption(f"**Subject:** {sel.get('subject', '')}")
+            st.caption(f"**To:** {sel.get('to','')}")
+            st.caption(f"**Subject:** {sel.get('subject','')}")
             scope_disp = sel.get("scope_summary") or sel.get("scope") or ""
             due_disp = sel.get("quote_due") or sel.get("due") or ""
             meta_cols = st.columns(2)
@@ -2448,23 +2276,20 @@ def render_outreach_tools():
             if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
                 files = st.session_state.get(SKEY_ATTACH) or []
                 if not files:
-                    st.warning(
-                        "Please upload at least one attachment before generating the preview.")
+                    st.warning("Please upload at least one attachment before generating the preview.")
                 else:
                     # Build display names from generated attachments + uploaded files
-                    gen_names = _normalize_sel_attachments(
-                        sel.get("attachments"))
+                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
                     try:
-                        upload_names = [
-                            {"name": getattr(f, "name", "file")} for f in files]
+                        upload_names = [{"name": getattr(f, "name", "file")} for f in files]
                     except Exception:
                         upload_names = []
                     st.session_state[SKEY_PREVIEW] = {
-                        "to": sel.get("to", ""),
-                        "cc": sel.get("cc", ""),
-                        "bcc": sel.get("bcc", ""),
-                        "subject": sel.get("subject", ""),
-                        "body_html": sel.get("body", ""),
+                        "to": sel.get("to",""),
+                        "cc": sel.get("cc",""),
+                        "bcc": sel.get("bcc",""),
+                        "subject": sel.get("subject",""),
+                        "body_html": sel.get("body",""),
                         "from_addr": USER_EMAILS.get(ACTIVE_USER, ""),
                         "scope_summary": scope_disp,
                         "quote_due": due_disp,
@@ -2472,24 +2297,23 @@ def render_outreach_tools():
                     }
                     st.success("Preview generated below.")
 
+
             actions2 = st.columns([1, 2, 2, 5])
             with actions2[1]:
                 if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
-                        st.warning(
-                            "Please upload at least one attachment before sending.")
+                        st.warning("Please upload at least one attachment before sending.")
                     else:
                         try:
-                            merged_atts = _normalize_sel_attachments(
-                                sel.get("attachments")) + _normalize_extra_files(files)
+                            merged_atts = _normalize_sel_attachments(sel.get("attachments")) + _normalize_extra_files(files)
                             _send_email(
                                 ACTIVE_USER,
-                                sel.get("to", ""),
-                                sel.get("subject", ""),
-                                sel.get("body", ""),
-                                cc=sel.get("cc", ""),
-                                bcc=sel.get("bcc", ""),
+                                sel.get("to",""),
+                                sel.get("subject",""),
+                                sel.get("body",""),
+                                cc=sel.get("cc",""),
+                                bcc=sel.get("bcc",""),
                                 attachments=merged_atts
                             )
                             st.success("Selected email sent.")
@@ -2499,54 +2323,43 @@ def render_outreach_tools():
                 if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
-                        st.warning(
-                            "Please upload at least one attachment before mass sending.")
+                        st.warning("Please upload at least one attachment before mass sending.")
                     else:
                         mb_all = st.session_state.get("mail_bodies") or []
                         sent = 0
                         failures = []
                         for i, itm in enumerate(mb_all, start=1):
                             try:
-                                merged_atts = _normalize_sel_attachments(
-                                    itm.get("attachments")) + _normalize_extra_files(files)
+                                merged_atts = _normalize_sel_attachments(itm.get("attachments")) + _normalize_extra_files(files)
                                 _send_email(
                                     ACTIVE_USER,
-                                    itm.get("to", ""),
-                                    itm.get("subject", ""),
-                                    itm.get("body", ""),
-                                    cc=itm.get("cc", ""),
-                                    bcc=itm.get("bcc", ""),
+                                    itm.get("to",""),
+                                    itm.get("subject",""),
+                                    itm.get("body",""),
+                                    cc=itm.get("cc",""),
+                                    bcc=itm.get("bcc",""),
                                     attachments=merged_atts
                                 )
                                 sent += 1
                             except Exception as e:
-                                failures.append(
-                                    (i, itm.get("subject", ""), str(e)))
+                                failures.append((i, itm.get("subject",""), str(e)))
                         if failures:
-                            st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join(
-                                [f"#{i} {subj} ({err})" for i, subj, err in failures]))
+                            st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join([f"#{i} {subj} ({err})" for i, subj, err in failures]))
                         else:
-                            # ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
-                            st.success(f"Sent all {sent} generated emails.")
+                            st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
         st.markdown("#### Preview")
         if not snap:
-            st.info(
-                "Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
+            st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
         else:
             # Header block similar to Gmail
             hdr_lines = []
-            if snap.get("from_addr"): hdr_lines.append(
-                f"<div><b>From:</b> {snap['from_addr']}</div>")
-            if snap.get("to"):        hdr_lines.append(
-                f"<div><b>To:</b> {snap['to']}</div>")
-            if snap.get("cc"):        hdr_lines.append(
-                f"<div><b>Cc:</b> {snap['cc']}</div>")
-            if snap.get("bcc"):       hdr_lines.append(
-                f"<div><b>Bcc:</b> {snap['bcc']}</div>")
-            if snap.get("subject"):   hdr_lines.append(
-                f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
+            if snap.get("from_addr"): hdr_lines.append(f"<div><b>From:</b> {snap['from_addr']}</div>")
+            if snap.get("to"):        hdr_lines.append(f"<div><b>To:</b> {snap['to']}</div>")
+            if snap.get("cc"):        hdr_lines.append(f"<div><b>Cc:</b> {snap['cc']}</div>")
+            if snap.get("bcc"):       hdr_lines.append(f"<div><b>Bcc:</b> {snap['bcc']}</div>")
+            if snap.get("subject"):   hdr_lines.append(f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
 
             # Meta row: Scope Summary & Quote Due
             meta_bits = []
@@ -2559,6 +2372,7 @@ def render_outreach_tools():
                                  "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
                                  f"{snap['quote_due']}</div>")
 
+
             # Attachments uploader (positioned below Quote Due)
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
                                            key=ns_key("outreach::extra_files"))
@@ -2566,15 +2380,13 @@ def render_outreach_tools():
                 st.session_state[SKEY_ATTACH] = extra_files
 
             # Body
-            body_html = (snap.get("body_html") or "").strip(
-            ) or "<p><i>(No body content)</i></p>"
+            body_html = (snap.get("body_html") or "").strip() or "<p><i>(No body content)</i></p>"
 
             # Attachments display
             atts_html = ""
             atts = snap.get("attachments") or []
             if atts:
-                items = "".join(
-                    [f"<li>{(a.get('name') if isinstance(a, dict) else str(a))}</li>" for a in atts])
+                items = "".join([f"<li>{(a.get('name') if isinstance(a,dict) else str(a))}</li>" for a in atts])
                 atts_html = ("<div style='margin-top:8px;'><b>Attachments:</b>"
                              f"<ul style='margin:6px 0 0 20px;'>{items}</ul></div>")
 
@@ -2594,13 +2406,12 @@ def render_outreach_tools():
                     try:
                         _send_email(
                             ACTIVE_USER,
-                            snap.get("to", ""),
-                            snap.get("subject", ""),
-                            snap.get("body_html", ""),
-                            cc=snap.get("cc", ""),
-                            bcc=snap.get("bcc", ""),
-                            attachments=st.session_state.get(
-                                SKEY_ATTACH) or []
+                            snap.get("to",""),
+                            snap.get("subject",""),
+                            snap.get("body_html",""),
+                            cc=snap.get("cc",""),
+                            bcc=snap.get("bcc",""),
+                            attachments=st.session_state.get(SKEY_ATTACH) or []
                         )
                         st.success("Email sent.")
                         st.session_state[SKEY_PREVIEW] = None
@@ -2609,7 +2420,6 @@ def render_outreach_tools():
             with a2:
                 if st.button("Close preview", key=ns_key("outreach::close_preview"), use_container_width=True):
                     st.session_state[SKEY_PREVIEW] = None
-
 
 def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
@@ -2632,25 +2442,21 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
     st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
 
-    hc1, hc2, hc3 = st.columns([1, 1, 2])
+    hc1, hc2, hc3 = st.columns([1,1,2])
     with hc1:
         if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
-            subj = st.session_state.get(
-                ns_key("outreach::mail_subj"), "") or ""
-            body = st.session_state.get(
-                ns_key("outreach::mail_body"), "") or ""
-            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get(
-                "attachments", [])
+            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
+            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
+            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
             st.session_state[ns_key("outreach::mail_preview_data")] = {
                 "to": to,
                 "cc": cc,
@@ -2665,27 +2471,21 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -2694,8 +2494,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 try:
                     for f in (files or []):
                         try:
-                            atts.append(
-                                {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                         except Exception:
                             pass
                 except Exception:
@@ -2712,10 +2511,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(
-                        ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
-                    for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
@@ -2725,11 +2523,11 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         import streamlit.components.v1 as components
         with st.container(border=True):
             st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr', '')}")
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"): st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject', '')}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
             html = preview.get("body_html") or ""
             components.html(
                 f"""
@@ -2742,35 +2540,32 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             )
         atts = preview.get("attachments") or []
         if atts:
-            names = [a.get("name", "file") for a in atts]
+            names = [a.get("name","file") for a in atts]
             st.caption("Attachments: " + ", ".join(names))
 
-        cc1, cc2, _ = st.columns([1, 1, 2])
+        cc1, cc2, _ = st.columns([1,1,2])
         with cc1:
             if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
                 class _MemFile:
                     def __init__(self, name, data):
                         self.name = name
                         self._data = data
-
                     def getvalue(self):
                         return self._data
-                mem_files = [
-                    _MemFile(a.get("name", "file"), a.get("data", b"")) for a in atts]
+                mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
                 try:
                     send_outreach_email(
                         ACTIVE_USER,
-                        preview.get("to", ""),
-                        preview.get("subject", ""),
-                        preview.get("body_html", ""),
-                        cc_addrs=preview.get("cc", ""),
-                        bcc_addrs=preview.get("bcc", ""),
+                        preview.get("to",""),
+                        preview.get("subject",""),
+                        preview.get("body_html",""),
+                        cc_addrs=preview.get("cc",""),
+                        bcc_addrs=preview.get("bcc",""),
                         attachments=mem_files
                     )
                     st.success("Email sent.")
-                    st.session_state[ns_key(
-                        "outreach::mail_preview_data")] = None
-                    for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
@@ -2779,8 +2574,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
@@ -2788,21 +2582,18 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
 
     # === Header-level controls ===
-    hc1, hc2, hc3 = st.columns([1, 1, 2])
+    hc1, hc2, hc3 = st.columns([1,1,2])
     with hc1:
         if st.button("Preview current draft", key=ns_key("outreach::hdr_preview_btn")):
             # Pull current draft values from session, even if the composer expander is closed
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
-            subj = st.session_state.get(
-                ns_key("outreach::mail_subj"), "") or ""
-            body = st.session_state.get(
-                ns_key("outreach::mail_body"), "") or ""
+            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
+            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
             # Attachments are not easily accessible from header because uploader holds file objects;
             # keep whatever was already captured if a composer preview was taken, else empty.
-            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get(
-                "attachments", [])
+            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
 
             st.session_state[ns_key("outreach::mail_preview_data")] = {
                 "to": to, "cc": cc, "bcc": bcc,
@@ -2816,29 +2607,23 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     # === Quick Outreach Composer ===
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -2848,8 +2633,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 try:
                     for f in (files or []):
                         try:
-                            atts.append(
-                                {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                         except Exception:
                             pass
                 except Exception:
@@ -2866,10 +2650,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(
-                        ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
-                    for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
@@ -2880,14 +2663,14 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         import streamlit.components.v1 as components
         with st.container(border=True):
             st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr', '')}")
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"):
                 st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"):
                 st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"):
                 st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject', '')}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             html = preview.get("body_html") or ""
             components.html(
@@ -2902,58 +2685,50 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
             atts = preview.get("attachments") or []
             if atts:
-                names = [a.get("name", "file") for a in atts]
+                names = [a.get("name","file") for a in atts]
                 st.caption("Attachments: " + ", ".join(names))
 
-            cc1, cc2, cc3 = st.columns([1, 1, 2])
+            cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
                 if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
                     class _MemFile:
                         def __init__(self, name, data):
                             self.name = name
                             self._data = data
-
                         def getvalue(self):
                             return self._data
-                    mem_files = [
-                        _MemFile(a.get("name", "file"), a.get("data", b"")) for a in atts]
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
                     try:
                         send_outreach_email(
                             ACTIVE_USER,
-                            preview.get("to", ""),
-                            preview.get("subject", ""),
-                            preview.get("body_html", ""),
-                            cc_addrs=preview.get("cc", ""),
-                            bcc_addrs=preview.get("bcc", ""),
+                            preview.get("to",""),
+                            preview.get("subject",""),
+                            preview.get("body_html",""),
+                            cc_addrs=preview.get("cc",""),
+                            bcc_addrs=preview.get("bcc",""),
                             attachments=mem_files
                         )
                         st.success("Email sent.")
-                        st.session_state[ns_key(
-                            "outreach::mail_preview_data")] = None
-                        for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
+                        for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                             NS.pop(k, None)
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
             with cc2:
                 if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[ns_key(
-                        "outreach::mail_preview_data")] = None
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     # Preview state
     st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
@@ -2962,15 +2737,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -3001,10 +2773,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(
-                        ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
-                    for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                    for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
@@ -3017,14 +2788,14 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with st.container(border=True):
             st.markdown("#### Email preview")
             # Header preview
-            st.markdown(f"**From:** {preview.get('from_addr', '')}")
+            st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"):
                 st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"):
                 st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"):
                 st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject', '')}")
+            st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             # Render the HTML body using a component so styles and tags are honored
             html = preview.get("body_html") or ""
@@ -3041,11 +2812,11 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             # Show attachment list if any
             atts = preview.get("attachments") or []
             if atts:
-                names = [a.get("name", "file") for a in atts]
+                names = [a.get("name","file") for a in atts]
                 st.caption("Attachments: " + ", ".join(names))
 
             # Confirm send buttons
-            cc1, cc2, cc3 = st.columns([1, 1, 2])
+            cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
                 if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
                     # Rebuild simple in memory files compatible with send_outreach_email expectations
@@ -3053,79 +2824,72 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                         def __init__(self, name, data):
                             self.name = name
                             self._data = data
-
                         def getvalue(self):
                             return self._data
-                    mem_files = [
-                        _MemFile(a.get("name", "file"), a.get("data", b"")) for a in atts]
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
                     try:
                         send_outreach_email(
                             ACTIVE_USER,
-                            preview.get("to", ""),
-                            preview.get("subject", ""),
-                            preview.get("body_html", ""),
-                            cc_addrs=preview.get("cc", ""),
-                            bcc_addrs=preview.get("bcc", ""),
+                            preview.get("to",""),
+                            preview.get("subject",""),
+                            preview.get("body_html",""),
+                            cc_addrs=preview.get("cc",""),
+                            bcc_addrs=preview.get("bcc",""),
                             attachments=mem_files
                         )
                         st.success("Email sent.")
-                        st.session_state[ns_key(
-                            "outreach::mail_preview_data")] = None
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
                         # Clear compose fields
-                        for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                        for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                             NS.pop(k, None)
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
             with cc2:
                 if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[ns_key(
-                        "outreach::mail_preview_data")] = None
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
         if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
-                send_outreach_email(ACTIVE_USER, to, subj, body,
-                                    cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                 st.success("Email sent.")
-                for k in ["outreach::mail_to", "outreach::mail_cc", "outreach::mail_bcc", "outreach::mail_subj", "outreach::mail_body", "outreach::mail_files"]:
+                for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                     NS.pop(k, None)
             except Exception as e:
                 st.error(f"Failed to send: {e}")
-
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     return send_outreach_email(ACTIVE_USER, to, subject, body_html, cc_addrs=cc, bcc_addrs=bcc, attachments=attachments)
 # === End Outreach Email block (moved) ===
 
 
+
+
+import requests
+from PyPDF2 import PdfReader
+import docx
+from sklearn.feature_extraction.text import TfidfVectorizer
 # === OCR and clause risk helpers (injected) ===
 try:
     import pytesseract  # optional
@@ -3145,8 +2909,6 @@ CLAUSE_RISKS = {
     "pay when paid": "Cash flow risk for subs. Negotiate fair terms.",
     "liability cap absent": "Unlimited liability. Seek cap or clarify scope.",
 }
-
-
 def _find_clause_risks(text: str, top_k: int = 6):
     text_l = (text or "").lower()
     hits = []
@@ -3154,7 +2916,6 @@ def _find_clause_risks(text: str, top_k: int = 6):
         if key in text_l:
             hits.append({"clause": key, "hint": hint})
     return hits[:top_k]
-
 
 def _ocr_pdf_bytes(pdf_bytes: bytes) -> str:
     if not (pytesseract and convert_from_bytes):
@@ -3176,8 +2937,6 @@ except Exception:
     BeautifulSoup = None
 
 # ---------- Safe key loader ----------
-
-
 def _get_key(name: str) -> str:
     v = os.getenv(name, "")
     if v:
@@ -3187,13 +2946,12 @@ def _get_key(name: str) -> str:
     except Exception:
         return ""
 
-
-OPENAI_API_KEY = (_get_key("OPENAI_API_KEY") or "").strip()
-GOOGLE_PLACES_KEY = (_get_key("GOOGLE_PLACES_API_KEY") or "").strip()
-SAM_API_KEY = (_get_key("SAM_API_KEY") or "").strip()
-MS_TENANT_ID = (_get_key("MS_TENANT_ID") or "").strip()
-MS_CLIENT_ID = (_get_key("MS_CLIENT_ID") or "").strip()
-MS_CLIENT_SECRET = (_get_key("MS_CLIENT_SECRET") or "").strip()
+OPENAI_API_KEY     = (_get_key("OPENAI_API_KEY") or "").strip()
+GOOGLE_PLACES_KEY  = (_get_key("GOOGLE_PLACES_API_KEY") or "").strip()
+SAM_API_KEY        = (_get_key("SAM_API_KEY") or "").strip()
+MS_TENANT_ID       = (_get_key("MS_TENANT_ID") or "").strip()
+MS_CLIENT_ID       = (_get_key("MS_CLIENT_ID") or "").strip()
+MS_CLIENT_SECRET   = (_get_key("MS_CLIENT_SECRET") or "").strip()
 
 # ---------- OpenAI client ----------
 try:
@@ -3201,19 +2959,17 @@ try:
     from openai import OpenAI  # openai>=1.40.0 recommended
     _openai_version = getattr(_openai_pkg, "__version__", "unknown")
 except Exception as e:
-    st.warning(
-        "OpenAI SDK missing or too old. Chat features disabled until installed.")
+    st.warning("OpenAI SDK missing or too old. Chat features disabled until installed.")
     OpenAI = None
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key(
-    "OPENAI_MODEL") or "gpt-5-chat-latest")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
 _OPENAI_FALLBACK_MODELS = [
     OPENAI_MODEL,
-    "gpt-5-chat-latest", "gpt-5", "gpt-5-2025-08-07",
-    "gpt-5-mini", "gpt-5-mini-2025-08-07",
-    "gpt-5-nano", "gpt-5-nano-2025-08-07",
-    "gpt-4o-mini", "gpt-4o",
+    "gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
+    "gpt-5-mini","gpt-5-mini-2025-08-07",
+    "gpt-5-nano","gpt-5-nano-2025-08-07",
+    "gpt-4o-mini","gpt-4o",
 ]
 
 
@@ -3250,13 +3006,10 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
         smtp_user = smtp_pass = None
 
     if smtp_user and smtp_pass:
-        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(
-            st, "secrets") else smtp_user
-        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(
-            st, "secrets") else None
+        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
+        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
         try:
-            _send_via_smtp_host(to_addr, subject, body, from_addr,
-                                "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
             return "Sent"
         except Exception as e:
             try:
@@ -3274,15 +3027,12 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
     except Exception:
         try:
             import streamlit as _st
-            _st.warning(
-                "Email preview mode is active. Configure SMTP or Graph to send.")
+            _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
         except Exception:
             pass
         return "Preview"
 
-
-st.set_page_config(page_title="GovCon Copilot Pro",
-                   page_icon="ðŸ§°", layout="wide")
+st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
 # ---- Date helpers for SAM search ----
 
@@ -3291,7 +3041,6 @@ try:
     _ = _parse_sam_date
 except NameError:
     from datetime import datetime
-
     def _parse_sam_date(s):
         """Parse common SAM.gov date/time strings into datetime; return original on failure."""
         if s is None:
@@ -3319,7 +3068,6 @@ try:
     _ = _us_date
 except NameError:
     from datetime import datetime
-
     def _us_date(dt):
         try:
             return dt.strftime("%m/%d/%Y")
@@ -3331,7 +3079,7 @@ except NameError:
 # ---- Hoisted SAM helper (duplicate for e# (early use) ----
 
 # ---- Datetime coercion helper for SAM Watch (inline before sam_search) ----
-
+from datetime import datetime
 
 def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None) -> str:
     """
@@ -3342,33 +3090,28 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
       - MS_SENDER_UPN or settings key ms_sender_upn
     """
     try:
-        import os
-        import requests
+        import os, requests
         from urllib.parse import quote_plus
     except Exception as _e_imp:
         return f"Graph send error: missing dependency ({_e_imp})"
 
     # Load config: prefer env, then settings table if available
     try:
-        sender = sender_upn or os.getenv(
-            "MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
     except Exception:
         sender = sender_upn or os.getenv("MS_SENDER_UPN") or ""
 
     # MS_* may already be loaded at module level; fall back to env/settings if empty
     try:
-        _tenant = os.getenv("MS_TENANT_ID") or get_setting(
-            "MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
+        _tenant = os.getenv("MS_TENANT_ID") or get_setting("MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
     except Exception:
         _tenant = os.getenv("MS_TENANT_ID") or ""
     try:
-        _client_id = os.getenv("MS_CLIENT_ID") or get_setting(
-            "MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
+        _client_id = os.getenv("MS_CLIENT_ID") or get_setting("MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
     except Exception:
         _client_id = os.getenv("MS_CLIENT_ID") or ""
     try:
-        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting(
-            "MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting("MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
     except Exception:
         _client_secret = os.getenv("MS_CLIENT_SECRET") or ""
 
@@ -3418,8 +3161,7 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     try:
         r = requests.post(
             send_url,
-            headers={"Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
             timeout=30,
         )
@@ -3438,19 +3180,16 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     return f"Graph send error {r.status_code}: {err_txt}"
 
 
+
+
 # === Market pricing data helpers (robust) ===
 def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200, st_debug=None):
-    import requests
-    import pandas as pd
-    import json
+    import requests, pandas as pd, json
     url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
-    headers = {"Content-Type": "application/json",
-        "Accept": "application/json"}
-    type_codes = ["A", "B", "C", "D"]
-
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    type_codes = ["A","B","C","D"]
     def make_filters(n, p, k, start, end):
-        f = {"time_period": [{"start_date": start, "end_date": end}],
-            "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
+        f = {"time_period": [{"start_date": start, "end_date": end}], "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
         if n: f["naics_codes"] = [n]
         if p: f["psc_codes"] = [p]
         if k: f["keywords"] = [k]
@@ -3458,18 +3197,16 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
     if not date_from or not date_to:
         from datetime import datetime, timedelta
         end = datetime.utcnow().date().strftime("%Y-%m-%d")
-        start = (datetime.utcnow().date() -
-                 timedelta(days=365*2)).strftime("%Y-%m-%d")
+        start = (datetime.utcnow().date() - timedelta(days=365*2)).strftime("%Y-%m-%d")
         date_from, date_to = date_from or start, date_to or end
     attempts = [("full", make_filters(naics, psc, keyword, date_from, date_to)),
                 ("no_psc", make_filters(naics, "", keyword, date_from, date_to)),
                 ("no_naics", make_filters("", psc, keyword, date_from, date_to)),
-                ("keyword_only", make_filters(
-                    "", "", keyword or "", date_from, date_to)),
+                ("keyword_only", make_filters("", "", keyword or "", date_from, date_to)),
                 ("bare", make_filters("", "", "", date_from, date_to))]
     last_detail = ""
     for name, flt in attempts:
-        payload = {"filters": flt, "fields": ["Award ID", "Recipient Name", "Start Date", "End Date", "Award Amount", "Awarding Agency", "NAICS Code", "PSC Code"],
+        payload = {"filters": flt, "fields": ["Award ID","Recipient Name","Start Date","End Date","Award Amount","Awarding Agency","NAICS Code","PSC Code"],
                    "page": 1, "limit": max(1, min(int(limit), 500)), "sort": "Award Amount", "order": "desc"}
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -3498,21 +3235,17 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
         st_debug.caption(last_detail)
     return pd.DataFrame(), last_detail
 
-
 def summarize_award_prices(df):
-    import numpy as np
-    import pandas as pd
+    import numpy as np, pandas as pd
     if df is None or df.empty or "amount" not in df.columns: return {}
     vals = pd.to_numeric(df["amount"], errors="coerce").dropna()
     if vals.empty: return {}
-    return {"count": int(vals.size), "min": float(vals.min()), "p25": float(np.percentile(vals, 25)),
-            "median": float(np.percentile(vals, 50)), "p75": float(np.percentile(vals, 75)),
+    return {"count": int(vals.size), "min": float(vals.min()), "p25": float(np.percentile(vals,25)),
+            "median": float(np.percentile(vals,50)), "p75": float(np.percentile(vals,75)),
             "max": float(vals.max()), "mean": float(vals.mean())}
 
-
 def gsa_calc_rates(query: str, page: int = 1):
-    import requests
-    import pandas as pd
+    import requests, pandas as pd
     url = "https://api.gsa.gov/technology/calc/search"
     params = {"q": query, "page": page}
     try:
@@ -3538,7 +3271,6 @@ def _coerce_dt(x):
     except Exception:
         return None
 
-
 def sam_search(
     naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
     notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
@@ -3549,7 +3281,7 @@ def sam_search(
     today = datetime.utcnow().date()
     min_due_date = today + timedelta(days=min_days)
     posted_from = _us_date(today - timedelta(days=posted_from_days))
-    posted_to = _us_date(today)
+    posted_to   = _us_date(today)
 
     params = {
         "api_key": SAM_API_KEY,
@@ -3565,8 +3297,7 @@ def sam_search(
         notice_types = "Combined Synopsis/Solicitation,Solicitation"
     params["noticeType"] = notice_types
 
-    if naics_list:   params["naics"] = ",".join(
-        [c for c in naics_list if c][:20])
+    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
     if keyword:      params["keywords"] = keyword
 
     try:
@@ -3581,8 +3312,7 @@ def sam_search(
         if status != 200:
             err_msg = ""
             if isinstance(data, dict):
-                err_msg = data.get("message") or (
-                    data.get("error") or {}).get("message") or ""
+                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
             return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
         if isinstance(data, dict) and data.get("message"):
             return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
@@ -3606,16 +3336,16 @@ def sam_search(
                 "agency": opp.get("organizationName"),
                 "naics": ",".join(opp.get("naicsCodes", [])),
                 "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city", ""),
+                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
                 "response_due": due_str,
-                "posted": opp.get("publishedDate", ""),
-                "type": opp.get("type", ""),
+                "posted": opp.get("publishedDate",""),
+                "type": opp.get("type",""),
                 "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-                "attachments_json": json.dumps([{"name": d.get("fileName"), "url": d.get("url")} for d in docs])
+                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
             })
         df = pd.DataFrame(rows)
         info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
-                "filters": {"naics": params.get("naics", ""), "keyword": keyword or "",
+                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
                             "postedFrom": posted_from, "postedTo": posted_to,
                             "min_due_days": min_days, "noticeType": notice_types,
                             "active": active, "limit": limit}}
@@ -3624,6 +3354,7 @@ def sam_search(
         return df, info
     except requests.RequestException as e:
         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
+
 
 
 # ---- Hoisted helper implementations (duplicate for e# === SAM Watch → Contacts auto sync helpers ===
@@ -3648,11 +3379,9 @@ def _contacts_upsert(name: str = "", org: str = "", role: str = "", email: str =
     row = None
     try:
         if email:
-            row = cur.execute(
-                "select id from contacts where lower(ifnull(email,'')) = lower(?) limit 1", (email,)).fetchone()
+            row = cur.execute("select id from contacts where lower(ifnull(email,'')) = lower(?) limit 1", (email,)).fetchone()
         if not row and (name and org):
-            row = cur.execute(
-                "select id from contacts where lower(ifnull(name,''))=lower(?) and lower(ifnull(org,''))=lower(?) limit 1", (name, org)).fetchone()
+            row = cur.execute("select id from contacts where lower(ifnull(name,''))=lower(?) and lower(ifnull(org,''))=lower(?) limit 1", (name, org)).fetchone()
     except Exception:
         row = None
 
@@ -3697,37 +3426,27 @@ def _extract_contacts_from_sam_row(r) -> list:
     import re
     agency = _g(["agency", "office", "department", "organization"]) or ""
 
-    poc_name = _g(["poc_name", "primary_poc_name", "pointOfContact",
-                  "primaryPointOfContact", "contact_name"]) or ""
-    poc_email = _g(["poc_email", "primary_poc_email",
-                   "pointOfContactEmail", "contact_email"]) or ""
-    poc_phone = _g(["poc_phone", "primary_poc_phone",
-                   "pointOfContactPhone", "contact_phone"]) or ""
+    poc_name = _g(["poc_name", "primary_poc_name", "pointOfContact", "primaryPointOfContact", "contact_name"]) or ""
+    poc_email = _g(["poc_email", "primary_poc_email", "pointOfContactEmail", "contact_email"]) or ""
+    poc_phone = _g(["poc_phone", "primary_poc_phone", "pointOfContactPhone", "contact_phone"]) or ""
 
-    co_name = _g(["co_name", "contracting_officer",
-                 "contractingOfficer", "buyer_name"]) or ""
-    co_email = _g(
-        ["co_email", "contracting_officer_email", "buyer_email"]) or ""
-    co_phone = _g(
-        ["co_phone", "contracting_officer_phone", "buyer_phone"]) or ""
+    co_name = _g(["co_name", "contracting_officer", "contractingOfficer", "buyer_name"]) or ""
+    co_email = _g(["co_email", "contracting_officer_email", "buyer_email"]) or ""
+    co_phone = _g(["co_phone", "contracting_officer_phone", "buyer_phone"]) or ""
 
     blob = _g(["description", "summary", "text", "body"]) or ""
     emails = []
     if blob:
-        emails = re.findall(
-            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob)
+        emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob)
 
     out = []
     if poc_email or poc_name or poc_phone:
-        out.append({"name": poc_name, "org": agency, "role": "POC",
-                   "email": poc_email, "phone": poc_phone, "source": "SAM.gov"})
+        out.append({"name": poc_name, "org": agency, "role": "POC", "email": poc_email, "phone": poc_phone, "source": "SAM.gov"})
     if co_email or co_name or co_phone:
-        out.append({"name": co_name, "org": agency, "role": "CO",
-                   "email": co_email, "phone": co_phone, "source": "SAM.gov"})
+        out.append({"name": co_name, "org": agency, "role": "CO", "email": co_email, "phone": co_phone, "source": "SAM.gov"})
 
     if not any(c.get("email") for c in out) and emails:
-        out.append({"name": "", "org": agency, "role": "POC",
-                   "email": emails[0], "phone": "", "source": "SAM.gov", "notes": "from description"})
+        out.append({"name": "", "org": agency, "role": "POC", "email": emails[0], "phone": "", "source": "SAM.gov", "notes": "from description"})
 
     seen = set(); dedup = []
     for c in out:
@@ -3749,16 +3468,14 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
     try:
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-        search_params = {"query": f"{query} {location}",
-            "radius": radius_m, "key": GOOGLE_PLACES_KEY}
+        search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
         rs = requests.get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
-        data = rs.json() if rs.headers.get(
-            "Content-Type", "").startswith("application/json") else {}
-        api_status = data.get("status", "")
+        data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
+        api_status = data.get("status","")
         results = data.get("results", []) or []
 
-        if status_code != 200 or api_status not in ("OK", "ZERO_RESULTS"):
+        if status_code != 200 or api_status not in ("OK","ZERO_RESULTS"):
             return ([] if strict else results), {
                 "ok": False, "reason": api_status or "http_error", "http": status_code,
                 "api_status": api_status, "count": len(results),
@@ -3773,11 +3490,9 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             phone, website = "", ""
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
-                det_params = {
-                    "place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
+                det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
                 rd = requests.get(det_url, params=det_params, timeout=20)
-                det_json = rd.json() if rd.headers.get(
-                    "Content-Type", "").startswith("application/json") else {}
+                det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
                 website = det.get("website", "") or ""
@@ -3793,7 +3508,7 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
                 "state": location.split(",")[-1].strip() if "," in location else "",
                 "certifications": "",
                 "set_asides": "",
-                "notes": item.get("formatted_address", ""),
+                "notes": item.get("formatted_address",""),
                 "source": "GooglePlaces",
             })
         info = {"ok": True, "count": len(out), "http": status_code, "api_status": api_status,
@@ -3802,10 +3517,8 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
     except Exception as e:
         return [], {"ok": False, "reason": "exception", "detail": str(e)[:500]}
 
-
 def linkedin_company_search(keyword: str) -> str:
     return f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keyword)}"
-
 
 def build_context(max_rows=6):
     conn = get_db()
@@ -3815,10 +3528,8 @@ def build_context(max_rows=6):
         rr = g.iloc[0]
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
                       f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
-    codes = pd.read_sql_query("select code from naics_watch order by code", conn)[
-                              "code"].tolist()
-    naics_line = ", ".join(
-        codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
         "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
         conn, params=(max_rows,)
@@ -3833,11 +3544,10 @@ def build_context(max_rows=6):
            group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
         conn, params=(max_rows,)
     )
-    vend_lines = [
-        f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
+    vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
     return "\n".join([
-        f"Company: {get_setting('company_name', 'ELA Management LLC')}",
-        f"Home location: {get_setting('home_loc', 'Houston, TX')}",
+        f"Company: {get_setting('company_name','ELA Management LLC')}",
+        f"Home location: {get_setting('home_loc','Houston, TX')}",
         f"Goals: {goals_line or 'not set'}",
         f"NAICS watch: {naics_line}",
         "Recent opportunities:" if not opp.empty else "Recent opportunities: (none)",
@@ -3847,6 +3557,7 @@ def build_context(max_rows=6):
     ])
 
 # ---------- External integrations ----------
+
 
 
 # ---- Safety helpers (fallbacks to avoid NameError at first render) ----
@@ -3867,10 +3578,9 @@ except NameError:
         Returns (results, info) where results is a list and info is a dict.
         """
         try:
-            query = args[0] if len(args) >= 1 else kwargs.get("query", "")
-            loc = args[1] if len(args) >= 2 else kwargs.get("location", "")
-            radius_m = args[2] if len(
-                args) >= 3 else kwargs.get("radius_meters", 1609)
+            query = args[0] if len(args) >= 1 else kwargs.get("query","")
+            loc = args[1] if len(args) >= 2 else kwargs.get("location","")
+            radius_m = args[2] if len(args) >= 3 else kwargs.get("radius_meters", 1609)
         except Exception:
             query, loc, radius_m = "", "", 1609
         url = f"https://www.google.com/maps/search/{quote_plus(str(query)+' '+str(loc))}"
@@ -3898,7 +3608,6 @@ try:
 except Exception:
     pass
 
-
 def _render_identity_chip():
     try:
         conn = get_db()
@@ -3909,33 +3618,28 @@ def _render_identity_chip():
         role = None
         oname = None
         if uid:
-            r = conn.execute(
-                "SELECT display_name, role FROM users WHERE id=?", (uid,)).fetchone()
+            r = conn.execute("SELECT display_name, role FROM users WHERE id=?", (uid,)).fetchone()
             if r: uname, role = r[0], r[1]
         if oid:
-            r = conn.execute(
-                "SELECT name FROM orgs WHERE id=?", (oid,)).fetchone()
+            r = conn.execute("SELECT name FROM orgs WHERE id=?", (oid,)).fetchone()
             if r: oname = r[0]
         if oname or uname:
-            c1, c2, c3 = st.columns([0.6, 0.2, 0.2])
+            c1, c2, c3 = st.columns([0.6,0.2,0.2])
             with c3:
-                st.caption(
-                    f"Org: {oname or 'unknown'}  •  User: {uname or 'unknown'}  •  Role: {role or 'unknown'}")
+                st.caption(f"Org: {oname or 'unknown'}  •  User: {uname or 'unknown'}  •  Role: {role or 'unknown'}")
     except Exception as _ex:
         import streamlit as st
         st.caption("identity: n/a")
-
-
 _render_identity_chip()
 st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
 DB_PATH = "data/app.db"
 
 NAICS_SEEDS = [
-    "561210", "721110", "562991", "326191", "336611", "531120", "531", "722310", "561990", "722514", "561612",
-    "561730", "311511", "238990", "311812", "561720", "811210", "236118", "238220", "237990", "311423",
-    "562910", "236220", "332420", "238320", "541380", "541519", "561710", "423730", "238210", "562211",
-    "541214", "541330", "541512", "541511", "541370", "611430", "611699", "611310", "611710", "562111", "562119",
-    "624230", "488999", "485510", "485410", "488510", "541614", "332994", "334220", "336992", "561320", "561311", "541214"
+    "561210","721110","562991","326191","336611","531120","531","722310","561990","722514","561612",
+    "561730","311511","238990","311812","561720","811210","236118","238220","237990","311423",
+    "562910","236220","332420","238320","541380","541519","561710","423730","238210","562211",
+    "541214","541330","541512","541511","541370","611430","611699","611310","611710","562111","562119",
+    "624230","488999","485510","485410","488510","541614","332994","334220","336992","561320","561311","541214"
 ]
 
 SCHEMA = {
@@ -4068,8 +3772,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         run = p_center.add_run()
         try:
             from docx.shared import Inches as _Inches
-            run.add_picture(io.BytesIO(logo_bytes),
-                            width=_Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
         except Exception:
             pass
     if title:
@@ -4264,8 +3967,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
         try:
-            run.add_picture(io.BytesIO(logo_bytes),
-                            width=Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
         except Exception:
             pass
     if title:
@@ -4455,15 +4157,13 @@ _os.makedirs('data', exist_ok=True)
 @st.cache_resource
 def get_db():
     import sqlite3
-    conn = sqlite3.connect(
-        'data/app.db', check_same_thread=False, isolation_level=None)
+    conn = sqlite3.connect('data/app.db', check_same_thread=False, isolation_level=None)
     try:
         conn.execute('PRAGMA journal_mode=WAL;')
         conn.execute('PRAGMA synchronous=NORMAL;')
         conn.execute('PRAGMA temp_store=MEMORY;')
         conn.execute('PRAGMA foreign_keys=ON;')
-        conn.execute(
-            'CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
+        conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
     except Exception:
         pass
     return conn
@@ -4478,20 +4178,19 @@ def _tenancy_phase1_bootstrap():
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             created_at TEXT NOT NULL
-        ); """)
+        );""")
         cur.execute("""CREATE TABLE IF NOT EXISTS users(
             id TEXT PRIMARY KEY,
             org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
             email TEXT NOT NULL UNIQUE,
             display_name TEXT,
-            role TEXT NOT NULL CHECK(role IN('Admin', 'Member', 'Viewer')),
+            role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
             created_at TEXT NOT NULL
-        ); """)
+        );""")
         # Seed a default org and 3 users if empty
         row = cur.execute("SELECT COUNT(*) FROM orgs").fetchone()
         if row and row[0] == 0:
-            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))",
-                        ('org-default','Default Org'))
+            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
         # Ensure at least one user exists for the default org
         rowu = cur.execute("SELECT COUNT(*) FROM users").fetchone()
         if rowu and rowu[0] == 0:
@@ -4527,15 +4226,13 @@ if "get_db" not in globals():
     @st.cache_resource
     def get_db():
         import sqlite3
-        conn = sqlite3.connect(
-            "data/app.db", check_same_thread=False, isolation_level=None)
+        conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA temp_store=MEMORY;")
             conn.execute("PRAGMA foreign_keys=ON;")
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);")
+            conn.execute("CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);")
         except Exception:
             pass
         return conn
@@ -4610,7 +4307,7 @@ def _ensure_migrations_table(conn):
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             applied_at TEXT NOT NULL
-        ); """)
+        );""")
     except Exception as ex:
         log_json("error", "migrations_table_create_failed", error=str(ex))
 
@@ -4679,12 +4376,10 @@ def create_api_client(base_url: str, api_key: _Optional[str]=None, timeout: int=
         key_parts = [url]
         if params:
             # stable sort
-            key_parts.extend(
-                [f"{k}={params[k]}" for k in sorted(params.keys())])
+            key_parts.extend([f"{k}={params[k]}" for k in sorted(params.keys())])
         cache_key = "|".join(key_parts)
         # read cache token first
-        # token content unused, just gate by key+ttl
-        token = _cached_get(cache_key) if ttl else None
+        token = _cached_get(cache_key) if ttl else None  # token content unused, just gate by key+ttl
         last_err = None
         for attempt in range(1, max(1, retries) + 1):
             try:
@@ -4792,8 +4487,7 @@ def _qp_get():
     # Fallback to experimental API which returns dict[str, list[str]]
     with contextlib.suppress(Exception):
         data = st.experimental_get_query_params()
-        norm = {k: (v[0] if isinstance(v, list) and v else v)
-                    for k, v in data.items()}
+        norm = {k: (v[0] if isinstance(v, list) and v else v) for k, v in data.items()}
         return norm
     return {}
 
@@ -4836,8 +4530,7 @@ def route_to(page, opp_id=None, tab=None, replace=False):
     st.session_state["route_opp_id"] = opp_id
     st.session_state["route_tab"] = tab
     # Update URL query params
-    _qp_set(page=page, opp=(opp_id if opp_id is not None else None),
-            tab=(tab if tab else None))
+    _qp_set(page=page, opp=(opp_id if opp_id is not None else None), tab=(tab if tab else None))
 
 def _get_notice_title_from_db(opp_id):
     # Best effort lookup. Works even if schema differs.
@@ -4855,8 +4548,7 @@ def _get_notice_title_from_db(opp_id):
         ]
         for table, cols in candidates:
             # Does the table exist
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
             row = cur.fetchone()
             if not row:
                 continue
@@ -4916,12 +4608,10 @@ def _render_opportunity_workspace():
         current = "overview"
     idx = tabs.index(current)
     try:
-        selected = st.radio("Workspace", options=list(
-            range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
+        selected = st.radio("Workspace", options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
     except TypeError:
         # Streamlit < 1.29 does not have horizontal
-        selected = st.radio("Workspace", options=list(
-            range(len(tabs))), index=idx, format_func=lambda i: labels[i])
+        selected = st.radio("Workspace", options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i])
     if tabs[selected] != current:
         route_to("opportunity", opp_id=opp_id, tab=tabs[selected])
         st.stop()
@@ -5006,8 +4696,7 @@ def _get_notice_meta_from_db(opp_id):
             })
         ]
         for table, cols in table_candidates:
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
             if not cur.fetchone():
                 continue
             cur.execute("PRAGMA table_info(%s)" % table)
@@ -5024,8 +4713,7 @@ def _get_notice_meta_from_db(opp_id):
             sel_cols = [c for c in [c_title, c_agency, c_due, c_set] if c]
             if not sel_cols:
                 continue
-            cur.execute("SELECT %s FROM %s WHERE id=?" %
-                        (", ".join(sel_cols), table), (opp_id,))
+            cur.execute("SELECT %s FROM %s WHERE id=?" % (", ".join(sel_cols), table), (opp_id,))
             row = cur.fetchone()
             if row:
                 idx = 0
@@ -5038,8 +4726,7 @@ def _get_notice_meta_from_db(opp_id):
                 if c_set:
                     raw = row[idx]
                     if isinstance(raw, str):
-                        parts = [p.strip()
-                                         for p in re.split(r"[;,/|]", raw) if p.strip()]
+                        parts = [p.strip() for p in re.split(r"[;,/|]", raw) if p.strip()]
                     elif isinstance(raw, (list, tuple)):
                         parts = list(raw)
                     else:
@@ -5169,21 +4856,16 @@ def _render_opportunity_workspace():
             st.caption(f'Due: {due}')
     with top_cols[2]:
         _render_badges(meta.get('set_asides') or [])
-    tabs = ['details','analyzer','compliance',
-        'proposal','pricing','vendors','submission']
-    labels = ['Details','Analyzer','Compliance',
-        'Proposal','Pricing','VendorsRFQ','Submission']
-    current = route.get('tab') or st.session_state.get(
-        'active_opportunity_tab') or 'details'
+    tabs = ['details','analyzer','compliance','proposal','pricing','vendors','submission']
+    labels = ['Details','Analyzer','Compliance','Proposal','Pricing','VendorsRFQ','Submission']
+    current = route.get('tab') or st.session_state.get('active_opportunity_tab') or 'details'
     if current not in tabs:
         current = 'details'
     idx = tabs.index(current)
     try:
-        sel = st.radio('Workspace', options=list(range(len(tabs))),
-                       index=idx, format_func=lambda i: labels[i], horizontal=True)
+        sel = st.radio('Workspace', options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i], horizontal=True)
     except TypeError:
-        sel = st.radio('Workspace', options=list(range(len(tabs))),
-                       index=idx, format_func=lambda i: labels[i])
+        sel = st.radio('Workspace', options=list(range(len(tabs))), index=idx, format_func=lambda i: labels[i])
     new_tab = tabs[sel]
     if new_tab != current:
         st.session_state['active_opportunity_tab'] = new_tab
@@ -5242,8 +4924,7 @@ def set_user_smtp_app_password(user: str, app_password: str):
     u["smtp_host"] = "smtp.gmail.com"
     u["smtp_port"] = 587
     u["username"] = USER_EMAILS.get(user, "")
-    u["app_password_b64"] = base64.b64encode(
-        (app_password or "").encode("utf-8")).decode("ascii")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
     store[user] = u
     _save_mail_store(store)
 
@@ -5252,8 +4933,7 @@ def get_user_mail_config(user: str):
     rec = store.get(user, {})
     if not rec:
         return None
-    pw = base64.b64decode(rec.get("app_password_b64", "").encode(
-        "ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
     return {
         "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
         "smtp_port": rec.get("smtp_port", 587),
@@ -5265,8 +4945,7 @@ def get_user_mail_config(user: str):
 def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
-        raise RuntimeError(
-            f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
 
     msg = EmailMessage()
     msg["Subject"] = subject or ""
@@ -5306,13 +4985,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             import uuid, urllib.parse as _u
             tid = tracking_id or str(uuid.uuid4())
             qp = {"id": tid, "to": ",".join(to_list)}
-            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace(
-                '{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
             body_html = (body_html or "") + pixel
             # Replace the last HTML alternative with updated body_html
             msg.clear_content()
-            plain = _re.sub(
-                "<[^<]+?>", "", body_html or "") if body_html else ""
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
             msg.set_content(plain or "(no content)")
             msg.add_alternative(body_html, subtype="html")
         except Exception:
@@ -5342,8 +5019,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
                     content = att["data"]
                 elif "content" in att and att["content"] is not None:
                     val = att["content"]
-                    content = val.getvalue() if hasattr(val, "getvalue") else (
-                        val.read() if hasattr(val, "read") else val)
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
                 elif "path" in att:
                     import os
                     path = att["path"]
@@ -5369,11 +5045,9 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             if not filename:
                 filename = "attachment.bin"
 
-            msg.add_attachment(content, maintype="application",
-                               subtype="octet-stream", filename=filename)
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(
-                f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -5382,8 +5056,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
-        server.send_message(
-            msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
         metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
@@ -5469,8 +5142,7 @@ def _do_login():
                 # Resolve identity into users table and set session ids
                 try:
                     conn = get_db()
-                    row = conn.execute(
-                        "SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
+                    row = conn.execute("SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
                     if row:
                         st.session_state["user_id"] = row[0]
                         st.session_state["org_id"] = row[1]
@@ -5478,8 +5150,7 @@ def _do_login():
                     else:
                         # fallback create if missing
                         oid = "org-ela"
-                        conn.execute(
-                            "INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
+                        conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
                                      (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
@@ -5492,16 +5163,14 @@ def _do_login():
                 # Resolve identity into users table and set session ids
                 try:
                     conn = get_db()
-                    row = conn.execute(
-                        "SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
+                    row = conn.execute("SELECT id, org_id, role FROM users WHERE display_name=?", (user,)).fetchone()
                     if row:
                         st.session_state["user_id"] = row[0]
                         st.session_state["org_id"] = row[1]
                         st.session_state["role"] = row[2]
                     else:
                         # Fallback create user mapped to default org
-                        cur = conn.execute(
-                            "SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
+                        cur = conn.execute("SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
                         oid = cur[0] if cur else "org-ela"
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
@@ -5528,8 +5197,7 @@ if not st.session_state.get("org_id") or not st.session_state.get("user_id"):
         conn = get_db()
         name = st.session_state.get("active_user")
         if name:
-            r = conn.execute(
-                "SELECT id, org_id FROM users WHERE display_name=?", (name,)).fetchone()
+            r = conn.execute("SELECT id, org_id FROM users WHERE display_name=?", (name,)).fetchone()
             if r:
                 st.session_state["user_id"], st.session_state["org_id"] = r[0], r[1]
     except Exception:
@@ -5555,11 +5223,9 @@ _selected = st.session_state.get("login_user_select")
 _active = st.session_state.get("active_user")
 if _active and _selected and _selected != _active:
     with st.sidebar:
-        st.warning(
-            f"You selected {_selected}. To switch from {_active}, click below then sign in.")
+        st.warning(f"You selected {_selected}. To switch from {_active}, click below then sign in.")
         if st.button(f"Switch to {_selected}", use_container_width=True, key="switch_user_btn"):
-            # this will trigger the login stop above on next run
-            st.session_state.pop("active_user", None)
+            st.session_state.pop("active_user", None)  # this will trigger the login stop above on next run
             st.session_state.pop("login_pin_input", None)
             st.rerun()
 
@@ -5615,8 +5281,7 @@ with st.sidebar:
         st.write("Update your sign-in PIN. New PIN must be 4–12 characters.")
         curr = st.text_input("Current PIN", type="password", key="pin_cur")
         new1 = st.text_input("New PIN", type="password", key="pin_new1")
-        new2 = st.text_input(
-            "Confirm New PIN", type="password", key="pin_new2")
+        new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
         if st.button("Update PIN", use_container_width=True, key="pin_update_btn"):
             if not _verify_pin(ACTIVE_USER, curr or ''):
                 st.error("Current PIN is incorrect.")
@@ -5628,8 +5293,7 @@ with st.sidebar:
                 set_user_pin(ACTIVE_USER, new1)
                 # Clear any cached login input
                 st.session_state.pop("login_pin_input", None)
-                st.success(
-                    "Your PIN has been updated. It will be required next time you sign in.")
+                st.success("Your PIN has been updated. It will be required next time you sign in.")
 
     st.session_state.setdefault(f"{ACTIVE_USER}::private_mode", True)
     NS["private_mode"] = st.toggle(
@@ -5668,8 +5332,7 @@ with st.sidebar:
     if st.button("Publish my changes", use_container_width=True, key="publish_btn"):
         errs = publish_changes()
         if not errs:
-            st.success(
-                "All your private changes are now published to the team data.")
+            st.success("All your private changes are now published to the team data.")
         else:
             st.error("Some changes failed to publish. See below for details.")
             for label, e in errs:
@@ -5717,8 +5380,7 @@ def set_user_smtp_app_password(user: str, app_password: str):
     u["smtp_host"] = "smtp.gmail.com"
     u["smtp_port"] = 587
     u["username"] = USER_EMAILS.get(user, "")
-    u["app_password_b64"] = base64.b64encode(
-        (app_password or "").encode("utf-8")).decode("ascii")
+    u["app_password_b64"] = base64.b64encode((app_password or "").encode("utf-8")).decode("ascii")
     store[user] = u
     _save_mail_store(store)
 
@@ -5727,8 +5389,7 @@ def get_user_mail_config(user: str):
     rec = store.get(user, {})
     if not rec:
         return None
-    pw = base64.b64decode(rec.get("app_password_b64", "").encode(
-        "ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
+    pw = base64.b64decode(rec.get("app_password_b64", "").encode("ascii")).decode("utf-8") if rec.get("app_password_b64") else ""
     return {
         "smtp_host": rec.get("smtp_host", "smtp.gmail.com"),
         "smtp_port": rec.get("smtp_port", 587),
@@ -5740,8 +5401,7 @@ def get_user_mail_config(user: str):
 def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_addrs=None, bcc_addrs=None, attachments=None, add_read_receipts=False, tracking_pixel_url=None, tracking_id=None):
     cfg = get_user_mail_config(user)
     if not cfg or not cfg.get("username") or not cfg.get("password"):
-        raise RuntimeError(
-            f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
+        raise RuntimeError(f"No email credentials configured for {user}. Set a Gmail App Password in the sidebar.")
 
     msg = EmailMessage()
     msg["Subject"] = subject or ""
@@ -5782,13 +5442,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             import uuid, urllib.parse as _u
             tid = tracking_id or str(uuid.uuid4())
             qp = {"id": tid, "to": ",".join(to_list)}
-            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace(
-                '{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
+            pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
             body_html = (body_html or "") + pixel
             # Replace the last HTML alternative with updated body_html
             msg.clear_content()
-            plain = _re.sub(
-                "<[^<]+?>", "", body_html or "") if body_html else ""
+            plain = _re.sub("<[^<]+?>", "", body_html or "") if body_html else ""
             msg.set_content(plain or "(no content)")
             msg.add_alternative(body_html, subtype="html")
         except Exception:
@@ -5819,8 +5477,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
                     content = att["data"]
                 elif "content" in att and att["content"] is not None:
                     val = att["content"]
-                    content = val.getvalue() if hasattr(val, "getvalue") else (
-                        val.read() if hasattr(val, "read") else val)
+                    content = val.getvalue() if hasattr(val, "getvalue") else (val.read() if hasattr(val, "read") else val)
                 elif "path" in att:
                     import os
                     path = att["path"]
@@ -5846,11 +5503,9 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
             if not filename:
                 filename = "attachment.bin"
 
-            msg.add_attachment(content, maintype="application",
-                               subtype="octet-stream", filename=filename)
+            msg.add_attachment(content, maintype="application", subtype="octet-stream", filename=filename)
         except Exception as e:
-            raise RuntimeError(
-                f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
+            raise RuntimeError(f"Failed to attach {getattr(att,'name', getattr(att,'path', 'file'))}: {e}")
 
     all_rcpts = to_list + cc_list + bcc_list
 
@@ -5860,8 +5515,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
-        server.send_message(
-            msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
+        server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
         metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 
@@ -5891,24 +5545,21 @@ def _normalize_extra_files(files):
                             with open(val, "rb") as fh:
                                 out.append({"name": name, "data": fh.read()})
                         else:
-                            out.append(
-                                {"name": name, "data": val.encode("utf-8")})
+                            out.append({"name": name, "data": val.encode("utf-8")})
                     continue
                 if "path" in f and f["path"]:
                     import os
                     path = f["path"]
                     try:
                         with open(path, "rb") as fh:
-                            out.append(
-                                {"name": name or os.path.basename(path), "data": fh.read()})
+                            out.append({"name": name or os.path.basename(path), "data": fh.read()})
                     except Exception:
                         pass
                     continue
 
             # Streamlit UploadedFile or similar
             if hasattr(f, "getvalue"):
-                out.append(
-                    {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                 continue
             if hasattr(f, "read"):
                 try:
@@ -5917,8 +5568,7 @@ def _normalize_extra_files(files):
                     pass
                 try:
                     data = f.read()
-                    out.append(
-                        {"name": getattr(f, "name", "file"), "data": data})
+                    out.append({"name": getattr(f, "name", "file"), "data": data})
                     continue
                 except Exception:
                     pass
@@ -5929,8 +5579,7 @@ def _normalize_extra_files(files):
                 if os.path.exists(f):
                     try:
                         with open(f, "rb") as fh:
-                            out.append(
-                                {"name": os.path.basename(f), "data": fh.read()})
+                            out.append({"name": os.path.basename(f), "data": fh.read()})
                         continue
                     except Exception:
                         pass
@@ -6000,26 +5649,22 @@ def render_outreach_tools():
                             import os
                             if os.path.exists(val):
                                 with open(val, "rb") as fh:
-                                    out.append(
-                                        {"name": name, "data": fh.read()})
+                                    out.append({"name": name, "data": fh.read()})
                             else:
-                                out.append(
-                                    {"name": name, "data": val.encode("utf-8")})
+                                out.append({"name": name, "data": val.encode("utf-8")})
                     elif "path" in f and f["path"]:
                         import os
                         path = f["path"]
                         try:
                             with open(path, "rb") as fh:
-                                out.append(
-                                    {"name": name or os.path.basename(path), "data": fh.read()})
+                                out.append({"name": name or os.path.basename(path), "data": fh.read()})
                         except Exception:
                             pass
                     continue
 
                 # Streamlit UploadedFile or similar
                 if hasattr(f, "getvalue"):
-                    out.append(
-                        {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                    out.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                     continue
                 if hasattr(f, "read"):
                     try:
@@ -6028,8 +5673,7 @@ def render_outreach_tools():
                         pass
                     try:
                         data = f.read()
-                        out.append(
-                            {"name": getattr(f, "name", "file"), "data": data})
+                        out.append({"name": getattr(f, "name", "file"), "data": data})
                         continue
                     except Exception:
                         pass
@@ -6040,8 +5684,7 @@ def render_outreach_tools():
                     if os.path.exists(f):
                         try:
                             with open(f, "rb") as fh:
-                                out.append(
-                                    {"name": os.path.basename(f), "data": fh.read()})
+                                out.append({"name": os.path.basename(f), "data": fh.read()})
                             continue
                         except Exception:
                             pass
@@ -6075,10 +5718,8 @@ def render_outreach_tools():
         raise last_err or RuntimeError("No outreach sender is available")
 
     # ---------- Stable session keys ----------
-    # snapshot for the Gmail-style preview card
-    SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"
-    # extra attachments uploaded by user (UploadedFile list)
-    SKEY_ATTACH  = f"{ACTIVE_USER}::outreach::extra_attachments"
+    SKEY_PREVIEW = f"{ACTIVE_USER}::outreach::preview"             # snapshot for the Gmail-style preview card
+    SKEY_ATTACH  = f"{ACTIVE_USER}::outreach::extra_attachments"   # extra attachments uploaded by user (UploadedFile list)
     SKEY_LASTSIG = f"{ACTIVE_USER}::outreach::last_loaded_sig"
 
     st.session_state.setdefault(SKEY_PREVIEW, None)
@@ -6092,11 +5733,9 @@ def render_outreach_tools():
         top_l, top_r = st.columns([3,2])
         with top_l:
             st.markdown("### ✉️ Outreach")
-            st.caption(
-                f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
+            st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with st.container(border=True):
-            mode = st.radio("Send to", [
-                            "Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
+            mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
 
 
 
@@ -6106,18 +5745,14 @@ def render_outreach_tools():
             st.markdown("#### Contacts")
             # Read receipts + tracking pixel options
             with st.expander("Delivery & Tracking options", expanded=False):
-                want_rr = st.checkbox(
-                    "Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
-                pixel_url = st.text_input(
-                    "Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
+                want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
+                pixel_url = st.text_input("Optional tracking pixel URL (https://...)", value="", key="outreach_pixel_url")
             # Load contacts from CSV
             col_c1, col_c2 = st.columns([2,1])
             with col_c1:
-                search = st.text_input(
-                    "Search contacts", key="outreach_contact_search")
+                search = st.text_input("Search contacts", key="outreach_contact_search")
             with col_c2:
-                uploaded = st.file_uploader(
-                    "", type=["csv"], key="outreach_contacts_csv")
+                uploaded = st.file_uploader("", type=["csv"], key="outreach_contacts_csv")
             contacts = []
             import os, csv
             # Prefer uploaded CSV
@@ -6125,10 +5760,8 @@ def render_outreach_tools():
                 try:
                     txt = uploaded.getvalue().decode("utf-8", errors="ignore")
                     for row in csv.DictReader(txt.splitlines()):
-                        nm = row.get("name") or row.get(
-                            "Name") or row.get("full_name") or ""
-                        em = row.get("email") or row.get(
-                            "Email") or row.get("mail") or ""
+                        nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                        em = row.get("email") or row.get("Email") or row.get("mail") or ""
                         if em:
                             contacts.append({"name": nm, "email": em})
                 except Exception:
@@ -6140,10 +5773,8 @@ def render_outreach_tools():
                     if os.path.exists(path):
                         with open(path, "r", encoding="utf-8") as f:
                             for row in csv.DictReader(f):
-                                nm = row.get("name") or row.get(
-                                    "Name") or row.get("full_name") or ""
-                                em = row.get("email") or row.get(
-                                    "Email") or row.get("mail") or ""
+                                nm = row.get("name") or row.get("Name") or row.get("full_name") or ""
+                                em = row.get("email") or row.get("Email") or row.get("mail") or ""
                                 if em:
                                     contacts.append({"name": nm, "email": em})
                 except Exception:
@@ -6152,20 +5783,15 @@ def render_outreach_tools():
             # Filter by search
             s = (search or "").lower().strip()
             if s:
-                contacts = [c for c in contacts if s in (
-                    c.get("name","")+c.get("email","")).lower()]
+                contacts = [c for c in contacts if s in (c.get("name","")+c.get("email","")).lower()]
 
             # Options
-            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get(
-                "name") else c["email"] for c in contacts]
-            selected = st.multiselect(
-                "Recipients", labels, key="outreach_contact_sel")
+            labels = [f'{c.get("name") or ""} <{c["email"]}>' if c.get("name") else c["email"] for c in contacts]
+            selected = st.multiselect("Recipients", labels, key="outreach_contact_sel")
 
             subj = st.text_input("Subject", key="outreach_contact_subject")
-            body = st.text_area("Body (HTML allowed)",
-                                key="outreach_contact_body", height=220)
-            c_files = st.file_uploader(
-                "Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
+            body = st.text_area("Body (HTML allowed)", key="outreach_contact_body", height=220)
+            c_files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key="outreach_contact_files")
 
             if st.button("Send to selected contacts", use_container_width=True, key="outreach_contact_send"):
                 emails = []
@@ -6193,19 +5819,16 @@ def render_outreach_tools():
                             send_outreach_email(
                                 ACTIVE_USER, [em], subj, body,
                                 cc_addrs=None, bcc_addrs=None, attachments=atts,
-                                add_read_receipts=want_rr, tracking_pixel_url=(
-                                    pixel_url or None),
+                                add_read_receipts=want_rr, tracking_pixel_url=(pixel_url or None),
                                 tracking_id=batch_id + "::" + em
                             )
                             sent += 1
                         except Exception as e:
                             failures.append((em, str(e)))
                     # Log
-                    _log_contact_outreach(
-                        [{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
+                    _log_contact_outreach([{"mode":"contacts","to": em, "subject": subj, "batch_id": batch_id} for em in emails])
                     if failures:
-                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + \
-                                 "; ".join([f"{a} ({b})" for a,b in failures]))
+                        st.error(f"Sent {sent} / {len(emails)}. Failures: " + "; ".join([f"{a} ({b})" for a,b in failures]))
                     else:
                         st.success(f"Sent {sent} / {len(emails)}")
         # Stop rendering vendor section if Contacts mode
@@ -6217,8 +5840,7 @@ def render_outreach_tools():
 
     # ---- Account: App Password (still here) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        pw = st.text_input("Gmail App Password", type="password",
-                           key=ns_key("outreach::gmail_app_pw"))
+        pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             try:
                 set_user_smtp_app_password(ACTIVE_USER, pw)
@@ -6260,15 +5882,12 @@ def render_outreach_tools():
             if st.button("Generate preview", key=ns_key("outreach::gen_preview"), use_container_width=True):
                 files = st.session_state.get(SKEY_ATTACH) or []
                 if not files:
-                    st.warning(
-                        "Please upload at least one attachment before generating the preview.")
+                    st.warning("Please upload at least one attachment before generating the preview.")
                 else:
                     # Build display names from generated attachments + uploaded files
-                    gen_names = _normalize_sel_attachments(
-                        sel.get("attachments"))
+                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
                     try:
-                        upload_names = [
-                            {"name": getattr(f, "name", "file")} for f in files]
+                        upload_names = [{"name": getattr(f, "name", "file")} for f in files]
                     except Exception:
                         upload_names = []
                     st.session_state[SKEY_PREVIEW] = {
@@ -6290,12 +5909,10 @@ def render_outreach_tools():
                 if st.button("Send selected now", key=ns_key("outreach::send_selected_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
-                        st.warning(
-                            "Please upload at least one attachment before sending.")
+                        st.warning("Please upload at least one attachment before sending.")
                     else:
                         try:
-                            merged_atts = _normalize_sel_attachments(
-                                sel.get("attachments")) + _normalize_extra_files(files)
+                            merged_atts = _normalize_sel_attachments(sel.get("attachments")) + _normalize_extra_files(files)
                             _send_email(
                                 ACTIVE_USER,
                                 sel.get("to",""),
@@ -6312,16 +5929,14 @@ def render_outreach_tools():
                 if st.button("Send ALL generated now", key=ns_key("outreach::send_all_now"), use_container_width=True):
                     files = st.session_state.get(SKEY_ATTACH) or []
                     if not files:
-                        st.warning(
-                            "Please upload at least one attachment before mass sending.")
+                        st.warning("Please upload at least one attachment before mass sending.")
                     else:
                         mb_all = st.session_state.get("mail_bodies") or []
                         sent = 0
                         failures = []
                         for i, itm in enumerate(mb_all, start=1):
                             try:
-                                merged_atts = _normalize_sel_attachments(
-                                    itm.get("attachments")) + _normalize_extra_files(files)
+                                merged_atts = _normalize_sel_attachments(itm.get("attachments")) + _normalize_extra_files(files)
                                 _send_email(
                                     ACTIVE_USER,
                                     itm.get("to",""),
@@ -6333,33 +5948,24 @@ def render_outreach_tools():
                                 )
                                 sent += 1
                             except Exception as e:
-                                failures.append(
-                                    (i, itm.get("subject",""), str(e)))
+                                failures.append((i, itm.get("subject",""), str(e)))
                         if failures:
-                            st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join(
-                                [f"#{i} {subj} ({err})" for i, subj, err in failures]))
+                            st.error(f"Sent {sent} / {len(mb_all)}. Failures: " + "; ".join([f"#{i} {subj} ({err})" for i, subj, err in failures]))
                         else:
-                            # ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
-                            st.success(f"Sent all {sent} generated emails.")
+                            st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
         st.markdown("#### Preview")
         if not snap:
-            st.info(
-                "Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
+            st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
         else:
             # Header block similar to Gmail
             hdr_lines = []
-            if snap.get("from_addr"): hdr_lines.append(
-                f"<div><b>From:</b> {snap['from_addr']}</div>")
-            if snap.get("to"):        hdr_lines.append(
-                f"<div><b>To:</b> {snap['to']}</div>")
-            if snap.get("cc"):        hdr_lines.append(
-                f"<div><b>Cc:</b> {snap['cc']}</div>")
-            if snap.get("bcc"):       hdr_lines.append(
-                f"<div><b>Bcc:</b> {snap['bcc']}</div>")
-            if snap.get("subject"):   hdr_lines.append(
-                f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
+            if snap.get("from_addr"): hdr_lines.append(f"<div><b>From:</b> {snap['from_addr']}</div>")
+            if snap.get("to"):        hdr_lines.append(f"<div><b>To:</b> {snap['to']}</div>")
+            if snap.get("cc"):        hdr_lines.append(f"<div><b>Cc:</b> {snap['cc']}</div>")
+            if snap.get("bcc"):       hdr_lines.append(f"<div><b>Bcc:</b> {snap['bcc']}</div>")
+            if snap.get("subject"):   hdr_lines.append(f"<div style='font-size:16px;margin-top:4px;'><b>Subject:</b> {snap['subject']}</div>")
 
             # Meta row: Scope Summary & Quote Due
             meta_bits = []
@@ -6380,25 +5986,23 @@ def render_outreach_tools():
                 st.session_state[SKEY_ATTACH] = extra_files
 
             # Body
-            body_html = (snap.get("body_html") or "").strip(
-            ) or "<p><i>(No body content)</i></p>"
+            body_html = (snap.get("body_html") or "").strip() or "<p><i>(No body content)</i></p>"
 
             # Attachments display
             atts_html = ""
             atts = snap.get("attachments") or []
             if atts:
-                items = "".join(
-                    [f"<li>{(a.get('name') if isinstance(a,dict) else str(a))}</li>" for a in atts])
+                items = "".join([f"<li>{(a.get('name') if isinstance(a,dict) else str(a))}</li>" for a in atts])
                 atts_html = ("<div style='margin-top:8px;'><b>Attachments:</b>"
                              f"<ul style='margin:6px 0 0 20px;'>{items}</ul></div>")
 
             components.html(f"""
-                < div style = "border:1px solid #ddd;border-radius:8px;padding:14px;" >
-                    <div style = "margin-bottom:8px;" > {''.join(hdr_lines)} < /div >
-                    <div style = "margin-bottom:8px;" > {''.join(meta_bits)} < /div >
-                    <div style = "border:1px solid #eee;padding:10px;border-radius:6px;" > {body_html} < /div >
+                <div style="border:1px solid #ddd;border-radius:8px;padding:14px;">
+                    <div style="margin-bottom:8px;">{''.join(hdr_lines)}</div>
+                    <div style="margin-bottom:8px;">{''.join(meta_bits)}</div>
+                    <div style="border:1px solid #eee;padding:10px;border-radius:6px;">{body_html}</div>
                     {atts_html}
-                < /div >
+                </div>
             """, height=520, scrolling=True)
 
             # Actions under the preview
@@ -6444,8 +6048,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     st.subheader("Email – Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
@@ -6457,12 +6060,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
-            subj = st.session_state.get(
-                ns_key("outreach::mail_subj"), "") or ""
-            body = st.session_state.get(
-                ns_key("outreach::mail_body"), "") or ""
-            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get(
-                "attachments", [])
+            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
+            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
+            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
             st.session_state[ns_key("outreach::mail_preview_data")] = {
                 "to": to,
                 "cc": cc,
@@ -6477,27 +6077,21 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -6506,8 +6100,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 try:
                     for f in (files or []):
                         try:
-                            atts.append(
-                                {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                         except Exception:
                             pass
                 except Exception:
@@ -6524,8 +6117,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(
-                        ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
@@ -6545,9 +6137,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             html = preview.get("body_html") or ""
             components.html(
                 f"""
-                < div style = "border:1px solid #ddd;padding:16px;margin-top:8px;" >
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
                     {html}
-                < /div >
+                </div>
                 """,
                 height=400,
                 scrolling=True,
@@ -6566,8 +6158,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                         self._data = data
                     def getvalue(self):
                         return self._data
-                mem_files = [
-                    _MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
                 try:
                     send_outreach_email(
                         ACTIVE_USER,
@@ -6579,8 +6170,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                         attachments=mem_files
                     )
                     st.success("Email sent.")
-                    st.session_state[ns_key(
-                        "outreach::mail_preview_data")] = None
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
                 except Exception as e:
@@ -6590,8 +6180,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
@@ -6606,14 +6195,11 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             to = st.session_state.get(ns_key("outreach::mail_to"), "") or ""
             cc = st.session_state.get(ns_key("outreach::mail_cc"), "") or ""
             bcc = st.session_state.get(ns_key("outreach::mail_bcc"), "") or ""
-            subj = st.session_state.get(
-                ns_key("outreach::mail_subj"), "") or ""
-            body = st.session_state.get(
-                ns_key("outreach::mail_body"), "") or ""
+            subj = st.session_state.get(ns_key("outreach::mail_subj"), "") or ""
+            body = st.session_state.get(ns_key("outreach::mail_body"), "") or ""
             # Attachments are not easily accessible from header because uploader holds file objects;
             # keep whatever was already captured if a composer preview was taken, else empty.
-            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get(
-                "attachments", [])
+            atts = (st.session_state.get(ns_key("outreach::mail_preview_data")) or {}).get("attachments", [])
 
             st.session_state[ns_key("outreach::mail_preview_data")] = {
                 "to": to, "cc": cc, "bcc": bcc,
@@ -6627,29 +6213,23 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             st.session_state[ns_key("outreach::mail_preview_data")] = None
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     # === Quick Outreach Composer ===
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -6659,8 +6239,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 try:
                     for f in (files or []):
                         try:
-                            atts.append(
-                                {"name": getattr(f, "name", "file"), "data": f.getvalue()})
+                            atts.append({"name": getattr(f, "name", "file"), "data": f.getvalue()})
                         except Exception:
                             pass
                 except Exception:
@@ -6677,8 +6256,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(
-                        ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
@@ -6703,9 +6281,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             html = preview.get("body_html") or ""
             components.html(
                 f"""
-                < div style = "border:1px solid #ddd;padding:16px;margin-top:8px;" >
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
                     {html}
-                < /div >
+                </div>
                 """,
                 height=400,
                 scrolling=True,
@@ -6725,8 +6303,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                             self._data = data
                         def getvalue(self):
                             return self._data
-                    mem_files = [
-                        _MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
                     try:
                         send_outreach_email(
                             ACTIVE_USER,
@@ -6738,32 +6315,26 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                             attachments=mem_files
                         )
                         st.success("Email sent.")
-                        st.session_state[ns_key(
-                            "outreach::mail_preview_data")] = None
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
                         for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                             NS.pop(k, None)
                     except Exception as e:
                         st.error(f"Failed to send: {e}")
             with cc2:
                 if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[ns_key(
-                        "outreach::mail_preview_data")] = None
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     # Preview state
     st.session_state.setdefault(ns_key("outreach::mail_preview_data"), None)
@@ -6772,15 +6343,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
 
         c1, c2 = st.columns(2)
         with c1:
@@ -6811,8 +6379,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         with c2:
             if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
                 try:
-                    send_outreach_email(
-                        ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                    send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                     st.success("Email sent.")
                     for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                         NS.pop(k, None)
@@ -6840,9 +6407,9 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             html = preview.get("body_html") or ""
             components.html(
                 f"""
-                < div style = "border:1px solid #ddd;padding:16px;margin-top:8px;" >
+                <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
                     {html}
-                < /div >
+                </div>
                 """,
                 height=400,
                 scrolling=True,
@@ -6865,8 +6432,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                             self._data = data
                         def getvalue(self):
                             return self._data
-                    mem_files = [
-                        _MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
+                    mem_files = [_MemFile(a.get("name","file"), a.get("data", b"")) for a in atts]
                     try:
                         send_outreach_email(
                             ACTIVE_USER,
@@ -6878,8 +6444,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                             attachments=mem_files
                         )
                         st.success("Email sent.")
-                        st.session_state[ns_key(
-                            "outreach::mail_preview_data")] = None
+                        st.session_state[ns_key("outreach::mail_preview_data")] = None
                         # Clear compose fields
                         for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                             NS.pop(k, None)
@@ -6887,42 +6452,33 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                         st.error(f"Failed to send: {e}")
             with cc2:
                 if st.button("Close preview", key=ns_key("outreach::mail_preview_close")):
-                    st.session_state[ns_key(
-                        "outreach::mail_preview_data")] = None
+                    st.session_state[ns_key("outreach::mail_preview_data")] = None
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
-        st.caption(
-            "No email configured for this user. Only Charles and Collin are set up.")
+        st.caption("No email configured for this user. Only Charles and Collin are set up.")
     else:
         st.caption(f"From: {from_addr}")
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        st.caption(
-            "Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)",
-                               type="password", key=ns_key("outreach::gmail_app_pw"))
+        st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
-            st.success(
-                "Saved. You can now send emails from the Outreach composer.")
+            st.success("Saved. You can now send emails from the Outreach composer.")
 
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)",
-                           key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)",
-                            key=ns_key("outreach::mail_bcc"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
-        files = st.file_uploader(
-            "Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
         if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
-                send_outreach_email(ACTIVE_USER, to, subj, body,
-                                    cc_addrs=cc, bcc_addrs=bcc, attachments=files)
+                send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
                 st.success("Email sent.")
                 for k in ["outreach::mail_to","outreach::mail_cc","outreach::mail_bcc","outreach::mail_subj","outreach::mail_body","outreach::mail_files"]:
                     NS.pop(k, None)
@@ -7009,13 +6565,11 @@ try:
     from openai import OpenAI  # openai>=1.40.0 recommended
     _openai_version = getattr(_openai_pkg, "__version__", "unknown")
 except Exception as e:
-    st.warning(
-        "OpenAI SDK missing or too old. Chat features disabled until installed.")
+    st.warning("OpenAI SDK missing or too old. Chat features disabled until installed.")
     OpenAI = None
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key(
-    "OPENAI_MODEL") or "gpt-5-chat-latest")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
 _OPENAI_FALLBACK_MODELS = [
     OPENAI_MODEL,
     "gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
@@ -7058,13 +6612,10 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
         smtp_user = smtp_pass = None
 
     if smtp_user and smtp_pass:
-        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(
-            st, "secrets") else smtp_user
-        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(
-            st, "secrets") else None
+        from_addr = st.secrets.get("smtp_from", smtp_user) if hasattr(st, "secrets") else smtp_user
+        reply_to = st.secrets.get("smtp_reply_to", None) if hasattr(st, "secrets") else None
         try:
-            _send_via_smtp_host(to_addr, subject, body, from_addr,
-                                "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
+            _send_via_smtp_host(to_addr, subject, body, from_addr, "smtp.gmail.com", 587, smtp_user, smtp_pass, reply_to)
             return "Sent"
         except Exception as e:
             try:
@@ -7082,14 +6633,12 @@ def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
     except Exception:
         try:
             import streamlit as _st
-            _st.warning(
-                "Email preview mode is active. Configure SMTP or Graph to send.")
+            _st.warning("Email preview mode is active. Configure SMTP or Graph to send.")
         except Exception:
             pass
         return "Preview"
 
-st.set_page_config(page_title="GovCon Copilot Pro",
-                   page_icon="ðŸ§°", layout="wide")
+st.set_page_config(page_title="GovCon Copilot Pro", page_icon="ðŸ§°", layout="wide")
 
 # ---- Date helpers for SAM search ----
 
@@ -7140,8 +6689,8 @@ from datetime import datetime
 
 def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None) -> str:
     """
-    Send mail using Microsoft Graph with application permissions(client credentials).
-    Uses / users/{sender}/sendMail. Returns "Sent" on success or a short diagnostic string on error.
+    Send mail using Microsoft Graph with application permissions (client credentials).
+    Uses /users/{sender}/sendMail. Returns "Sent" on success or a short diagnostic string on error.
     Env/settings used:
       - MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET
       - MS_SENDER_UPN or settings key ms_sender_upn
@@ -7154,25 +6703,21 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
 
     # Load config: prefer env, then settings table if available
     try:
-        sender = sender_upn or os.getenv(
-            "MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
+        sender = sender_upn or os.getenv("MS_SENDER_UPN") or get_setting("ms_sender_upn", "")
     except Exception:
         sender = sender_upn or os.getenv("MS_SENDER_UPN") or ""
 
     # MS_* may already be loaded at module level; fall back to env/settings if empty
     try:
-        _tenant = os.getenv("MS_TENANT_ID") or get_setting(
-            "MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
+        _tenant = os.getenv("MS_TENANT_ID") or get_setting("MS_TENANT_ID", "") or get_setting("ms_tenant_id", "")
     except Exception:
         _tenant = os.getenv("MS_TENANT_ID") or ""
     try:
-        _client_id = os.getenv("MS_CLIENT_ID") or get_setting(
-            "MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
+        _client_id = os.getenv("MS_CLIENT_ID") or get_setting("MS_CLIENT_ID", "") or get_setting("ms_client_id", "")
     except Exception:
         _client_id = os.getenv("MS_CLIENT_ID") or ""
     try:
-        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting(
-            "MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
+        _client_secret = os.getenv("MS_CLIENT_SECRET") or get_setting("MS_CLIENT_SECRET", "") or get_setting("ms_client_secret", "")
     except Exception:
         _client_secret = os.getenv("MS_CLIENT_SECRET") or ""
 
@@ -7222,8 +6767,7 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
     try:
         r = requests.post(
             send_url,
-            headers={"Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
             timeout=30,
         )
@@ -7248,12 +6792,10 @@ def send_via_graph(to_addr: str, subject: str, body: str, sender_upn: str = None
 def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "", date_to: str = "", keyword: str = "", limit: int = 200, st_debug=None):
     import requests, pandas as pd, json
     url = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
-    headers = {"Content-Type": "application/json",
-        "Accept": "application/json"}
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
     type_codes = ["A","B","C","D"]
     def make_filters(n, p, k, start, end):
-        f = {"time_period": [{"start_date": start, "end_date": end}],
-            "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
+        f = {"time_period": [{"start_date": start, "end_date": end}], "award_type_codes": type_codes, "prime_or_sub": "prime_only"}
         if n: f["naics_codes"] = [n]
         if p: f["psc_codes"] = [p]
         if k: f["keywords"] = [k]
@@ -7261,14 +6803,12 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
     if not date_from or not date_to:
         from datetime import datetime, timedelta
         end = datetime.utcnow().date().strftime("%Y-%m-%d")
-        start = (datetime.utcnow().date() - \
-                 timedelta(days=365*2)).strftime("%Y-%m-%d")
+        start = (datetime.utcnow().date() - timedelta(days=365*2)).strftime("%Y-%m-%d")
         date_from, date_to = date_from or start, date_to or end
     attempts = [("full", make_filters(naics, psc, keyword, date_from, date_to)),
                 ("no_psc", make_filters(naics, "", keyword, date_from, date_to)),
                 ("no_naics", make_filters("", psc, keyword, date_from, date_to)),
-                ("keyword_only", make_filters(
-                    "", "", keyword or "", date_from, date_to)),
+                ("keyword_only", make_filters("", "", keyword or "", date_from, date_to)),
                 ("bare", make_filters("", "", "", date_from, date_to))]
     last_detail = ""
     for name, flt in attempts:
@@ -7363,8 +6903,7 @@ def sam_search(
         notice_types = "Combined Synopsis/Solicitation,Solicitation"
     params["noticeType"] = notice_types
 
-    if naics_list:   params["naics"] = ",".join(
-        [c for c in naics_list if c][:20])
+    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
     if keyword:      params["keywords"] = keyword
 
     try:
@@ -7379,8 +6918,7 @@ def sam_search(
         if status != 200:
             err_msg = ""
             if isinstance(data, dict):
-                err_msg = data.get("message") or (
-                    data.get("error") or {}).get("message") or ""
+                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
             return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
         if isinstance(data, dict) and data.get("message"):
             return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
@@ -7447,11 +6985,9 @@ def _contacts_upsert(name: str = "", org: str = "", role: str = "", email: str =
     row = None
     try:
         if email:
-            row = cur.execute(
-                "select id from contacts where lower(ifnull(email,'')) = lower(?) limit 1", (email,)).fetchone()
+            row = cur.execute("select id from contacts where lower(ifnull(email,'')) = lower(?) limit 1", (email,)).fetchone()
         if not row and (name and org):
-            row = cur.execute(
-                "select id from contacts where lower(ifnull(name,''))=lower(?) and lower(ifnull(org,''))=lower(?) limit 1", (name, org)).fetchone()
+            row = cur.execute("select id from contacts where lower(ifnull(name,''))=lower(?) and lower(ifnull(org,''))=lower(?) limit 1", (name, org)).fetchone()
     except Exception:
         row = None
 
@@ -7496,37 +7032,27 @@ def _extract_contacts_from_sam_row(r) -> list:
     import re
     agency = _g(["agency", "office", "department", "organization"]) or ""
 
-    poc_name = _g(["poc_name", "primary_poc_name", "pointOfContact",
-                  "primaryPointOfContact", "contact_name"]) or ""
-    poc_email = _g(["poc_email", "primary_poc_email",
-                   "pointOfContactEmail", "contact_email"]) or ""
-    poc_phone = _g(["poc_phone", "primary_poc_phone",
-                   "pointOfContactPhone", "contact_phone"]) or ""
+    poc_name = _g(["poc_name", "primary_poc_name", "pointOfContact", "primaryPointOfContact", "contact_name"]) or ""
+    poc_email = _g(["poc_email", "primary_poc_email", "pointOfContactEmail", "contact_email"]) or ""
+    poc_phone = _g(["poc_phone", "primary_poc_phone", "pointOfContactPhone", "contact_phone"]) or ""
 
-    co_name = _g(["co_name", "contracting_officer",
-                 "contractingOfficer", "buyer_name"]) or ""
-    co_email = _g(
-        ["co_email", "contracting_officer_email", "buyer_email"]) or ""
-    co_phone = _g(
-        ["co_phone", "contracting_officer_phone", "buyer_phone"]) or ""
+    co_name = _g(["co_name", "contracting_officer", "contractingOfficer", "buyer_name"]) or ""
+    co_email = _g(["co_email", "contracting_officer_email", "buyer_email"]) or ""
+    co_phone = _g(["co_phone", "contracting_officer_phone", "buyer_phone"]) or ""
 
     blob = _g(["description", "summary", "text", "body"]) or ""
     emails = []
     if blob:
-        emails = re.findall(
-            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob)
+        emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob)
 
     out = []
     if poc_email or poc_name or poc_phone:
-        out.append({"name": poc_name, "org": agency, "role": "POC",
-                   "email": poc_email, "phone": poc_phone, "source": "SAM.gov"})
+        out.append({"name": poc_name, "org": agency, "role": "POC", "email": poc_email, "phone": poc_phone, "source": "SAM.gov"})
     if co_email or co_name or co_phone:
-        out.append({"name": co_name, "org": agency, "role": "CO",
-                   "email": co_email, "phone": co_phone, "source": "SAM.gov"})
+        out.append({"name": co_name, "org": agency, "role": "CO", "email": co_email, "phone": co_phone, "source": "SAM.gov"})
 
     if not any(c.get("email") for c in out) and emails:
-        out.append({"name": "", "org": agency, "role": "POC",
-                   "email": emails[0], "phone": "", "source": "SAM.gov", "notes": "from description"})
+        out.append({"name": "", "org": agency, "role": "POC", "email": emails[0], "phone": "", "source": "SAM.gov", "notes": "from description"})
 
     seen = set(); dedup = []
     for c in out:
@@ -7540,20 +7066,18 @@ def _extract_contacts_from_sam_row(r) -> list:
 # (early use) ----
 def google_places_search(query, location="Houston, TX", radius_m=80000, strict=True):
     """
-    Google Places Text Search + Details(phone + website).
-    Returns(list_of_vendors, info). Emails are NOT provided by Places.
+    Google Places Text Search + Details (phone + website).
+    Returns (list_of_vendors, info). Emails are NOT provided by Places.
     """
     if not GOOGLE_PLACES_KEY:
         return [], {"ok": False, "reason": "missing_key", "detail": "GOOGLE_PLACES_API_KEY is empty."}
     try:
         # 1) Text Search
         search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-        search_params = {"query": f"{query} {location}",
-            "radius": radius_m, "key": GOOGLE_PLACES_KEY}
+        search_params = {"query": f"{query} {location}", "radius": radius_m, "key": GOOGLE_PLACES_KEY}
         rs = requests.get(search_url, params=search_params, timeout=25)
         status_code = rs.status_code
-        data = rs.json() if rs.headers.get(
-            "Content-Type","").startswith("application/json") else {}
+        data = rs.json() if rs.headers.get("Content-Type","").startswith("application/json") else {}
         api_status = data.get("status","")
         results = data.get("results", []) or []
 
@@ -7572,11 +7096,9 @@ def google_places_search(query, location="Houston, TX", radius_m=80000, strict=T
             phone, website = "", ""
             if place_id:
                 det_url = "https://maps.googleapis.com/maps/api/place/details/json"
-                det_params = {
-                    "place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
+                det_params = {"place_id": place_id, "fields": "formatted_phone_number,website", "key": GOOGLE_PLACES_KEY}
                 rd = requests.get(det_url, params=det_params, timeout=20)
-                det_json = rd.json() if rd.headers.get(
-                    "Content-Type","").startswith("application/json") else {}
+                det_json = rd.json() if rd.headers.get("Content-Type","").startswith("application/json") else {}
                 det = det_json.get("result", {})
                 phone = det.get("formatted_phone_number", "") or ""
                 website = det.get("website", "") or ""
@@ -7612,10 +7134,8 @@ def build_context(max_rows=6):
         rr = g.iloc[0]
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
                       f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
-    codes = pd.read_sql_query("select code from naics_watch order by code", conn)[
-                              "code"].tolist()
-    naics_line = ", ".join(
-        codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
+    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
         "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
         conn, params=(max_rows,)
@@ -7625,13 +7145,12 @@ def build_context(max_rows=6):
         f"due {str(r['response_due'])[:16]}", f"NAICS {str(r['naics'])[:18]}",
     ])) for _, r in opp.iterrows()]
     vend = pd.read_sql_query(
-        """select trim(substr(naics, 1, 6)) as code, count(*) as cnt
-           from vendors where ifnull(naics, '')<>''
-           group by trim(substr(naics, 1, 6)) order by cnt desc limit ?""",
+        """select trim(substr(naics,1,6)) as code, count(*) as cnt
+           from vendors where ifnull(naics,'')<>''
+           group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
         conn, params=(max_rows,)
     )
-    vend_lines = [
-        f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
+    vend_lines = [f"- {r['code']}: {int(r['cnt'])} vendors" for _, r in vend.iterrows()]
     return "\n".join([
         f"Company: {get_setting('company_name','ELA Management LLC')}",
         f"Home location: {get_setting('home_loc','Houston, TX')}",
