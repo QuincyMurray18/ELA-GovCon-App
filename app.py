@@ -360,7 +360,7 @@ def _add_paragraph_with_inlines(doc, text, style=None):
 
                 else:
 
-                    tokens.append(('text', sp))
+#                     tokens.append(('text', sp))
 
 
 
@@ -968,7 +968,7 @@ def get_db():
 
         conn.execute('PRAGMA foreign_keys=ON;')
 
-        conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
+#         conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
 
     except Exception:
 
@@ -1010,7 +1010,7 @@ def _tenancy_phase1_bootstrap():
 
             display_name TEXT,
 
-            role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
+#             role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
 
             created_at TEXT NOT NULL
 
@@ -1022,7 +1022,7 @@ def _tenancy_phase1_bootstrap():
 
         if row and row[0] == 0:
 
-            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
+#             cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
 
         # Ensure at least one user exists for the default org
 
@@ -1032,17 +1032,17 @@ def _tenancy_phase1_bootstrap():
 
             users = [
 
-                ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
+#                 ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
 
-                ('user-collin','org-default','collin@example.com','Collin','Member'),
+#                 ('user-collin','org-default','collin@example.com','Collin','Member'),
 
-                ('user-charles','org-default','charles@example.com','Charles','Viewer'),
+#                 ('user-charles','org-default','charles@example.com','Charles','Viewer'),
 
             ]
 
             for uid, oid, email, name, role in users:
 
-                cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+#                 cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
                             (uid, oid, email, name, role))
 
@@ -1976,13 +1976,13 @@ def _ensure_route_state_defaults():
 
     import streamlit as st
 
-    st.session_state.setdefault('route_page', 'dashboard')
+#     st.session_state.setdefault('route_page', 'dashboard')
 
-    st.session_state.setdefault('route_opp_id', None)
+#     st.session_state.setdefault('route_opp_id', None)
 
-    st.session_state.setdefault('route_tab', None)
+#     st.session_state.setdefault('route_tab', None)
 
-    st.session_state.setdefault('active_opportunity_tab', None)
+#     st.session_state.setdefault('active_opportunity_tab', None)
 
 
 
@@ -2006,7 +2006,7 @@ def _get_notice_meta_from_db(opp_id):
 
         table_candidates = [
 
-            ('notices', {
+#             ('notices', {
 
                 'title': ['title','notice_title','name','subject'],
 
@@ -2018,7 +2018,7 @@ def _get_notice_meta_from_db(opp_id):
 
             }),
 
-            ('opportunities', {
+#             ('opportunities', {
 
                 'title': ['title','name','subject'],
 
@@ -2182,7 +2182,7 @@ def render_details(opp_id):
 
     import streamlit as st
 
-    st.subheader('Details')
+#     st.subheader('Details')
 
     st.write('Opportunity ID:', opp_id)
 
@@ -2192,7 +2192,7 @@ def render_analyzer(opp_id):
 
     import streamlit as st
 
-    st.subheader('Analyzer')
+#     st.subheader('Analyzer')
 
     data = _load_analyzer_data(opp_id)
 
@@ -2210,9 +2210,9 @@ def render_analyzer(opp_id):
 
         if feature_flags().get('rtm', False):
 
-            st.markdown('---')
+#             st.markdown('---')
 
-            st.subheader('RTM')
+#             st.subheader('RTM')
 
             render_rtm_tab(int(opp_id))
 
@@ -2224,9 +2224,9 @@ def render_analyzer(opp_id):
 
         if feature_flags().get('submission_rules', False):
 
-            st.markdown('---')
+#             st.markdown('---')
 
-            st.subheader('Forms & Submission')
+#             st.subheader('Forms & Submission')
 
             render_forms_and_submission_tabs(int(opp_id))
 
@@ -2238,9 +2238,9 @@ def render_analyzer(opp_id):
 
         if feature_flags().get('sow_price_hints', False):
 
-            st.markdown('---')
+#             st.markdown('---')
 
-            st.subheader('SOW & Price hints')
+#             st.subheader('SOW & Price hints')
 
             render_sow_price_tabs(int(opp_id))
 
@@ -2252,9 +2252,9 @@ def render_analyzer(opp_id):
 
         if feature_flags().get('rfp_impact', False):
 
-            st.markdown('---')
+#             st.markdown('---')
 
-            st.subheader('Impact')
+#             st.subheader('Impact')
 
             render_rfp_impact_tab(int(opp_id))
 
@@ -2266,9 +2266,9 @@ def render_analyzer(opp_id):
 
         if feature_flags().get('builder_from_analyzer', False):
 
-            st.markdown('---')
+#             st.markdown('---')
 
-            st.subheader('Builder')
+#             st.subheader('Builder')
 
             render_builder_adapter_ui(int(opp_id))
 
@@ -2294,7 +2294,7 @@ def render_compliance(opp_id):
 
     import streamlit as st
 
-    st.subheader('Compliance')
+#     st.subheader('Compliance')
 
     data = _load_compliance_data(opp_id)
 
@@ -2306,7 +2306,7 @@ def render_proposal(opp_id):
 
     import streamlit as st
 
-    st.subheader('Proposal')
+#     st.subheader('Proposal')
 
     st.write({'opp_id': opp_id})
 
@@ -2316,7 +2316,7 @@ def render_pricing(opp_id):
 
     import streamlit as st
 
-    st.subheader('Pricing')
+#     st.subheader('Pricing')
 
     data = _load_pricing_data(opp_id)
 
@@ -2328,7 +2328,7 @@ def render_vendorsrfq(opp_id):
 
     import streamlit as st
 
-    st.subheader('Vendors RFQ')
+#     st.subheader('Vendors RFQ')
 
     data = _load_vendors_data(opp_id)
 
@@ -2340,7 +2340,7 @@ def render_submission(opp_id):
 
     import streamlit as st
 
-    st.subheader('Submission')
+#     st.subheader('Submission')
 
     data = _load_submission_data(opp_id)
 
@@ -2424,13 +2424,13 @@ def _render_opportunity_workspace():
 
     meta = _get_notice_meta_from_db(opp_id)
 
-    st.header(str(meta.get('title', '')))
+#     st.header(str(meta.get('title', '')))
 
     top_cols = st.columns([2,1,1])
 
     with top_cols[0]:
 
-        st.caption(str(meta.get('agency') or ''))
+#         st.caption(str(meta.get('agency') or ''))
 
     with top_cols[1]:
 
@@ -2442,7 +2442,7 @@ def _render_opportunity_workspace():
 
     with top_cols[2]:
 
-        _render_badges(meta.get('set_asides') or [])
+#         _render_badges(meta.get('set_asides') or [])
 
     tabs = ['details','analyzer','compliance','proposal','pricing','vendors','submission']
 
@@ -3032,11 +3032,11 @@ def _do_login():
 
                         oid = "org-ela"
 
-                        conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
+#                         conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
 
                         uid = f"u-{user.lower()}"
 
-                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+#                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
                                      (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
 
@@ -3078,9 +3078,9 @@ def _do_login():
 
                         uid = f"u-{user.lower()}"
 
-                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+#                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
-                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
+#                                      (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
 
                         st.session_state["user_id"] = uid
 
@@ -3154,7 +3154,7 @@ with st.sidebar:
 
     if st.session_state.get("active_user"):
 
-        st.caption(f"Signed in as {st.session_state['active_user']}")
+#         st.caption(f"Signed in as {st.session_state['active_user']}")
 
         if st.button("Sign out", use_container_width=True, key="logout_btn"):
 
@@ -4676,7 +4676,7 @@ def render_outreach_tools():
 
                                  "padding:4px 8px;border-radius:8px;margin-right:8px;'><b>Scope:</b> "
 
-                                 f"{snap['scope_summary']}</div>")
+#                                  f"{snap['scope_summary']}</div>")
 
             if snap.get("quote_due"):
 
@@ -4684,7 +4684,7 @@ def render_outreach_tools():
 
                                  "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
 
-                                 f"{snap['quote_due']}</div>")
+#                                  f"{snap['quote_due']}</div>")
 
 
 
@@ -5916,7 +5916,7 @@ def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
 
         msg['Reply-To'] = reply_to
 
-    msg.attach(MIMEText(body, 'plain'))
+#     msg.attach(MIMEText(body, 'plain'))
 
     with smtplib.SMTP(smtp_server, smtp_port) as server:
 
@@ -7024,7 +7024,7 @@ def build_context(max_rows=6):
 
         """select trim(substr(naics,1,6)) as code, count(*) as cnt
 
-           from vendors where ifnull(naics,'')<>''
+#            from vendors where ifnull(naics,'')<>''
 
            group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
 
@@ -7258,7 +7258,7 @@ def _strip_markdown_to_plain(txt: str) -> str:
 
     """
 
-    Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
+#     Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
 
     """
 
@@ -7662,7 +7662,7 @@ def _add_paragraph_with_inlines(doc, text, style=None):
 
                 else:
 
-                    tokens.append(('text', sp))
+#                     tokens.append(('text', sp))
 
 
 
@@ -8270,7 +8270,7 @@ def get_db():
 
         conn.execute('PRAGMA foreign_keys=ON;')
 
-        conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
+#         conn.execute('CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TEXT NOT NULL);')
 
     except Exception:
 
@@ -8312,7 +8312,7 @@ def _tenancy_phase1_bootstrap():
 
             display_name TEXT,
 
-            role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
+#             role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
 
             created_at TEXT NOT NULL
 
@@ -8324,7 +8324,7 @@ def _tenancy_phase1_bootstrap():
 
         if row and row[0] == 0:
 
-            cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
+#             cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
 
         # Ensure at least one user exists for the default org
 
@@ -8334,17 +8334,17 @@ def _tenancy_phase1_bootstrap():
 
             users = [
 
-                ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
+#                 ('user-quincy','org-default','quincy@example.com','Quincy','Admin'),
 
-                ('user-collin','org-default','collin@example.com','Collin','Member'),
+#                 ('user-collin','org-default','collin@example.com','Collin','Member'),
 
-                ('user-charles','org-default','charles@example.com','Charles','Viewer'),
+#                 ('user-charles','org-default','charles@example.com','Charles','Viewer'),
 
             ]
 
             for uid, oid, email, name, role in users:
 
-                cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+#                 cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
                             (uid, oid, email, name, role))
 
@@ -9278,13 +9278,13 @@ def _ensure_route_state_defaults():
 
     import streamlit as st
 
-    st.session_state.setdefault('route_page', 'dashboard')
+#     st.session_state.setdefault('route_page', 'dashboard')
 
-    st.session_state.setdefault('route_opp_id', None)
+#     st.session_state.setdefault('route_opp_id', None)
 
-    st.session_state.setdefault('route_tab', None)
+#     st.session_state.setdefault('route_tab', None)
 
-    st.session_state.setdefault('active_opportunity_tab', None)
+#     st.session_state.setdefault('active_opportunity_tab', None)
 
 
 
@@ -9308,7 +9308,7 @@ def _get_notice_meta_from_db(opp_id):
 
         table_candidates = [
 
-            ('notices', {
+#             ('notices', {
 
                 'title': ['title','notice_title','name','subject'],
 
@@ -9320,7 +9320,7 @@ def _get_notice_meta_from_db(opp_id):
 
             }),
 
-            ('opportunities', {
+#             ('opportunities', {
 
                 'title': ['title','name','subject'],
 
@@ -9484,7 +9484,7 @@ def render_details(opp_id):
 
     import streamlit as st
 
-    st.subheader('Details')
+#     st.subheader('Details')
 
     st.write('Opportunity ID:', opp_id)
 
@@ -9494,7 +9494,7 @@ def render_analyzer(opp_id):
 
     import streamlit as st
 
-    st.subheader('Analyzer')
+#     st.subheader('Analyzer')
 
     data = _load_analyzer_data(opp_id)
 
@@ -9506,7 +9506,7 @@ def render_compliance(opp_id):
 
     import streamlit as st
 
-    st.subheader('Compliance')
+#     st.subheader('Compliance')
 
     data = _load_compliance_data(opp_id)
 
@@ -9518,7 +9518,7 @@ def render_proposal(opp_id):
 
     import streamlit as st
 
-    st.subheader('Proposal')
+#     st.subheader('Proposal')
 
     st.write({'opp_id': opp_id})
 
@@ -9528,7 +9528,7 @@ def render_pricing(opp_id):
 
     import streamlit as st
 
-    st.subheader('Pricing')
+#     st.subheader('Pricing')
 
     data = _load_pricing_data(opp_id)
 
@@ -9540,7 +9540,7 @@ def render_vendorsrfq(opp_id):
 
     import streamlit as st
 
-    st.subheader('Vendors RFQ')
+#     st.subheader('Vendors RFQ')
 
     data = _load_vendors_data(opp_id)
 
@@ -9552,7 +9552,7 @@ def render_submission(opp_id):
 
     import streamlit as st
 
-    st.subheader('Submission')
+#     st.subheader('Submission')
 
     data = _load_submission_data(opp_id)
 
@@ -9636,13 +9636,13 @@ def _render_opportunity_workspace():
 
     meta = _get_notice_meta_from_db(opp_id)
 
-    st.header(str(meta.get('title', '')))
+#     st.header(str(meta.get('title', '')))
 
     top_cols = st.columns([2,1,1])
 
     with top_cols[0]:
 
-        st.caption(str(meta.get('agency') or ''))
+#         st.caption(str(meta.get('agency') or ''))
 
     with top_cols[1]:
 
@@ -9654,7 +9654,7 @@ def _render_opportunity_workspace():
 
     with top_cols[2]:
 
-        _render_badges(meta.get('set_asides') or [])
+#         _render_badges(meta.get('set_asides') or [])
 
     tabs = ['details','analyzer','compliance','proposal','pricing','vendors','submission']
 
@@ -10244,11 +10244,11 @@ def _do_login():
 
                         oid = "org-ela"
 
-                        conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
+#                         conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
 
                         uid = f"u-{user.lower()}"
 
-                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+#                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
                                      (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
 
@@ -10290,9 +10290,9 @@ def _do_login():
 
                         uid = f"u-{user.lower()}"
 
-                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+#                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
-                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
+#                                      (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
 
                         st.session_state["user_id"] = uid
 
@@ -10366,7 +10366,7 @@ with st.sidebar:
 
     if st.session_state.get("active_user"):
 
-        st.caption(f"Signed in as {st.session_state['active_user']}")
+#         st.caption(f"Signed in as {st.session_state['active_user']}")
 
         if st.button("Sign out", use_container_width=True, key="logout_btn"):
 
@@ -11888,7 +11888,7 @@ def render_outreach_tools():
 
                                  "padding:4px 8px;border-radius:8px;margin-right:8px;'><b>Scope:</b> "
 
-                                 f"{snap['scope_summary']}</div>")
+#                                  f"{snap['scope_summary']}</div>")
 
             if snap.get("quote_due"):
 
@@ -11896,7 +11896,7 @@ def render_outreach_tools():
 
                                  "padding:4px 8px;border-radius:8px;'><b>Quote due:</b> "
 
-                                 f"{snap['quote_due']}</div>")
+#                                  f"{snap['quote_due']}</div>")
 
 
 
@@ -13128,7 +13128,7 @@ def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
 
         msg['Reply-To'] = reply_to
 
-    msg.attach(MIMEText(body, 'plain'))
+#     msg.attach(MIMEText(body, 'plain'))
 
     with smtplib.SMTP(smtp_server, smtp_port) as server:
 
@@ -14236,7 +14236,7 @@ def build_context(max_rows=6):
 
         """select trim(substr(naics,1,6)) as code, count(*) as cnt
 
-           from vendors where ifnull(naics,'')<>''
+#            from vendors where ifnull(naics,'')<>''
 
            group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
 
@@ -14442,7 +14442,7 @@ SCHEMA = {
 
         place_of_performance text, response_due text, posted text, type text, url text,
 
-        attachments_json text, status text default 'New', created_at text default current_timestamp
+#         attachments_json text, status text default 'New', created_at text default current_timestamp
 
     );
 
@@ -14676,7 +14676,7 @@ SCHEMA.update({
 
         source text,
 
-        status text default 'Open',
+#         status text default 'Open',
 
         notes text,
 
@@ -14698,7 +14698,7 @@ SCHEMA.update({
 
         required integer default 1,
 
-        status text default 'Pending',
+#         status text default 'Pending',
 
         source_page text,
 
@@ -14732,7 +14732,7 @@ SCHEMA.update({
 
         sent_at text,
 
-        status text default 'Draft',
+#         status text default 'Draft',
 
         created_at text default current_timestamp
 
@@ -15040,7 +15040,7 @@ def _ensure_tenancy_phase1():
 
     cur.execute("CREATE TABLE IF NOT EXISTS orgs(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
 
-    cur.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, email TEXT NOT NULL UNIQUE, display_name TEXT, role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')), created_at TEXT NOT NULL)")
+#     cur.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, email TEXT NOT NULL UNIQUE, display_name TEXT, role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')), created_at TEXT NOT NULL)")
 
     # Pick an org id: prefer existing; else create 'org-ela'
 
@@ -15050,7 +15050,7 @@ def _ensure_tenancy_phase1():
 
     if not row:
 
-        cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (org_id, "ELA Management LLC"))
+#         cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (org_id, "ELA Management LLC"))
 
     # Seed users referencing selected org to satisfy FK constraint
 
@@ -15068,7 +15068,7 @@ def _ensure_tenancy_phase1():
 
         cur.execute("""INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at)
 
-                       VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
+#                        VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
 
     conn.commit()
 
@@ -15176,7 +15176,7 @@ def apply_ddl(stmts, name=None):
 
     if name:
 
-        cur.execute("INSERT INTO migrations(name, applied_at) VALUES(?, datetime('now'))", (name,))
+#         cur.execute("INSERT INTO migrations(name, applied_at) VALUES(?, datetime('now'))", (name,))
 
     try:
 
@@ -15540,11 +15540,11 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
     if _re.search(r'\\bINSERT\\b', text) or _re.search(r'\\[[^\\]]*(insert|placeholder|tbd)[^\\]]*\\]', text, flags=_re.IGNORECASE):
 
-        issues.append("Placeholder text 'INSERT' detected. Remove before export.")
+#         issues.append("Placeholder text 'INSERT' detected. Remove before export.")
 
     if _re.search(r'\\bTBD\\b|\\bTODO\\b', text):
 
-        issues.append("Unresolved 'TBD/TODO' placeholders present.")
+#         issues.append("Unresolved 'TBD/TODO' placeholders present.")
 
     if "<>" in text or "[ ]" in text:
 
@@ -15886,7 +15886,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
         if ph.lower() in body.lower():
 
-            issues.append(f"Placeholder text '{ph}' detected. Remove before export.")
+#             issues.append(f"Placeholder text '{ph}' detected. Remove before export.")
 
 
 
@@ -15906,7 +15906,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
     if require_font and require_font.lower() not in ("times new roman","arial","calibri","garamond","helvetica"):
 
-        warnings.append(f"Requested font '{require_font}' is uncommon for federal proposals.")
+#         warnings.append(f"Requested font '{require_font}' is uncommon for federal proposals.")
 
 
 
@@ -16410,7 +16410,7 @@ def _ensure_extra_schema():
 
             opp_id integer, title text, assignee text, due_date text,
 
-            status text default 'Open', notes text,
+#             status text default 'Open', notes text,
 
             created_at text default current_timestamp,
 
@@ -16728,9 +16728,9 @@ except Exception as _e_qc:
 
             select v.id, v.company,
 
-                   coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
+#                    coalesce(sum(case when o.status like 'Sent%' then 1 else 0 end),0) as sent,
 
-                   coalesce(sum(case when o.status like 'Preview%' then 1 else 0 end),0) as preview
+#                    coalesce(sum(case when o.status like 'Preview%' then 1 else 0 end),0) as preview
 
             from vendors v left join outreach_log o on v.id = o.vendor_id
 
@@ -16922,7 +16922,7 @@ with legacy_tabs[0]:
 
             index=(assignees.index(st.session_state.get('active_profile', ''))
 
-                   if st.session_state.get('active_profile', '') in assignees else 0),
+#                    if st.session_state.get('active_profile', '') in assignees else 0),
 
             key="opp_assignee_filter"
 
@@ -17604,7 +17604,7 @@ with legacy_tabs[3]:
 
             _conn.commit()
 
-            st.success(f"Updated '{pick_t}'")
+#             st.success(f"Updated '{pick_t}'")
 
             st.rerun()
 
@@ -17642,7 +17642,7 @@ with legacy_tabs[3]:
 
             _conn.commit()
 
-            st.success(f"Saved as '{new_name.strip()}'")
+#             st.success(f"Saved as '{new_name.strip()}'")
 
             st.rerun()
 
@@ -17660,7 +17660,7 @@ with legacy_tabs[3]:
 
             _conn.commit()
 
-            st.warning(f"Deleted '{pick_t}'")
+#             st.warning(f"Deleted '{pick_t}'")
 
             st.rerun()
 
@@ -17690,7 +17690,7 @@ with legacy_tabs[3]:
 
             st.session_state["mail_bodies"].append({"to": to_addr, "subject": subj, "body": body_filled, "vendor_id": int(row["id"])})
 
-        st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
+#         st.success(f"Prepared {len(st.session_state['mail_bodies'])} emails")
 
 
 
@@ -17716,7 +17716,7 @@ with legacy_tabs[3]:
 
                 msg['Reply-To'] = reply_to
 
-            msg.attach(MIMEText(body, 'plain'))
+#             msg.attach(MIMEText(body, 'plain'))
 
             with smtplib.SMTP(smtp_server, smtp_port) as server:
 
@@ -18074,7 +18074,7 @@ def save_opportunities(df, default_assignee=None):
 
             placeholders = ",".join("?" for _ in insert_cols)
 
-            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+#             cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
 
             inserted += 1
 
@@ -18106,7 +18106,7 @@ def _ensure_sam_history():
 
         user text,
 
-        action text,        -- e.g., 'fetch','insert','update','save_to_pipeline','proposal_prep','digest_sent'
+#         action text,        -- e.g., 'fetch','insert','update','save_to_pipeline','proposal_prep','digest_sent'
 
         sam_notice_id text,
 
@@ -18226,7 +18226,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
 
     """
 
-    Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
+#     Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
 
     used in SAM Watch and insert new rows into opportunities. Optionally email a digest.
 
@@ -18496,7 +18496,7 @@ with legacy_tabs[4]:
 
 
 
-        st.info('No active results yet. Click **Run search now**.')
+#         st.info('No active results yet. Click **Run search now**.')
 
 
 
@@ -18542,7 +18542,7 @@ with legacy_tabs[4]:
 
                 sam_saved_upsert(ss_name.strip(), _params, active=True)
 
-                st.success(f"Saved search '{ss_name}'")
+#                 st.success(f"Saved search '{ss_name}'")
 
             except Exception as e:
 
@@ -18562,7 +18562,7 @@ with legacy_tabs[4]:
 
                     c1,c2,c3,c4,c5 = st.columns([2,3,2,2,2])
 
-                    c1.write(f"**{row['name']}**")
+#                     c1.write(f"**{row['name']}**")
 
                     c2.write(row.get("params",{}))
 
@@ -18590,7 +18590,7 @@ with legacy_tabs[4]:
 
                         st.session_state["sam_results_df"] = df_run
 
-                        st.success(f"Found {len(df_run)} results for '{row['name']}'")
+#                         st.success(f"Found {len(df_run)} results for '{row['name']}'")
 
                     if c4.button("Run & Ingest", key=f"run_ingest_{row['name']}"):
 
@@ -18634,9 +18634,9 @@ with legacy_tabs[4]:
 
                     if c5.button("Delete", key=f"del_{row['name']}"):
 
-                        sam_saved_delete(row['name'])
+#                         sam_saved_delete(row['name'])
 
-                        st.warning(f"Deleted '{row['name']}'. Refresh to update list.")
+#                         st.warning(f"Deleted '{row['name']}'. Refresh to update list.")
 
         except Exception as e:
 
@@ -18852,7 +18852,7 @@ except Exception:
 
                 sam_saved_searches_upsert(ss_name.strip(), params)
 
-                st.success(f"Saved search '{ss_name.strip()}'")
+#                 st.success(f"Saved search '{ss_name.strip()}'")
 
 
 
@@ -20766,7 +20766,7 @@ def build_context(max_rows=6):
 
         """select trim(substr(naics,1,6)) as code, count(*) as cnt
 
-           from vendors where ifnull(naics,'')<>''
+#            from vendors where ifnull(naics,'')<>''
 
            group by trim(substr(naics,1,6)) order by cnt desc limit ?""",
 
@@ -21258,7 +21258,7 @@ def ensure_sam_ingest_tables():
 
         notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
 
-        state TEXT NOT NULL CHECK(state IN ('saved','dismissed')),
+#         state TEXT NOT NULL CHECK(state IN ('saved','dismissed')),
 
         ts TEXT NOT NULL,
 
@@ -21292,7 +21292,7 @@ def ensure_sam_ingest_tables():
 
         notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
 
-        stage TEXT DEFAULT 'Lead',
+#         stage TEXT DEFAULT 'Lead',
 
         created_at TEXT NOT NULL,
 
@@ -21702,19 +21702,19 @@ def list_notices(filters: dict, page: int, page_size: int, include_hidden: bool,
 
         where.append("agency LIKE ?")
 
-        vals.append(f"%{filters['agency']}%")
+#         vals.append(f"%{filters['agency']}%")
 
     if filters.get("place_state"):
 
         where.append("place_state LIKE ?")
 
-        vals.append(f"%{filters['place_state']}%")
+#         vals.append(f"%{filters['place_state']}%")
 
     if filters.get("place_city"):
 
         where.append("place_city LIKE ?")
 
-        vals.append(f"%{filters['place_city']}%")
+#         vals.append(f"%{filters['place_city']}%")
 
 
 
@@ -21766,7 +21766,7 @@ def list_notices(filters: dict, page: int, page_size: int, include_hidden: bool,
 
                    (SELECT COUNT(1) FROM amendments a WHERE a.notice_id=n.id) AS amendments_count,
 
-                   COALESCE(n.compliance_state,'Unreviewed') AS compliance_state
+#                    COALESCE(n.compliance_state,'Unreviewed') AS compliance_state
 
             FROM notices n
 
@@ -22136,7 +22136,7 @@ def render_sam_watch_ingest():
 
                 for nid in selected_ids:
 
-                    set_notice_state(user_id, nid, "dismissed"); audit('dismiss', user_id, 'notice', str(nid))
+#                     set_notice_state(user_id, nid, "dismissed"); audit('dismiss', user_id, 'notice', str(nid))
 
         with c3:
 
@@ -22156,7 +22156,7 @@ def render_sam_watch_ingest():
 
                 for nid in selected_ids:
 
-                    toggle_pipeline_star(user_id, nid); audit('star_toggle', user_id, 'notice', str(nid))
+#                     toggle_pipeline_star(user_id, nid); audit('star_toggle', user_id, 'notice', str(nid))
 
         # Diff controls
 
@@ -22796,7 +22796,7 @@ def render_rfp_panel():
 
     st.subheader("RFP Analyzer")
 
-    st.caption(f"{meta['title']}  -  {meta['agency']}  -  Due {meta['due'] or 'n/a'}")
+#     st.caption(f"{meta['title']}  -  {meta['agency']}  -  Due {meta['due'] or 'n/a'}")
 
 
 
@@ -23700,7 +23700,7 @@ def ensure_compliance_schema():
 
         due_date TEXT,
 
-        status TEXT NOT NULL CHECK(status IN('Red','Yellow','Green')),
+#         status TEXT NOT NULL CHECK(status IN('Red','Yellow','Green')),
 
         notes TEXT
 
@@ -23736,11 +23736,11 @@ def ensure_compliance_schema():
 
         notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
 
-        role TEXT NOT NULL CHECK(role IN('Tech','Price','Contracts')),
+#         role TEXT NOT NULL CHECK(role IN('Tech','Price','Contracts')),
 
         user_id TEXT NOT NULL,
 
-        status TEXT NOT NULL CHECK(status IN('Pending','Approved','Rejected')),
+#         status TEXT NOT NULL CHECK(status IN('Pending','Approved','Rejected')),
 
         ts TEXT NOT NULL
 
@@ -23774,7 +23774,7 @@ def ensure_compliance_schema():
 
         if "compliance_state" not in cols:
 
-            conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
+#             conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
 
     except Exception:
 
@@ -23908,7 +23908,7 @@ def upsert_checklist_row(nid:int, data:dict):
 
                     VALUES(?,?,?,?,?,?,?,?,?)""", (int(nid), data.get("factor"), data.get("subfactor"), data.get("requirement"),
 
-                    data.get("source_page"), data.get("owner_id"), data.get("due_date"), data.get("status") or 'Red', data.get("notes")))
+#                     data.get("source_page"), data.get("owner_id"), data.get("due_date"), data.get("status") or 'Red', data.get("notes")))
 
     conn.commit()
 
@@ -24420,7 +24420,7 @@ def build_lm_checklist(notice_id: int, rfp_json: dict):
 
             for r in item['requirements']:
 
-                reqs.append( (factor, None, str(r.get('text') or r) , r.get('cite_file'), r.get('cite_page')) )
+#                 reqs.append( (factor, None, str(r.get('text') or r) , r.get('cite_file'), r.get('cite_page')) )
 
         # Subfactors with requirements
 
@@ -24430,7 +24430,7 @@ def build_lm_checklist(notice_id: int, rfp_json: dict):
 
             for r in sub.get('requirements') or []:
 
-                reqs.append( (factor, subf, str(r.get('text') or r), r.get('cite_file'), r.get('cite_page')) )
+#                 reqs.append( (factor, subf, str(r.get('text') or r), r.get('cite_file'), r.get('cite_page')) )
 
         # Fallback: if 'L' or 'M' string hints exist
 
@@ -24462,7 +24462,7 @@ def build_lm_checklist(notice_id: int, rfp_json: dict):
 
                 ) VALUES(?,?,?,?,?,?,?,?)""",
 
-                (nid, rid, fac or None, subf or None, req_text.strip(), cfile, int(cpage) if cpage else None, 'Red'))
+#                 (nid, rid, fac or None, subf or None, req_text.strip(), cfile, int(cpage) if cpage else None, 'Red'))
 
                 if cur.rowcount:
 
@@ -24512,7 +24512,7 @@ def render_compliance_v2_evidence_viewer():
 
     _, fname, url, ctype, local_path = row
 
-    st.caption(f"{fname} - page {page if page else '?'}")
+#     st.caption(f"{fname} - page {page if page else '?'}")
 
     # Simple preview: try to extract text of the page for quick context
 
@@ -24848,7 +24848,7 @@ def bulk_assign_by_factor(nid:int, factor:str, owner_id:str|None, due_date:str|N
 
     cur.execute("update lm_checklist set owner_id=?, due_date=?, last_updated_by=? where notice_id=? and factor=?",
 
-                (owner_id, due_date, str(owner_id or ''), int(nid), factor))
+#                 (owner_id, due_date, str(owner_id or ''), int(nid), factor))
 
     conn.commit()
 
@@ -24902,7 +24902,7 @@ def _audit_log(nid:int, action:str, user_id:str|None, req_id:str|None, before:di
 
     conn.execute("INSERT INTO compliance_audit(notice_id, user_id, ts, action, req_id, before_json, after_json) VALUES(?,?,?,?,?,?,?)",
 
-                 (int(nid), user_id or '', utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat() + 'Z', action, req_id or '', b, a))
+#                  (int(nid), user_id or '', utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat() + 'Z', action, req_id or '', b, a))
 
     conn.commit()
 
@@ -25020,7 +25020,7 @@ def schedule_compliance_emails():
 
                     conn.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?,?)",
 
-                                 (to_addr, subj, body, now.isoformat()+ 'Z'))
+#                                  (to_addr, subj, body, now.isoformat()+ 'Z'))
 
                     enq += 1
 
@@ -25140,7 +25140,7 @@ def _ensure_file_parse_and_index(nid: int, fid: int, name: str, url: str) -> Lis
 
     except Exception: pass
 
-    _index_chunks(int(nid), name or url.split('/')[-1], pages)
+#     _index_chunks(int(nid), name or url.split('/')[-1], pages)
 
     return pages
 
@@ -25474,7 +25474,7 @@ def ensure_amend_tables():
 
         try:
 
-            conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
+#             conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
 
         except Exception:
 
@@ -26484,7 +26484,7 @@ def save_opportunities(df, default_assignee=None):
 
             placeholders = ",".join("?" for _ in insert_cols)
 
-            cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
+#             cur.execute(f"insert into opportunities({','.join(insert_cols)}) values({placeholders})", insert_vals)
 
             inserted += 1
 
@@ -26892,7 +26892,7 @@ def render_rfp_analyzer():
 
                 else:
 
-                    st.caption(f"System updated at {row['created_at']}")
+#                     st.caption(f"System updated at {row['created_at']}")
 
 
 
@@ -27296,7 +27296,7 @@ def render_proposal_builder():
 
                     tmpl = [
 
-                        f'## {heading}',
+#                         f'## {heading}',
 
                         '- Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
 
@@ -27328,7 +27328,7 @@ def render_proposal_builder():
 
                     tmpl = [
 
-                        f'## {heading}',
+#                         f'## {heading}',
 
                         '- Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
 
@@ -27480,7 +27480,7 @@ def render_proposal_builder():
 
             try:
 
-                st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
+#                 st.success("Generated drafts. Scroll down to 'Drafts' to review and edit.")
 
             except Exception:
 
@@ -27558,7 +27558,7 @@ def render_proposal_builder():
 
         try:
 
-            audit('export', st.session_state.get('user_id'), 'notice', str(st.session_state.get('selected_notice_id')))
+#             audit('export', st.session_state.get('user_id'), 'notice', str(st.session_state.get('selected_notice_id')))
 
         except Exception:
 
@@ -27830,7 +27830,7 @@ with conn:
 
         notes text,
 
-        source text default 'USAspending',
+#         source text default 'USAspending',
 
         created_at text default current_timestamp
 
@@ -28150,7 +28150,7 @@ def ensure_deals_table(conn):
 
             title text not null,
 
-            stage text not null default 'No Contact Made',
+#             stage text not null default 'No Contact Made',
 
             owner text,
 
@@ -28162,9 +28162,9 @@ def ensure_deals_table(conn):
 
             due_date text,
 
-            created_at text default (datetime('now')),
+#             created_at text default (datetime('now')),
 
-            updated_at text default (datetime('now'))
+#             updated_at text default (datetime('now'))
 
         )
 
@@ -28324,7 +28324,7 @@ def ensure_deal_activities_schema(conn):
 
             completed_at TEXT,
 
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+#             created_at TEXT NOT NULL DEFAULT (datetime('now')),
 
             created_by TEXT
 
@@ -28408,9 +28408,9 @@ def create_activity(deal_id:int, type_:str, title:str="", body:str="", due_at:st
 
             msg = f"Task due at {due_at}:\n\n{body or title or ''}"
 
-            cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?, datetime('now'))",
+#             cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?, datetime('now'))",
 
-                        (st.session_state.get('user_email') or 'alerts@localhost', subj, msg))
+#                         (st.session_state.get('user_email') or 'alerts@localhost', subj, msg))
 
             conn.commit()
 
@@ -28906,7 +28906,7 @@ try:
 
                     with st.container(border=True):
 
-                        st.markdown(f"**{row['title']}**")
+#                         st.markdown(f"**{row['title']}**")
 
                         st.caption(f"Owner: {row['owner'] or 'Unassigned'}  -  Amount: ${float(row['amount'] or 0):,.2f}")
 
@@ -30566,7 +30566,7 @@ try:
 
     # Ensure refresh token exists
 
-    st.session_state.setdefault('deals_refresh', 0)
+#     st.session_state.setdefault('deals_refresh', 0)
 
 
 
@@ -30876,7 +30876,7 @@ try:
 
                             with st.container(border=True):
 
-                                st.caption(f"{r.agency or ''}")
+#                                 st.caption(f"{r.agency or ''}")
 
                                 st.write(str(r.title))
 
@@ -31004,9 +31004,9 @@ try:
 
                             if str(row.get('stage')) != str(row.get('stage_old')):
 
-                                _persist_stage(oid, str(row.get('stage') or 'New'))
+#                                 _persist_stage(oid, str(row.get('stage') or 'New'))
 
-                            _persist_inline(oid, str(row.get('next_action') or ''), row.get('due_at'))
+#                             _persist_inline(oid, str(row.get('next_action') or ''), row.get('due_at'))
 
                         st.experimental_rerun()
 
@@ -31788,7 +31788,7 @@ def _sam_phase1_schema():
 
             notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
 
-            state TEXT NOT NULL CHECK(state IN ('saved','dismissed')),
+#             state TEXT NOT NULL CHECK(state IN ('saved','dismissed')),
 
             ts TEXT NOT NULL,
 
@@ -31814,7 +31814,7 @@ def _sam_phase1_schema():
 
             notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
 
-            stage TEXT DEFAULT 'Lead',
+#             stage TEXT DEFAULT 'Lead',
 
             created_at TEXT NOT NULL,
 
@@ -32210,13 +32210,13 @@ def list_notices(filters: Dict[str, Any], page: int, page_size: int, current_use
 
         where.append("agency LIKE ?")
 
-        params.append(f"%{filters['agency']}%")
+#         params.append(f"%{filters['agency']}%")
 
     if filters.get("place_city"):
 
         where.append("place_city LIKE ?")
 
-        params.append(f"%{filters['place_city']}%")
+#         params.append(f"%{filters['place_city']}%")
 
     if filters.get("place_state"):
 
@@ -32348,7 +32348,7 @@ def upsert_opportunity_from_notice(user_id: str, notice_id: int) -> None:
 
             (sam_notice_id, title, agency, naics, psc, place_of_performance, response_due, posted, type, url, attachments_json, status, source)
 
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'New', 'sam_star')""",
+#             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'New', 'sam_star')""",
 
             (sam_notice_id, title, agency, naics, psc, place_of_performance, due_at, posted_at, notice_type, url))
 
@@ -32370,7 +32370,7 @@ def toggle_pipeline_star(user_id: str, notice_id: int) -> bool:
 
         return False
 
-    cur.execute("INSERT OR IGNORE INTO pipeline_deals(user_id, notice_id, stage, created_at) VALUES(?,?, 'Lead', ?)", (user_id, notice_id, datetime.datetime.utcnow().isoformat()))
+#     cur.execute("INSERT OR IGNORE INTO pipeline_deals(user_id, notice_id, stage, created_at) VALUES(?,?, 'Lead', ?)", (user_id, notice_id, datetime.datetime.utcnow().isoformat()))
 
     conn.commit()
 
@@ -32620,7 +32620,7 @@ def _sam_phase1_results_grid():
 
                 if row.get("url"):
 
-                    st.markdown(f"[{title}]({row['url']})")
+#                     st.markdown(f"[{title}]({row['url']})")
 
                 else:
 
@@ -33444,7 +33444,7 @@ def _rfp_panel_ui(notice_id: int):
 
                 for h in hits:
 
-                    st.caption(f"{h.get('file_name')} p.{h.get('page')}")
+#                     st.caption(f"{h.get('file_name')} p.{h.get('page')}")
 
                     st.write(h.get("text", ""))
 
@@ -33646,7 +33646,7 @@ def _sam_phase3_schema():
 
         if "compliance_state" not in cols:
 
-            conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
+#             conn.execute("ALTER TABLE notices ADD COLUMN compliance_state TEXT DEFAULT 'Unreviewed'")
 
             conn.commit()
 
@@ -33822,7 +33822,7 @@ def _record_notice_version(notice_id: int, core_now: dict):
 
     cur.execute("INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
 
-                (notice_id, None, core_now.get('posted_at'), core_now.get('url'), vhash, summary))
+#                 (notice_id, None, core_now.get('posted_at'), core_now.get('url'), vhash, summary))
 
     # Flip compliance_state
 
@@ -34080,13 +34080,13 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
 
         where.append("agency LIKE ?")
 
-        params.append(f"%{filters['agency']}%")
+#         params.append(f"%{filters['agency']}%")
 
     if filters.get("place_city"):
 
         where.append("place_city LIKE ?")
 
-        params.append(f"%{filters['place_city']}%")
+#         params.append(f"%{filters['place_city']}%")
 
     if filters.get("place_state"):
 
@@ -34594,7 +34594,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('builder_from_analyzer', False)
+#     ff.setdefault('builder_from_analyzer', False)
 
 except Exception:
 
@@ -34610,7 +34610,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('rfp_impact', False)
+#     ff.setdefault('rfp_impact', False)
 
 except Exception:
 
@@ -34626,7 +34626,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('sow_price_hints', False)
+#     ff.setdefault('sow_price_hints', False)
 
 except Exception:
 
@@ -34642,7 +34642,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('submission_rules', False)
+#     ff.setdefault('submission_rules', False)
 
 except Exception:
 
@@ -34658,7 +34658,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('rtm', False)
+#     ff.setdefault('rtm', False)
 
 except Exception:
 
@@ -34674,7 +34674,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('observability', False)
+#     ff.setdefault('observability', False)
 
 except Exception:
 
@@ -34690,9 +34690,9 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('compliance_relock', False)
+#     ff.setdefault('compliance_relock', False)
 
-    ff.setdefault('email_enabled', False)
+#     ff.setdefault('email_enabled', False)
 
 except Exception:
 
@@ -34708,7 +34708,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('compliance_gate_v2', False)
+#     ff.setdefault('compliance_gate_v2', False)
 
 except Exception:
 
@@ -34724,7 +34724,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('compliance_v2', False)
+#     ff.setdefault('compliance_v2', False)
 
 except Exception:
 
@@ -34740,7 +34740,7 @@ try:
 
     ff = feature_flags()
 
-    ff.setdefault('compliance_gate', False)
+#     ff.setdefault('compliance_gate', False)
 
 except Exception:
 
@@ -34886,7 +34886,7 @@ def render_sam():
 
     st.subheader("SAM Watch")
 
-    st.info("Enable 'sam_ingest_core' in Admin to use the new SAM UI.")
+#     st.info("Enable 'sam_ingest_core' in Admin to use the new SAM UI.")
 
 
 
@@ -35822,7 +35822,7 @@ def _rfp_panel_ui(notice_id: int):
 
                         for h in hits:
 
-                            st.caption(f"{h.get('file_name')} p.{h.get('page')}"); st.write(h.get("text",""))
+#                             st.caption(f"{h.get('file_name')} p.{h.get('page')}"); st.write(h.get("text",""))
 
         elif not row:
 
@@ -35894,7 +35894,7 @@ def _tp2_add_columns_and_indexes():
 
             if not _tp2_db_has_col(conn, t, "visibility"):
 
-                cur.execute(f"ALTER TABLE {t} ADD COLUMN visibility TEXT DEFAULT 'private' CHECK(visibility IN('private','team','shared'))")
+#                 cur.execute(f"ALTER TABLE {t} ADD COLUMN visibility TEXT DEFAULT 'private' CHECK(visibility IN('private','team','shared'))")
 
             if not _tp2_db_has_col(conn, t, "version"):
 
@@ -35950,7 +35950,7 @@ def _tp2_get_default_identity():
 
         try:
 
-            cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (org_id, "Default Org"))
+#             cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (org_id, "Default Org"))
 
             conn.commit()
 
@@ -36166,7 +36166,7 @@ def _ensure_ids():
 
     if not org or not user:
 
-        raise PermissionError('identity_required')
+#         raise PermissionError('identity_required')
 
 
 
@@ -36264,11 +36264,11 @@ def q_insert(table: str, data: dict):
 
     data = dict(data or {})
 
-    data.setdefault('org_id', org)
+#     data.setdefault('org_id', org)
 
-    data.setdefault('owner_id', user)
+#     data.setdefault('owner_id', user)
 
-    data.setdefault('visibility', 'team')
+#     data.setdefault('visibility', 'team')
 
     if 'version' in [k.lower() for k in data.keys()]:
 
@@ -36308,7 +36308,7 @@ def q_update(table: str, data: dict, where: dict):
 
     if where.get('org_id') and where['org_id'] != org:
 
-        raise PermissionError('cross_org_denied')
+#         raise PermissionError('cross_org_denied')
 
     set_cols = []
 
@@ -36482,7 +36482,7 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
 
     if filters.get('keywords'):
 
-        where.append('(title LIKE ? OR agency LIKE ?)')
+#         where.append('(title LIKE ? OR agency LIKE ?)')
 
         kw = f"%{filters['keywords']}%"
 
@@ -36492,43 +36492,43 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
 
         qs = ','.join(['?'] * len(filters['types']))
 
-        where.append(f'notice_type IN ({qs})')
+#         where.append(f'notice_type IN ({qs})')
 
-        params.extend(filters['types'])
+#         params.extend(filters['types'])
 
     if filters.get('naics'):
 
         for code in filters['naics']:
 
-            where.append('naics LIKE ?')
+#             where.append('naics LIKE ?')
 
-            params.append(f'%{code}%')
+#             params.append(f'%{code}%')
 
     if filters.get('psc'):
 
         for code in filters['psc']:
 
-            where.append('psc LIKE ?')
+#             where.append('psc LIKE ?')
 
-            params.append(f'%{code}%')
+#             params.append(f'%{code}%')
 
     if filters.get('agency'):
 
-        where.append('agency LIKE ?')
+#         where.append('agency LIKE ?')
 
-        params.append(f"%{filters['agency']}%")
+#         params.append(f"%{filters['agency']}%")
 
     if filters.get('place_city'):
 
-        where.append('place_city LIKE ?')
+#         where.append('place_city LIKE ?')
 
-        params.append(f"%{filters['place_city']}%")
+#         params.append(f"%{filters['place_city']}%")
 
     if filters.get('place_state'):
 
         where.append('place_state = ?')
 
-        params.append(filters['place_state'])
+#         params.append(filters['place_state'])
 
     if filters.get('posted_enabled'):
 
@@ -36624,7 +36624,7 @@ def _p5_schema():
 
       payload_json TEXT NOT NULL,
 
-      status TEXT NOT NULL CHECK(status IN('queued','running','done','error')),
+#       status TEXT NOT NULL CHECK(status IN('queued','running','done','error')),
 
       attempts INTEGER NOT NULL DEFAULT 0,
 
@@ -36680,7 +36680,7 @@ def enqueue_job(kind: str, payload: _Dict5[str, _Any5], org_id: _Optional5[str]=
 
         "INSERT INTO jobs(org_id,kind,payload_json,status,attempts,last_error,created_at,updated_at) VALUES(?,?,?,?,0,NULL,?,?)",
 
-        (org, kind, _json5.dumps(payload or {}), 'queued', now, now)
+#         (org, kind, _json5.dumps(payload or {}), 'queued', now, now)
 
     )
 
@@ -36776,11 +36776,11 @@ def _run_job(job: dict):
 
             raise ValueError(f'unknown_job_kind:{kind}')
 
-        _finish_job(job['id'], 'done', None)
+#         _finish_job(job['id'], 'done', None)
 
     except Exception as ex:
 
-        _finish_job(job['id'], 'error', str(ex))
+#         _finish_job(job['id'], 'error', str(ex))
 
 
 
@@ -37010,7 +37010,7 @@ def render_sam_watch_minimal_ui():
 
     if not key_present:
 
-        st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
+#         st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
 
     with st.form("sam_min_search", clear_on_submit=False):
 
@@ -37074,7 +37074,7 @@ def render_sam_watch_minimal_ui():
 
             with st.container(border=True):
 
-                st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
+#                 st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
 
 
 
@@ -37150,7 +37150,7 @@ def _ss_schema():
 
             query_json TEXT NOT NULL,
 
-            cadence TEXT NOT NULL CHECK(cadence IN('daily','weekly','monthly')),
+#             cadence TEXT NOT NULL CHECK(cadence IN('daily','weekly','monthly')),
 
             recipients TEXT NOT NULL,
 
@@ -37200,7 +37200,7 @@ def _ss_schema():
 
             created_at TEXT NOT NULL,
 
-            status TEXT NOT NULL DEFAULT 'queued',
+#             status TEXT NOT NULL DEFAULT 'queued',
 
             attempts INTEGER NOT NULL DEFAULT 0,
 
@@ -37444,7 +37444,7 @@ def run_saved_searches():
 
             try:
 
-                cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)", (to, subj, body, now))
+#                 cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)", (to, subj, body, now))
 
                 enq += 1
 
@@ -37526,7 +37526,7 @@ def render_sam_watch_minimal_ui():
 
     if not key_present:
 
-        st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
+#         st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
 
     with st.form("sam_min_search", clear_on_submit=False):
 
@@ -37610,7 +37610,7 @@ def render_sam_watch_minimal_ui():
 
             with st.container(border=True):
 
-                st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
+#                 st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
 
     if _ss_flag() and st.session_state.get("saved_search_modal_open"):
 
@@ -37718,7 +37718,7 @@ def _p5_schema():
 
             title TEXT NOT NULL,
 
-            status TEXT NOT NULL DEFAULT 'Draft',
+#             status TEXT NOT NULL DEFAULT 'Draft',
 
             created_at TEXT NOT NULL
 
@@ -37948,7 +37948,7 @@ def render_proposal_wizard(notice_id: int):
 
         for it in (data.get("lm_requirements") or [])[:50]:
 
-            st.markdown(f"- {it.get('text','')}".strip())
+#             st.markdown(f"- {it.get('text','')}".strip())
 
         if st.button("Next -> Sections"):
 
@@ -38740,13 +38740,13 @@ def _b7_seed_sections_from_analyzer(notice_id: int, proposal_id: int):
 
                 for it in items:
 
-                    bullets.append(f'- {it}{cite_str}')
+#                     bullets.append(f'- {it}{cite_str}')
 
             else:
 
                 text = r.get('text') or ''
 
-                bullets.append(f'- {text}{cite_str}')
+#                 bullets.append(f'- {text}{cite_str}')
 
             try:
 
@@ -38838,7 +38838,7 @@ def _b7_seed_clins(notice_id: int, proposal_id: int):
 
         try:
 
-            cur.execute(f'INSERT INTO price_lines({cols_sql}) VALUES({ph})', tuple(vals))
+#             cur.execute(f'INSERT INTO price_lines({cols_sql}) VALUES({ph})', tuple(vals))
 
         except Exception:
 
@@ -39450,7 +39450,7 @@ def render_vendors(opp_id: int):
 
     if not st.session_state.get("feature_flags", {}).get("subfinder_paging", False):
 
-        st.info("Subfinder is disabled. Enable 'subfinder_paging' in Admin.")
+#         st.info("Subfinder is disabled. Enable 'subfinder_paging' in Admin.")
 
         return
 
@@ -39566,7 +39566,7 @@ def _sub2_schema():
 
         if 'fit_score' not in cols:
 
-            cur.execute('ALTER TABLE vendors ADD COLUMN fit_score REAL')
+#             cur.execute('ALTER TABLE vendors ADD COLUMN fit_score REAL')
 
     except Exception:
 
@@ -39794,7 +39794,7 @@ def render_vendors(opp_id: int):
 
     # Fallback or augmented UI
 
-    st.subheader('Subcontractor Finder')
+#     st.subheader('Subcontractor Finder')
 
     # base inputs reused for paging flow if present
 
@@ -39810,7 +39810,7 @@ def render_vendors(opp_id: int):
 
     # Phase 2 filters
 
-    st.markdown('**Filters**')
+#     st.markdown('**Filters**')
 
     c1,c2,c3 = st.columns([2,2,2])
 
@@ -39878,7 +39878,7 @@ def render_vendors(opp_id: int):
 
                     if key not in curset:
 
-                        st.session_state['sub1_results'].append(it)
+#                         st.session_state['sub1_results'].append(it)
 
                 st.session_state['sub1_token'] = res.get('next_token')
 
@@ -39894,7 +39894,7 @@ def render_vendors(opp_id: int):
 
                 if k in st.session_state: del st.session_state[k]
 
-            st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
+#             st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
 
     # Store filters
 
@@ -39996,11 +39996,11 @@ def _sub3_schema():
 
         if 'source' not in cols:
 
-            cur.execute('ALTER TABLE vendor_sources ADD COLUMN source TEXT')
+#             cur.execute('ALTER TABLE vendor_sources ADD COLUMN source TEXT')
 
         if 'vendor_id' not in cols:
 
-            cur.execute('ALTER TABLE vendor_sources ADD COLUMN vendor_id INTEGER')
+#             cur.execute('ALTER TABLE vendor_sources ADD COLUMN vendor_id INTEGER')
 
     except Exception:
 
@@ -40178,7 +40178,7 @@ def _sub3_upsert_vendor_and_link(opp_id: int, src_name: str, v: dict, rank: int=
 
             cols_sql = ','.join(fields.keys()); ph = ','.join(['?']*len(fields));
 
-            cur.execute(f'INSERT INTO vendors({cols_sql}) VALUES({ph})', tuple(fields.values()))
+#             cur.execute(f'INSERT INTO vendors({cols_sql}) VALUES({ph})', tuple(fields.values()))
 
             vid = int(cur.lastrowid)
 
@@ -40204,7 +40204,7 @@ def _sub3_upsert_vendor_and_link(opp_id: int, src_name: str, v: dict, rank: int=
 
     try:
 
-        cur.execute('INSERT INTO vendor_sources(run_id, place_id, vendor_name, rank, created_at, source, vendor_id) VALUES(?,?,?,?,?,?,?)', (int(run_id), None, name, int(rank), _dt_sub3.datetime.utcnow().isoformat(), src_name, vid))
+#         cur.execute('INSERT INTO vendor_sources(run_id, place_id, vendor_name, rank, created_at, source, vendor_id) VALUES(?,?,?,?,?,?,?)', (int(run_id), None, name, int(rank), _dt_sub3.datetime.utcnow().isoformat(), src_name, vid))
 
     except Exception:
 
@@ -40296,9 +40296,9 @@ def render_vendors(opp_id: int):
 
     if flag_src:
 
-        st.markdown('---')
+#         st.markdown('---')
 
-        st.markdown('**Federal sources**')
+#         st.markdown('**Federal sources**')
 
         cols = st.columns(3)
 
@@ -40616,7 +40616,7 @@ def _sub4_send_rfqs(opp_id: int, vendor_items: list):
 
             try:
 
-                cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)",
+#                 cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)",
 
                             (it.get("email") or "", f"RFQ Invite for opportunity {opp_id}", f"Please respond to RFQ {rfq_id}", _dt_sub4.datetime.utcnow().isoformat()))
 
@@ -40640,7 +40640,7 @@ def _sub4_save_vendor_search(name: str, filters: dict, cadence: str="weekly", re
 
     uid = __import__("streamlit").session_state.get("user_id") or "user"
 
-    cur.execute("INSERT INTO saved_searches(user_id, name, query_json, cadence, recipients, active, last_run_at, type) VALUES(?,?,?,?,?,1,NULL,'vendors')",
+#     cur.execute("INSERT INTO saved_searches(user_id, name, query_json, cadence, recipients, active, last_run_at, type) VALUES(?,?,?,?,?,1,NULL,'vendors')",
 
                 (uid, name, _json_sub4.dumps(filters), cadence, recipients or ""))
 
@@ -40736,7 +40736,7 @@ def render_vendors(opp_id: int):
 
                     if res.get("ok"):
 
-                        st.success(f"Created {res.get('invites_created',0)} invites for RFQ {res.get('rfq_id')}")
+#                         st.success(f"Created {res.get('invites_created',0)} invites for RFQ {res.get('rfq_id')}")
 
                     else:
 
@@ -41138,7 +41138,7 @@ def _rfqg_seed_terms_from_notice(notice_id: int, rfq_id: int):
 
     }
 
-    cur.execute("INSERT INTO rfq_terms(rfq_id, pop_text, due_date, validity_days, insurance, bonding, flowdowns_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))",
+#     cur.execute("INSERT INTO rfq_terms(rfq_id, pop_text, due_date, validity_days, insurance, bonding, flowdowns_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))",
 
                 (int(rfq_id), terms["pop_text"], terms["due_date"], int(terms["validity_days"]), terms["insurance"], terms["bonding"], terms["flowdowns_json"]))
 
@@ -41292,7 +41292,7 @@ def _rfqg_build_pack(rfq_id: int, notice_id: int):
 
     # store
 
-    cur.execute("INSERT INTO rfq_pack(rfq_id, zip_path, cover_pdf_path, checksum, bytes, created_at) VALUES(?,?,?,?,?,datetime('now'))", (int(rfq_id), zip_path, cover_path, checksum, int(sz)))
+#     cur.execute("INSERT INTO rfq_pack(rfq_id, zip_path, cover_pdf_path, checksum, bytes, created_at) VALUES(?,?,?,?,?,datetime('now'))", (int(rfq_id), zip_path, cover_path, checksum, int(sz)))
 
     conn.commit()
 
@@ -41420,7 +41420,7 @@ def render_rfq_generator(opp_id: int):
 
             res = _rfqg_build_pack(int(rfq_id), int(opp_id))
 
-            st.success(f"Pack built. SHA256 {res.get('checksum')} Bytes {res.get('bytes')}")
+#             st.success(f"Pack built. SHA256 {res.get('checksum')} Bytes {res.get('bytes')}")
 
     with rcol:
 
@@ -41434,7 +41434,7 @@ def render_rfq_generator(opp_id: int):
 
             c = f"{cite.get('file','')} p.{cite.get('page')}" if (cite.get('file') or cite.get('page') is not None) else ""
 
-            st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('- ' + c) if c else ''}")
+#             st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('- ' + c) if c else ''}")
 
 
 
@@ -41500,7 +41500,7 @@ def _rfqg2_schema():
 
     try:
 
-        cur.execute('CREATE TABLE IF NOT EXISTS vendor_portal_tokens( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, expires_at TEXT, created_at TEXT NOT NULL )')
+#         cur.execute('CREATE TABLE IF NOT EXISTS vendor_portal_tokens( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, expires_at TEXT, created_at TEXT NOT NULL )')
 
     except Exception:
 
@@ -41510,7 +41510,7 @@ def _rfqg2_schema():
 
     try:
 
-        cur.execute('CREATE TABLE IF NOT EXISTS rfq_invites( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, status TEXT, created_at TEXT NOT NULL )')
+#         cur.execute('CREATE TABLE IF NOT EXISTS rfq_invites( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, status TEXT, created_at TEXT NOT NULL )')
 
     except Exception:
 
@@ -41536,7 +41536,7 @@ def _rfqg2_get_token(rfq_id: int, vendor_id: int, days_valid: int=14) -> str:
 
     exp = (_dt_rfqg2.datetime.utcnow() + _dt_rfqg2.timedelta(days=int(days_valid))).isoformat()
 
-    cur.execute('INSERT INTO vendor_portal_tokens(rfq_id, vendor_id, token, expires_at, created_at) VALUES(?,?,?,?,datetime(\'now\'))', (int(rfq_id), int(vendor_id), tok, exp))
+#     cur.execute('INSERT INTO vendor_portal_tokens(rfq_id, vendor_id, token, expires_at, created_at) VALUES(?,?,?,?,datetime(\'now\'))', (int(rfq_id), int(vendor_id), tok, exp))
 
     conn.commit()
 
@@ -41638,9 +41638,9 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
     _rfqg2_schema()
 
-    st.markdown('---')
+#     st.markdown('---')
 
-    st.markdown('**Target vendors**')
+#     st.markdown('**Target vendors**')
 
     rows = st.session_state.get('sub1_results', []) or []
 
@@ -41652,11 +41652,11 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
     targets = _rfqg2_target(rows, starred_only, min_score, max_distance)
 
-    st.caption(f'{len(targets)} vendors selected')
+#     st.caption(f'{len(targets)} vendors selected')
 
     # Subject and body templates
 
-    st.markdown('**Email template**')
+#     st.markdown('**Email template**')
 
     subj_t = st.text_input('Subject', value='RFQ: {title} -- reply by {due_date}', key='rfqg2_subj')
 
@@ -41682,7 +41682,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
         app_base = ''
 
-    st.caption('Preview')
+#     st.caption('Preview')
 
     for it in targets[:3]:
 
@@ -41714,7 +41714,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
         body = body_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'), link=link)
 
-        st.code(subject + '\n\n' + body)
+#         st.code(subject + '\n\n' + body)
 
     # Send button
 
@@ -41760,7 +41760,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
                     if not row:
 
-                        cur.execute('INSERT INTO rfq_invites(rfq_id, vendor_id, status, created_at) VALUES(?,?,\'Queued\', datetime(\'now\'))', (int(rfq_id), int(vid)))
+#                         cur.execute('INSERT INTO rfq_invites(rfq_id, vendor_id, status, created_at) VALUES(?,?,\'Queued\', datetime(\'now\'))', (int(rfq_id), int(vid)))
 
                 except Exception:
 
@@ -41770,7 +41770,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
             try:
 
-                cur.execute('INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?,\'queued\',0)', (_rfqg2_vendor_email(cur,int(vid)) or '', subject, body, _dt_rfqg2.datetime.utcnow().isoformat()))
+#                 cur.execute('INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?,\'queued\',0)', (_rfqg2_vendor_email(cur,int(vid)) or '', subject, body, _dt_rfqg2.datetime.utcnow().isoformat()))
 
             except Exception:
 
@@ -41780,7 +41780,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
         get_db().commit()
 
-        st.success(f'Queued {created} emails; skipped {skipped}.')
+#         st.success(f'Queued {created} emails; skipped {skipped}.')
 
 
 
@@ -41922,7 +41922,7 @@ def _rfqg3_get_or_create_quote(rfq_id: int, vendor_id: int, status: str="draft")
 
         return qid
 
-    cur.execute("INSERT INTO vendor_quotes(rfq_id, vendor_id, status, total_price, exceptions, created_at, updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))",
+#     cur.execute("INSERT INTO vendor_quotes(rfq_id, vendor_id, status, total_price, exceptions, created_at, updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))",
 
                 (int(rfq_id), int(vendor_id), status, None, None))
 
@@ -42072,7 +42072,7 @@ def _rfqg3_upload_vendor_pdf(rfq_id: int, vendor_id: int, file_obj, filename: st
 
     conn = get_db(); cur = conn.cursor()
 
-    cur.execute("INSERT INTO vendor_docs(vendor_id, rfq_id, file_name, path, bytes, checksum, uploaded_at) VALUES(?,?,?,?,?,?,datetime('now'))",
+#     cur.execute("INSERT INTO vendor_docs(vendor_id, rfq_id, file_name, path, bytes, checksum, uploaded_at) VALUES(?,?,?,?,?,?,datetime('now'))",
 
                 (int(vendor_id), int(rfq_id), filename, str(path), len(data), h))
 
@@ -42334,23 +42334,23 @@ def _p8_schema():
 
         for col, ddl in [
 
-            ('cage', "ALTER TABLE vendors ADD COLUMN cage TEXT"),
+#             ('cage', "ALTER TABLE vendors ADD COLUMN cage TEXT"),
 
-            ('uei', "ALTER TABLE vendors ADD COLUMN uei TEXT"),
+#             ('uei', "ALTER TABLE vendors ADD COLUMN uei TEXT"),
 
-            ('naics', "ALTER TABLE vendors ADD COLUMN naics TEXT"),
+#             ('naics', "ALTER TABLE vendors ADD COLUMN naics TEXT"),
 
-            ('city', "ALTER TABLE vendors ADD COLUMN city TEXT"),
+#             ('city', "ALTER TABLE vendors ADD COLUMN city TEXT"),
 
-            ('state', "ALTER TABLE vendors ADD COLUMN state TEXT"),
+#             ('state', "ALTER TABLE vendors ADD COLUMN state TEXT"),
 
-            ('email', "ALTER TABLE vendors ADD COLUMN email TEXT"),
+#             ('email', "ALTER TABLE vendors ADD COLUMN email TEXT"),
 
-            ('website', "ALTER TABLE vendors ADD COLUMN website TEXT"),
+#             ('website', "ALTER TABLE vendors ADD COLUMN website TEXT"),
 
-            ('notes', "ALTER TABLE vendors ADD COLUMN notes TEXT"),
+#             ('notes', "ALTER TABLE vendors ADD COLUMN notes TEXT"),
 
-            ('last_seen_award', "ALTER TABLE vendors ADD COLUMN last_seen_award TEXT"),
+#             ('last_seen_award', "ALTER TABLE vendors ADD COLUMN last_seen_award TEXT"),
 
         ]:
 
@@ -42400,15 +42400,15 @@ def _p8_schema():
 
         for col, ddl in [
 
-            ('received_at', "ALTER TABLE vendor_quotes ADD COLUMN received_at TEXT"),
+#             ('received_at', "ALTER TABLE vendor_quotes ADD COLUMN received_at TEXT"),
 
-            ('valid_through', "ALTER TABLE vendor_quotes ADD COLUMN valid_through TEXT"),
+#             ('valid_through', "ALTER TABLE vendor_quotes ADD COLUMN valid_through TEXT"),
 
-            ('total', "ALTER TABLE vendor_quotes ADD COLUMN total REAL"),
+#             ('total', "ALTER TABLE vendor_quotes ADD COLUMN total REAL"),
 
-            ('doc_id', "ALTER TABLE vendor_quotes ADD COLUMN doc_id TEXT"),
+#             ('doc_id', "ALTER TABLE vendor_quotes ADD COLUMN doc_id TEXT"),
 
-            ('coverage_score', "ALTER TABLE vendor_quotes ADD COLUMN coverage_score REAL DEFAULT 0"),
+#             ('coverage_score', "ALTER TABLE vendor_quotes ADD COLUMN coverage_score REAL DEFAULT 0"),
 
         ]:
 
@@ -42434,7 +42434,7 @@ def _p8_schema():
 
     try:
 
-        cur.execute("CREATE TABLE IF NOT EXISTS rfq_chase( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, next_action TEXT NOT NULL, due_at TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN('pending','done')) )")
+#         cur.execute("CREATE TABLE IF NOT EXISTS rfq_chase( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, next_action TEXT NOT NULL, due_at TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN('pending','done')) )")
 
     except Exception: pass
 
@@ -42514,7 +42514,7 @@ def _p8_seed_vendors_for_notice(notice_id: int, limit: int=100):
 
             city = addr.split(',')[0].strip()
 
-        cur.execute('INSERT INTO vendors(name, naics, city, state, phone, email, website, notes) VALUES(?,?,?,?,?,?,?,?)',
+#         cur.execute('INSERT INTO vendors(name, naics, city, state, phone, email, website, notes) VALUES(?,?,?,?,?,?,?,?)',
 
                     (name, naics, city, st, phone, email, web, None))
 
@@ -42576,7 +42576,7 @@ def _p8_send_rfqs(rfq_id: int, vendor_ids: list, subject_t: str, body_t: str, at
 
         try:
 
-            cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?, 'queued', 0)",
+#             cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?, 'queued', 0)",
 
                         (email, subject, body, _dt_p8.datetime.utcnow().isoformat()))
 
@@ -42644,7 +42644,7 @@ def _p8_save_contact_and_notes(vendor_id: int, name: str, email: str, phone: str
 
     if any([name, email, phone]):
 
-        cur.execute('INSERT INTO vendor_contacts(vendor_id, name, email, phone, role) VALUES(?,?,?,?,?)', (int(vendor_id), name or None, email or None, phone or None, None))
+#         cur.execute('INSERT INTO vendor_contacts(vendor_id, name, email, phone, role) VALUES(?,?,?,?,?)', (int(vendor_id), name or None, email or None, phone or None, None))
 
     if notes:
 
@@ -42658,7 +42658,7 @@ def _p8_add_chase(rfq_id: int, vendor_id: int, action: str, due_iso: str):
 
     conn = get_db(); cur = conn.cursor()
 
-    cur.execute('INSERT INTO rfq_chase(rfq_id, vendor_id, next_action, due_at, status) VALUES(?,?,?,?,\'pending\')', (int(rfq_id), int(vendor_id), action, due_iso))
+#     cur.execute('INSERT INTO rfq_chase(rfq_id, vendor_id, next_action, due_at, status) VALUES(?,?,?,?,\'pending\')', (int(rfq_id), int(vendor_id), action, due_iso))
 
     conn.commit()
 
@@ -42710,9 +42710,9 @@ def render_vendors(opp_id: int):
 
     st.session_state['current_rfq_id'] = rfq_id
 
-    st.markdown('---')
+#     st.markdown('---')
 
-    st.subheader('Vendors for this notice')
+#     st.subheader('Vendors for this notice')
 
     c1,c2,c3 = st.columns(3)
 
@@ -42722,7 +42722,7 @@ def render_vendors(opp_id: int):
 
             cnt = _p8_seed_vendors_for_notice(int(opp_id))
 
-            st.success(f'Added {cnt} vendors from Finder results')
+#             st.success(f'Added {cnt} vendors from Finder results')
 
     with c2:
 
@@ -42752,11 +42752,11 @@ def render_vendors(opp_id: int):
 
         sent = _p8_send_rfqs(int(rfq_id), target_ids, subj, body, attachments=None)
 
-        st.success(f'Sent {sent} emails')
+#         st.success(f'Sent {sent} emails')
 
-    st.markdown('---')
+#     st.markdown('---')
 
-    st.markdown('**Record quote**')
+#     st.markdown('**Record quote**')
 
     # Select vendor and enter totals; per-line handled in RFQG intake but allow quick total+coverage recompute
 
@@ -42782,11 +42782,11 @@ def render_vendors(opp_id: int):
 
         if st.button('Save contact + notes'):
 
-            _p8_save_contact_and_notes(int(vid), name, email, phone, notes); st.success('Saved')
+#             _p8_save_contact_and_notes(int(vid), name, email, phone, notes); st.success('Saved')
 
-    st.markdown('---')
+#     st.markdown('---')
 
-    st.markdown('**Chase list**')
+#     st.markdown('**Chase list**')
 
     action = st.text_input('Next action', value='Follow up call')
 
@@ -42794,7 +42794,7 @@ def render_vendors(opp_id: int):
 
     if vid and st.button('Add chase item'):
 
-        _p8_add_chase(int(rfq_id), int(vid), action, due); st.success('Chase added')
+#         _p8_add_chase(int(rfq_id), int(vid), action, due); st.success('Chase added')
 
     # List pending items
 
@@ -42814,7 +42814,7 @@ def render_vendors(opp_id: int):
 
                 if st.button('Done', key=f'c_done_{cid}'):
 
-                    _p8_mark_chase_done(int(cid)); st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
+#                     _p8_mark_chase_done(int(cid)); st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
 
     except Exception:
 
@@ -43190,7 +43190,7 @@ def metric_push(name: str, value: float, labels: dict|None=None):
 
     conn.execute("INSERT INTO metrics(ts,name,value,labels_json) VALUES(?,?,?,?)",
 
-                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(name), float(value), json.dumps(labels or {})))
+#                  (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(name), float(value), json.dumps(labels or {})))
 
     conn.commit()
 
@@ -43234,9 +43234,9 @@ def audit(action:str, user_id:str|None=None, entity:str|None=None, entity_id:str
 
     conn.execute("INSERT INTO audit_log(ts,user_id,action,entity,entity_id,meta_json) VALUES(?,?,?,?,?,?)",
 
-                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z',
+#                  (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z',
 
-                  str(user_id or ''), str(action), str(entity or ''), str(entity_id or ''), json.dumps(meta or {})))
+#                   str(user_id or ''), str(action), str(entity or ''), str(entity_id or ''), json.dumps(meta or {})))
 
     conn.commit()
 
@@ -43254,7 +43254,7 @@ def error_event(error_id:str, message:str, ctx:dict|None=None):
 
     conn.execute("INSERT INTO error_events(ts,error_id,message,context_json) VALUES(?,?,?,?)",
 
-                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(error_id), str(message), json.dumps(ctx or {})))
+#                  (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(error_id), str(message), json.dumps(ctx or {})))
 
     conn.commit()
 
@@ -43768,7 +43768,7 @@ def render_env_switcher():
 
     if st.button("Set env"):
 
-        set_config('env', new_env)
+#         set_config('env', new_env)
 
         apply_env_db_settings()
 
@@ -43810,7 +43810,7 @@ def ensure_rtm_schema():
 
         evidence_note TEXT,
 
-        status TEXT NOT NULL CHECK(status IN('Unmapped','Planned','Written','Reviewed')),
+#         status TEXT NOT NULL CHECK(status IN('Unmapped','Planned','Written','Reviewed')),
 
         updated_at TEXT NOT NULL
 
@@ -43856,7 +43856,7 @@ def build_rtm(notice_id: int, rfp_json: dict|None=None):
 
             cur.execute("""INSERT OR IGNORE INTO rtm(notice_id, req_id, factor, subfactor, requirement, status, updated_at)
 
-                        VALUES(?,?,?,?,?, 'Unmapped', datetime('now'))""", (nid, req_id, factor, subfactor, requirement))
+#                         VALUES(?,?,?,?,?, 'Unmapped', datetime('now'))""", (nid, req_id, factor, subfactor, requirement))
 
             if cur.rowcount:
 
@@ -44880,7 +44880,7 @@ def compute_rfp_impact(nid:int):
 
     conn.execute("INSERT INTO rfp_impacts(notice_id, from_hash, to_hash, impact_json, created_at) VALUES(?,?,?,?,?)",
 
-                 (int(nid), h_old, h_new, impact_json, _dt.datetime.utcnow().isoformat()+'Z'))
+#                  (int(nid), h_old, h_new, impact_json, _dt.datetime.utcnow().isoformat()+'Z'))
 
     try:
 
@@ -45082,7 +45082,7 @@ def build_proposal_from_analyzer(notice_id: int):
 
         return {'ok': False, 'reason': 'no_outline'}
 
-    cur.execute("INSERT INTO proposals(notice_id, title, created_at) VALUES(?,?, datetime('now'))", (int(notice_id), f"Proposal for {int(notice_id)}"))
+#     cur.execute("INSERT INTO proposals(notice_id, title, created_at) VALUES(?,?, datetime('now'))", (int(notice_id), f"Proposal for {int(notice_id)}"))
 
     pid = cur.lastrowid
 
@@ -45122,7 +45122,7 @@ def build_proposal_from_analyzer(notice_id: int):
 
             try:
 
-                cur.execute("INSERT OR IGNORE INTO section_requirements(proposal_id, section_key, req_id) VALUES(?,?,?)", (int(pid), key, b['req_id'] or ''))
+#                 cur.execute("INSERT OR IGNORE INTO section_requirements(proposal_id, section_key, req_id) VALUES(?,?,?)", (int(pid), key, b['req_id'] or ''))
 
             except Exception:
 
@@ -45214,7 +45214,7 @@ def render_builder_adapter_ui(nid:int):
 
         else:
 
-            st.success(f"Created proposal {res.get('proposal_id')} with {res.get('sections')} sections.")
+#             st.success(f"Created proposal {res.get('proposal_id')} with {res.get('sections')} sections.")
 
             st.session_state['builder_adapter_ready'] = True
 
