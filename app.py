@@ -1,12 +1,12 @@
 # ===== app.py =====    st.session_state.setdefault('deals_refresh', 0)
 
 
-def _strip_markdown_to_plain(txt: str) -> str:
-    """Convert markdown to plain text by stripping formatting markers."""
-    if not txt:
+# def _strip_markdown_to_plain(txt: str) -> str:
+"""Convert markdown to plain text by stripping formatting markers."""
+if not txt:
         return ""
-    import re as _re
-    s = txt
+        import re as _re
+        s = txt
     # Remove code fences but keep inner text
     s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
     # Inline code backticks
@@ -24,6 +24,26 @@ def _strip_markdown_to_plain(txt: str) -> str:
     s = _re.sub(r"^\|", "", s, flags=_re.MULTILINE)
     s = _re.sub(r"\|$", "", s, flags=_re.MULTILINE)
     return s
+
+import datetime as _dt
+import json
+import re as _re
+s = txt
+    # Remove code fences but keep inner text
+    s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
+    # Inline code backticks
+    s = s.replace("`", "")
+    # Bold/italic markers
+    s = s.replace("***", "")
+    s = s.replace("**", "")
+    s = s.replace("*", "")
+    s = s.replace("__", "")
+    s = s.replace("_", "")
+    # Strip heading markers at line starts
+    s = _re.sub(r"^[ \t]*#{1,6}[ \t]*", "", s, flags=_re.MULTILINE)
+    # Strip blockquote markers
+    s = _re.sub(r"^[ \t]*>[ \t]?", "", s, flags=_re.MULTILINE)
+    # Remove list markers
     s = _re.sub(r"^[ \t]*([-*-]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
     # Remove table pipes (keep content)
     s = _re.sub(r"^\|", "", s, flags=_re.MULTILINE)
@@ -125,7 +145,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
-    _render_markdown_to_docx(doc, md_text)
+#     _render_markdown_to_docx(doc, md_text)
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 
@@ -163,7 +183,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
-    _render_markdown_to_docx(doc, md_text)
+#     _render_markdown_to_docx(doc, md_text)
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 
@@ -217,7 +237,7 @@ def _add_paragraph_with_inlines(doc, text, style=None):
             run.italic = True
     return p
 
-def _render_markdown_to_docx(doc, md_text):
+# def _render_markdown_to_docx(doc, md_text):
     import re as _re
     lines = (md_text or '').splitlines()
     bullet_buf, num_buf = [], []
@@ -283,7 +303,7 @@ def _render_markdown_to_docx(doc, md_text):
 def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                           margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     """
-    Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+#     Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
     """
     from docx import Document
     from docx.shared import Pt, Inches
@@ -321,7 +341,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
 
-    _render_markdown_to_docx(doc, md_text)
+#     _render_markdown_to_docx(doc, md_text)
 
     out = io.BytesIO()
     doc.save(out)
@@ -926,7 +946,7 @@ def _render_top_nav():
         ("library", "Library"),
         ("admin", "Admin"),
     ]
-    st.markdown("### Navigation")
+#     st.markdown("### Navigation")
     cols = st.columns(len(pages))
     route = get_route()
     for i, (pid, label) in enumerate(pages):
@@ -1027,9 +1047,9 @@ def _get_notice_meta_from_db(opp_id):
     try:
         conn = get_db()
         cur = conn.cursor()
-        table_candidates = [
-            ('notices', {
-                'title': ['title','notice_title','name','subject'],
+#         table_candidates = [
+#             ('notices', {
+#                 'title': ['title','notice_title','name','subject'],
                 'agency': ['agency','agency_name','buyer','office'],
                 'due':   ['due_date','response_due','close_date','offer_due'],
                 'set':   ['set_aside','setaside','set_asides','naics_set_aside']
@@ -1088,11 +1108,11 @@ def _get_notice_meta_from_db(opp_id):
 try:
     import streamlit as st
 except Exception:
-    class _Stub:
+#     class _Stub:
         def cache_data(self, **kw):
             def deco(fn): return fn
             return deco
-    st = _Stub()
+#     st = _Stub()
 
 @st.cache_data(ttl=900)
 def _load_analyzer_data(opp_id):
@@ -1130,35 +1150,35 @@ def render_analyzer(opp_id):
         pass
     try:
         if feature_flags().get('rtm', False):
-            st.markdown('---')
+#             st.markdown('---')
             st.subheader('RTM')
             render_rtm_tab(int(opp_id))
     except Exception:
         pass
     try:
         if feature_flags().get('submission_rules', False):
-            st.markdown('---')
+#             st.markdown('---')
             st.subheader('Forms & Submission')
             render_forms_and_submission_tabs(int(opp_id))
     except Exception:
         pass
     try:
         if feature_flags().get('sow_price_hints', False):
-            st.markdown('---')
+#             st.markdown('---')
             st.subheader('SOW & Price hints')
             render_sow_price_tabs(int(opp_id))
     except Exception:
         pass
     try:
         if feature_flags().get('rfp_impact', False):
-            st.markdown('---')
+#             st.markdown('---')
             st.subheader('Impact')
             render_rfp_impact_tab(int(opp_id))
     except Exception:
         pass
     try:
         if feature_flags().get('builder_from_analyzer', False):
-            st.markdown('---')
+#             st.markdown('---')
             st.subheader('Builder')
             render_builder_adapter_ui(int(opp_id))
     except Exception:
@@ -2123,7 +2143,7 @@ def render_outreach_tools():
     with st.container(border=True):
         top_l, top_r = st.columns([3,2])
         with top_l:
-            st.markdown("### ✉️ Outreach")
+#             st.markdown("### ✉️ Outreach")
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with st.container(border=True):
             mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
@@ -2133,7 +2153,7 @@ def render_outreach_tools():
     # ---- Contacts Outreach ----
     if mode == "Contacts":
         with st.container(border=True):
-            st.markdown("#### Contacts")
+#             st.markdown("#### Contacts")
             # Read receipts + tracking pixel options
             with st.expander("Delivery & Tracking options", expanded=False):
                 want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
@@ -2243,7 +2263,7 @@ def render_outreach_tools():
 
     # ---------- Choose Generated Email & Attachments (required) ----------
     with st.container(border=True):
-        st.markdown("#### Choose Generated Email")
+#         st.markdown("#### Choose Generated Email")
         mb = st.session_state.get("mail_bodies") or []
         if not mb:
             st.info("Generate emails to select one for preview.", icon="ℹ️")
@@ -2259,9 +2279,9 @@ def render_outreach_tools():
             due_disp = sel.get("quote_due") or sel.get("due") or ""
             meta_cols = st.columns(2)
             with meta_cols[0]:
-                st.markdown(f"**Scope Summary:** {scope_disp}")
+#                 st.markdown(f"**Scope Summary:** {scope_disp}")
             with meta_cols[1]:
-                st.markdown(f"**Quote Due:** {due_disp}")
+#                 st.markdown(f"**Quote Due:** {due_disp}")
 
             # Attachments uploader (REQUIRED) placed below Quote Due
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
@@ -2346,7 +2366,7 @@ def render_outreach_tools():
                             st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
-        st.markdown("#### Preview")
+#         st.markdown("#### Preview")
         if not snap:
             st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
         else:
@@ -2519,12 +2539,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
-            st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
-            if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
-            if preview.get("cc"): st.markdown(f"**Cc:** {preview['cc']}")
-            if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
+#             st.markdown("#### Email preview")
+#             st.markdown(f"**From:** {preview.get('from_addr','')}")
+#             if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
+#             if preview.get("cc"): st.markdown(f"**Cc:** {preview['cc']}")
+#             if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
+#             st.markdown(f"**Subject:** {preview.get('subject','')}")
             html = preview.get("body_html") or ""
             components.html(
                 f"""
@@ -2659,15 +2679,15 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
-            st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
+#             st.markdown("#### Email preview")
+#             st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"):
-                st.markdown(f"**To:** {preview['to']}")
+#                 st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"):
-                st.markdown(f"**Cc:** {preview['cc']}")
+#                 st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"):
-                st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
+#                 st.markdown(f"**Bcc:** {preview['bcc']}")
+#             st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             html = preview.get("body_html") or ""
             components.html(
@@ -2783,16 +2803,16 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         import streamlit.components.v1 as components
 
         with st.container(border=True):
-            st.markdown("#### Email preview")
+#             st.markdown("#### Email preview")
             # Header preview
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
+#             st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"):
-                st.markdown(f"**To:** {preview['to']}")
+#                 st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"):
-                st.markdown(f"**Cc:** {preview['cc']}")
+#                 st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"):
-                st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
+#                 st.markdown(f"**Bcc:** {preview['bcc']}")
+#             st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             # Render the HTML body using a component so styles and tags are honored
             html = preview.get("body_html") or ""
@@ -2961,7 +2981,7 @@ except Exception as e:
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
-_OPENAI_FALLBACK_MODELS = [
+# _OPENAI_FALLBACK_MODELS = [
     OPENAI_MODEL,
     "gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
     "gpt-5-mini","gpt-5-mini-2025-08-07",
@@ -3570,7 +3590,7 @@ try:
 except NameError:
     def google_places_search(*args, **kwargs):
         """
-        Fallback stub when real google_places_search isn't loaded yet.
+#         Fallback stub when real google_places_search isn't loaded yet.
         Accepts flexible signatures, e.g. (query, location, radius_meters).
         Returns (results, info) where results is a list and info is a dict.
         """
@@ -3582,7 +3602,7 @@ except NameError:
             query, loc, radius_m = "", "", 1609
         url = f"https://www.google.com/maps/search/{quote_plus(str(query)+' '+str(loc))}"
         # Provide an empty result set and metadata so callers expecting tuple unpacking won't crash
-        return [], {"url": url, "note": "Fallback google_places_search stub used", "radius_m": radius_m}
+#         return [], {"url": url, "note": "Fallback google_places_search stub used", "radius_m": radius_m}
 
 try:
     _ = build_context
@@ -3652,9 +3672,9 @@ SCHEMA = {
     # ===== app.py =====    st.session_state.setdefault('deals_refresh', 0)
 
 
-def _strip_markdown_to_plain(txt: str) -> str:
+# def _strip_markdown_to_plain(txt: str) -> str:
     """
-    Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
+#     Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
     """
     if not txt:
         return ""
@@ -3776,7 +3796,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
-    _render_markdown_to_docx(doc, md_text)
+#     _render_markdown_to_docx(doc, md_text)
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 
@@ -3814,7 +3834,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         h = doc.add_heading(title, level=1)
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
-    _render_markdown_to_docx(doc, md_text)
+#     _render_markdown_to_docx(doc, md_text)
     bio = io.BytesIO(); doc.save(bio); bio.seek(0); return bio.getvalue()
 
 
@@ -3868,7 +3888,7 @@ def _add_paragraph_with_inlines(doc, text, style=None):
             run.italic = True
     return p
 
-def _render_markdown_to_docx(doc, md_text):
+# def _render_markdown_to_docx(doc, md_text):
     import re as _re
     lines = (md_text or '').splitlines()
     bullet_buf, num_buf = [], []
@@ -3934,7 +3954,7 @@ def _render_markdown_to_docx(doc, md_text):
 def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                           margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     """
-    Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+#     Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
     """
     from docx import Document
     from docx.shared import Pt, Inches
@@ -3972,7 +3992,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         try: h.style = doc.styles["Heading 1"]
         except Exception: pass
 
-    _render_markdown_to_docx(doc, md_text)
+#     _render_markdown_to_docx(doc, md_text)
 
     out = io.BytesIO()
     doc.save(out)
@@ -4577,7 +4597,7 @@ def _render_top_nav():
         ("library", "Library"),
         ("admin", "Admin"),
     ]
-    st.markdown("### Navigation")
+#     st.markdown("### Navigation")
     cols = st.columns(len(pages))
     route = get_route()
     for i, (pid, label) in enumerate(pages):
@@ -4739,11 +4759,11 @@ def _get_notice_meta_from_db(opp_id):
 try:
     import streamlit as st
 except Exception:
-    class _Stub:
+#     class _Stub:
         def cache_data(self, **kw):
             def deco(fn): return fn
             return deco
-    st = _Stub()
+#     st = _Stub()
 
 @st.cache_data(ttl=900)
 def _load_analyzer_data(opp_id):
@@ -5729,7 +5749,7 @@ def render_outreach_tools():
     with st.container(border=True):
         top_l, top_r = st.columns([3,2])
         with top_l:
-            st.markdown("### ✉️ Outreach")
+#             st.markdown("### ✉️ Outreach")
             st.caption(f"From: **{from_addr}**" if from_addr else "No email configured for this user.")
         with st.container(border=True):
             mode = st.radio("Send to", ["Vendors", "Contacts"], index=0, horizontal=True, key="outreach_mode")
@@ -5739,7 +5759,7 @@ def render_outreach_tools():
     # ---- Contacts Outreach ----
     if mode == "Contacts":
         with st.container(border=True):
-            st.markdown("#### Contacts")
+#             st.markdown("#### Contacts")
             # Read receipts + tracking pixel options
             with st.expander("Delivery & Tracking options", expanded=False):
                 want_rr = st.checkbox("Request read receipt headers (may prompt recipient)", value=False, key="outreach_rr")
@@ -5849,7 +5869,7 @@ def render_outreach_tools():
 
     # ---------- Choose Generated Email & Attachments (required) ----------
     with st.container(border=True):
-        st.markdown("#### Choose Generated Email")
+#         st.markdown("#### Choose Generated Email")
         mb = st.session_state.get("mail_bodies") or []
         if not mb:
             st.info("Generate emails to select one for preview.", icon="ℹ️")
@@ -5865,9 +5885,9 @@ def render_outreach_tools():
             due_disp = sel.get("quote_due") or sel.get("due") or ""
             meta_cols = st.columns(2)
             with meta_cols[0]:
-                st.markdown(f"**Scope Summary:** {scope_disp}")
+#                 st.markdown(f"**Scope Summary:** {scope_disp}")
             with meta_cols[1]:
-                st.markdown(f"**Quote Due:** {due_disp}")
+#                 st.markdown(f"**Quote Due:** {due_disp}")
 
             # Attachments uploader (REQUIRED) placed below Quote Due
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
@@ -5952,7 +5972,7 @@ def render_outreach_tools():
                             st.success(f"Sent all {sent} generated emails.")# ---------- Single Preview (Gmail-like card) ---------- (Gmail-like card) ----------
     snap = st.session_state.get(SKEY_PREVIEW)
     with st.container(border=True):
-        st.markdown("#### Preview")
+#         st.markdown("#### Preview")
         if not snap:
             st.info("Select a generated email above, attach files if needed, and click Preview.", icon="ℹ️")
         else:
@@ -6125,12 +6145,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
-            st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
-            if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
-            if preview.get("cc"): st.markdown(f"**Cc:** {preview['cc']}")
-            if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
+#             st.markdown("#### Email preview")
+#             st.markdown(f"**From:** {preview.get('from_addr','')}")
+#             if preview.get("to"): st.markdown(f"**To:** {preview['to']}")
+#             if preview.get("cc"): st.markdown(f"**Cc:** {preview['cc']}")
+#             if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
+#             st.markdown(f"**Subject:** {preview.get('subject','')}")
             html = preview.get("body_html") or ""
             components.html(
                 f"""
@@ -6265,15 +6285,15 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
-            st.markdown("#### Email preview")
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
+#             st.markdown("#### Email preview")
+#             st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"):
-                st.markdown(f"**To:** {preview['to']}")
+#                 st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"):
-                st.markdown(f"**Cc:** {preview['cc']}")
+#                 st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"):
-                st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
+#                 st.markdown(f"**Bcc:** {preview['bcc']}")
+#             st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             html = preview.get("body_html") or ""
             components.html(
@@ -6389,16 +6409,16 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         import streamlit.components.v1 as components
 
         with st.container(border=True):
-            st.markdown("#### Email preview")
+#             st.markdown("#### Email preview")
             # Header preview
-            st.markdown(f"**From:** {preview.get('from_addr','')}")
+#             st.markdown(f"**From:** {preview.get('from_addr','')}")
             if preview.get("to"):
-                st.markdown(f"**To:** {preview['to']}")
+#                 st.markdown(f"**To:** {preview['to']}")
             if preview.get("cc"):
-                st.markdown(f"**Cc:** {preview['cc']}")
+#                 st.markdown(f"**Cc:** {preview['cc']}")
             if preview.get("bcc"):
-                st.markdown(f"**Bcc:** {preview['bcc']}")
-            st.markdown(f"**Subject:** {preview.get('subject','')}")
+#                 st.markdown(f"**Bcc:** {preview['bcc']}")
+#             st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             # Render the HTML body using a component so styles and tags are honored
             html = preview.get("body_html") or ""
@@ -6567,7 +6587,7 @@ except Exception as e:
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", _get_key("OPENAI_MODEL") or "gpt-5-chat-latest")
-_OPENAI_FALLBACK_MODELS = [
+# _OPENAI_FALLBACK_MODELS = [
     OPENAI_MODEL,
     "gpt-5-chat-latest","gpt-5","gpt-5-2025-08-07",
     "gpt-5-mini","gpt-5-mini-2025-08-07",
@@ -7175,11 +7195,11 @@ try:
     _ = google_places_search
 except NameError:
     def google_places_search(*args, **kwargs):
-#         """
+        """
 #         Fallback stub when real google_places_search isn't loaded yet.
-#         Accepts flexible signatures, e.g. (query, location, radius_meters).
-#         Returns (results, info) where results is a list and info is a dict.
-#         """
+        Accepts flexible signatures, e.g. (query, location, radius_meters).
+        Returns (results, info) where results is a list and info is a dict.
+        """
         try:
             query = args[0] if len(args) >= 1 else kwargs.get("query","")
             loc = args[1] if len(args) >= 2 else kwargs.get("location","")
@@ -7188,7 +7208,7 @@ except NameError:
             query, loc, radius_m = "", "", 1609
         url = f"https://www.google.com/maps/search/{quote_plus(str(query)+' '+str(loc))}"
         # Provide an empty result set and metadata so callers expecting tuple unpacking won't crash
-        return [], {"url": url, "note": "Fallback google_places_search stub used", "radius_m": radius_m}
+#         return [], {"url": url, "note": "Fallback google_places_search stub used", "radius_m": radius_m}
 
 try:
     _ = build_context
@@ -7733,12 +7753,12 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
     if not client: return "Set OPENAI_API_KEY to enable drafting."
     messages = [{"role":"system","content":system},{"role":"user","content":prompt}]
     last_err = None
-    for model_name in _OPENAI_FALLBACK_MODELS:
+#     for model_name in _OPENAI_FALLBACK_MODELS:
         try:
             rsp = client.chat.completions.create(model=model_name, messages=messages,
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
-                try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
+#                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
                 except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
@@ -7748,12 +7768,12 @@ def llm(system, prompt, temp=0.2, max_tokens=1400):
 def llm_messages(messages, temp=0.2, max_tokens=1400):
     if not client: return "Set OPENAI_API_KEY to enable drafting."
     last_err = None
-    for model_name in _OPENAI_FALLBACK_MODELS:
+#     for model_name in _OPENAI_FALLBACK_MODELS:
         try:
             rsp = client.chat.completions.create(model=model_name, messages=messages,
                                                  temperature=temp, max_tokens=max_tokens)
             if model_name != OPENAI_MODEL:
-                try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
+#                 try: st.toast(f"Using fallback model: {model_name}", icon="âš™ï¸")
                 except Exception: pass
             return rsp.choices[0].message.content
         except Exception as e:
@@ -7787,7 +7807,7 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
     """
     Lightweight validator used across export flows.
     Returns a tuple: (issues: list[str], estimated_pages: int)
-    Heuristics only -- cannot actually inspect fonts from Markdown.
+#     Heuristics only -- cannot actually inspect fonts from Markdown.
     """
     import math, re as _re
     text = (md_text or "").strip()
@@ -7812,10 +7832,10 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
 
 
-def _normalize_markdown_sections(md_text: str) -> str:
+# def _normalize_markdown_sections(md_text: str) -> str:
     """
     Clean common generation artifacts:
-      - Collapse immediately repeated headings with the same text
+#       - Collapse immediately repeated headings with the same text
       - Trim double spaces after heading text
     """
     if not md_text:
@@ -7852,7 +7872,7 @@ def _docx_title_if_needed(md_text: str, proposed_title: str) -> str:
 def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                       margins_in: float = 1.0) -> bytes:
     """
-    Minimal Markdown-ish to DOCX converter:
+#     Minimal Markdown-ish to DOCX converter:
       - Headings: lines starting with #, ##, ### map to H1/H2/H3
       - Bullets: lines starting with -, *, or - map to bullets
       - Numbered: lines like "1. text" map to numbered list (approx)
@@ -8035,7 +8055,7 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
 def _render_saved_vendors_manager(_container=None):
     import pandas as pd
     _c = _container or st
-    _c.markdown("### Saved vendors")
+#     _c.markdown("### Saved vendors")
     try:
         conn = get_db()
     except Exception as e:
@@ -8175,7 +8195,7 @@ try:
     if "Pipeline" in TAB_LABELS:
         _pipeline_idx = TAB_LABELS.index("Pipeline") + 1  # nth-child is 1-based
         _css = "<style>\n.stTabs [role='tablist'] button:nth-child(" + str(_pipeline_idx) + ") { display: none !important; }\n</style>"
-        st.markdown(_css, unsafe_allow_html=True)
+#         st.markdown(_css, unsafe_allow_html=True)
 except Exception:
     # Do not fail rendering if anything goes wrong
     pass
@@ -8383,7 +8403,7 @@ except Exception as _e_qc:
     st.caption(f"[Quote Comparison tab init note: {_e_qc}]")
 
 
-    st.markdown("### Vendor ranking (scorecards)")
+#     st.markdown("### Vendor ranking (scorecards)")
     try:
         conn = get_db()
         # Responsiveness proxy: count outreach_log entries per vendor with "Sent" or "Preview"
@@ -8568,7 +8588,7 @@ with legacy_tabs[0]:
         conn = get_db()
         df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
         if not df_all.empty:
-            st.markdown("### Pipeline analytics")
+#             st.markdown("### Pipeline analytics")
             st.bar_chart(df_all.set_index("status"))
         # Forecast (probability-adjusted revenue) using win_scores if any
         try:
@@ -8591,7 +8611,7 @@ with legacy_tabs[0]:
     if globals().get("__ctx_pipeline", False):
 
 
-        st.markdown("### Tasks for selected opportunity")
+#         st.markdown("### Tasks for selected opportunity")
 
         try:
 
@@ -8760,11 +8780,11 @@ with legacy_tabs[1]:
 
 
     with colB:
-        st.markdown("LinkedIn quick search")
+#         st.markdown("LinkedIn quick search")
         st.link_button("Open LinkedIn", f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(trade + ' ' + loc)}")
 
     with colC:
-        st.markdown("Google search")
+#         st.markdown("Google search")
         st.link_button("Open Google", f"https://www.google.com/search?q={quote_plus(trade + ' ' + loc)}")
 
     st.divider()
@@ -9138,7 +9158,7 @@ def sam_saved_searches_list():
         return []
 def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_digest: bool = False, min_score_digest: int = 70):
     """
-    Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
+#     Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
     used in SAM Watch and insert new rows into opportunities. Optionally email a digest.
     """
     try:
@@ -9347,7 +9367,7 @@ with legacy_tabs[4]:
         except Exception as e:
             st.error(f"Saved searches error: {e}")
     st.subheader("SAM Watch: Auto Search + Attachments + Saved Searches")
-    st.markdown("> **Flow:** Set All active -> apply filters -> open attachments -> choose assignee -> **Search** then **Save to pipeline**")
+#     st.markdown("> **Flow:** Set All active -> apply filters -> open attachments -> choose assignee -> **Search** then **Save to pipeline**")
     conn = get_db()
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
@@ -9394,7 +9414,7 @@ except Exception:
         diag = st.checkbox("Show diagnostics", value=False)
         raw = st.checkbox("Show raw API text (debug)", value=False)
         assignee_default = st.selectbox("Default assignee", ["","Quincy","Charles","Collin"], index=(['','Quincy','Charles','Collin'].index(st.session_state.get('active_profile','')) if st.session_state.get('active_profile','') in ['Quincy','Charles','Collin'] else 0))
-        st.markdown("**Defaults**")
+#         st.markdown("**Defaults**")
         if st.button("Save as my default"):
             # Add set_aside to saved defaults if a UI variable named set_aside exists
             try:
@@ -9422,7 +9442,7 @@ except Exception:
             st.info("Cleared your saved defaults")
 
         # --- Saved Searches manager ---
-        st.markdown("### Saved Searches")
+#         st.markdown("### Saved Searches")
         _ensure_sam_saved_searches_schema()
         _ss_list = sam_saved_searches_list()
         if _ss_list:
@@ -9454,7 +9474,7 @@ except Exception:
                 st.success(f"Saved search '{ss_name.strip()}'")
 
         if chosen:
-            st.markdown("#### Run selected saved search")
+#             st.markdown("#### Run selected saved search")
             if st.button("Run & Ingest to Pipeline"):
                 _df, _info = sam_search(
                     naics_list=chosen['params'].get('naics_list') or [],
@@ -9482,7 +9502,7 @@ except Exception:
                     st.success(f"Ingested to pipeline: added {_added}, updated {_updated}")
 
         # --- Auto-ingest scheduler ---
-        st.markdown("### Auto-ingest")
+#         st.markdown("### Auto-ingest")
         toggle_auto = st.checkbox("Enable background auto-ingest (every N hours)", value=bool(get_setting("sam_auto_ingest_enabled","")=="1"))
         every_hours = st.slider("Frequency (hours)", min_value=1, max_value=24, value=int(get_setting("sam_auto_ingest_hours","3") or 3))
         email_digest = st.checkbox("Email a digest when new matches found", value=bool(get_setting("sam_auto_ingest_email","")=="1"))
@@ -9727,7 +9747,7 @@ with legacy_tabs[6]:
 
     with c1:
         if st.button("Generate one page", key="btn_cap_generate_capability_builder"):
-            system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
+#             system = "Format a one page federal capability statement in markdown. Use clean headings and short bullets."
             prompt = f"""Company {company}
 Tagline {tagline}
 Core {core}
@@ -9744,10 +9764,10 @@ Certifications Small Business"""
             st.session_state.pop("capability_md", None)
 
     cap_md = st.session_state.get("capability_md", "")
-    cap_md = _normalize_markdown_sections(cap_md)
+#     cap_md = _normalize_markdown_sections(cap_md)
     if cap_md:
-        st.markdown("#### Preview")
-        st.markdown(cap_md)
+#         st.markdown("#### Preview")
+#         st.markdown(cap_md)
         issues, est_pages = _validate_text_for_guardrails(cap_md, page_limit=2, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
             st.warning("Before export, fix these items: " + "; ".join(issues))
@@ -9777,10 +9797,10 @@ with legacy_tabs[7]:
             st.session_state.pop("whitepaper_md", None)
 
     wp_md = st.session_state.get("whitepaper_md", "")
-    wp_md = _normalize_markdown_sections(wp_md)
+#     wp_md = _normalize_markdown_sections(wp_md)
     if wp_md:
-        st.markdown("#### Preview")
-        st.markdown(wp_md)
+#         st.markdown("#### Preview")
+#         st.markdown(wp_md)
         issues, est_pages = _validate_text_for_guardrails(wp_md, page_limit=4, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
             st.warning("Before export, fix these items: " + "; ".join(issues))
@@ -9814,7 +9834,7 @@ with legacy_tabs[9]:
         )
         system = "You are a federal contracting assistant. Use headings and tight bullets."
         prompt = "Source slices\n" + "\n\n".join(snips) + "\n\nExtract fields now"
-        st.markdown(llm(system, prompt, max_tokens=1200))
+#         st.markdown(llm(system, prompt, max_tokens=1200))
 
 with legacy_tabs[10]:
     st.subheader("Ask questions over the uploaded docs")
@@ -9826,7 +9846,7 @@ with legacy_tabs[10]:
         snips = search_chunks(q, vec, X, chunks, k=6); support = "\n\n".join(snips)
         system = "Answer directly. Quote exact lines for dates or addresses."
         prompt = f"Context\n{support}\n\nQuestion\n{q}"
-        st.markdown(llm(system, prompt, max_tokens=900))
+#         st.markdown(llm(system, prompt, max_tokens=900))
 
 
 with legacy_tabs[11]:
@@ -9920,9 +9940,9 @@ with legacy_tabs[11]:
             )
             for _, row in hist.iterrows():
                 if row["role"] == "user":
-                    st.chat_message("user").markdown(row["content"])
+#                     st.chat_message("user").markdown(row["content"])
                 elif row["role"] == "assistant":
-                    st.chat_message("assistant").markdown(row["content"])
+#                     st.chat_message("assistant").markdown(row["content"])
 
             # Chat input lives inside the tab to avoid bleed-through
             user_msg = st.chat_input("Type your message")
@@ -9960,8 +9980,8 @@ with legacy_tabs[11]:
                              (session_id, "assistant", assistant_out))
                 conn.commit()
 
-                st.chat_message("user").markdown(user_msg)
-                st.chat_message("assistant").markdown(assistant_out)
+#                 st.chat_message("user").markdown(user_msg)
+#                 st.chat_message("assistant").markdown(assistant_out)
 
 
 
@@ -10015,12 +10035,12 @@ with legacy_tabs[__tabs_base + 0]:
                 conn.commit()
                 st.success("Added")
 
-    st.markdown("### Due today")
+#     st.markdown("### Due today")
     due_today = pd.read_sql_query("select * from deadlines where date(due_date)=date('now') and status='Open'", conn)
     if not due_today.empty:
         st.dataframe(due_today[["title","due_date","source","notes"]])
         # Email reminders via Microsoft Graph
-        st.markdown("#### Send email reminders")
+#         st.markdown("#### Send email reminders")
         to_addr = st.text_input("Send reminders to email", value="")
         if st.button("Email reminders for items due today"):
             if to_addr:
@@ -10101,7 +10121,7 @@ with legacy_tabs[__tabs_base + 1]:
         conn.commit()
         st.success("Checklist saved with page anchors, owners and snippets")
 
-    st.markdown("#### Existing items")
+#     st.markdown("#### Existing items")
     items = pd.read_sql_query("select * from compliance_items order by created_at desc limit 200", conn)
     st.dataframe(items, use_container_width=True)
 
@@ -10131,7 +10151,7 @@ with legacy_tabs[__tabs_base + 2]:
                           json.dumps([f.strip() for f in files.split(",") if f.strip()]), "Draft"))
         conn.commit()
         st.success(f"Created {len(recs)} RFQ draft(s)")
-    st.markdown("#### Drafts")
+#     st.markdown("#### Drafts")
     drafts = pd.read_sql_query("select * from rfq_outbox order by created_at desc", conn)
     st.dataframe(drafts)
 
@@ -10147,7 +10167,7 @@ with legacy_tabs[__tabs_base + 2]:
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
             for para in row[2].split("\n\n"):
-                doc.add_paragraph(_strip_markdown_to_plain(para))
+#                 doc.add_paragraph(_strip_markdown_to_plain(para))
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -10197,7 +10217,7 @@ with legacy_tabs[__tabs_base + 3]:
         except Exception as _e_pc:
             st.caption(f"[Pricing save note: {_e_pc}]")
 
-    st.markdown("### Scenario comparison")
+#     st.markdown("### Scenario comparison")
     conn = get_db()
     try:
         dfp = pd.read_sql_query("select id, created_at, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct from pricing_scenarios order by id desc limit 20", conn)
@@ -10259,9 +10279,9 @@ with legacy_tabs[__tabs_base + 3]:
                     _df["term_months"] = _df.apply(lambda r: _months_between(r["start"], r["end"]), axis=1)
                     _df["monthly_spend"] = _df.apply(lambda r: (float(r["amount"]) / r["term_months"]) if r["term_months"] and r["term_months"] > 0 else None, axis=1)
 
-                    st.markdown("#### Diagnostics: term and monthly spend")
+#                     st.markdown("#### Diagnostics: term and monthly spend")
                     # Save selected awards as benchmarks with your annotations
-                    st.markdown("#### Save selected awards to your benchmark library")
+#                     st.markdown("#### Save selected awards to your benchmark library")
                     try:
                         _choices = _df["award_id"].dropna().astype(str).unique().tolist()
                     except Exception:
@@ -10320,9 +10340,9 @@ with legacy_tabs[__tabs_base + 3]:
                             except Exception:
                                 _med_month = None
                             if _med_sqft:
-                                st.markdown(f"**Median dollars per sqft per year across benchmarks: ${_med_sqft:,.2f}**")
+#                                 st.markdown(f"**Median dollars per sqft per year across benchmarks: ${_med_sqft:,.2f}**")
                             if _med_month:
-                                st.markdown(f"**Median monthly spend across benchmarks: ${_med_month:,.0f}**")
+#                                 st.markdown(f"**Median monthly spend across benchmarks: ${_med_month:,.0f}**")
                             _apply_sqft = st.number_input("Use sqft to apply median $ per sqft", min_value=0, step=1000, value=0, key="md_apply_sqft")
                             if _apply_sqft and _apply_sqft > 0 and _med_sqft:
                                 _hint = float(_apply_sqft) * float(_med_sqft)
@@ -10348,7 +10368,7 @@ with legacy_tabs[__tabs_base + 3]:
                             _vals = _pd.to_numeric(_df2["dollars_per_sqft_year"], errors="coerce").dropna()
                             if not _vals.empty:
                                 _med = float(_vals.median())
-                                st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
+#                                 st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
                                 if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
                                     st.session_state["pricing_base_cost"] = _med * float(sqft)
                                     st.success(f"Base cost set to ${st.session_state['pricing_base_cost']:,.2f} from implied $/sqft median. Recalculate above.")
@@ -10366,7 +10386,7 @@ with legacy_tabs[__tabs_base + 3]:
                                 hrs_per_week = st.number_input("Hours per week (crew)", min_value=1, max_value=168, value=40, step=1, key="md_hours")
                                 rate_med = float(_np.median(rate_series))
                                 est_monthly = rate_med * float(crew_size) * float(hrs_per_week) * 4.33
-                                st.markdown(f"Estimated crew cost at CALC median rate: **${est_monthly:,.0f} / month**")
+#                                 st.markdown(f"Estimated crew cost at CALC median rate: **${est_monthly:,.0f} / month**")
                     else:
                         st.info("No CALC rates returned. Try a simpler keyword.")
             else:
@@ -11421,7 +11441,7 @@ def render_rfp_panel():
         return
     nid = int(st.session_state["current_notice_id"])
     meta = _get_notice_meta(nid)
-    st.markdown("---")
+#     st.markdown("---")
     st.subheader("RFP Analyzer")
     st.caption(f"{meta['title']}  -  {meta['agency']}  -  Due {meta['due'] or 'n/a'}")
 
@@ -11455,7 +11475,7 @@ def render_rfp_panel():
             if feature_flags().get('rfp_impact', False):
                 data, ts = latest_rfp_impact(int(notice_id)) if 'notice_id' in locals() else (None,None)
                 if data and data.get('items'):
-                    st.markdown("#### To Do from latest amendment")
+#                     st.markdown("#### To Do from latest amendment")
                     for it in data['items']:
                         t = it.get('type')
                         if t == 'forms' and it.get('added'):
@@ -11479,7 +11499,7 @@ def render_rfp_panel():
                         dfc = pd.read_sql_query("select clin, descr as desc, uom, qty_hint from price_lines where proposal_id=?", conn, params=(pid,))
                     except Exception:
                         dfc = None
-                    st.markdown("#### CLINs seeded for pricing")
+#                     st.markdown("#### CLINs seeded for pricing")
                     if dfc is not None and not dfc.empty:
                         st.dataframe(dfc, use_container_width=True, hide_index=True)
                     else:
@@ -11496,7 +11516,7 @@ with st.expander("Milestones"): st.write(s.get("sections",{}).get("Milestones",[
             st.info("No summary parsed yet.")
 
     # Q and A
-    st.markdown("**Ask only from parsed docs**")
+#     st.markdown("**Ask only from parsed docs**")
     q = st.text_input("Your question", key="rfp_q")
     if st.button("Ask"):
         if not q.strip():
@@ -12027,7 +12047,7 @@ def render_compliance_panel():
         return
     ensure_compliance_schema()
     nid = int(st.session_state["selected_notice_id"])
-    st.markdown("---")
+#     st.markdown("---")
     st.subheader("Compliance")
     # Amendment impact banner
     try:
@@ -12045,12 +12065,12 @@ def render_compliance_panel():
         if feature_flags().get('compliance_gate_v2', False):
             ok2, unmet2 = gate_status(nid)
             counts = _gate_counts(nid)
-            st.markdown("#### Gate")
+#             st.markdown("#### Gate")
             c1,c2,c3,c4 = st.columns(4)
             c1.metric("Green", counts.get("Green",0))
             c2.metric("Yellow", counts.get("Yellow",0))
             c3.metric("Red", counts.get("Red",0))
-            c4.markdown("🔓 Unlocked" if ok2 else "🔒 Locked")
+#             c4.markdown("🔓 Unlocked" if ok2 else "🔒 Locked")
             if not ok2 and unmet2:
                 st.info("Gate reasons: " + "; ".join(unmet2))
     except Exception as _gx:
@@ -12059,7 +12079,7 @@ def render_compliance_panel():
     if unmet:
         st.warning("Unmet: " + "; ".join(unmet))
     # Checklist editor
-    st.markdown("#### L and M checklist")
+#     st.markdown("#### L and M checklist")
     conn = get_db()
     import pandas as pd
     
@@ -12114,7 +12134,7 @@ st.success("Checklist saved.")
         st.session_state["compliance_tab_open"] = True
         st.rerun()
     # Required docs
-    st.markdown("#### Required documents")
+#     st.markdown("#### Required documents")
     df2 = pd.read_sql_query("select id, name, template_key, required, provided, file_id from required_docs where notice_id=? order by id", conn, params=(nid,))
     edited2 = st.data_editor(df2, use_container_width=True, num_rows="dynamic",
                              column_config={
@@ -12132,7 +12152,7 @@ st.success("Checklist saved.")
         st.session_state["compliance_tab_open"] = True
         st.rerun()
     # Signoffs
-    st.markdown("#### Signoffs")
+#     st.markdown("#### Signoffs")
     roles = ["Tech","Price","Contracts"]
     cols = st.columns(len(roles))
     uid = st.session_state.get("user_id") or st.session_state.get("current_user_id") or "unknown"
@@ -12145,7 +12165,7 @@ st.success("Checklist saved.")
                 set_signoff(nid, role, "Rejected", str(uid))
                 st.rerun()
     # Q and A log
-    st.markdown("#### Q and A")
+#     st.markdown("#### Q and A")
     q = st.text_input("Question")
     d = st.text_input("Deadline")
     if st.button("Add Q and A"):
@@ -12274,7 +12294,7 @@ def render_compliance_v2_evidence_viewer():
     page = st.session_state.get('current_evidence_page')
     if not file_id:
         return
-    st.markdown("### Evidence Viewer")
+#     st.markdown("### Evidence Viewer")
     conn = get_db()
     row = conn.execute("select id, file_name, url, content_type, local_path from notice_files where id=?", (int(file_id),)).fetchone()
     if not row:
@@ -12306,7 +12326,7 @@ def _compliance_v2_controls_in_panel(nid: int):
         return
     compliance_v2_schema_upgrade()
     conn = get_db()
-    st.markdown("#### L and M checklist (v2)")
+#     st.markdown("#### L and M checklist (v2)")
     df = pd.read_sql_query("select id, req_id, factor, subfactor, requirement, cite_file, cite_page, evidence_file_id, evidence_page, status, owner_id, due_date from lm_checklist where notice_id=? order by id", conn, params=(int(nid),))
     # Show grid with no Analyzer editing. We allow status here in Compliance tab.
     edited = st.data_editor(df, use_container_width=True, num_rows=0,
@@ -12350,7 +12370,7 @@ def analyzer_lm_readonly(nid: int):
     compliance_v2_schema_upgrade()
     conn = get_db()
     df = pd.read_sql_query("select factor, subfactor, requirement, cite_file, cite_page, status from lm_checklist where notice_id=? order by id", conn, params=(int(nid),))
-    st.markdown("#### Section L & M requirements (read-only)")
+#     st.markdown("#### Section L & M requirements (read-only)")
     st.dataframe(df, use_container_width=True, hide_index=True)
     if st.button("Open in Compliance"):
         st.session_state['selected_notice_id'] = int(nid)
@@ -12547,7 +12567,7 @@ def render_compliance_audit_drawer(nid:int):
     ensure_compliance_audit_schema()
     if not st.session_state.get('audit_drawer_open'):
         return
-    st.markdown("#### Audit trail")
+#     st.markdown("#### Audit trail")
     conn = get_db()
     df = pd.read_sql_query("SELECT ts, action, user_id, req_id, before_json, after_json FROM compliance_audit WHERE notice_id=? ORDER BY id DESC LIMIT 200", conn, params=(int(nid),))
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -12860,7 +12880,7 @@ def render_diff_panel():
     if not st.session_state.get("diff_tab_open") or not st.session_state.get("selected_notice_id"):
         return
     nid = int(st.session_state["selected_notice_id"])
-    st.markdown("---")
+#     st.markdown("---")
     st.subheader("Amendments Diff")
     versions = _load_versions(nid)
     if len(versions) < 1:
@@ -13284,9 +13304,9 @@ with st.sidebar:
 
     st.subheader("API Key Status")
     def _ok(v): return "✔" if v else "✘"
-    st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
-    st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
-    st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
+#     st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
+#     st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
+#     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
     st.caption(f"OpenAI SDK: {_openai_version} - Model: {OPENAI_MODEL}")
     if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
@@ -13467,9 +13487,9 @@ def render_rfp_analyzer():
         else:
             for _, row in hist.iterrows():
                 if row["role"] == "user":
-                    st.chat_message("user").markdown(row["content"])
+#                     st.chat_message("user").markdown(row["content"])
                 elif row["role"] == "assistant":
-                    st.chat_message("assistant").markdown(row["content"])
+#                     st.chat_message("assistant").markdown(row["content"])
                 else:
                     st.caption(f"System updated at {row['created_at']}")
 
@@ -13565,8 +13585,8 @@ def render_rfp_analyzer():
                          (session_id, "assistant", assistant_out))
             conn.commit()
 
-            st.chat_message("user").markdown(pending_prompt)
-            st.chat_message("assistant").markdown(assistant_out)
+#             st.chat_message("user").markdown(pending_prompt)
+#             st.chat_message("assistant").markdown(assistant_out)
     except Exception as e:
         st.warning(f"RFP Analyzer error: {e}")
 
@@ -13588,7 +13608,7 @@ def render_proposal_builder():
             st.info("Select a valid session to continue.")
 
 
-        st.markdown("**Attach past performance to include**")
+#         st.markdown("**Attach past performance to include**")
         df_pp = get_past_performance_df()
         selected_pp_ids = []
         if not df_pp.empty:
@@ -13653,7 +13673,7 @@ def render_proposal_builder():
 
         with colB:
             save_all = st.button("Save edited drafts")
-            export_md = st.button("Assemble full proposal (Markdown)")
+#             export_md = st.button("Assemble full proposal (Markdown)")
             export_docx = st.button("Export Proposal DOCX (guardrails)")
         # === Generate selected sections ===
         if regenerate:
@@ -13664,7 +13684,7 @@ def render_proposal_builder():
             except Exception:
                 pass
 
-            def _gen_with_fallback(system_text, user_prompt):
+#             def _gen_with_fallback(system_text, user_prompt):
                 # Immediate template if OpenAI client is not configured
                 try:
                     from builtins import globals as _g
@@ -13753,7 +13773,7 @@ def render_proposal_builder():
                 ]))
                 user_prompt = section_prompts.get(sec, f"Draft the section titled: {sec}.")
 
-                out = _gen_with_fallback(system_text, user_prompt)
+#                 out = _gen_with_fallback(system_text, user_prompt)
 
                 # Upsert into proposal_drafts
                 cur = conn.cursor()
@@ -13772,7 +13792,7 @@ def render_proposal_builder():
 
 
         # Compliance validation settings
-        st.markdown("#### Compliance validation settings")
+#         st.markdown("#### Compliance validation settings")
         colv1, colv2, colv3 = st.columns(3)
         with colv1:
             pb_page_limit = st.number_input("Page limit (estimated)", min_value=0, step=1, value=0)
@@ -13796,10 +13816,10 @@ def render_proposal_builder():
                 if row and row[0]:
                     parts.append(f"# {sec}\n\n{row[0].strip()}\n")
             assembled = "\n\n---\n\n".join(parts) if parts else "# Proposal\n(No sections saved yet.)"
-            st.markdown("#### Assembled Proposal (Markdown preview)")
-            st.code(assembled, language="markdown")
+#             st.markdown("#### Assembled Proposal (Markdown preview)")
+#             st.code(assembled, language="markdown")
             st.download_button("Download proposal.md", data=assembled.encode("utf-8"),
-                               file_name="proposal.md", mime="text/markdown")
+#                                file_name="proposal.md", mime="text/markdown")
 
         # Export DOCX with guardrails
         if export_docx:
@@ -13832,7 +13852,7 @@ def render_proposal_builder():
             if issues:
                 st.warning("Proceeding with export:")
                 for x in issues:
-                    st.markdown(f"- {x}")
+#                     st.markdown(f"- {x}")
 
 
             doc = Document()
@@ -13851,7 +13871,7 @@ def render_proposal_builder():
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
                 for para in txt.split("\n\n"):
-                    doc.add_paragraph(_strip_markdown_to_plain(para))
+#                     doc.add_paragraph(_strip_markdown_to_plain(para))
 
             bio = io.BytesIO()
             doc.save(bio)
@@ -13872,7 +13892,7 @@ def render_proposal_builder():
             st.download_button("Download Proposal DOCX", data=bio.getvalue(), file_name=fname,
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.markdown("### Drafts")
+#         st.markdown("### Drafts")
         order = ["Executive Summary","Technical Approach","Management & Staffing Plan","Past Performance","Pricing Assumptions/Notes","Compliance Narrative"]
         # Refresh drafts after generation so new content appears immediately
         drafts_df = pd.read_sql_query(
@@ -13884,7 +13904,7 @@ def render_proposal_builder():
         for sec in order:
             if not actions.get(sec, False):
                 continue
-            st.markdown(f"**{sec}**")
+#             st.markdown(f"**{sec}**")
             txt = existing.get(sec, {}).get("content", "")
             edited_blocks[sec] = st.text_area(f"Edit {sec}", value=txt, height=240, key=f"pb_{sec}")
 
@@ -14266,7 +14286,7 @@ def _render_deals_activities_and_calendar():
     conn = get_db()
     ensure_deal_activities_schema(conn)
     # Quick actions
-    st.markdown("### Activities")
+#     st.markdown("### Activities")
     c1,c2,c3,c4 = st.columns([2,1,2,2])
     with c1:
         deal_id = st.number_input("Deal ID", min_value=1, step=1, value=1, key="qa_deal_id")
@@ -14289,7 +14309,7 @@ def _render_deals_activities_and_calendar():
         st.success("Task created and reminder enqueued."); st.session_state["deals_refresh"] += 1; st.rerun()
 
     # Activity list with inline complete/delete
-    st.markdown("#### Open items")
+#     st.markdown("#### Open items")
     q = st.text_input("Filter", key="dact_q")
     df_open = list_activities(include_completed=False, q=q)
     st.dataframe(df_open, use_container_width=True, hide_index=True)
@@ -14301,7 +14321,7 @@ def _render_deals_activities_and_calendar():
 
     # Calendar view
     st.divider()
-    st.markdown("### Calendar")
+#     st.markdown("### Calendar")
     import pandas as _pd
     df_tasks = list_activities(include_completed=False)
     df_tasks = df_tasks[df_tasks["type"]=="task"].copy()
@@ -14350,13 +14370,13 @@ try:
         with c2:
             q = st.text_input("Search", key="deals_search")
         with c3:
-            st.markdown(" ")
+#             st.markdown(" ")
 
         # Data
         df = list_deals(stage_filter, q)
 
         # Totals by stage (above grid)
-        st.markdown("#### Totals by stage")
+#         st.markdown("#### Totals by stage")
         import pandas as _pd
         _stage_amounts = _pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         _stage_totals = _stage_amounts.groupby(df["stage"]).sum() if not df.empty else _pd.Series(dtype=float)
@@ -14367,7 +14387,7 @@ try:
                 st.metric(_stage, f"${float(_stage_totals.get(_stage, 0.0)):,.2f}")
 
         # Add a new deal
-        st.markdown("#### Add a new deal")
+#         st.markdown("#### Add a new deal")
         with st.form("new_deal_form", clear_on_submit=True):
             nc1,nc2,nc3,nc4 = st.columns([2,1,1,1])
             with nc1:
@@ -14402,7 +14422,7 @@ try:
                     st.rerun()
 
         # Pipeline editor (grid)
-        st.markdown("#### Pipeline editor")
+#         st.markdown("#### Pipeline editor")
         if df.empty:
             st.info("No deals yet. Add your first deal above.")
         else:
@@ -14441,7 +14461,7 @@ try:
 
         # Kanban board
         st.divider()
-        st.markdown("### Board view")
+#         st.markdown("### Board view")
         st.caption("Column per stage with quick add, inline edits, and move.")
 
         df_board = list_deals(stage=None, q=q)
@@ -14450,12 +14470,12 @@ try:
         _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
         _totals = _amounts.groupby(df_board["stage"]).sum() if not df_board.empty else _pd2.Series(dtype=float)
         grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
-        st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
+#         st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
 
         cols = st.columns(len(DEAL_STAGES))
         for i, stage_name in enumerate(DEAL_STAGES):
             with cols[i]:
-                st.markdown(f"#### {stage_name}")
+#                 st.markdown(f"#### {stage_name}")
                 st.caption(f"{int(_counts.get(stage_name, 0))} deals - ${float(_totals.get(stage_name, 0.0)):,.2f}")
 
                 # Quick add in this stage
@@ -14478,7 +14498,7 @@ try:
                 stage_rows = df_board[df_board["stage"] == stage_name]
                 for _, row in stage_rows.iterrows():
                     with st.container(border=True):
-                        st.markdown(f"**{row['title']}**")
+#                         st.markdown(f"**{row['title']}**")
                         st.caption(f"Owner: {row['owner'] or 'Unassigned'}  -  Amount: ${float(row['amount'] or 0):,.2f}")
                         kc1, kc2 = st.columns([1,1])
                         with kc1:
@@ -14528,16 +14548,16 @@ try:
             ff = {}
         if ff.get('deals_forecast', True):
             st.divider()
-            st.markdown("### Forecast and Signals")
+#             st.markdown("### Forecast and Signals")
             qf = st.text_input("Search for forecast", key="forecast_q")
             df_all = _list_deals_for_forecast(qf)
             bm, bq = forecast_weighted(df_all)
             c1,c2 = st.columns(2)
             with c1:
-                st.markdown("#### Weighted by month")
+#                 st.markdown("#### Weighted by month")
                 st.dataframe(bm, use_container_width=True, hide_index=True)
             with c2:
-                st.markdown("#### Weighted by quarter")
+#                 st.markdown("#### Weighted by quarter")
                 st.dataframe(bq, use_container_width=True, hide_index=True)
             # Optional chart
             try:
@@ -14548,7 +14568,7 @@ try:
             except Exception:
                 pass
             # SLA blockers
-            st.markdown("#### SLA and blockers")
+#             st.markdown("#### SLA and blockers")
             bl = compute_sla_blockers()
             if bl:
                 import pandas as pd
@@ -14557,7 +14577,7 @@ try:
             else:
                 st.info("No SLA blockers detected.")
             # Win prob updater
-            st.markdown("#### Update win probability from signals")
+#             st.markdown("#### Update win probability from signals")
             upd_id = st.number_input("Deal ID", min_value=0, step=1, value=0, key="upd_win_id")
             if st.button("Update win_prob"):
                 if upd_id:
@@ -14791,7 +14811,7 @@ def mount_compliance_assistant():
                     st.write(f"- {r}: {m}")
             st.write("Evaluator style scores:", result["scores"])
         if st.button("Suggest Outline from SOW"):
-            st.code(propose_outline_with_mirrored_terms(sow), language="markdown")
+#             st.code(propose_outline_with_mirrored_terms(sow), language="markdown")
         if st.button("Clean Placeholders in Draft"):
             st.text_area("Cleaned Draft", clean_placeholders(draft), height=200, key="co_cleaned_draft_out")
 
@@ -14808,7 +14828,7 @@ def _clean_placeholders(text: str) -> str:
     Rules:
       - Remove bracketed placeholders like [INSERT ...], {PLACEHOLDER}, <TBD>, ((TODO))
       - Remove isolated ALL-CAPS tokens commonly used as placeholders (INSERT, TBD, TODO)
-      - Collapse multiple spaces to one
+#       - Collapse multiple spaces to one
     """
     import re
     if not text:
@@ -15242,7 +15262,7 @@ try:
                                 f"Due: {due}" if due else "",
                                 f"Posted: {posted}" if posted else ""
                             ]))
-                            _st.markdown(
+#                             _st.markdown(
                                 link_md + (f"<br/><span style='font-size: 12px;'>{meta}</span>" if meta else ""),
                                 unsafe_allow_html=True
                             )
@@ -15459,7 +15479,7 @@ try:
                 cols = st.columns(len(stages))
                 for idx, stg in enumerate(stages):
                     with cols[idx]:
-                        st.markdown(f"**{stg}**")
+#                         st.markdown(f"**{stg}**")
                         g = df_deals[df_deals['stage'].fillna("New") == stg]
                         for _, r in g.iterrows():
                             with st.container(border=True):
@@ -15470,7 +15490,7 @@ try:
                                 rfq = r.rfq_coverage if pd.notna(r.get("rfq_coverage")) else None
                                 b1 = _badge(comp, "ok" if comp.lower()=="pass" else "warn" if comp.lower()=="partial" else "bad")
                                 b2 = _badge(f"RFQ {int(rfq)}%" if rfq is not None else "RFQ 0%", "ok" if (rfq or 0) >= 80 else "warn" if (rfq or 0) >= 40 else "bad")
-                                st.markdown(b1 + " " + b2, unsafe_allow_html=True)
+#                                 st.markdown(b1 + " " + b2, unsafe_allow_html=True)
                                 move_to = st.selectbox("Move to", stages, index=stages.index(stg), key=f"mv_{int(r.id)}")
                                 if move_to != stg:
                                     if st.button("Update", key=f"mv_btn_{int(r.id)}"):
@@ -16335,7 +16355,7 @@ def _sam_phase1_results_grid():
             with c2:
                 title = row.get("title") or ""
                 if row.get("url"):
-                    st.markdown(f"[{title}]({row['url']})")
+#                     st.markdown(f"[{title}]({row['url']})")
                 else:
                     st.write(title)
                 st.caption(row.get("agency") or "")
@@ -16696,7 +16716,7 @@ def _rfp_panel_ui(notice_id: int):
     st.session_state.setdefault("rfp_panel_open", True)
     st.session_state["current_notice_id"] = notice_id
     with st.sidebar:
-        st.markdown("## RFP Analyzer")
+#         st.markdown("## RFP Analyzer")
         st.caption(f"Notice #{notice_id}")
         status = st.session_state.get("rfp_worker_status")
         if st.button("Close panel"):
@@ -16737,7 +16757,7 @@ def _rfp_panel_ui(notice_id: int):
             st.subheader("Milestones")
             for m in data.get("milestones", []):
                 st.write("- " + m)
-        st.markdown("---")
+#         st.markdown("---")
         st.subheader("Q and A")
         q = st.text_input("Ask a question about this RFP")
         if st.button("Answer") and q:
@@ -17128,10 +17148,10 @@ def render_diff(opp_id: int):
         return
     d = info.get("diff", {})
     if d.get("changed_fields"):
-        st.markdown("**Changed fields**")
+#         st.markdown("**Changed fields**")
         for c in d["changed_fields"]:
             st.write(f"{c['field']}: '{c.get('from')}' -> '{c.get('to')}'")
-    st.markdown("**Files**")
+#     st.markdown("**Files**")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.caption("Added")
@@ -17145,7 +17165,7 @@ def render_diff(opp_id: int):
         st.caption("Changed size")
         for f in d.get("files_changed", []):
             st.write(f["file_url"])
-    st.markdown("---")
+#     st.markdown("---")
     if st.button("Mark reviewed"):
         conn = get_db()
         conn.execute("UPDATE notices SET compliance_state='Reviewed' WHERE id=?", (int(opp_id),))
@@ -17895,7 +17915,7 @@ def _rfp_panel_ui(notice_id: int):
     st.session_state.setdefault("rfp_panel_open", True)
     st.session_state["current_notice_id"] = notice_id
     with st.sidebar:
-        st.markdown("## RFP Analyzer")
+#         st.markdown("## RFP Analyzer")
         st.caption(f"Notice #{notice_id}")
         # Controls
         if _rfp_p2_feature_on():
@@ -18832,7 +18852,7 @@ def render_sam_watch_minimal_ui():
             with st.container(border=True):
                 st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
     if _ss_flag() and st.session_state.get("saved_search_modal_open"):
-        st.markdown("### Saved Searches")
+#         st.markdown("### Saved Searches")
         conn = get_db(); cur = conn.cursor()
         rows = cur.execute("SELECT id,name,cadence,recipients,active,last_run_at,query_json FROM saved_searches WHERE user_id=? ORDER BY id DESC",
                            (st.session_state.get("user_id"),)).fetchall()
@@ -18988,7 +19008,7 @@ def render_proposal_wizard(notice_id: int):
         _p5_seed_sections_from_rfp(int(notice_id), pid)
         st.session_state["current_proposal_id"] = pid
     pid = int(st.session_state["current_proposal_id"])
-    st.markdown("#### Proposal Wizard")
+#     st.markdown("#### Proposal Wizard")
     steps = ["1. Outline","2. Sections","3. Uploads","4. Package"]
     scols = st.columns(4)
     for i, c in enumerate(scols, start=1):
@@ -18999,12 +19019,12 @@ def render_proposal_wizard(notice_id: int):
         data = _p5_latest_rfp_json(int(notice_id)) or {}
         st.write("Factors and requirements")
         for it in (data.get("lm_requirements") or [])[:50]:
-            st.markdown(f"- {it.get('text','')}".strip())
+#             st.markdown(f"- {it.get('text','')}".strip())
         if st.button("Next -> Sections"):
             st.session_state["wizard_step"] = 2
             (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
     if step == 2:
-        st.subheader("Step 2 · Section stubs")
+#         st.subheader("Step 2 · Section stubs")
         conn = get_db(); cur = conn.cursor()
         rows = cur.execute("SELECT id, key, title, page_limit, font_name, font_size, writing_plan FROM proposal_sections WHERE proposal_id=? ORDER BY id", (pid,)).fetchall()
         for sid, key, title, pl, fname, fsize, plan in rows:
@@ -19088,7 +19108,7 @@ def _rfp_panel_ui(notice_id: int):
     if not feature_flags().get("rfp_analyzer_panel", False):
         return
     with st.sidebar:
-        st.markdown("## RFP Analyzer")
+#         st.markdown("## RFP Analyzer")
         st.caption(f"Notice #{notice_id}")
         if feature_flags().get("start_proposal_inline", False):
             if st.button("Start proposal"):
@@ -19244,7 +19264,7 @@ def _rfp_panel_ui_p2_with_impact(notice_id: int):
     if not _rfp6_flag():
         return
     with st.sidebar:
-        st.markdown("### Impact")
+#         st.markdown("### Impact")
         data = latest_rfp_impact(int(notice_id))
         if not data:
             st.caption("No impact cached yet.")
@@ -19792,7 +19812,7 @@ def render_vendors(opp_id: int):
             addr = it.get("formatted_address") or it.get("vicinity") or ""
             phone = it.get("formatted_phone_number") or ""
             web = it.get("website") or ""
-            st.markdown(f"**{nm}**  ·  {dist:.1f} mi" if isinstance(dist, (int,float)) else f"**{nm}**")
+#             st.markdown(f"**{nm}**  ·  {dist:.1f} mi" if isinstance(dist, (int,float)) else f"**{nm}**")
             st.caption(f"{addr}")
             if phone: st.caption(phone)
             if web: st.caption(web)
@@ -19930,7 +19950,7 @@ def render_vendors(opp_id: int):
     page_size = st.selectbox('Page size', [20,50,100], index={20:0,50:1,100:2}[st.session_state.get('sub1_page_size', 50)])
     st.session_state['sub1_query']=query; st.session_state['sub1_use_pop']=use_pop; st.session_state['sub1_radius']=radius; st.session_state['sub1_page_size']=page_size
     # Phase 2 filters
-    st.markdown('**Filters**')
+#     st.markdown('**Filters**')
     c1,c2,c3 = st.columns([2,2,2])
     with c1:
         naics_in = st.text_input('NAICS (comma-separated)', value=st.session_state.get('sub2_naics',''))
@@ -20006,7 +20026,7 @@ def render_vendors(opp_id: int):
             sc = it.get('fit_score')
             header = f"**{nm}**  ·  score {sc:.1f}" if isinstance(sc,(int,float)) else f"**{nm}**"
             if isinstance(dist,(int,float)): header += f"  ·  {dist:.1f} mi"
-            st.markdown(header)
+#             st.markdown(header)
             if addr: st.caption(addr)
             if phone: st.caption(phone)
             if web: st.caption(web)
@@ -20173,8 +20193,8 @@ def render_vendors(opp_id: int):
             pass
     # Augment controls for sources
     if flag_src:
-        st.markdown('---')
-        st.markdown('**Federal sources**')
+#         st.markdown('---')
+#         st.markdown('**Federal sources**')
         cols = st.columns(3)
         with cols[0]:
             awardees_only = st.checkbox('Only prior federal awardees', value=st.session_state.get('sub3_awardees_only', False))
@@ -20367,8 +20387,8 @@ def render_vendors(opp_id: int):
     st.session_state.setdefault("vendor_stars", {})
     rows = st.session_state.get("sub1_results", []) or []
     if rows:
-        st.markdown("---")
-        st.markdown("**Outreach**")
+#         st.markdown("---")
+#         st.markdown("**Outreach**")
         # Star toggles inline list
         starred_keys = set(st.session_state.get("vendor_stars", {}).keys())
         for i, it in enumerate(rows[: st.session_state.get("sub1_page_size", 50) ]):
@@ -20716,7 +20736,7 @@ def render_rfq_generator(opp_id: int):
     # Two-column layout: left lines, right flowdowns
     lcol, rcol = st.columns([3,2])
     with lcol:
-        st.markdown("**Lines**")
+#         st.markdown("**Lines**")
         # Render simple table with edit ability
         cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq_lines)").fetchall()] if cur else []
         if cols:
@@ -20737,7 +20757,7 @@ def render_rfq_generator(opp_id: int):
             res = _rfqg_build_pack(int(rfq_id), int(opp_id))
             st.success(f"Pack built. SHA256 {res.get('checksum')} Bytes {res.get('bytes')}")
     with rcol:
-        st.markdown("**Flowdowns**")
+#         st.markdown("**Flowdowns**")
         an = _rfqg_latest_analyzer(int(opp_id))
         for cl in (an.get("clauses") or [])[:200]:
             cite = cl.get("cite") or {}
@@ -20756,7 +20776,7 @@ def render_vendors(opp_id: int):
         try: _orig_render_vendors_for_rfqg(int(opp_id))
         except Exception: pass
     if _rfqg_flag():
-        st.markdown("---")
+#         st.markdown("---")
         render_rfq_generator(int(opp_id))
 # === RFQG PHASE 1 END ===
 
@@ -20844,8 +20864,8 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
     if not _rfqg2_flag():
         return
     _rfqg2_schema()
-    st.markdown('---')
-    st.markdown('**Target vendors**')
+#     st.markdown('---')
+#     st.markdown('**Target vendors**')
     rows = st.session_state.get('sub1_results', []) or []
     starred_only = st.checkbox('Starred only', value=False, key='rfqg2_starred')
     min_score = st.slider('Min fit score', 0.0, 10.0, 0.0, 0.5, key='rfqg2_minscore')
@@ -20853,7 +20873,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
     targets = _rfqg2_target(rows, starred_only, min_score, max_distance)
     st.caption(f'{len(targets)} vendors selected')
     # Subject and body templates
-    st.markdown('**Email template**')
+#     st.markdown('**Email template**')
     subj_t = st.text_input('Subject', value='RFQ: {title} -- reply by {due_date}', key='rfqg2_subj')
     body_t = st.text_area('Body', value='Hello {company},\n\nWe invite you to quote for {title}. Please submit by {due_date}.\nOpen your secure link: {link}\n\nThank you.', key='rfqg2_body', height=140)
     # Preview first three
@@ -21109,7 +21129,7 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
         for vid, nm, em in vendors[:500]:
             status = _rfqg3_status_label(cur, int(rfq_id), int(vid))
             with st.container(border=True):
-                st.markdown(f"**{nm}**  ·  {status}")
+#                 st.markdown(f"**{nm}**  ·  {status}")
                 # show latest quote total if any
                 row = cur.execute("SELECT total_price, status, updated_at FROM vendor_quotes WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1", (int(rfq_id), int(vid))).fetchone()
                 if row and row[0] is not None:
@@ -21380,7 +21400,7 @@ def render_vendors(opp_id: int):
     owner = st.session_state.get('user_id') or 'user'
     rfq_id = _p8_get_or_create_rfq(int(opp_id), owner)
     st.session_state['current_rfq_id'] = rfq_id
-    st.markdown('---')
+#     st.markdown('---')
     st.subheader('Vendors for this notice')
     c1,c2,c3 = st.columns(3)
     with c1:
@@ -21402,8 +21422,8 @@ def render_vendors(opp_id: int):
     if st.button(f'Send RFQs to {len(target_ids)} vendor(s)', disabled=(len(target_ids)==0)):
         sent = _p8_send_rfqs(int(rfq_id), target_ids, subj, body, attachments=None)
         st.success(f'Sent {sent} emails')
-    st.markdown('---')
-    st.markdown('**Record quote**')
+#     st.markdown('---')
+#     st.markdown('**Record quote**')
     # Select vendor and enter totals; per-line handled in RFQG intake but allow quick total+coverage recompute
     sel2 = st.selectbox('Vendor', options=[(i, (cur.execute('SELECT name FROM vendors WHERE id=?', (i,)).fetchone() or ['Vendor'])[0]) for i in [r[0] for r in vrows]], format_func=lambda x: x[1] if isinstance(x, tuple) else str(x))
     vid = sel2[0] if isinstance(sel2, tuple) else None
@@ -21417,8 +21437,8 @@ def render_vendors(opp_id: int):
         notes = st.text_area('Capability notes')
         if st.button('Save contact + notes'):
             _p8_save_contact_and_notes(int(vid), name, email, phone, notes); st.success('Saved')
-    st.markdown('---')
-    st.markdown('**Chase list**')
+#     st.markdown('---')
+#     st.markdown('**Chase list**')
     action = st.text_input('Next action', value='Follow up call')
     due = st.text_input('Due date ISO', value=_dt_p8.datetime.utcnow().date().isoformat())
     if vid and st.button('Add chase item'):
@@ -21681,7 +21701,7 @@ def render_health_card():
     email_rate = (100.0*email_ok/email_total) if email_total else 0.0
     last_export = _last_time("export_duration_ms") or "n/a"
     last_parser_err = conn.execute("select max(ts) from error_events where error_id like 'parser%'" ).fetchone()[0] if True else None
-    st.markdown("### Health")
+#     st.markdown("### Health")
     c1,c2,c3 = st.columns(3)
     c1.metric("API avg latency", f"{api_ms:.0f} ms")
     c2.metric("Cache hit", f"{cache_pct:.0f}%")
@@ -21703,7 +21723,7 @@ def render_admin_observability():
         end = st.text_input("End ISO", value=_dt.datetime.utcnow().isoformat()+'Z')
     u = st.text_input("User filter")
     conn = get_db()
-    st.markdown("#### Audit log")
+#     st.markdown("#### Audit log")
     q = "select ts,user_id,action,entity,entity_id,meta_json from audit_log where ts between ? and ?"
     params = [start, end]
     if u:
@@ -21715,7 +21735,7 @@ def render_admin_observability():
         df = None
     if df is not None:
         st.dataframe(df, use_container_width=True, hide_index=True)
-    st.markdown("#### Metrics")
+#     st.markdown("#### Metrics")
     mname = st.text_input("Metric name")
     mq = "select ts,name,value,labels_json from metrics where ts between ? and ?"
     mparams = [start, end]
@@ -21824,7 +21844,7 @@ def pg_dump_now(db_url: str):
 def render_data_health_card():
     import streamlit as st, shutil, os, datetime as _dt
     ensure_config_table()
-    st.markdown("### Data health")
+#     st.markdown("### Data health")
     # Last backup
     info = last_backup_info()
     last_ts = info['ts'] if info else 'none'
@@ -21905,7 +21925,7 @@ def apply_env_db_settings():
 def render_env_switcher():
     import streamlit as st
     ensure_config_table()
-    st.markdown("### Environment")
+#     st.markdown("### Environment")
     env = get_config('env', 'dev')
     new_env = st.selectbox("Active env", options=['dev','prod'], index=0 if env!='prod' else 1)
     if st.button("Set env"):
@@ -22000,7 +22020,7 @@ def render_rtm_tab(nid:int):
         return
     ensure_rtm_schema()
     conn = get_db()
-    st.markdown("#### Requirements Traceability Matrix")
+#     st.markdown("#### Requirements Traceability Matrix")
     # Seed if empty
     cnt = conn.execute("select count(*) from rtm where notice_id=?", (int(nid),)).fetchone()[0]
     if cnt == 0:
@@ -22040,7 +22060,7 @@ def render_rtm_tab(nid:int):
         st.experimental_rerun()
     # Coverage
     by_factor, overall = rtm_coverage(nid)
-    st.markdown("#### Coverage")
+#     st.markdown("#### Coverage")
     if by_factor:
         c1,c2 = st.columns([2,1])
         with c1:
@@ -22177,7 +22197,7 @@ def render_forms_and_submission_tabs(nid:int):
     rules = extract_submission_rules(doc or {})
     tabs = st.tabs(["Forms", "Submission"])
     with tabs[0]:
-        st.markdown("#### Standard Forms")
+#         st.markdown("#### Standard Forms")
         if forms:
             st.dataframe(pd.DataFrame(forms), use_container_width=True, hide_index=True)
         else:
@@ -22186,18 +22206,18 @@ def render_forms_and_submission_tabs(nid:int):
         try:
             conn = get_db()
             mapdf = pd.read_sql_query("select id, name, template_key, provided from required_docs where notice_id=?", conn, params=(int(nid),))
-            st.markdown("#### Required docs mapping")
+#             st.markdown("#### Required docs mapping")
             st.dataframe(mapdf, use_container_width=True, hide_index=True)
         except Exception:
             pass
     with tabs[1]:
-        st.markdown("#### Submission rules")
+#         st.markdown("#### Submission rules")
         if rules:
             st.json(rules)
         else:
             st.info("No explicit submission rules parsed.")
         warns = submission_checklist(nid, rules, forms)
-        st.markdown("#### Pre-export checklist (read-only)")
+#         st.markdown("#### Pre-export checklist (read-only)")
         if warns:
             for w in warns:
                 st.warning(w)
@@ -22340,11 +22360,11 @@ def render_sow_price_tabs(nid:int):
         except Exception: pass
     tabs = st.tabs(["SOW", "Price"])
     with tabs[0]:
-        st.markdown("#### SOW tasks")
+#         st.markdown("#### SOW tasks")
         df = pd.read_sql_query("select task_id, text, location, hours_hint, labor_cats_hint, cite_file, cite_page from sow_tasks where notice_id=? order by id", conn, params=(int(nid),))
         st.dataframe(df, use_container_width=True, hide_index=True)
     with tabs[1]:
-        st.markdown("#### CLINs and hints")
+#         st.markdown("#### CLINs and hints")
         df2 = pd.read_sql_query("select clin, desc, uom, qty_hint, cite_file, cite_page from clin_hints where notice_id=? order by id", conn, params=(int(nid),))
         st.dataframe(df2, use_container_width=True, hide_index=True)
         # Wage determination presence hint
@@ -22489,7 +22509,7 @@ def render_rfp_impact_tab(nid:int):
     import streamlit as st, pandas as pd
     if not feature_flags().get('rfp_impact', False):
         return
-    st.markdown("#### Amendment impact")
+#     st.markdown("#### Amendment impact")
     data, ts = latest_rfp_impact(int(nid))
     if not data:
         st.info("No impact computed yet.")
@@ -22626,7 +22646,7 @@ def render_builder_adapter_ui(nid:int):
     import streamlit as st, pandas as pd
     if not feature_flags().get('builder_from_analyzer', False):
         return
-    st.markdown("#### Builder from Analyzer (beta)")
+#     st.markdown("#### Builder from Analyzer (beta)")
     if st.button("Build sections from Analyzer"):
         res = build_proposal_from_analyzer(int(nid))
         if not res.get('ok'):
@@ -22639,7 +22659,7 @@ def render_builder_adapter_ui(nid:int):
     if row:
         pid = int(row[0])
         f = lint_proposal(pid)
-        st.markdown("#### Prechecks")
+#         st.markdown("#### Prechecks")
         if f:
             st.dataframe(pd.DataFrame(f), use_container_width=True, hide_index=True)
         else:
