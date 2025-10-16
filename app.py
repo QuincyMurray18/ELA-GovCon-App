@@ -2632,7 +2632,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             atts = preview.get("attachments") or []
             if atts:
                 names = [a.get("name","file") for a in atts]
-                st.caption("Attachments: " + ", ".join(names)
+                st.caption("Attachments: " + ", ".join(names))
             cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
                 if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
@@ -2670,7 +2670,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw")
+        app_pw = st.text_input("Gmail App Password (16 characters, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
@@ -8455,15 +8455,27 @@ import sys, uuid, json, time, traceback
 
 # Structured logging
 def _now_iso():
-    return utc_now_iso() if 'utc_now_iso' in globals() else __import__('datetime').datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    try:
+        return utc_now_iso()  # use existing helper if available
+    except Exception:
+        import datetime as _dt
+        return _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 def log_event(level: str, message: str, **context):
     lvl = str(level).lower()
+    # sanitize context to mask any key containing "secret"
+    _ctx = {}
+    try:
+        for k, v in dict(context or {}).items():
+            key_s = str(k).lower()
+            _ctx[k] = "***" if "secret" in key_s else v
+    except Exception:
+        _ctx = {}
     evt = {
         "ts": _now_iso(),
         "level": lvl,
         "msg": message,
-        "ctx": {k: ("***" if "secret" in k.lower() else v) for k, v in (context or {}).items()},
+        "ctx": _ctx,
     }
     line = json.dumps(evt, ensure_ascii=False)
     try:
@@ -8471,6 +8483,7 @@ def log_event(level: str, message: str, **context):
     except Exception:
         pass
     return evt
+
 
 def err_with_id(message: str, **context):
     eid = str(uuid.uuid4()
@@ -8547,7 +8560,7 @@ def create_api_client(base_url: str, api_key: str = None, timeout: int = 30, ret
             if cb["fails"] >= 3:
                 _trip_circuit()
                 break
-            time.sleep(min(2 ** attempt, 8)
+            time.sleep(min(2 ** attempt, 8))
         return err_with_id("request_failed", base_url=base_url, path=path, err=last_err)
 
     def post(path: str, json_body: dict = None):
@@ -8628,7 +8641,7 @@ def _bootstrap_phase0():
 try:
     _bootstrap_phase0()
 except Exception as _ex:
-    log_event("error", "bootstrap_call_failed", err=str(_ex)
+    log_event("error", "bootstrap_call_failed", err=str(_ex))
 # ===== end Phase 0 Bootstrap =====
 
 # LEGACY_REMOVED :
