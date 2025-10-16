@@ -1,22 +1,3 @@
-# === RUN-ID & FEATURE-FLAGS DEBUG (injected) ===
-try:
-    import hashlib, pathlib, streamlit as st  # safe re-import
-    _p = pathlib.Path(__file__)
-    st.sidebar.caption(f"__file__: {_p}")
-    st.sidebar.caption(f"sha256: {hashlib.sha256(_p.read_bytes()).hexdigest()}")
-    st.session_state.setdefault("feature_flags", {})
-    st.session_state["feature_flags"].update({
-        "workspace_enabled": True,
-        "sam_ingest_core": True,
-        "sam_page_size": True,
-        "pipeline_star": True,
-        "rfp_analyzer_panel": True,
-        "amend_tracking": True,
-    })
-except Exception:
-    pass
-# === END RUN-ID & FEATURE-FLAGS DEBUG ===
-
 # ===== app.py =====
 
 def _strip_markdown_to_plain(txt: str) -> str:
@@ -496,6 +477,24 @@ import streamlit as st
 
 
 
+
+
+# === SAFE RERUN HELPER START ===
+def _safe_rerun():
+    import streamlit as st
+    try:
+        # Streamlit >= 1.30
+        st.rerun()
+    except Exception:
+        try:
+            # Older Streamlit
+            _safe_rerun()
+        except Exception:
+            # As a last resort stop, which triggers a rerun on next interaction
+            st.stop()
+# === SAFE RERUN HELPER END ===
+
+
 # === CORE DB EARLY START ===
 import os as _os
 _os.makedirs('data', exist_ok=True)
@@ -628,8 +627,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 # ---- Feature flags ----
 _FEATURE_KEYS = [
     "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking"
-]
+    "rfp_analyzer_panel", "amend_tracking", "rfp_schema"]
 def init_feature_flags():
     flags = st.session_state.setdefault("feature_flags", {})
     # Do not remove existing keys. Only set missing to False.
@@ -4671,7 +4669,7 @@ try:
                 values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
             conn.commit()
             st.success("Saved")
-            st.experimental_rerun()
+            _safe_rerun()
 except Exception as _e_pp:
     st.caption(f"[Past Performance tab init note: {_e_pp}]")
 
@@ -7359,7 +7357,7 @@ def render_sam_watch_ingest():
             if st.button("Reset"):
                 st.session_state["sam_filters"] = {}
                 st.session_state["sam_page"] = 1
-                st.experimental_rerun()
+                _safe_rerun()
 
     # Maintain filters in session
     st.session_state["sam_filters"] = {
@@ -7457,11 +7455,11 @@ def render_sam_watch_ingest():
     with p1:
         if st.button("Prev") and page > 1:
             st.session_state["sam_page"] = page - 1
-            st.experimental_rerun()
+            _safe_rerun()
     with p2:
         if st.button("Next") and (page * page_size) < total:
             st.session_state["sam_page"] = page + 1
-            st.experimental_rerun()
+            _safe_rerun()
     with p3:
         if st.button("Load more"):
             # Load next API page and ingest
@@ -7473,7 +7471,7 @@ def render_sam_watch_ingest():
                     except Exception as ex:
                         log_event("error","upsert_notice_failed", err=str(ex))
             st.session_state["sam_page"] = page + 1
-            st.experimental_rerun()
+            _safe_rerun()
 
 # ===== end SAM Ingest Phase 1 =====
 
@@ -8383,7 +8381,7 @@ def _load_versions(notice_id: int):
     return out
 
 def _diff_fields(prev: dict, curr: dict):
-    keys = ["title","agency","naics","psc","set_aside","posted_at","due_at","status","place_city","place_state"]
+    keys = ["title","agency","naics","psc","set_aside","posted_at","due_at","status","place_city","place_state","rfp_schema","rfp_parser"]
     changes = []
     for k in keys:
         if (prev or {}).get(k) != (curr or {}).get(k):
@@ -11526,13 +11524,13 @@ def _sam_phase1_results_grid():
     with cpa:
         if st.button("Prev") and page > 0:
             st.session_state["sam_page"] = page - 1
-            st.experimental_rerun()
+            _safe_rerun()
     with cpb:
         st.write(f"Page {page + 1} of {total_pages}")
     with cpc:
         if st.button("Load more"):
             st.session_state["sam_page"] = page + 1
-            st.experimental_rerun()
+            _safe_rerun()
 
 def render_sam_watch_phase1_ui():
     st.write("")  # spacing
@@ -12445,3 +12443,1090 @@ try:
 except Exception:
     pass
 # === DEV AUTOLOGIN END ===
+
+
+
+# === NAV + SHELL FIX START ===
+import streamlit as st
+
+# Ensure router helpers exist
+def get_route():
+    try:
+        qp = st.query_params
+    except AttributeError:
+        qp = st.experimental_get_query_params()
+    page = (qp.get("page") if isinstance(qp.get("page"), str) else (qp.get("page",[None])[0] if qp.get("page") else None)) or st.session_state.get("route_page") or "dashboard"
+    opp = qp.get("opp") if isinstance(qp.get("opp"), str) else (qp.get("opp",[None])[0] if qp.get("opp") else None)
+    tab = qp.get("tab") if isinstance(qp.get("tab"), str) else (qp.get("tab",[None])[0] if qp.get("tab") else None)
+    st.session_state["route_page"] = page
+    st.session_state["route_opp_id"] = opp
+    st.session_state["route_tab"] = tab
+    return {"page": page, "opp_id": opp, "tab": tab}
+
+def route_to(page, opp_id=None, tab=None):
+    try:
+        st.query_params.clear()
+        if page: st.query_params["page"] = page
+        if opp_id is not None: st.query_params["opp"] = str(opp_id)
+        if tab: st.query_params["tab"] = tab
+    except AttributeError:
+        params = {}
+        if page: params["page"] = page
+        if opp_id is not None: params["opp"] = str(opp_id)
+        if tab: params["tab"] = tab
+        st.experimental_set_query_params(**params)
+    st.session_state["route_page"] = page
+    st.session_state["route_opp_id"] = opp_id
+    st.session_state["route_tab"] = tab
+    _safe_rerun()
+
+# Feature flags accessor
+def feature_flags():
+    return st.session_state.setdefault("feature_flags", {})
+
+# --- Page renderers ---
+def _render_nav():
+    ff = feature_flags()
+    st.sidebar.header("Navigation")
+    pages = [
+        ("dashboard","Dashboard"),
+        ("sam","SAM Watch"),
+        ("pipeline","Pipeline"),
+        ("outreach","Outreach"),
+        ("library","Library"),
+        ("admin","Admin"),
+    ]
+    for key,label in pages:
+        if st.sidebar.button(label, key=f"nav_{key}"):
+            route_to(key)
+
+def render_dashboard():
+    st.subheader("Dashboard")
+    st.info("Dashboard placeholder.")
+
+def render_pipeline():
+    st.subheader("Pipeline")
+    conn = get_db()
+    uid = st.session_state.get("user_id")
+    try:
+        rows = conn.execute("SELECT pd.id, n.title, n.agency, n.due_at FROM pipeline_deals pd JOIN notices n ON n.id=pd.notice_id WHERE pd.user_id=? ORDER BY pd.created_at DESC", (uid,)).fetchall() if uid else []
+    except Exception:
+        rows = []
+    if not rows:
+        st.caption("No pipeline items yet.")
+        return
+    for r in rows:
+        with st.container(border=True):
+            st.write(r[1])
+            st.caption(f"Agency: {r[2]}  Due: {r[3]}")
+
+def render_outreach():
+    st.subheader("Outreach")
+    st.caption("Outreach placeholder.")
+
+def render_library():
+    st.subheader("Library")
+    st.caption("Library placeholder.")
+
+def render_admin():
+    st.subheader("Admin")
+    ff = feature_flags()
+    st.caption("Feature flags")
+    cols = st.columns(3)
+    keys = ["workspace_enabled","sam_ingest_core","sam_page_size","pipeline_star","rfp_analyzer_panel","amend_tracking"]
+    for i,k in enumerate(keys):
+        with cols[i % 3]:
+            ff[k] = st.checkbox(k, value=ff.get(k, False))
+    st.session_state["feature_flags"] = ff
+    st.caption("Identity")
+    st.write({k: st.session_state.get(k) for k in ["org_id","user_id","role"]})
+    st.caption("Routing")
+    st.write(get_route())
+
+def render_sam():
+    # If Phase 1 SAM UI is present and flagged on, use it
+    if feature_flags().get("sam_ingest_core", False):
+        try:
+            render_sam_watch_phase1_ui()  # defined in SAM Phase 1
+            return
+        except Exception as ex:
+            st.warning(f"SAM UI error: {ex}")
+    st.subheader("SAM Watch")
+    st.info("Enable 'sam_ingest_core' in Admin to use the new SAM UI.")
+
+# Main shell
+def _render_shell():
+    _render_nav()
+    route = get_route()
+    page = route.get("page") or "dashboard"
+    if page == "dashboard":
+        render_dashboard()
+    elif page == "sam":
+        render_sam()
+    elif page == "pipeline":
+        render_pipeline()
+    elif page == "outreach":
+        render_outreach()
+    elif page == "library":
+        render_library()
+    elif page == "admin":
+        render_admin()
+    elif page == "opportunity":
+        # Use workspace if available
+        try:
+            _render_opportunity_workspace()
+        except Exception as ex:
+            st.warning(f"Workspace error: {ex}")
+    else:
+        st.write("Unknown page:", page)
+
+# Execute shell last
+try:
+    _render_shell()
+except Exception as ex:
+    st.error(f"Shell failed: {ex}")
+# === NAV + SHELL FIX END ===
+
+
+# === RFP PHASE 1 START ===
+import datetime as _dt
+import json as _json
+import hashlib as _hash
+
+def _rfp_phase1_schema_ddl():
+    conn = get_db()
+    ddls = [
+        """CREATE TABLE IF NOT EXISTS rfp_schema_versions(
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            schema_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(name, version)
+        );""",
+        """CREATE TABLE IF NOT EXISTS rfp_json(
+            id INTEGER PRIMARY KEY,
+            notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+            schema_name TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            version_hash TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(notice_id, version_hash)
+        );"""
+    ]
+    try:
+        apply_ddl(ddls, name="rfp_phase1_schema")
+    except Exception:
+        cur = conn.cursor()
+        for ddl in ddls:
+            cur.execute(ddl)
+        conn.commit()
+
+def _rfp_phase1_register_schema():
+    _rfp_phase1_schema_ddl()
+    conn = get_db()
+    cur = conn.cursor()
+    name = "RFPv1"; ver = "1.0"
+    schema = {"type": "object", "required": ["header", "sections", "lm_requirements", "submission"], "properties": {"header": {"type": "object", "required": ["notice_id", "title"], "properties": {"notice_id": {"type": "string"}, "title": {"type": "string"}, "agency": {"type": "string"}, "type": {"type": "string"}, "set_aside": {"type": "string"}, "place": {"type": "string"}, "pocs": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}}}, "volumes": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "required": {"type": "boolean"}, "page_limit": {"type": "integer"}, "file_type": {"type": "string"}, "font": {"type": "string"}, "spacing": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "sections": {"type": "array", "items": {"type": "object", "required": ["key", "title"], "properties": {"key": {"type": "string"}, "title": {"type": "string"}, "parent_volume": {"type": "string"}, "required": {"type": "boolean"}, "page_limit": {"type": "integer"}, "instructions": {"type": "array", "items": {"type": "string"}}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "lm_requirements": {"type": "array", "items": {"type": "object", "required": ["id", "text"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "factor": {"type": "string"}, "subfactor": {"type": "string"}, "evaluation_criterion": {"type": "string"}, "must_address": {"type": "array", "items": {"type": "string"}}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "deliverables_forms": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "form_no": {"type": "string"}, "fillable": {"type": "boolean"}, "where_to_upload": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "submission": {"type": "object", "required": ["due_datetime"], "properties": {"method": {"type": "string"}, "portals": {"type": "array", "items": {"type": "string"}}, "email": {"type": "string"}, "subject_line_format": {"type": "string"}, "due_datetime": {"type": "string"}, "timezone": {"type": "string"}, "copies": {"type": "integer"}, "file_naming_rules": {"type": "string"}, "zip_rules": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "milestones": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "due_datetime": {"type": "string"}, "origin": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "clauses": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "title": {"type": "string"}, "section": {"type": "string"}, "mandatory": {"type": "boolean"}, "notes": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "sow_tasks": {"type": "array", "items": {"type": "object", "properties": {"task_id": {"type": "string"}, "text": {"type": "string"}, "location": {"type": "string"}, "hours_hint": {"type": "number"}, "labor_cats_hint": {"type": "array", "items": {"type": "string"}}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "price_structure": {"type": "object", "properties": {"clins": {"type": "array", "items": {"type": "object", "properties": {"clin": {"type": "string"}, "desc": {"type": "string"}, "uom": {"type": "string"}, "qty_hint": {"type": "number"}, "options": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "wage_determinations": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string"}, "id": {"type": "string"}, "county_state": {"type": "string"}, "labor_cats": {"type": "array", "items": {"type": "string"}}, "rates": {"type": "string"}, "fringe": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}}}, "past_perf_rules": {"type": "object", "properties": {"count": {"type": "integer"}, "years_back": {"type": "integer"}, "relevance_dims": {"type": "string"}, "format": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "staffing_rules": {"type": "object", "properties": {"key_personnel": {"type": "string"}, "certs": {"type": "string"}, "clearances": {"type": "string"}, "badging": {"type": "string"}, "training": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "accessibility_rules": {"type": "object", "properties": {"req_508": {"type": "boolean"}, "pdf_tags": {"type": "boolean"}, "bookmarks": {"type": "boolean"}, "alt_text": {"type": "boolean"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "risks_assumptions": {"type": "array", "items": {"type": "object", "properties": {"risk": {"type": "string"}, "impact": {"type": "string"}, "mitigation": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}}}
+    cur.execute("""INSERT OR IGNORE INTO rfp_schema_versions(name, version, schema_json, created_at)
+                 VALUES(?,?,?,?)""", (name, ver, schema, _dt.datetime.utcnow().isoformat()))
+    conn.commit()
+    import streamlit as st
+    st.session_state["rfp_schema_ready"] = True
+
+def _is_iso_datetime_with_tz(s: str) -> bool:
+    try:
+        if s.endswith("Z"):
+            _dt.datetime.fromisoformat(s.replace("Z","+00:00"))
+            return True
+        _dt.datetime.fromisoformat(s)
+        return (s.endswith("Z") or ("+" in s[10:] or "-" in s[10:]))
+    except Exception:
+        return False
+
+def validate_rfpv1(payload: dict):
+    errs = []
+    if not isinstance(payload, dict):
+        return False, ["payload must be object"]
+    for req in ["header","sections","lm_requirements","submission"]:
+        if req not in payload: errs.append(f"missing {req}")
+    hdr = payload.get("header", {})
+    if not isinstance(hdr, dict): errs.append("header must be object")
+    else:
+        for req in ["notice_id","title"]:
+            if req not in hdr: errs.append(f"header.{req} required")
+
+    def _check_items(arr, name, require_cite=True, dt_fields=None):
+        if arr is None: return
+        if not isinstance(arr, list): errs.append(f"{name} must be array"); return
+        for i, it in enumerate(arr):
+            if not isinstance(it, dict): errs.append(f"{name}[{i}] must be object"); continue
+            if require_cite and "cite" not in it: errs.append(f"{name}[{i}].cite required")
+            if "cite" in it:
+                c = it["cite"]
+                if not isinstance(c, dict): errs.append(f"{name}[{i}].cite must be object")
+                else:
+                    if "file" not in c or not isinstance(c.get("file"), str) or not c.get("file"): errs.append(f"{name}[{i}].cite.file required")
+                    if "page" not in c or not isinstance(c.get("page"), int): errs.append(f"{name}[{i}].cite.page required int")
+            if dt_fields:
+                for f in dt_fields:
+                    if f in it and not _is_iso_datetime_with_tz(it[f]): errs.append(f"{name}[{i}].{f} must be ISO datetime with timezone")
+
+    _check_items(payload.get("volumes"), "volumes", require_cite=True)
+    _check_items(payload.get("sections"), "sections", require_cite=True)
+    _check_items(payload.get("lm_requirements"), "lm_requirements", require_cite=True)
+    _check_items(payload.get("deliverables_forms"), "deliverables_forms", require_cite=True)
+    _check_items(payload.get("milestones"), "milestones", require_cite=True, dt_fields=["due_datetime"])
+    _check_items(payload.get("clauses"), "clauses", require_cite=True)
+    _check_items(payload.get("sow_tasks"), "sow_tasks", require_cite=True)
+
+    sub = payload.get("submission", {})
+    if not isinstance(sub, dict): errs.append("submission must be object")
+    else:
+        if "due_datetime" not in sub: errs.append("submission.due_datetime required")
+        else:
+            if not _is_iso_datetime_with_tz(sub.get("due_datetime","")): errs.append("submission.due_datetime must be ISO datetime with timezone")
+        if "cite" in sub:
+            c = sub["cite"]
+            if not isinstance(c, dict) or "file" not in c or "page" not in c: errs.append("submission.cite.file and page required when cite present")
+
+    ps = payload.get("price_structure")
+    if ps is not None:
+        if not isinstance(ps, dict): errs.append("price_structure must be object")
+        else:
+            _check_items(ps.get("clins"), "price_structure.clins", require_cite=True)
+            _check_items(ps.get("wage_determinations"), "price_structure.wage_determinations", require_cite=True)
+
+    for obj_key in ["past_perf_rules","staffing_rules","accessibility_rules"]:
+        obj = payload.get(obj_key)
+        if obj is not None:
+            if not isinstance(obj, dict): errs.append(f"{obj_key} must be object")
+            else:
+                if any(k for k in obj.keys() if k != "cite") and "cite" not in obj:
+                    errs.append(f"{obj_key}.cite required when fields present")
+
+    return (len(errs) == 0), errs
+
+def save_rfp_json(notice_id: int, payload: dict, schema_name: str="RFPv1", schema_version: str="1.0"):
+    import streamlit as st
+    if not st.session_state.get("feature_flags", {}).get("rfp_schema", False):
+        return {"ok": False, "error": "rfp_schema flag disabled"}
+    ok, errs = validate_rfpv1(payload)
+    if not ok:
+        return {"ok": False, "errors": errs}
+    conn = get_db()
+    cur = conn.cursor()
+    data_str = _json.dumps(payload, sort_keys=True, separators=(",",":"))
+    vhash = _hash.sha256(data_str.encode("utf-8")).hexdigest()
+    cur.execute("""INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at)
+                 VALUES(?,?,?,?,?,?)""", (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat()))
+    conn.commit()
+    return {"ok": True, "version_hash": vhash}
+
+try:
+    _rfp_phase1_register_schema()
+except Exception as _ex:
+    try: log_json("error", "rfp_phase1_register_failed", error=str(_ex))
+    except Exception: pass
+# === RFP PHASE 1 END ===
+
+
+
+# === RFP PHASE 2 START ===
+import re as _re
+import io as _io
+import threading as _thr
+import datetime as _dt
+
+def _rfp_p2_feature_on():
+    import streamlit as st
+    return st.session_state.get("feature_flags", {}).get("rfp_parser", False)
+
+def _rfp_p2_notice_row(nid:int):
+    conn = get_db()
+    row = conn.execute("SELECT id,sam_notice_id,notice_type,title,agency,set_aside,place_city,place_state FROM notices WHERE id=?", (int(nid),)).fetchone()
+    if not row: return None
+    cols = ["id","sam_notice_id","notice_type","title","agency","set_aside","place_city","place_state"]
+    return dict(zip(cols, row))
+
+_TZMAP = {
+    "ET":"+00:00", "EST":"-05:00", "EDT":"-04:00",
+    "CT":"-06:00", "CST":"-06:00", "CDT":"-05:00",
+    "MT":"-07:00", "MST":"-07:00", "MDT":"-06:00",
+    "PT":"-08:00", "PST":"-08:00", "PDT":"-07:00",
+    "UTC":"+00:00", "Z":"+00:00"
+}
+
+def _rfp_p2_norm_dt(s: str):
+    # Try patterns like "Sep 30, 2025 3:00 PM ET" or "09/30/2025 1500 EST"
+    try:
+        txt = s.strip()
+        tz = None
+        for k in sorted(_TZMAP.keys(), key=len, reverse=True):
+            if k in txt:
+                tz = _TZMAP[k]
+                txt = txt.replace(k, "").strip()
+                break
+        # Common formats
+        fmts = ["%b %d, %Y %I:%M %p", "%m/%d/%Y %I:%M %p", "%B %d, %Y %I:%M %p", "%m/%d/%Y %H%M", "%Y-%m-%d %H:%M"]
+        for f in fmts:
+            try:
+                dt = _dt.datetime.strptime(txt, f)
+                if tz:
+                    return dt.isoformat(timespec="minutes") + tz
+            except Exception:
+                continue
+        return None
+    except Exception:
+        return None
+
+def _rfp_p2_extract(file_name: str, pages: list):
+    # Scan for patterns and return structures with cites
+    def lines():
+        for p in pages:
+            t = p.get("text") or ""
+            for ln in t.splitlines():
+                yield p.get("page"), ln.strip()
+    header = {}
+    sections = []
+    lm_reqs = []
+    deliverables = []
+    clauses = []
+    milestones = []
+    submission = {}
+    # Heuristics
+    for pg, ln in lines():
+        low = ln.lower()
+        # Section L / M
+        if "section l" in low or low.startswith("l."):
+            sections.append({"key":"L","title":ln, "cite":{"file":file_name,"page":int(pg)}})
+        if "section m" in low or low.startswith("m.") or "evaluation" in low:
+            lm_reqs.append({"id":f"M-{pg}", "text":ln, "cite":{"file":file_name,"page":int(pg)}})
+        # Clauses references (FAR/DFARS)
+        if "far " in low or "dfars" in low:
+            clauses.append({"ref": ln, "cite":{"file":file_name,"page":int(pg)}})
+        # Forms
+        if "sf 1449" in low or "sf 1442" in low or "sf1449" in low or "sf1442" in low:
+            deliverables.append({"name": ln, "cite":{"file":file_name,"page":int(pg)}})
+        # Page limits/fonts/copies naming rules
+        if "page limit" in low or "not exceed" in low and "pages" in low:
+            sections.append({"key":"page_limit_hint", "title":ln, "cite":{"file":file_name,"page":int(pg)}})
+        if "font" in low or "typeface" in low:
+            sections.append({"key":"font_hint", "title":ln, "cite":{"file":file_name,"page":int(pg)}})
+        if "copies" in low and ("electronic" in low or "hard" in low):
+            submission.setdefault("copies", 0)  # value unknown, retain cite only
+            submission["cite"] = {"file":file_name,"page":int(pg)}
+        if "file name" in low or "naming convention" in low:
+            submission["file_naming_rules"] = ln
+            submission["cite"] = {"file":file_name,"page":int(pg)}
+        # Due datetime
+        if any(k in low for k in ["due", "closing", "offers must be received", "proposal deadline"]):
+            iso = _rfp_p2_norm_dt(ln)
+            if iso:
+                submission["due_datetime"] = iso
+                # Try to add timezone token if present in the line
+                for token, off in _TZMAP.items():
+                    if token in ln:
+                        submission["timezone"] = token
+                        break
+                submission.setdefault("cite", {"file":file_name,"page":int(pg)})
+        # Email
+        if "@" in ln and ("contact" in low or "submit" in low or "questions" in low):
+            submission["email"] = _re.findall(r"[\w\.-]+@[\w\.-]+", ln)[0] if _re.findall(r"[\w\.-]+@[\w\.-]+", ln) else None
+            submission.setdefault("cite", {"file":file_name,"page":int(pg)})
+        # POC
+        if "point of contact" in low or "poc" in low:
+            ems = _re.findall(r"[\w\.-]+@[\w\.-]+", ln)
+            header.setdefault("pocs", [])
+            header["pocs"].append({"name": ln, "email": (ems[0] if ems else None), "cite":{"file":file_name,"page":int(pg)}})
+        # Milestones like site visit or questions due
+        if "site visit" in low or "questions due" in low:
+            iso = _rfp_p2_norm_dt(ln)
+            item = {"name": ln, "cite":{"file":file_name,"page":int(pg)}}
+            if iso: item["due_datetime"] = iso
+            milestones.append(item)
+    # Normalize by schema keys
+    out = {
+        "header": header if header else None,
+        "sections": sections or None,
+        "lm_requirements": lm_reqs or None,
+        "deliverables_forms": deliverables or None,
+        "clauses": clauses or None,
+        "milestones": milestones or None,
+        "submission": submission or None,
+    }
+    return out
+
+def _rfp_p2_build_json(notice_id: int, file_payloads: list):
+    # Compose RFPv1 JSON from file-level extractions
+    nrow = _rfp_p2_notice_row(notice_id) or {}
+    header = {"notice_id": str(nrow.get("sam_notice_id") or notice_id), "title": nrow.get("title") or ""}
+    if nrow.get("agency"): header["agency"] = nrow["agency"]
+    if nrow.get("notice_type"): header["type"] = nrow["notice_type"]
+    if nrow.get("set_aside"): header["set_aside"] = nrow["set_aside"]
+    place = ", ".join([x for x in [nrow.get("place_city"), nrow.get("place_state")] if x])
+    if place: header["place"] = place
+    sections = []; lm = []; deliver = []; clauses = []; milestones = []; submission = {}
+    for fp in file_payloads:
+        part = _rfp_p2_extract(fp.get("file_name") or "", fp.get("pages") or [])
+        if part.get("header"):
+            header.setdefault("pocs", [])
+            if part["header"].get("pocs"):
+                header["pocs"].extend([p for p in part["header"]["pocs"] if p.get("cite")])
+        for key, acc in [("sections", sections), ("lm_requirements", lm), ("deliverables_forms", deliver), ("clauses", clauses), ("milestones", milestones)]:
+            if part.get(key):
+                acc.extend([x for x in part[key] if x.get("cite")])
+        if part.get("submission"):
+            # Merge submission fields but keep cites per field via top-level cite
+            for k,v in part["submission"].items():
+                submission[k] = v
+    payload = {"header": header, "sections": sections, "lm_requirements": lm, "submission": submission}
+    if deliver: payload["deliverables_forms"] = deliver
+    if clauses: payload["clauses"] = clauses
+    if milestones: payload["milestones"] = milestones
+    return payload
+
+def rfp_parse_and_store(notice_id: int):
+    """Download, parse, populate FTS, build RFPv1 JSON, validate and store. Cache by version_hash."""
+    if not _rfp_p2_feature_on():
+        return {"ok": False, "error": "rfp_parser flag disabled"}
+    conn = get_db()
+    cur = conn.cursor()
+    # Get files
+    files = cur.execute("SELECT id, file_name, file_url, checksum FROM notice_files WHERE notice_id=?", (int(notice_id),)).fetchall()
+    if not files:
+        return {"ok": False, "error": "no_files_for_notice"}
+    # Compute combined version hash from checksums or content
+    comb = _hashlib.sha256()
+    file_payloads = []
+    for fid, fname, furl, cks in files:
+        # Download
+        b = _download_bytes(furl)
+        sha = _sha256_bytes(b)
+        comb.update(sha.encode())
+        if cks != sha:
+            try: cur.execute("UPDATE notice_files SET checksum=? WHERE id=?", (sha, fid)); conn.commit()
+            except Exception: pass
+        # Parse
+        ftype = _detect_filetype(fname or "", b)
+        if ftype == "pdf":
+            pages = _parse_pdf_bytes(b)
+        elif ftype == "docx":
+            pages = _parse_docx_bytes(b)
+        else:
+            pages = [{"page":1, "text":""}]
+        payload = {"file_id": fid, "file_name": fname or furl.split("/")[-1], "checksum": sha, "pages": pages}
+        file_payloads.append(payload)
+        # Persist file_parses
+        try:
+            cur.execute("INSERT OR IGNORE INTO file_parses(notice_file_id, checksum, parsed_json, created_at) VALUES(?,?,?,?)",
+                        (fid, sha, _json.dumps(payload), _dt.datetime.utcnow().isoformat()))
+            conn.commit()
+        except Exception: pass
+        # Populate FTS if available
+        try:
+            conn.execute("SELECT 1 FROM rfp_chunks LIMIT 1")
+            for p in pages[:800]:
+                conn.execute("INSERT INTO rfp_chunks(notice_id, file_name, page, text) VALUES(?,?,?,?)",
+                             (int(notice_id), payload["file_name"], int(p.get("page") or 0), p.get("text") or ""))
+            conn.commit()
+        except Exception: pass
+    version_hash = comb.hexdigest()
+    # Cache check in rfp_json
+    row = cur.execute("SELECT id FROM rfp_json WHERE notice_id=? AND version_hash=?", (int(notice_id), version_hash)).fetchone()
+    if row: return {"ok": True, "cached": True, "version_hash": version_hash}
+    # Build analyzer JSON
+    data = _rfp_p2_build_json(int(notice_id), file_payloads)
+    ok, errs = validate_rfpv1(data)
+    if not ok:
+        return {"ok": False, "errors": errs}
+    # Store via RFP Phase 1 saver to ensure consistent hashing
+    res = save_rfp_json(int(notice_id), data, schema_name="RFPv1", schema_version="1.0")
+    if not res.get("ok"):
+        return res
+    return {"ok": True, "cached": False, "version_hash": res.get("version_hash"), "data": data}
+
+def rfp_run_worker(notice_id: int):
+    import streamlit as st
+    st.session_state["rfp_parser_status"] = {"state":"running","notice_id": int(notice_id), "progress": 0, "error_id": None}
+    def _run():
+        try:
+            st.session_state["rfp_parser_status"]["progress"] = 10
+            res = rfp_parse_and_store(int(notice_id))
+            if res.get("ok"):
+                st.session_state["rfp_parser_status"] = {"state":"done","notice_id": int(notice_id), "progress": 100, "result": res}
+            else:
+                st.session_state["rfp_parser_status"] = {"state":"error","notice_id": int(notice_id), "progress": 0, "error_id": str(res)}
+        except Exception as ex:
+            eid = log_json("error","rfp_p2_worker_failed", notice_id=int(notice_id), error=str(ex))
+            st.session_state["rfp_parser_status"] = {"state":"error","notice_id": int(notice_id), "progress": 0, "error_id": eid}
+    t = _thr.Thread(target=_run, daemon=True); t.start()
+
+# Enhance Analyzer panel with tabs when rfp_parser is on
+try:
+    _orig_rfp_panel_ui_p2 = _rfp_panel_ui
+except Exception:
+    _orig_rfp_panel_ui_p2 = None
+
+def _rfp_panel_ui(notice_id: int):
+    import streamlit as st
+    if not feature_flags().get("rfp_analyzer_panel", False):
+        return
+    # Run schema DDL to be safe
+    try: _rfp_phase1_schema_ddl()
+    except Exception: pass
+    st.session_state.setdefault("rfp_panel_open", True)
+    st.session_state["current_notice_id"] = notice_id
+    with st.sidebar:
+        st.markdown("## RFP Analyzer")
+        st.caption(f"Notice #{notice_id}")
+        # Controls
+        if _rfp_p2_feature_on():
+            if st.button("Run parser"):
+                rfp_run_worker(int(notice_id))
+        else:
+            if st.button("Enable rfp_parser flag in Admin to run parser"):
+                pass
+        status = st.session_state.get("rfp_parser_status")
+        if status and status.get("state") == "running":
+            st.info("Parsing..."); st.progress(int(status.get("progress", 10)))
+        elif status and status.get("state") == "error":
+            st.error(f"Parser error: {status.get('error_id')}")
+        # Show latest JSON if present
+        conn = get_db(); cur = conn.cursor()
+        row = cur.execute("SELECT data_json, created_at FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
+        if _rfp_p2_feature_on() and row:
+            data = _json.loads(row[0])
+            tabs = st.tabs(["Summary","L and M","Clauses","Forms","Submission","Q and A"])
+            with tabs[0]:
+                st.write(data.get("header", {}))
+                st.caption(f"Created: {row[1]}")
+            with tabs[1]:
+                for it in data.get("lm_requirements", []):
+                    st.write(it.get("text")); c = it.get("cite") or {}; st.caption(f"{c.get('file')} p.{c.get('page')}")
+            with tabs[2]:
+                for it in data.get("clauses", []):
+                    st.write(it.get("ref")); c = it.get("cite") or {}; st.caption(f"{c.get('file')} p.{c.get('page')}")
+            with tabs[3]:
+                for it in data.get("deliverables_forms", []):
+                    st.write(it.get("name")); c = it.get("cite") or {}; st.caption(f"{c.get('file')} p.{c.get('page')}")
+            with tabs[4]:
+                sub = data.get("submission", {}); st.json(sub)
+            with tabs[5]:
+                q = st.text_input("Ask a question about this RFP") 
+                if st.button("Answer") and q:
+                    hits = _rfp_query_chunks(int(notice_id), q)
+                    if not hits: st.info("No matches.")
+                    else:
+                        for h in hits:
+                            st.caption(f"{h.get('file_name')} p.{h.get('page')}"); st.write(h.get("text",""))
+        elif not row:
+            st.caption("No analyzer JSON yet. Run parser.")
+# === RFP PHASE 2 END ===
+
+
+
+
+# === TENANCY PHASE 2 START ===
+def _tp2_db_has_col(conn, table, col):
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        return col in cols
+    except Exception:
+        return False
+
+def _tp2_tables():
+    return [
+        "notices","notice_files","notice_status","proposals","proposal_sections",
+        "price_models","price_lines","vendors","vendor_contacts","vendor_quotes",
+        "rfq","rfq_lines","rfq_invites","vendor_portal_tokens","saved_searches",
+        "pipeline_deals","required_docs","lm_checklist","signoffs","submissions",
+        "submission_files","rfp_json","rfp_summaries","metrics","audit_log",
+        "email_accounts","contacts","campaigns","campaign_recipients"
+    ]  # rfp_chunks is FTS virtual; skip ALTER
+
+def _tp2_add_columns_and_indexes():
+    conn = get_db()
+    cur = conn.cursor()
+    for t in _tp2_tables():
+        try:
+            if not _tp2_db_has_col(conn, t, "org_id"):
+                cur.execute(f"ALTER TABLE {t} ADD COLUMN org_id TEXT")
+            if not _tp2_db_has_col(conn, t, "owner_id"):
+                cur.execute(f"ALTER TABLE {t} ADD COLUMN owner_id TEXT")
+            if not _tp2_db_has_col(conn, t, "visibility"):
+                cur.execute(f"ALTER TABLE {t} ADD COLUMN visibility TEXT DEFAULT 'private' CHECK(visibility IN('private','team','shared'))")
+            if not _tp2_db_has_col(conn, t, "version"):
+                cur.execute(f"ALTER TABLE {t} ADD COLUMN version INTEGER DEFAULT 0")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_org ON {t}(org_id)")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_owner ON {t}(org_id, owner_id)")
+        except Exception:
+            continue
+    try:
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_notices_org_sam ON notices(org_id, sam_notice_id)")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_rfp_json_org ON rfp_json(org_id, notice_id, version_hash)")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pipeline_org_user_notice ON pipeline_deals(org_id, user_id, notice_id)")
+    except Exception:
+        pass
+    conn.commit()
+
+def _tp2_get_default_identity():
+    conn = get_db()
+    cur = conn.cursor()
+    row = cur.execute("SELECT id FROM orgs LIMIT 1").fetchone()
+    org_id = row[0] if row else "org-default"
+    if not row:
+        try:
+            cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (org_id, "Default Org"))
+            conn.commit()
+        except Exception:
+            pass
+    rowu = cur.execute("SELECT id FROM users WHERE org_id=? AND role='Admin' LIMIT 1", (org_id,)).fetchone()
+    if not rowu:
+        rowu = cur.execute("SELECT id FROM users WHERE org_id=? LIMIT 1", (org_id,)).fetchone()
+    owner_id = rowu[0] if rowu else "system"
+    return org_id, owner_id
+
+def _tp2_backfill():
+    conn = get_db()
+    cur = conn.cursor()
+    org_id, owner_id = _tp2_get_default_identity()
+    for t in _tp2_tables():
+        try:
+            cur.execute(f"UPDATE {t} SET visibility=COALESCE(visibility,'team') WHERE visibility IS NULL")
+            cur.execute(f"UPDATE {t} SET org_id=? WHERE (org_id IS NULL OR org_id='')", (org_id,))
+            has_created_by = _tp2_db_has_col(conn, t, "created_by")
+            if has_created_by:
+                cur.execute(f"UPDATE {t} SET owner_id=COALESCE(owner_id, created_by, ?) WHERE owner_id IS NULL", (owner_id,))
+            else:
+                cur.execute(f"UPDATE {t} SET owner_id=COALESCE(owner_id, ?) WHERE owner_id IS NULL", (owner_id,))
+            cur.execute(f"UPDATE {t} SET version=COALESCE(version,0) WHERE version IS NULL")
+        except Exception:
+            continue
+    conn.commit()
+
+try:
+    _orig_upsert_notice_tp2 = upsert_notice
+except Exception:
+    _orig_upsert_notice_tp2 = None
+
+def upsert_notice(notice: dict, files: Optional[list] = None) -> int:
+    nid = _orig_upsert_notice_tp2(notice, files) if _orig_upsert_notice_tp2 else 0
+    try:
+        conn = get_db(); cur = conn.cursor()
+        org_id, owner_id = _tp2_get_default_identity()
+        cur.execute("UPDATE notices SET org_id=COALESCE(org_id,?), owner_id=COALESCE(owner_id,?) WHERE id=?", (org_id, owner_id, int(nid)))
+        conn.commit()
+    except Exception:
+        pass
+    return int(nid)
+
+try:
+    _orig_save_rfp_json_tp2 = save_rfp_json
+except Exception:
+    _orig_save_rfp_json_tp2 = None
+
+def save_rfp_json(notice_id: int, payload: dict, schema_name: str="RFPv1", schema_version: str="1.0"):
+    res = {"ok": False, "error": "unhandled"}
+    try:
+        import streamlit as st
+        conn = get_db(); cur = conn.cursor()
+        org_id = st.session_state.get("org_id") or _tp2_get_default_identity()[0]
+        owner_id = st.session_state.get("user_id") or _tp2_get_default_identity()[1]
+        data_str = _json.dumps(payload, sort_keys=True, separators=(",",":"))
+        vhash = _hash.sha256(data_str.encode("utf-8")).hexdigest()
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(rfp_json)").fetchall()]
+        if "org_id" in cols:
+            cur.execute(
+                "INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at, org_id, owner_id, visibility) VALUES(?,?,?,?,?,?,?,?,?)",
+                (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat(), org_id, owner_id, "team")
+            )
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at) VALUES(?,?,?,?,?,?)",
+                (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat())
+            )
+        conn.commit()
+        res = {"ok": True, "version_hash": vhash}
+    except Exception:
+        if _orig_save_rfp_json_tp2:
+            return _orig_save_rfp_json_tp2(notice_id, payload, schema_name, schema_version)
+        raise
+    return res
+
+def _run_tenancy_phase2():
+    try:
+        _tp2_add_columns_and_indexes()
+        _tp2_backfill()
+    except Exception as ex:
+        try: log_json("error", "tenancy_phase2_migration_failed", error=str(ex))
+        except Exception: pass
+
+try:
+    _run_tenancy_phase2()
+except Exception:
+    pass
+# === TENANCY PHASE 2 END ===
+
+
+
+# === TENANCY PHASE 3 START ===
+import datetime as _dt
+import hashlib as _hash3
+import json as _json3
+import re as re
+
+def _ids():
+    import streamlit as st
+    org = st.session_state.get('org_id')
+    user = st.session_state.get('user_id')
+    return org, user
+
+def _ensure_ids():
+    org, user = _ids()
+    if not org or not user:
+        raise PermissionError('identity_required')
+
+def _append_org_filter(sql: str) -> str:
+    s = sql.strip()
+    if re.search(r'\borg_id\b\s*(=|IN|LIKE|IS)', s, re.IGNORECASE):
+        return s
+    m = re.search(r'\b(ORDER\s+BY|LIMIT)\b', s, re.IGNORECASE)
+    clause = ' AND org_id=?'
+    if 'WHERE' in s.upper():
+        if m:
+            return s[:m.start()] + clause + ' ' + s[m.start():]
+        return s + clause
+    else:
+        if m:
+            return s[:m.start()] + ' WHERE org_id=? ' + s[m.start():]
+        return s + ' WHERE org_id=?'
+
+def q_select(sql: str, params: tuple = ()):
+    _ensure_ids()
+    org, _user = _ids()
+    s = _append_org_filter(sql)
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        return cur.execute(s, params + (org,)).fetchall()
+    except Exception:
+        return cur.execute(sql, params).fetchall()
+
+def q_select_one(sql: str, params: tuple = ()):
+    rows = q_select(sql, params)
+    return rows[0] if rows else None
+
+def q_exec(sql: str, params: tuple = ()):
+    _ensure_ids()
+    org, _user = _ids()
+    s = _append_org_filter(sql)
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(s, params + (org,))
+    except Exception:
+        cur.execute(sql, params)
+    conn.commit()
+    return cur.rowcount
+
+def q_insert(table: str, data: dict):
+    _ensure_ids()
+    org, user = _ids()
+    data = dict(data or {})
+    data.setdefault('org_id', org)
+    data.setdefault('owner_id', user)
+    data.setdefault('visibility', 'team')
+    if 'version' in [k.lower() for k in data.keys()]:
+        try:
+            data['version'] = int(data.get('version', 0))
+        except Exception:
+            data['version'] = 0
+    cols = list(data.keys())
+    vals = [data[c] for c in cols]
+    placeholders = ','.join(['?']*len(cols))
+    sql = f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders})"
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(sql, tuple(vals))
+    conn.commit()
+    return int(cur.lastrowid)
+
+def q_update(table: str, data: dict, where: dict):
+    _ensure_ids()
+    org, user = _ids()
+    where = dict(where or {})
+    if where.get('org_id') and where['org_id'] != org:
+        raise PermissionError('cross_org_denied')
+    set_cols = []
+    params = []
+    if 'version' in data:
+        new_version = int(data['version']) + 1
+        set_cols.append('version=?')
+        params.append(new_version)
+        where_version = int(data['version'])
+        where = dict(where, version=where_version)
+        data = {k:v for k,v in data.items() if k != 'version'}
+    for k,v in data.items():
+        set_cols.append(f"{k}=?")
+        params.append(v)
+    if 'owner_id' not in data:
+        set_cols.append('owner_id=?'); params.append(user)
+    wh_cols = []
+    wh_params = []
+    for k,v in where.items():
+        wh_cols.append(f"{k}=?"); wh_params.append(v)
+    if 'org_id' not in where:
+        wh_cols.append('org_id=?'); wh_params.append(org)
+    sql = f"UPDATE {table} SET {', '.join(set_cols)} WHERE {' AND '.join(wh_cols)}"
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(sql, tuple(params+wh_params))
+    conn.commit()
+    return cur.rowcount
+
+def q_delete(table: str, where: dict):
+    _ensure_ids()
+    org, _user = _ids()
+    wh_cols = []; wh_params = []
+    for k,v in (where or {}).items():
+        wh_cols.append(f"{k}=?"); wh_params.append(v)
+    if 'org_id' not in (where or {}):
+        wh_cols.append('org_id=?'); wh_params.append(org)
+    sql = f"DELETE FROM {table} WHERE {' AND '.join(wh_cols)}"
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(sql, tuple(wh_params))
+    conn.commit()
+    return cur.rowcount
+
+def cache_key(base: str) -> str:
+    org, user = _ids()
+    return f"{base}::org={org}::user={user}"
+
+def cached_get(url: str, params: dict=None, ttl: int=900):
+    import streamlit as st
+    @st.cache_data(ttl=ttl)
+    def _fetch(key, url, params):
+        return _http_get_json(url, params or {})
+    return _fetch(cache_key('GET:'+url+':'+_json3.dumps(params or {}, sort_keys=True)), url, params or {})
+
+def store_uploaded_file(file_bytes: bytes, filename: str, entity: str, entity_id: int, org_id: str=None, owner_id: str=None) -> dict:
+    import os
+    org, user = _ids()
+    org_id = org_id or org; owner_id = owner_id or user
+    base = os.path.join('data', 'files', str(org_id), str(owner_id), str(entity), str(entity_id))
+    os.makedirs(base, exist_ok=True)
+    checksum = _hash3.sha256(file_bytes).hexdigest()
+    path = os.path.join(base, filename)
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            if _hash3.sha256(f.read()).hexdigest() == checksum:
+                return {'path': path, 'bytes': os.path.getsize(path), 'checksum': checksum, 'skipped': True}
+    with open(path, 'wb') as f:
+        f.write(file_bytes)
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("""INSERT OR IGNORE INTO files(org_id, owner_id, entity, entity_id, name, path, bytes, checksum, created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?)""", (org_id, owner_id, entity, int(entity_id), filename, path, len(file_bytes), checksum, _dt.datetime.utcnow().isoformat()))
+        conn.commit()
+    except Exception:
+        pass
+    return {'path': path, 'bytes': len(file_bytes), 'checksum': checksum, 'skipped': False}
+
+try:
+    _orig_list_notices_tp3 = list_notices
+except Exception:
+    _orig_list_notices_tp3 = None
+
+def list_notices(filters: dict, page: int, page_size: int, current_user_id: Optional[str], show_hidden: bool=False, order_by: str='posted_at DESC'):
+    _ensure_ids()
+    org, me = _ids()
+    conn = get_db(); cur = conn.cursor()
+    where = ['(org_id=? AND visibility!=\'private\') OR owner_id=?']
+    params = [org, me]
+    if filters.get('keywords'):
+        where.append('(title LIKE ? OR agency LIKE ?)')
+        kw = f"%{filters['keywords']}%"
+        params.extend([kw, kw])
+    if filters.get('types'):
+        qs = ','.join(['?'] * len(filters['types']))
+        where.append(f'notice_type IN ({qs})')
+        params.extend(filters['types'])
+    if filters.get('naics'):
+        for code in filters['naics']:
+            where.append('naics LIKE ?')
+            params.append(f'%{code}%')
+    if filters.get('psc'):
+        for code in filters['psc']:
+            where.append('psc LIKE ?')
+            params.append(f'%{code}%')
+    if filters.get('agency'):
+        where.append('agency LIKE ?')
+        params.append(f"%{filters['agency']}%")
+    if filters.get('place_city'):
+        where.append('place_city LIKE ?')
+        params.append(f"%{filters['place_city']}%")
+    if filters.get('place_state'):
+        where.append('place_state = ?')
+        params.append(filters['place_state'])
+    if filters.get('posted_enabled'):
+        if filters.get('posted_from'):
+            where.append('(posted_at >= ?)'); params.append(filters['posted_from'])
+        if filters.get('posted_to'):
+            where.append('(posted_at <= ?)'); params.append(filters['posted_to'])
+    if not show_hidden and current_user_id:
+        where.append('id NOT IN (SELECT notice_id FROM notice_status WHERE user_id=?)')
+        params.append(current_user_id)
+    wh = ('WHERE ' + ' AND '.join(where)) if where else ''
+    limit = max(1, int(page_size))
+    offset = max(0, int(page)) * limit
+    sql = f'''
+        SELECT
+            n.id, n.sam_notice_id, n.notice_type, n.title, n.agency, n.naics, n.psc,
+            n.set_aside, n.place_city, n.place_state, n.posted_at, n.due_at, n.status, n.url,
+            n.compliance_state,
+            EXISTS(SELECT 1 FROM pipeline_deals pd WHERE pd.notice_id=n.id AND pd.user_id=? AND pd.org_id=?) AS starred,
+            EXISTS(SELECT 1 FROM amendments a WHERE a.notice_id=n.id) AS amended
+        FROM notices n
+        {wh}
+        ORDER BY {order_by}
+        LIMIT ? OFFSET ?
+    '''
+    rows = cur.execute(sql, params + [me, org, limit, offset]).fetchall()
+    cols = ['id','sam_notice_id','notice_type','title','agency','naics','psc','set_aside','place_city','place_state','posted_at','due_at','status','url','compliance_state','starred','amended']
+    items = [dict(zip(cols, r)) for r in rows]
+    total = cur.execute(f'SELECT COUNT(*) FROM notices n {wh}', params).fetchone()[0]
+    return {'items': items, 'page': page, 'page_size': page_size, 'total': total}
+# === TENANCY PHASE 3 END ===
+
+
+# === PERSIST PHASE 5 START ===
+import json as _json5
+import threading as _thr5
+import time as _time5
+from typing import Optional as _Optional5, Dict as _Dict5, Any as _Any5
+
+JOB_STALE_MINUTES = 10
+JOB_LOOP_SLEEP_SEC = 1.0
+
+def _p5_schema():
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS jobs(
+      id INTEGER PRIMARY KEY,
+      org_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN('queued','running','done','error')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );""")
+    # Ensure minimal status columns on existing queues if missing
+    def ensure_cols(tbl):
+        try:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
+            if 'status' not in cols:
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN status TEXT")
+            if 'updated_at' not in cols:
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN updated_at TEXT")
+            conn.commit()
+        except Exception:
+            pass
+    for tbl in ['email_queue','search_runs','rfq_events']:
+        ensure_cols(tbl)
+
+def enqueue_job(kind: str, payload: _Dict5[str, _Any5], org_id: _Optional5[str]=None) -> int:
+    import datetime as _dt
+    import streamlit as st
+    conn = get_db(); cur = conn.cursor()
+    org = org_id or st.session_state.get('org_id') or 'org-default'
+    now = _dt.datetime.utcnow().isoformat()
+    cur.execute(
+        "INSERT INTO jobs(org_id,kind,payload_json,status,attempts,last_error,created_at,updated_at) VALUES(?,?,?,?,0,NULL,?,?)",
+        (org, kind, _json5.dumps(payload or {}), 'queued', now, now)
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+def _claim_job() -> _Optional5[dict]:
+    import datetime as _dt
+    conn = get_db(); cur = conn.cursor()
+    # 1) claim a queued job
+    row = cur.execute("SELECT id, org_id, kind, payload_json, attempts FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
+    if row:
+        jid, org, kind, payload_json, attempts = row
+        now = _dt.datetime.utcnow().isoformat()
+        cur.execute("UPDATE jobs SET status='running', attempts=?, updated_at=? WHERE id=? AND status='queued'", (attempts+1, now, jid))
+        conn.commit()
+        return {'id': jid, 'org_id': org, 'kind': kind, 'payload': _json5.loads(payload_json), 'attempts': attempts+1}
+    # 2) reclaim stale running jobs
+    cutoff = ( _dt.datetime.utcnow() - _dt.timedelta(minutes=JOB_STALE_MINUTES) ).isoformat()
+    row = cur.execute("SELECT id, org_id, kind, payload_json, attempts FROM jobs WHERE status='running' AND updated_at < ? ORDER BY id LIMIT 1", (cutoff,)).fetchone()
+    if row:
+        jid, org, kind, payload_json, attempts = row
+        now = _dt.datetime.utcnow().isoformat()
+        cur.execute("UPDATE jobs SET attempts=?, updated_at=? WHERE id=?", (attempts+1, now, jid))
+        conn.commit()
+        return {'id': jid, 'org_id': org, 'kind': kind, 'payload': _json5.loads(payload_json), 'attempts': attempts+1}
+    return None
+
+def _finish_job(jid: int, status: str, error: _Optional5[str]=None):
+    import datetime as _dt
+    conn = get_db(); cur = conn.cursor()
+    now = _dt.datetime.utcnow().isoformat()
+    cur.execute("UPDATE jobs SET status=?, last_error=?, updated_at=? WHERE id=?", (status, error, now, int(jid)))
+    conn.commit()
+
+def _run_job(job: dict):
+    kind = job.get('kind')
+    payload = job.get('payload') or {}
+    try:
+        if kind == 'parse_rfp':
+            nid = int(payload.get('notice_id'))
+            res = rfp_parse_and_store(nid)
+            if not res.get('ok'):
+                raise RuntimeError(str(res))
+        elif kind == 'build_pack':
+            # Placeholder for future packaging job
+            pass
+        else:
+            raise ValueError(f'unknown_job_kind:{kind}')
+        _finish_job(job['id'], 'done', None)
+    except Exception as ex:
+        _finish_job(job['id'], 'error', str(ex))
+
+_p5_worker_thread = None
+
+def start_job_worker():
+    """Start a background thread that ticks the durable job queue. Safe to call multiple times."""
+    global _p5_worker_thread
+    if _p5_worker_thread and _p5_worker_thread.is_alive():
+        return
+    def _loop():
+        _p5_schema()
+        while True:
+            job = _claim_job()
+            if job:
+                _run_job(job)
+            else:
+                _time5.sleep(JOB_LOOP_SLEEP_SEC)
+    _p5_worker_thread = _thr5.Thread(target=_loop, daemon=True)
+    _p5_worker_thread.start()
+
+def durable_parse_rfp(notice_id: int) -> int:
+    """Public API: enqueue a parse job and ensure worker is running. Returns job id."""
+    start_job_worker()
+    return enqueue_job('parse_rfp', {'notice_id': int(notice_id)})
+
+# Bootstrap schema at import so app survives restarts
+try:
+    _p5_schema()
+except Exception:
+    pass
+# === PERSIST PHASE 5 END ===
