@@ -3555,6 +3555,13 @@ except NameError:
 
 st.title("GovCon Copilot Pro")
 
+# Data health card
+try:
+    render_data_health_card()
+    render_env_switcher()
+except Exception:
+    pass
+
 # Health card
 try:
     render_health_card()
@@ -21597,3 +21604,180 @@ try:
         render_admin_observability()
 except Exception:
     pass
+
+
+
+# === PERSIST PHASE 6: Config + Backups ===
+def ensure_config_table():
+    conn = get_db()
+    conn.execute("CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+    conn.commit()
+
+def get_config(key:str, default:str=None):
+    ensure_config_table()
+    conn = get_db()
+    row = conn.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+def set_config(key:str, value:str):
+    ensure_config_table()
+    conn = get_db()
+    conn.execute("INSERT INTO config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;", (key, value))
+    conn.commit()
+
+def _current_sqlite_path(conn=None):
+    import sqlite3
+    conn = conn or get_db()
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return row[2] if row else None
+    except Exception:
+        return None
+
+
+def ensure_backups_dir():
+    import os
+    bdir = os.path.join('.', 'backups')
+    os.makedirs(bdir, exist_ok=True)
+    return bdir
+
+def sqlite_backup_now():
+    import os, shutil, datetime as _dt
+    conn = get_db()
+    src = _current_sqlite_path(conn)
+    if not src or not os.path.exists(src):
+        return {'ok': False, 'reason': 'not_sqlite'}
+    bdir = ensure_backups_dir()
+    stamp = _dt.datetime.utcnow().strftime('%Y%m%d')
+    dst = os.path.join(bdir, f"app-{stamp}.db")
+    try:
+        # Use SQLite backup API for consistency
+        import sqlite3
+        with sqlite3.connect(dst) as bconn:
+            conn.backup(bconn)
+        return {'ok': True, 'path': dst}
+    except Exception as ex:
+        # Fallback to file copy if backup API fails
+        try:
+            shutil.copy2(src, dst)
+            return {'ok': True, 'path': dst, 'mode': 'copy2'}
+        except Exception as ex2:
+            return {'ok': False, 'reason': str(ex2)}
+
+def last_backup_info():
+    import os, glob, datetime as _dt
+    bdir = ensure_backups_dir()
+    files = sorted(glob.glob(os.path.join(bdir, 'app-*.db')), reverse=True)
+    if not files:
+        return None
+    latest = files[0]
+    ts = _dt.datetime.utcfromtimestamp(os.path.getmtime(latest)).isoformat()+'Z'
+    return {'path': latest, 'ts': ts}
+
+def pg_dump_now(db_url: str):
+    # Best-effort placeholder: requires pg_dump installed in runtime
+    import subprocess, shlex, os, datetime as _dt
+    bdir = ensure_backups_dir()
+    stamp = _dt.datetime.utcnow().strftime('%Y%m%d')
+    outfile = os.path.join(bdir, f"pg-{stamp}.sql")
+    cmd = f"pg_dump {shlex.quote(db_url)} -f {shlex.quote(outfile)}"
+    try:
+        subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        return {'ok': True, 'path': outfile}
+    except Exception as ex:
+        return {'ok': False, 'reason': str(ex), 'cmd': cmd}
+
+
+def render_data_health_card():
+    import streamlit as st, shutil, os, datetime as _dt
+    ensure_config_table()
+    st.markdown("### Data health")
+    # Last backup
+    info = last_backup_info()
+    last_ts = info['ts'] if info else 'none'
+    # WAL mode
+    conn = get_db()
+    try:
+        jmode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    except Exception:
+        jmode = 'unknown'
+    # Disk free
+    total, used, free = shutil.disk_usage('.')
+    pct_free = (free/total*100.0) if total else 0.0
+    # Job backlog: unsent emails as proxy
+    try:
+        backlog = conn.execute("SELECT COUNT(*) FROM email_queue").fetchone()[0]
+    except Exception:
+        backlog = 0
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Last backup", last_ts)
+    c2.metric("Journal mode", jmode)
+    c3.metric("Free disk", f"{pct_free:.0f}%")
+    c4.metric("Job backlog", int(backlog))
+    # Alerts
+    alerts = []
+    try:
+        if info:
+            dt_last = _dt.datetime.fromisoformat(info['ts'].replace('Z',''))
+            if (_dt.datetime.utcnow()-dt_last).total_seconds() > 24*3600:
+                alerts.append("Backup older than 24h")
+        else:
+            alerts.append("No backups found")
+    except Exception:
+        pass
+    if pct_free < 10.0:
+        alerts.append("Disk < 10% free")
+    if alerts:
+        st.warning("; ".join(alerts))
+    # Actions
+    st.caption("Backup ops")
+    colA, colB = st.columns(2)
+    with colA:
+        if st.button("Run SQLite backup now"):
+            res = sqlite_backup_now()
+            if res.get('ok'):
+                st.success(f"Backup created: {res.get('path')}")
+            else:
+                st.error(f"Backup failed: {res.get('reason')}")
+    with colB:
+        pg_url = get_config('db_url_postgres', None)
+        if pg_url and st.button("Run pg_dump now"):
+            res = pg_dump_now(pg_url)
+            if res.get('ok'):
+                st.success(f"pg_dump created: {res.get('path')}")
+            else:
+                st.error(f"pg_dump failed: {res.get('reason')}")
+
+
+def apply_env_db_settings():
+    """Read config/env and secrets to decide DB target. Writes advisory note; actual reconnect requires app restart."""
+    ensure_config_table()
+    env = get_config('env', 'dev')
+    # These keys are advisory; app retains current connection until restart
+    # Expected secrets: secrets['db_path_dev'], ['db_path_prod'] or ['db_url_dev'], ['db_url_prod']
+    try:
+        import streamlit as st
+        st.session_state['active_env'] = env
+        # Store advisory targets in session for visibility
+        st.session_state['db_target_path'] = None
+        st.session_state['db_target_url'] = None
+        sec = st.secrets if 'st' in globals() else {}
+        if 'db_url_prod' in sec or 'db_url_dev' in sec:
+            st.session_state['db_target_url'] = sec['db_url_prod'] if env=='prod' else sec.get('db_url_dev')
+        elif 'db_path_prod' in sec or 'db_path_dev' in sec:
+            st.session_state['db_target_path'] = sec['db_path_prod'] if env=='prod' else sec.get('db_path_dev')
+    except Exception:
+        pass
+
+def render_env_switcher():
+    import streamlit as st
+    ensure_config_table()
+    st.markdown("### Environment")
+    env = get_config('env', 'dev')
+    new_env = st.selectbox("Active env", options=['dev','prod'], index=0 if env!='prod' else 1)
+    if st.button("Set env"):
+        set_config('env', new_env)
+        apply_env_db_settings()
+        st.success(f"Env set to {new_env}. Restart app to take effect for DB connection.")
+
+# === END PERSIST PHASE 6 ===
