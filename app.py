@@ -117,7 +117,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         run = p_center.add_run()
         try:
             from docx.shared import Inches as _Inches
-            run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=_Inches(logo_width_in)
         except Exception:
             pass
     if title:
@@ -269,7 +269,7 @@ def _render_markdown_to_docx(doc, md_text):
         # Numbered: 1. text
         if _re.match(r'^\s*\d+\.\s+', line):
             flush_bullets()
-            num_buf.append(_re.sub(r'^\s*\d+\.\s+', '', line, count=1))
+            num_buf.append(_re.sub(r'^\s*\d+\.\s+', '', line, count=1)
             continue
 
         # Normal paragraph with inline formatting
@@ -312,7 +312,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
         try:
-            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in)
         except Exception:
             pass
     if title:
@@ -426,7 +426,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
     if logo_bytes:
         p_center = doc.add_paragraph(); p_center.paragraph_format.alignment = 1
         run = p_center.add_run()
-        try: run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+        try: run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in)
         except Exception: pass
     if title:
         h = doc.add_heading(title, level=1)
@@ -546,11 +546,11 @@ def _tenancy_phase1_bootstrap():
             ]
             for uid, oid, email, name, role in users:
                 cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                            (uid, oid, email, name, role))
+                            (uid, oid, email, name, role)
         conn.commit()
     except Exception as ex:
         # Do not break startup on bootstrap failure
-        try: log_json('error', 'tenancy_bootstrap_failed', error=str(ex))
+        try: log_json('error', 'tenancy_bootstrap_failed', error=str(ex)
         except Exception: pass
 
 try:
@@ -597,7 +597,7 @@ import streamlit as st
 # ---- Structured logging ----
 def log_json(level: str, message: str, **context) -> str:
     """Emit a single line JSON log. Returns error_id for error levels."""
-    event_id = str(_uuid.uuid4())
+    event_id = str(_uuid.uuid4()
     payload = {
         "ts": int(_time.time()),
         "level": level.upper(),
@@ -606,10 +606,10 @@ def log_json(level: str, message: str, **context) -> str:
         "context": {k: v for k, v in context.items()},
     }
     try:
-        print(_json.dumps(payload, ensure_ascii=False))
+        print(_json.dumps(payload, ensure_ascii=False)
     except Exception:
         # Ensure logging never breaks app
-        print(str(payload))
+        print(str(payload)
     return event_id if level.lower() in {"error","fatal","critical"} else event_id
 
 # ---- Secrets loader ----
@@ -630,7 +630,7 @@ _FEATURE_KEYS = [
     "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban", "deals_activities", "deals_forecast"]
 def init_feature_flags():
 
-# Deals Phase 1: init refresh token
+    # Deals Phase 1: init refresh token
 st.session_state.setdefault("deals_refresh", 0)
 
     flags = st.session_state.setdefault("feature_flags", {})
@@ -649,8 +649,7 @@ def _apply_sqlite_pragmas(conn):
         cur.execute("PRAGMA temp_store=MEMORY;")
         cur.execute("PRAGMA foreign_keys=ON;")
     except Exception as ex:
-        log_json("error", "sqlite_pragmas_failed", error=str(ex))
-
+        log_json("error", "sqlite_pragmas_failed", error=str(ex)
 def _ensure_migrations_table(conn):
     try:
         cur = conn.cursor()
@@ -660,8 +659,7 @@ def _ensure_migrations_table(conn):
             applied_at TEXT NOT NULL
         );""")
     except Exception as ex:
-        log_json("error", "migrations_table_create_failed", error=str(ex))
-
+        log_json("error", "migrations_table_create_failed", error=str(ex)
 def ensure_bootstrap_db():
     try:
         conn = get_db()  # Provided by later phases. Cached.
@@ -669,7 +667,7 @@ def ensure_bootstrap_db():
         _ensure_migrations_table(conn)
         return True
     except Exception as ex:
-        log_json("error", "bootstrap_db_failed", error=str(ex))
+        log_json("error", "bootstrap_db_failed", error=str(ex)
         return False
 
 # ---- Central API client ----
@@ -932,7 +930,7 @@ def _render_top_nav():
         ("admin", "Admin"),
     ]
     st.markdown("### Navigation")
-    cols = st.columns(len(pages))
+    cols = st.columns(len(pages)
     route = get_route()
     for i, (pid, label) in enumerate(pages):
         with cols[i]:
@@ -1334,7 +1332,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     if tracking_pixel_url and body_html:
         try:
             import uuid, urllib.parse as _u
-            tid = tracking_id or str(uuid.uuid4())
+            tid = tracking_id or str(uuid.uuid4()
             qp = {"id": tid, "to": ",".join(to_list)}
             pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
             body_html = (body_html or "") + pixel
@@ -1502,7 +1500,7 @@ def _do_login():
                         conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                                     (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
+                                     (uid, oid, f"{user.lower()}@ela.local", user, "Member")
                         st.session_state["user_id"] = uid
                         st.session_state["org_id"] = oid
                         st.session_state["role"] = "Member"
@@ -1523,7 +1521,7 @@ def _do_login():
                         oid = cur[0] if cur else "org-ela"
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
+                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member')
                         st.session_state["user_id"] = uid
                         st.session_state["org_id"] = oid
                         st.session_state["role"] = 'Member'
@@ -1604,8 +1602,7 @@ class SessionNS:
         return f"{self.user}::{key}"
 
     def __getitem__(self, key: str):
-        return st.session_state.get(self._k(key))
-
+        return st.session_state.get(self._k(key)
     def __setitem__(self, key: str, value):
         st.session_state[self._k(key)] = value
 
@@ -1685,8 +1682,7 @@ with st.sidebar:
         else:
             st.error("Some changes failed to publish. See below for details.")
             for label, e in errs:
-                st.exception(RuntimeError(f"{label}: {e}"))
-
+                st.exception(RuntimeError(f"{label}: {e}")
 # === End multi-user block ===
 
 # === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
@@ -1789,7 +1785,7 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     if tracking_pixel_url and body_html:
         try:
             import uuid, urllib.parse as _u
-            tid = tracking_id or str(uuid.uuid4())
+            tid = tracking_id or str(uuid.uuid4()
             qp = {"id": tid, "to": ",".join(to_list)}
             pixel = f'<img src="{tracking_pixel_url}?'+r'{'+'}'.replace('{','')+r'}" width="1" height="1" style="display:none;" />'.replace("{"+"}", "{_u.urlencode(qp)}")
             body_html = (body_html or "") + pixel
@@ -2158,7 +2154,7 @@ def render_outreach_tools():
                     atts = _normalize_extra_files(c_files)
                     # Tracking id per batch
                     import uuid
-                    batch_id = str(uuid.uuid4())
+                    batch_id = str(uuid.uuid4()
                     failures = []
                     sent = 0
                     for em in emails:
@@ -2187,7 +2183,7 @@ def render_outreach_tools():
 
     # ---- Account: App Password (still here) ----
     with st.expander("Set/Update my Gmail App Password", expanded=False):
-        pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw"))
+        pw = st.text_input("Gmail App Password", type="password", key=ns_key("outreach::gmail_app_pw")
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             try:
                 set_user_smtp_app_password(ACTIVE_USER, pw)
@@ -2205,7 +2201,7 @@ def render_outreach_tools():
             st.info("Generate emails to select one for preview.", icon="ℹ️")
         else:
             idx = st.number_input("Select one", min_value=1, max_value=len(mb), value=len(mb), step=1,
-                                  key=ns_key("outreach::pick_idx"))
+                                  key=ns_key("outreach::pick_idx")
             sel = mb[int(idx)-1]
 
             # Show key fields from the generated email
@@ -2221,7 +2217,7 @@ def render_outreach_tools():
 
             # Attachments uploader (REQUIRED) placed below Quote Due
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
-                                           key=ns_key("outreach::extra_files"))
+                                           key=ns_key("outreach::extra_files")
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
 
@@ -2232,7 +2228,7 @@ def render_outreach_tools():
                     st.warning("Please upload at least one attachment before generating the preview.")
                 else:
                     # Build display names from generated attachments + uploaded files
-                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
+                    gen_names = _normalize_sel_attachments(sel.get("attachments")
                     try:
                         upload_names = [{"name": getattr(f, "name", "file")} for f in files]
                     except Exception:
@@ -2328,7 +2324,7 @@ def render_outreach_tools():
 
             # Attachments uploader (positioned below Quote Due)
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
-                                           key=ns_key("outreach::extra_files"))
+                                           key=ns_key("outreach::extra_files")
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
 
@@ -2425,7 +2421,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw")
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
@@ -2433,13 +2429,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
     with st.expander("Quick Outreach Composer", expanded=False):
         to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc")
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc")
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj")
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
@@ -2471,7 +2466,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
 
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data")
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
@@ -2494,8 +2489,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         atts = preview.get("attachments") or []
         if atts:
             names = [a.get("name","file") for a in atts]
-            st.caption("Attachments: " + ", ".join(names))
-
+            st.caption("Attachments: " + ", ".join(names)
         cc1, cc2, _ = st.columns([1,1,2])
         with cc1:
             if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
@@ -2561,7 +2555,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw")
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
@@ -2571,13 +2565,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc")
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc")
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj")
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
@@ -2611,7 +2604,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     st.error(f"Failed to send: {e}")
 
     # === Unified Preview Block (used by both header-level and composer-level triggers) ===
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data")
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
@@ -2639,8 +2632,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             atts = preview.get("attachments") or []
             if atts:
                 names = [a.get("name","file") for a in atts]
-                st.caption("Attachments: " + ", ".join(names))
-
+                st.caption("Attachments: " + ", ".join(names)
             cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
                 if st.button("Send this email", key=ns_key("outreach::mail_preview_confirm")):
@@ -2678,7 +2670,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw")
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
@@ -2690,13 +2682,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc")
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc")
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj")
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
-
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
@@ -2734,7 +2725,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     st.error(f"Failed to send: {e}")
 
     # If a preview has been requested, render it exactly like the HTML body will appear.
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data")
     if preview:
         import streamlit.components.v1 as components
 
@@ -2766,8 +2757,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             atts = preview.get("attachments") or []
             if atts:
                 names = [a.get("name","file") for a in atts]
-                st.caption("Attachments: " + ", ".join(names))
-
+                st.caption("Attachments: " + ", ".join(names)
             # Confirm send buttons
             cc1, cc2, cc3 = st.columns([1,1,2])
             with cc1:
@@ -2808,7 +2798,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
     with st.expander("Set/Update my Gmail App Password", expanded=False):
         st.caption("Generate an App Password in your Google Account > Security > 2-Step Verification.")
-        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw"))
+        app_pw = st.text_input("Gmail App Password (16 chars, no spaces)", type="password", key=ns_key("outreach::gmail_app_pw")
         if st.button("Save App Password", key=ns_key("outreach::save_app_pw")):
             set_user_smtp_app_password(ACTIVE_USER, app_pw)
             st.success("Saved. You can now send emails from the Outreach composer.")
@@ -2817,12 +2807,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         to = st.text_input("To (comma-separated)",
                            key=ns_key("outreach::mail_to"),
                            placeholder="recipient@example.com, another@domain.com")
-        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
-        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
-        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
+        cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc")
+        bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc")
+        subj = st.text_input("Subject", key=ns_key("outreach::mail_subj")
         body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,
                             placeholder="<p>Hello...</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files")
         if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
                 send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
@@ -2877,7 +2867,7 @@ def _ocr_pdf_bytes(pdf_bytes: bytes) -> str:
         pages = convert_from_bytes(pdf_bytes, dpi=200)
         out = []
         for img in pages[:30]:
-            out.append(pytesseract.image_to_string(img))
+            out.append(pytesseract.image_to_string(img)
         return "\n".join(out)
     except Exception:
         return ""
@@ -2939,13 +2929,11 @@ def _send_via_smtp_host(to_addr: str, subject: str, body: str, from_addr: str,
     msg['Subject'] = subject
     if reply_to:
         msg['Reply-To'] = reply_to
-    msg.attach(MIMEText(body, 'plain'))
+    msg.attach(MIMEText(body, 'plain')
     with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
-
-
+        server.sendmail(from_addr, [to_addr], msg.as_string()
 def _send_via_gmail(to_addr: str, subject: str, body: str) -> str:
     """
     Gmail sender using Streamlit secrets.
@@ -3177,7 +3165,7 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
                          "psc": it.get("PSC Code")} for it in rows]
                 diag = f"Attempt {name}: HTTP {status}, rows={len(rows)}"
                 if st_debug is not None:
-                    st_debug.code(json.dumps(payload, indent=2))
+                    st_debug.code(json.dumps(payload, indent=2)
                     st_debug.caption(diag)
                 return pd.DataFrame(data), diag
             else:
@@ -3233,7 +3221,7 @@ def sam_search(
     base = "https://api.sam.gov/opportunities/v2/search"
     today = datetime.utcnow().date()
     min_due_date = today + timedelta(days=min_days)
-    posted_from = _us_date(today - timedelta(days=posted_from_days))
+    posted_from = _us_date(today - timedelta(days=posted_from_days)
     posted_to   = _us_date(today)
 
     params = {
@@ -3403,7 +3391,7 @@ def _extract_contacts_from_sam_row(r) -> list:
 
     seen = set(); dedup = []
     for c in out:
-        key = (c.get("email") or c.get("name"), c.get("org"))
+        key = (c.get("email") or c.get("name"), c.get("org")
         if key in seen:
             continue
         seen.add(key); dedup.append(c)
@@ -3834,20 +3822,19 @@ def q_select(sql: str, params: list | tuple = (), one: bool = False, alias: str 
     conn = get_db()
     fin_sql = _append_org_filter(sql, alias) if require_org else sql
     fin_params = list(params) + ([current_org_id()] if require_org else [])
-    cur = conn.execute(fin_sql, tuple(fin_params))
-    return (cur.fetchone() if one else cur.fetchall())
-
+    cur = conn.execute(fin_sql, tuple(fin_params)
+    return (cur.fetchone() if one else cur.fetchall()
 def q_insert(table: str, data: dict):
     _assert_can_write()
     d = dict(data or {})
-    d.setdefault("org_id", current_org_id())
-    d.setdefault("owner_id", current_user_id())
-    keys = list(d.keys())
+    d.setdefault("org_id", current_org_id()
+    d.setdefault("owner_id", current_user_id()
+    keys = list(d.keys()
     vals = [d[k] for k in keys]
-    placeholders = ",".join(["?"] * len(keys))
+    placeholders = ",".join(["?"] * len(keys)
     sql = f"INSERT INTO {table}({','.join(keys)}) VALUES({placeholders})"
     conn = get_db()
-    cur = conn.execute(sql, tuple(vals))
+    cur = conn.execute(sql, tuple(vals)
     return cur.lastrowid
 
 def q_update(table: str, data: dict, where: dict):
@@ -3861,13 +3848,13 @@ def q_update(table: str, data: dict, where: dict):
     sets = ", ".join([f"{k}=?" for k in d.keys()])
     args = [d[k] for k in d.keys()]
     sql = f"UPDATE {table} SET {sets} WHERE id=?"
-    args.append(int(where["id"]))
+    args.append(int(where["id"])
     sql += " AND org_id=?"
-    args.append(current_org_id())
+    args.append(current_org_id()
     if "version" in where:
         sql += " AND version=?"
-        args.append(int(where["version"]))
-    cur = conn.execute(sql, tuple(args))
+        args.append(int(where["version"])
+    cur = conn.execute(sql, tuple(args)
     return cur.rowcount
 
 def q_delete(table: str, where: dict):
@@ -3876,7 +3863,7 @@ def q_delete(table: str, where: dict):
         raise ValueError("q_delete requires id in where")
     conn = get_db()
     sql = f"DELETE FROM {table} WHERE id=? AND org_id=?"
-    args = (int(where["id"]), current_org_id())
+    args = (int(where["id"]), current_org_id()
     cur = conn.execute(sql, args)
     return cur.rowcount
 # ===== end Tenancy Phase 3 =====
@@ -3903,7 +3890,7 @@ def _ensure_tenancy_phase1():
     ]
     for uid, oid, email, dname, role in defaults:
         cur.execute("""INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at)
-                       VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
+                       VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role)
     conn.commit()
 
 def current_user_role():
@@ -4042,7 +4029,7 @@ def set_setting(key, value):
     conn = get_db()
     conn.execute("""insert into settings(key,value) values(?,?)
                     on conflict(key) do update set value=excluded.value, updated_at=current_timestamp""",
-                 (key, str(value)))
+                 (key, str(value))
     conn.commit()
 
 def read_doc(uploaded_file):
@@ -4053,7 +4040,7 @@ def read_doc(uploaded_file):
     if suffix == "pdf":
         try:
             data = uploaded_file.read()
-            r = PdfReader(io.BytesIO(data))
+            r = PdfReader(io.BytesIO(data)
             txt = "\n".join((p.extract_text() or "") for p in r.pages)
             # OCR fallback when native text is sparse
             if len((txt or "").strip()) < 500:
@@ -4173,7 +4160,7 @@ def _normalize_markdown_sections(md_text: str) -> str:
             hashes, text = m.group(1), m.group(2).rstrip()
             # Remove any trailing two-space soft break at end of headings
             text = re.sub(r'\s{2,}$', '', text)
-            curr = (hashes, text.strip().lower())
+            curr = (hashes, text.strip().lower()
             if prev_heading and curr == prev_heading:
                 # skip duplicate consecutive heading
                 continue
@@ -4289,7 +4276,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
         # Numbered list approx (e.g., "1. step")
         if re.match(r"^\d+\.\s+", line):
             flush_bullets()
-            num_buf.append(re.sub(r"^\d+\.\s+", "", line, count=1))
+            num_buf.append(re.sub(r"^\d+\.\s+", "", line, count=1)
             continue
 
         # Normal paragraph
@@ -4357,7 +4344,7 @@ def _proposal_context_for(conn, session_id: int, question_text: str):
     for _, r in rows.iterrows():
         cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
         chunks.extend(cs)
-        labels.extend([r["filename"]]*len(cs))
+        labels.extend([r["filename"]]*len(cs)
     vec, X = embed_texts(chunks)
     top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
     parts, used = [], set()
@@ -4482,7 +4469,7 @@ def _render_saved_vendors_manager(_container=None):
                     else:
                         cur.execute("""update vendors
                                        set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, certifications=?, set_asides=?, notes=?, updated_at=current_timestamp
-                                       where id=?""", vals + (int(vid),))
+                                       where id=?""", vals + (int(vid),)
                         updated += 1
                 conn.commit()
                 _c.success(f"Saved {saved} new, updated {updated} existing")
@@ -4586,7 +4573,7 @@ _ensure_extra_schema()
 
 def get_past_performance_df():
     try:
-        return pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", get_db())
+        return pd.read_sql_query("select * from past_performance order by updated_at desc, id desc", get_db()
     except Exception:
         return pd.DataFrame()
 
@@ -4599,7 +4586,7 @@ def upsert_win_score(opp_id: int, score: float, factors: dict):
                 score=excluded.score,
                 factors_json=excluded.factors_json,
                 computed_at=current_timestamp
-        """, (int(opp_id), float(score), json.dumps(factors)))
+        """, (int(opp_id), float(score), json.dumps(factors))
         conn.commit()
     except Exception:
         pass
@@ -4634,7 +4621,7 @@ def compute_win_score_row(opp_row, past_perf_df):
     factors["time_runway"] = runway_pts
     score += runway_pts
     # Attachment presence for clarity
-    has_docs = bool(opp_row.get("attachments_json"))
+    has_docs = bool(opp_row.get("attachments_json")
     factors["docs_avail"] = 10 if has_docs else 5
     score += factors["docs_avail"]
     # Cap 100
@@ -4670,7 +4657,7 @@ try:
         if submit:
             conn.execute("""insert into past_performance
                 (title,agency,naics,psc,period,value,role,location,highlights,contact_name,contact_email,contact_phone)
-                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone))
+                values(?,?,?,?,?,?,?,?,?,?,?,?)""",                (title,agency,naics,psc,period,float(value_amt),role,location,highlights,contact_name,contact_email,contact_phone)
             conn.commit()
             st.success("Saved")
             _safe_rerun()
@@ -4717,7 +4704,7 @@ try:
                 st.info("No quotes yet")
             else:
                 st.dataframe(dfq[["company","subtotal","taxes","shipping","total","lead_time","notes"]], use_container_width=True)
-                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist())
+                pick_winner = st.selectbox("Pick winner", options=[""] + dfq["company"].tolist()
                 if pick_winner and st.button("Pick Winner"):
                     winner_row = dfq[dfq["company"]==pick_winner].head(1)
                     if not winner_row.empty:
@@ -4817,7 +4804,7 @@ with legacy_tabs[0]:
     if "Link" not in df_opp.columns and "notes" in df_opp.columns:
         def _extract_url(_s):
             try:
-                m = _re.search(r"(https?://\S+)", str(_s))
+                m = _re.search(r"(https?://\S+)", str(_s)
                 return m.group(1).rstrip("),.;]") if m else ""
             except Exception:
                 return ""
@@ -4829,7 +4816,7 @@ with legacy_tabs[0]:
         a_filter = st.selectbox(
             "Filter by assignee",
             assignees,
-            index=(assignees.index(st.session_state.get('active_profile', ''))
+            index=(assignees.index(st.session_state.get('active_profile', '')
                    if st.session_state.get('active_profile', '') in assignees else 0),
             key="opp_assignee_filter"
         )
@@ -4913,7 +4900,7 @@ with legacy_tabs[0]:
         df_all = pd.read_sql_query("select status, count(*) as n from opportunities group by status", conn)
         if not df_all.empty:
             st.markdown("### Pipeline analytics")
-            st.bar_chart(df_all.set_index("status"))
+            st.bar_chart(df_all.set_index("status")
         # Forecast (probability-adjusted revenue) using win_scores if any
         try:
             dfw = pd.read_sql_query("""
@@ -4939,8 +4926,7 @@ with legacy_tabs[0]:
 
         try:
 
-            sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0))
-
+            sel_id = int(st.number_input("Type an opportunity ID to manage tasks", min_value=0, step=1, value=0)
             if sel_id:
 
                 df_tasks = pd.read_sql_query("select * from tasks where opp_id=? order by due_date asc nulls last, id desc", conn, params=(sel_id,))
@@ -4961,13 +4947,13 @@ with legacy_tabs[0]:
 
                             cur.execute("insert into tasks(opp_id,title,assignee,due_date,status,notes) values(?,?,?,?,?,?)",
 
-                                        (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes","")))
+                                        (sel_id, r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""))
 
                         else:
 
                             cur.execute("update tasks set title=?, assignee=?, due_date=?, status=?, notes=?, updated_at=current_timestamp where id=?",
 
-                                        (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id"))))
+                                        (r.get("title",""), r.get("assignee",""), r.get("due_date",""), r.get("status","Open"), r.get("notes",""), int(r.get("id")))
 
                     conn.commit()
 
@@ -4978,8 +4964,8 @@ with legacy_tabs[0]:
             st.caption(f"[Tasks panel note: {_e_tasks}]")
 with legacy_tabs[1]:
     st.subheader("Find subcontractors and rank by fit")
-    trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial"))
-    loc = st.text_input("Place of Performance", value=get_setting("home_loc", "Houston, TX"))
+    trade = st.text_input("Trade", value=get_setting("default_trade", "Janitorial")
+    loc = st.text_input("Place of Performance", value=get_setting("home_loc", "Houston, TX")
     radius_miles = st.slider("Radius (miles)", min_value=5, max_value=200, value=50, step=5)
     naics_choice = st.multiselect("NAICS to tag new imports", options=sorted(set(NAICS_SEEDS)), default=[])
     find_emails = st.checkbox("Try to find emails from website (slow)", value=False)
@@ -4991,7 +4977,7 @@ with legacy_tabs[1]:
     with colA:
 
         if st.button("Google Places import"):
-            results, info = google_places_search(f"{trade} small business", loc, int(radius_miles*1609.34))
+            results, info = google_places_search(f"{trade} small business", loc, int(radius_miles*1609.34)
             st.session_state["vendor_results"] = results or []
             st.session_state["vendor_info"] = info or {}
             if places_diag:
@@ -5011,7 +4997,7 @@ with legacy_tabs[1]:
                 comp = (row.get("company") or "").strip()
                 city = (row.get("city") or "").strip()
                 state = (row.get("state") or "").strip()
-                q = quote_plus(" ".join(x for x in [comp, city, state, "site"] if x))
+                q = quote_plus(" ".join(x for x in [comp, city, state, "site"] if x)
                 return f"https://www.google.com/search?q={q}"
 
             if not df_new.empty:
@@ -5084,7 +5070,7 @@ with legacy_tabs[1]:
                     if vid:
                         cur.execute(
                             "update vendors set company=?, naics=?, trades=?, phone=?, email=?, website=?, city=?, state=?, notes=?, source=?, updated_at=current_timestamp where id=?",
-                            (company, naics_tag, trade, phone, email, website, city, state, extra_note, source, int(vid))
+                            (company, naics_tag, trade, phone, email, website, city, state, extra_note, source, int(vid)
                         )
                     else:
                         cur.execute(
@@ -5127,10 +5113,10 @@ with legacy_tabs[2]:
         for _, r in grid.iterrows():
             if pd.isna(r["id"]):
                 cur.execute("""insert into contacts(name,org,role,email,phone,source,notes) values(?,?,?,?,?,?,?)""",
-                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"]))
+                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"])
             else:
                 cur.execute("""update contacts set name=?, org=?, role=?, email=?, phone=?, source=?, notes=? where id=?""",
-                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"])))
+                            (r["name"], r["org"], r["role"], r["email"], r["phone"], r["source"], r["notes"], int(r["id"]))
         conn.commit(); st.success("Saved")
 
 with legacy_tabs[3]:
@@ -5144,7 +5130,7 @@ with legacy_tabs[3]:
 
 
     # --- Template manager ---
-    t = pd.read_sql_query("select * from email_templates order by name", get_db())
+    t = pd.read_sql_query("select * from email_templates order by name", get_db()
     names = t["name"].tolist() if not t.empty else ["RFQ Request"]
     pick_t = st.selectbox("Template", options=names, key="tpl_pick_name")
     tpl = pd.read_sql_query("select subject, body from email_templates where name=?", get_db(), params=(pick_t,))
@@ -5205,8 +5191,8 @@ with legacy_tabs[3]:
     with colD:
         st.caption("Tips: Use placeholders like {company}, {scope}, {due}.")
     picks = st.multiselect("Choose vendors to email", options=df_v["company"].tolist(), default=df_v["company"].tolist()[:10])
-    scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", ""))
-    due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT"))
+    scope_hint = st.text_area("Scope summary", value=get_setting("outreach_scope", "")
+    due = st.text_input("Quote due", value=(datetime.now()+timedelta(days=5)).strftime("%B %d, %Y 4 pm CT")
     if st.button("Generate emails"):
         st.session_state["mail_bodies"] = []
         for name in picks:
@@ -5227,12 +5213,11 @@ with legacy_tabs[3]:
             msg['Subject'] = subject
             if reply_to:
                 msg['Reply-To'] = reply_to
-            msg.attach(MIMEText(body, 'plain'))
+            msg.attach(MIMEText(body, 'plain')
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(smtp_user, smtp_pass)
-                server.sendmail(from_addr, [to_addr], msg.as_string())
-
+                server.sendmail(from_addr, [to_addr], msg.as_string()
         def _send_via_gmail(to_addr, subject, body):
             # Requires st.secrets: smtp_user, smtp_pass
             smtp_user = st.secrets.get("smtp_user")
@@ -5259,9 +5244,9 @@ def score_opportunity(row, keywords=None, watched_naics=None):
         score = 0
         kw = [k.strip().lower() for k in (keywords or []) if k.strip()]
         title = str(row.get("title","")).lower()
-        agency = str(row.get("agency",""))
-        naics = str(row.get("naics",""))
-        typ = str(row.get("type",""))
+        agency = str(row.get("agency","")
+        naics = str(row.get("naics","")
+        typ = str(row.get("type","")
         # Days until due
         due = row.get("response_due")
         days_to_due = None
@@ -5358,8 +5343,7 @@ def save_opportunities(df, default_assignee=None):
         pass
 
     _ensure_opportunity_columns()
-    cols = set(_get_table_cols("opportunities"))
-
+    cols = set(_get_table_cols("opportunities")
     inserted = 0
     updated = 0
     conn = get_db(); cur = conn.cursor()
@@ -5402,7 +5386,7 @@ def save_opportunities(df, default_assignee=None):
             if "status" in cols:
                 insert_cols.append("status"); insert_vals.append("New")
             if "assignee" in cols:
-                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or "")
             if "quick_note" in cols:
                 insert_cols.append("quick_note"); insert_vals.append("")
             placeholders = ",".join("?" for _ in insert_cols)
@@ -5512,11 +5496,10 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         except Exception:
             _saved = {}
 
-        min_days = int(_saved.get("min_days", 3))
-        posted_from_days = int(_saved.get("posted_from_days", 30))
-        active_only = bool(_saved.get("active_only", True))
-        keyword = str(_saved.get("keyword", ""))
-
+        min_days = int(_saved.get("min_days", 3)
+        posted_from_days = int(_saved.get("posted_from_days", 30)
+        active_only = bool(_saved.get("active_only", True)
+        keyword = str(_saved.get("keyword", "")
         # Build filters
         conn = get_db()
         naics = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
@@ -5531,7 +5514,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         # Log history
         conn = get_db(); cur = conn.cursor()
         cur.execute("insert into sam_history(ts_utc,user,action,sam_notice_id,title,agency,naics,response_due,score) values(?,?,?,?,?,?,?,?,?)",
-                    (str(now_utc), ACTIVE_USER, "fetch", "", "", "", "", "", 0))
+                    (str(now_utc), ACTIVE_USER, "fetch", "", "", "", "", "", 0)
         conn.commit()
 
         # Optional digest email
@@ -5545,13 +5528,13 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
                 for _, r in best.iterrows():
                     lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
                 try:
-                    send_outreach_email(ACTIVE_USER, USER_EMAILS.get(ACTIVE_USER), "SAM Watch: Daily digest", "<br>".join(lines))
+                    send_outreach_email(ACTIVE_USER, USER_EMAILS.get(ACTIVE_USER), "SAM Watch: Daily digest", "<br>".join(lines)
                     cur.execute("insert into sam_history(ts_utc,user,action) values(?,?,?)", (str(now_utc), ACTIVE_USER, "digest_sent"))
                     conn.commit()
                 except Exception as _e:
                     pass
 
-        set_setting(key_last, str(now_utc))
+        set_setting(key_last, str(now_utc)
         return {"ok": True, "inserted": int(new_rows), "updated": int(upd_rows)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -5559,17 +5542,17 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
 
     # ---- Auto proposal prep from SAM row ----
     def build_proposal_md_from_row(row: dict) -> str:
-        title = str(row.get("title",""))
-        agency = str(row.get("agency",""))
-        sol = str(row.get("sam_notice_id",""))
-        due = str(row.get("response_due",""))
-        naics = str(row.get("naics",""))
-        url = str(row.get("url",""))
+        title = str(row.get("title","")
+        agency = str(row.get("agency","")
+        sol = str(row.get("sam_notice_id","")
+        due = str(row.get("response_due","")
+        naics = str(row.get("naics","")
+        url = str(row.get("url","")
         company = get_setting("company_name", "ELA Management LLC")
         uei = get_setting("uei", "")
         cage = get_setting("cage", "")
         phone = get_setting("company_phone", "")
-        email = USER_EMAILS.get(ACTIVE_USER, get_setting("company_email",""))
+        email = USER_EMAILS.get(ACTIVE_USER, get_setting("company_email","")
         summary = str(row.get("description",""))[:1200]
 
         md = f"""# {company} – Proposal Draft
@@ -5651,7 +5634,7 @@ with legacy_tabs[4]:
                 for row in saved:
                     c1,c2,c3,c4,c5 = st.columns([2,3,2,2,2])
                     c1.write(f"**{row['name']}**")
-                    c2.write(row.get("params",{}))
+                    c2.write(row.get("params",{})
                     if c3.button("Run", key=f"run_{row['name']}"):
                         pars = row['params']
                         df_run, info = sam_search(
@@ -5680,7 +5663,7 @@ with legacy_tabs[4]:
                             to_save = df_run.copy()
                             if "Link" in to_save.columns:
                                 to_save = to_save.drop(columns=["Link"])
-                            ins, upd = save_opportunities(to_save, default_assignee=st.session_state.get("assignee_default",""))
+                            ins, upd = save_opportunities(to_save, default_assignee=st.session_state.get("assignee_default","")
                             st.success(f"Ingested {len(df_run)}. New {ins}, updated {upd}.")
                             st.session_state["sam_results_df"] = df_run
                         else:
@@ -5710,7 +5693,7 @@ with legacy_tabs[4]:
     # Kick the monitor if interval elapsed
     try:
         if auto_on:
-            _res = sam_live_monitor(False, int(interval_hours), digest, int(digest_min))
+            _res = sam_live_monitor(False, int(interval_hours), digest, int(digest_min)
             if _res and _res.get("ok") and not _res.get("skipped"):
                 st.info(f"Auto-monitor: inserted {_res.get('inserted',0)}, updated {_res.get('updated',0)}")
     except Exception as _e_mon:
@@ -5733,7 +5716,7 @@ except Exception:
         active_only = st.checkbox("All active opportunities", value=bool(_saved_defaults.get('active_only', True)))
     with col2:
         keyword = st.text_input("Keyword", value=str(_saved_defaults.get('keyword', '')), key="sam_keyword")
-        notice_types = st.multiselect("Notice types", options=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"], default=_saved_defaults.get("notice_types", ["Combined Synopsis/Solicitation","Solicitation"]))
+        notice_types = st.multiselect("Notice types", options=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"], default=_saved_defaults.get("notice_types", ["Combined Synopsis/Solicitation","Solicitation"])
     with col3:
         diag = st.checkbox("Show diagnostics", value=False)
         raw = st.checkbox("Show raw API text (debug)", value=False)
@@ -5759,7 +5742,7 @@ except Exception:
                 'notice_types': list(notice_types),
                 'set_aside': list(_set_aside_vals)
             })
-            set_setting(_defaults_key, json.dumps(_cur))
+            set_setting(_defaults_key, json.dumps(_cur)
             st.success("Saved your defaults")
         if st.button("Reset my default"):
             set_setting(_defaults_key, "")
@@ -5779,11 +5762,11 @@ except Exception:
 
         with st.expander("Create or update a saved search"):
             ss_name = st.text_input("Search name", value="")
-            ss_keyword = st.text_input("Keyword(s) for this saved search", value=str(keyword or ""))
+            ss_keyword = st.text_input("Keyword(s) for this saved search", value=str(keyword or "")
             ss_naics = st.text_input("NAICS list (comma separated)", value="")
             ss_notice = st.multiselect("Notice types", options=["Combined Synopsis/Solicitation","Solicitation","Presolicitation","SRCSGT"], default=["Combined Synopsis/Solicitation","Solicitation"], key="sam_ss_notice")
-            ss_min_days = st.number_input("Min days until due", min_value=0, step=1, value=int(min_days))
-            ss_posted_from_days = st.number_input("Look-back window (days since posted)", min_value=1, step=1, value=int(posted_from_days))
+            ss_min_days = st.number_input("Min days until due", min_value=0, step=1, value=int(min_days)
+            ss_posted_from_days = st.number_input("Look-back window (days since posted)", min_value=1, step=1, value=int(posted_from_days)
             if st.button("Save search"):
                 params = {
                     "keyword": ss_keyword.strip(),
@@ -5833,13 +5816,13 @@ except Exception:
         min_score = st.slider("Min score for digest", min_value=0, max_value=100, value=int(get_setting("sam_auto_ingest_min_score","70") or 70))
         if st.button("Save auto-ingest settings"):
             set_setting("sam_auto_ingest_enabled", "1" if toggle_auto else "0")
-            set_setting("sam_auto_ingest_hours", str(every_hours))
+            set_setting("sam_auto_ingest_hours", str(every_hours)
             set_setting("sam_auto_ingest_email", "1" if email_digest else "0")
-            set_setting("sam_auto_ingest_min_score", str(min_score))
+            set_setting("sam_auto_ingest_min_score", str(min_score)
             st.success("Saved auto-ingest settings.")
             # Optionally trigger a run now
             if st.checkbox("Run one cycle now"):
-                _r = sam_live_monitor(run_now=True, hours_interval=int(every_hours), email_digest=bool(email_digest), min_score_digest=int(min_score))
+                _r = sam_live_monitor(run_now=True, hours_interval=int(every_hours), email_digest=bool(email_digest), min_score_digest=int(min_score)
                 st.write(_r)
 
 
@@ -5853,8 +5836,7 @@ except Exception:
         pages_to_fetch = st.session_state.get("pages_to_fetch", 3)
         email_top = st.checkbox("Email me the top results", value=False)
         min_score_email = st.number_input("Min score to email", min_value=0, max_value=100, value=70, step=5)
-        email_to_self = st.text_input("Send to (your email)", value=USER_EMAILS.get(ACTIVE_USER, ""))
-
+        email_to_self = st.text_input("Send to (your email)", value=USER_EMAILS.get(ACTIVE_USER, "")
         if st.button("Run search now"):
             df, info = sam_search(
                 codes, min_days=min_days, limit=150,
@@ -5875,7 +5857,7 @@ except Exception:
                         for _, r in best.iterrows():
                             lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
                         try:
-                            send_outreach_email(ACTIVE_USER, email_to_self, "SAM Watch: Top matches", "<br>".join(lines))
+                            send_outreach_email(ACTIVE_USER, email_to_self, "SAM Watch: Top matches", "<br>".join(lines)
                             st.info(f"Emailed {len(best)} matches to {email_to_self}")
                         except Exception as _e_mail:
                             st.caption(f"[Email note: {_e_mail}]")
@@ -5986,7 +5968,7 @@ except Exception as _e_sync:
 # [disabled to fix indentation]                     try:
 # [disabled to fix indentation]                         cur = get_db().cursor()
 # [disabled to fix indentation]                         cur.execute("insert into sam_history(ts_utc,user,action,sam_notice_id,title,agency,naics,response_due,score) values(?,?,?,?,?,?,?,?,?)",
-# [disabled to fix indentation]                                     (str(pd.Timestamp.utcnow()), ACTIVE_USER, "proposal_prep", str(_r.get('sam_notice_id','')), str(_r.get('title','')), str(_r.get('agency','')), str(_r.get('naics','')), str(_r.get('response_due','')), int(_r.get('Score',0))))
+# [disabled to fix indentation]                                     (str(pd.Timestamp.utcnow()), ACTIVE_USER, "proposal_prep", str(_r.get('sam_notice_id','')), str(_r.get('title','')), str(_r.get('agency','')), str(_r.get('naics','')), str(_r.get('response_due','')), int(_r.get('Score',0)))
 # [disabled to fix indentation]                         get_db().commit()
 # [disabled to fix indentation]                     except Exception:
 # [disabled to fix indentation]                         pass
@@ -6019,7 +6001,7 @@ except Exception as _e_sync:
     with cC:
         if st.button("Test SAM key only"):
             try:
-                today_us = _us_date(datetime.utcnow().date())
+                today_us = _us_date(datetime.utcnow().date()
                 test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json", "postedFrom": today_us, "postedTo": today_us}
                 headers = {"X-Api-Key": SAM_API_KEY}
                 r = requests.get("https://api.sam.gov/opportunities/v2/search", params=test_params, headers=headers, timeout=20)
@@ -6046,7 +6028,7 @@ with legacy_tabs[4]:
         conn = get_db()
         try:
             hist = pd.read_sql_query("select * from sam_history order by ts_utc desc", conn)
-            st.dataframe(hist.head(200))
+            st.dataframe(hist.head(200)
             # Simple aggregates
             st.write("Total fetches:", int((hist["action"]=="fetch").sum()) if "action" in hist else 0)
             st.write("Proposals prepped:", int((hist["action"]=="proposal_prep").sum()) if "action" in hist else 0)
@@ -6055,7 +6037,7 @@ with legacy_tabs[4]:
                 _h = hist.copy(); _h["month"] = pd.to_datetime(_h["ts_utc"], errors="coerce").dt.to_period("M").astype(str)
                 agg = _h.groupby(["month","action"]).size().reset_index(name="n")
                 st.write("Activity by month")
-                st.dataframe(agg.sort_values(["month","action"]))
+                st.dataframe(agg.sort_values(["month","action"])
         except Exception as _e_ana:
             st.caption(f"[Analytics note: {_e_ana}]")
 with legacy_tabs[6]:
@@ -6094,7 +6076,7 @@ Certifications Small Business"""
         st.markdown(cap_md)
         issues, est_pages = _validate_text_for_guardrails(cap_md, page_limit=2, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
-            st.warning("Before export, fix these items: " + "; ".join(issues))
+            st.warning("Before export, fix these items: " + "; ".join(issues)
         logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="cap_logo_upload")
         _logo = logo_file.read() if logo_file else None
         docx_bytes = md_to_docx_bytes_rich(cap_md, title=_docx_title_if_needed(cap_md, f"{company} Capability Statement"), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_logo)
@@ -6127,7 +6109,7 @@ with legacy_tabs[7]:
         st.markdown(wp_md)
         issues, est_pages = _validate_text_for_guardrails(wp_md, page_limit=4, require_font="Times New Roman", require_size_pt=11, margins_in=1.0, line_spacing=1.0, filename_pattern="{company}_{section}_{date}")
         if issues:
-            st.warning("Before export, fix these items: " + "; ".join(issues))
+            st.warning("Before export, fix these items: " + "; ".join(issues)
         wp_logo_file = st.file_uploader("Optional logo for header", type=["png","jpg","jpeg"], key="wp_logo_upload")
         _wp_logo = wp_logo_file.read() if wp_logo_file else None
         wp_bytes = md_to_docx_bytes_rich(wp_md, title=_docx_title_if_needed(wp_md, title), base_font="Times New Roman", base_size_pt=11, margins_in=1.0, logo_bytes=_wp_logo)
@@ -6158,8 +6140,7 @@ with legacy_tabs[9]:
         )
         system = "You are a federal contracting assistant. Use headings and tight bullets."
         prompt = "Source slices\n" + "\n\n".join(snips) + "\n\nExtract fields now"
-        st.markdown(llm(system, prompt, max_tokens=1200))
-
+        st.markdown(llm(system, prompt, max_tokens=1200)
 with legacy_tabs[10]:
     st.subheader("Ask questions over the uploaded docs")
     up2 = st.file_uploader("Upload PDFs or DOCX", type=["pdf","docx","doc","txt"], accept_multiple_files=True, key="qna_up")
@@ -6170,9 +6151,7 @@ with legacy_tabs[10]:
         snips = search_chunks(q, vec, X, chunks, k=6); support = "\n\n".join(snips)
         system = "Answer directly. Quote exact lines for dates or addresses."
         prompt = f"Context\n{support}\n\nQuestion\n{q}"
-        st.markdown(llm(system, prompt, max_tokens=900))
-
-
+        st.markdown(llm(system, prompt, max_tokens=900)
 with legacy_tabs[11]:
     st.subheader("Chat Assistant (remembers context; accepts file uploads)")
     conn = get_db()
@@ -6240,7 +6219,7 @@ with legacy_tabs[11]:
                 for _, r in rows.iterrows():
                     cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
                     chunks.extend(cs)
-                    labels.extend([r["filename"]] * len(cs))
+                    labels.extend([r["filename"]] * len(cs)
                 vec, X = embed_texts(chunks)
                 top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
                 parts, used = [], set()
@@ -6273,7 +6252,7 @@ with legacy_tabs[11]:
             if user_msg:
                 # Save user's message
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
-                             (session_id, "user", user_msg))
+                             (session_id, "user", user_msg)
                 conn.commit()
 
                 # Build system + context
@@ -6301,7 +6280,7 @@ with legacy_tabs[11]:
 
                 assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
                 conn.execute("insert into chat_messages(session_id, role, content) values(?,?,?)",
-                             (session_id, "assistant", assistant_out))
+                             (session_id, "assistant", assistant_out)
                 conn.commit()
 
                 st.chat_message("user").markdown(user_msg)
@@ -6350,12 +6329,12 @@ with legacy_tabs[__tabs_base + 0]:
         st.dataframe(m)
         with st.form("add_deadline"):
             title = st.text_input("Title")
-            due = st.date_input("Due date", datetime.now().date())
+            due = st.date_input("Due date", datetime.now().date()
             source = st.text_input("Source or link", "")
             notes = st.text_area("Notes", "")
             if st.form_submit_button("Add"):
                 conn.execute("insert into deadlines(opp_id,title,due_date,source,notes) values(?,?,?,?,?)",
-                             (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip()))
+                             (None, title.strip(), due.strftime("%Y-%m-%d"), source.strip(), notes.strip())
                 conn.commit()
                 st.success("Added")
 
@@ -6371,7 +6350,7 @@ with legacy_tabs[__tabs_base + 0]:
                 body_lines = ["The following items are due today:"]
                 for _, r in due_today.iterrows():
                     body_lines.append(f"- {r['title']} (source: {r.get('source','')})")
-                status = send_via_graph(to_addr, "Reminders: items due today", "\n".join(body_lines))
+                status = send_via_graph(to_addr, "Reminders: items due today", "\n".join(body_lines)
                 st.info(f"Email status: {status}")
             else:
                 st.info("Enter an email address to send reminders.")
@@ -6397,7 +6376,7 @@ with legacy_tabs[__tabs_base + 1]:
             try:
                 if suffix == "pdf":
                     data = f.read()
-                    r = PdfReader(io.BytesIO(data))
+                    r = PdfReader(io.BytesIO(data)
                     txt = "\n".join((p.extract_text() or "") for p in r.pages)
                     if len((txt or "").strip()) < 500:
                         txt = _ocr_pdf_bytes(data) or txt
@@ -6441,7 +6420,7 @@ with legacy_tabs[__tabs_base + 1]:
         st.dataframe(df, use_container_width=True)
         for r in items:
             conn.execute("insert into compliance_items(opp_id,item,required,status,owner,source_page,notes,snippet) values(?,?,?,?,?,?,?,?)",
-                         (r["opp_id"], r["item"], 1 if r["required"] else 0, r["status"], r["owner"], r["source_page"], r["notes"], r.get("snippet","")))
+                         (r["opp_id"], r["item"], 1 if r["required"] else 0, r["status"], r["owner"], r["source_page"], r["notes"], r.get("snippet",""))
         conn.commit()
         st.success("Checklist saved with page anchors, owners and snippets")
 
@@ -6456,10 +6435,10 @@ with legacy_tabs[__tabs_base + 2]:
     vendors = pd.read_sql_query("select id, company, email, phone, trades from vendors order by company", conn)
     st.caption("Compose RFQ")
     with st.form("rfq_form"):
-        sel = st.multiselect("Recipients", vendors["company"].tolist())
+        sel = st.multiselect("Recipients", vendors["company"].tolist()
         scope = st.text_area("Scope", st.session_state.get("default_scope", "Provide labor materials equipment and supervision per attached specifications"), height=120)
         qty = st.text_input("Quantities or CLIN list", "")
-        due = st.date_input("Quote due by", datetime.now().date() + timedelta(days=3))
+        due = st.date_input("Quote due by", datetime.now().date() + timedelta(days=3)
         files = st.text_input("File names to reference", "")
         subject = st.text_input("Email subject", "Quote request for upcoming federal project")
         body = st.text_area("Email body preview", height=240,
@@ -6491,7 +6470,7 @@ with legacy_tabs[__tabs_base + 2]:
             doc.add_heading(row[1], level=1)
             doc.add_paragraph(f"To: {row[0]}")
             for para in row[2].split("\n\n"):
-                doc.add_paragraph(_strip_markdown_to_plain(para))
+                doc.add_paragraph(_strip_markdown_to_plain(para)
             bio = io.BytesIO(); doc.save(bio); bio.seek(0)
             st.download_button("Download RFQ.docx", data=bio.getvalue(), file_name="RFQ.docx",
                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -6499,7 +6478,7 @@ with legacy_tabs[__tabs_base + 2]:
 with legacy_tabs[__tabs_base + 3]:
     st.subheader("Pricing calculator")
     with st.form("price_calc"):
-        default_base = float(st.session_state.get("pricing_base_cost", 0.0))
+        default_base = float(st.session_state.get("pricing_base_cost", 0.0)
         base_cost = st.number_input("Base or subcontractor price", min_value=0.0, step=100.0, value=default_base)
         overhead = st.number_input("Overhead percent", min_value=0.0, max_value=100.0, step=0.5, value=10.0)
         gna = st.number_input("G and A percent", min_value=0.0, max_value=100.0, step=0.5, value=5.0)
@@ -6536,7 +6515,7 @@ with legacy_tabs[__tabs_base + 3]:
 
             conn.execute("""insert into pricing_scenarios(opp_id, base_cost, overhead_pct, gna_pct, profit_pct, total_price, lpta_note, terms_days, factoring_rate, advance_pct)
                             values(?,?,?,?,?,?,?,?,?,?)""",
-                        (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note, int(terms_days), float(fac_rate), float(advance_pct)))
+                        (None, float(base_cost), float(overhead), float(gna), float(profit), float(total), note, int(terms_days), float(fac_rate), float(advance_pct))
             conn.commit()
         except Exception as _e_pc:
             st.caption(f"[Pricing save note: {_e_pc}]")
@@ -6691,7 +6670,7 @@ with legacy_tabs[__tabs_base + 3]:
 
                             _vals = _pd.to_numeric(_df2["dollars_per_sqft_year"], errors="coerce").dropna()
                             if not _vals.empty:
-                                _med = float(_vals.median())
+                                _med = float(_vals.median()
                                 st.markdown(f"**Median implied $/sqft/year across results: ${_med:,.2f}**")
                                 if st.button("Set pricing hint from $/sqft median", key="md_set_sqft"):
                                     st.session_state["pricing_base_cost"] = _med * float(sqft)
@@ -6708,7 +6687,7 @@ with legacy_tabs[__tabs_base + 3]:
                             with st.expander("Crew cost estimate (GSA CALC)", expanded=False):
                                 crew_size = st.number_input("Crew size (people)", min_value=1, max_value=50, value=3, step=1, key="md_crew")
                                 hrs_per_week = st.number_input("Hours per week (crew)", min_value=1, max_value=168, value=40, step=1, key="md_hours")
-                                rate_med = float(_np.median(rate_series))
+                                rate_med = float(_np.median(rate_series)
                                 est_monthly = rate_med * float(crew_size) * float(hrs_per_week) * 4.33
                                 st.markdown(f"Estimated crew cost at CALC median rate: **${est_monthly:,.0f} / month**")
                     else:
@@ -6905,7 +6884,7 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
                 href = a["href"].strip()
                 if href.startswith("mailto:"):
                     emails.add(href.replace("mailto:","").split("?")[0])
-            emails |= _extract_emails(soup.get_text(separator=" ", strip=True))
+            emails |= _extract_emails(soup.get_text(separator=" ", strip=True)
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 if href.startswith(("#","mailto:","javascript:")): continue
@@ -6916,7 +6895,7 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
                 if nxt not in seen and len(queue) < (max_pages*3):
                     queue.append(nxt)
         except Exception as e:
-            errors.append(str(e))
+            errors.append(str(e)
         time.sleep(delay_s)
     return {"emails": emails, "visited": visited, "errors": errors}
 
@@ -7181,7 +7160,7 @@ def upsert_notice(n: dict):
     try:
         record_notice_version(nid, n)
     except Exception as _ex:
-        log_event("warn","record_notice_version_failed", err=str(_ex))
+        log_event("warn","record_notice_version_failed", err=str(_ex)
     return nid
 
 def list_notices(filters: dict, page: int, page_size: int, include_hidden: bool, user_id: str):
@@ -7241,8 +7220,8 @@ def list_notices(filters: dict, page: int, page_size: int, include_hidden: bool,
     total = conn.execute(f"SELECT COUNT(1) FROM notices n {hidden_join} {wh} {hidden_cond}", tuple(vals)).fetchone()[0]
 
     # Pagination
-    page = max(1, int(page))
-    page_size = max(1, int(page_size))
+    page = max(1, int(page)
+    page_size = max(1, int(page_size)
     offset = (page-1)*page_size
 
     org_id = current_org_id()
@@ -7294,10 +7273,10 @@ def set_notice_state(user_id: str, notice_id: int, state: str):
     conn.execute("""INSERT INTO notice_status(user_id, notice_id, state, ts, org_id, owner_id)
                     VALUES(?,?,?,?,?,?)
                     ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""",
-                 (user_id, int(notice_id), state, utc_now_iso(), org_id, user_id))
+                 (user_id, int(notice_id), state, utc_now_iso(), org_id, user_id)
     return False
     conn.execute("INSERT OR IGNORE INTO pipeline_deals(user_id, notice_id, created_at) VALUES(?,?,?)",
-                 (user_id, int(notice_id), utc_now_iso()))
+                 (user_id, int(notice_id), utc_now_iso())
     return True
 
 def get_user_page_size(user_id: str, default: int = 50) -> int:
@@ -7311,7 +7290,7 @@ def set_user_page_size(user_id: str, value: int):
     conn = get_db()
     val = int(value or 50)
     conn.execute("INSERT INTO user_prefs(user_id, sam_page_size) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET sam_page_size=excluded.sam_page_size",
-                 (user_id, val))
+                 (user_id, val)
 
 def render_sam_watch_ingest():
     import streamlit as st
@@ -7325,9 +7304,9 @@ def render_sam_watch_ingest():
     with st.expander("Filters", expanded=True):
         c1, c2, c3 = st.columns([2,2,2])
         with c1:
-            kw = st.text_input("Keywords", key="sam_kw", value=(st.session_state.get("sam_filters", {}) or {}).get("keywords",""))
+            kw = st.text_input("Keywords", key="sam_kw", value=(st.session_state.get("sam_filters", {}) or {}).get("keywords","")
             types = st.multiselect("Notice types", options=["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"], key="sam_types",
-                                   default=(st.session_state.get("sam_filters", {}) or {}).get("types", []))
+                                   default=(st.session_state.get("sam_filters", {}) or {}).get("types", [])
         with c2:
             naics = st.text_input("NAICS (comma sep)", key="sam_naics", value="")
             psc = st.text_input("PSC (optional, comma sep)", key="sam_psc", value="")
@@ -7345,7 +7324,7 @@ def render_sam_watch_ingest():
         page_size = 50
         if st.session_state.get("feature_flags", {}).get("sam_page_size"):
             saved_ps = get_user_page_size(user_id, 50)
-            page_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(saved_ps if saved_ps in [25,50,100] else 50))
+            page_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(saved_ps if saved_ps in [25,50,100] else 50)
             if page_size != saved_ps:
                 set_user_page_size(user_id, page_size)
         else:
@@ -7388,7 +7367,7 @@ def render_sam_watch_ingest():
                 try:
                     upsert_notice(item); cnt += 1
                 except Exception as ex:
-                    log_event("error", "upsert_notice_failed", err=str(ex), sid=item.get("sam_notice_id"))
+                    log_event("error", "upsert_notice_failed", err=str(ex), sid=item.get("sam_notice_id")
             st.success(f"Ingested {cnt} notices.")
 
     # List from DB respecting hidden state
@@ -7445,9 +7424,9 @@ def render_sam_watch_ingest():
                     try:
                         if feature_flags().get("deals_core"):
                             if res:
-                                upsert_deal_from_notice(user_id, int(nid))
+                                upsert_deal_from_notice(user_id, int(nid)
                             else:
-                                delete_deal_for_notice(int(nid))
+                                delete_deal_for_notice(int(nid)
                     except Exception:
                         pass
 
@@ -7482,7 +7461,7 @@ render_diff_panel()
                     try:
                         upsert_notice(item)
                     except Exception as ex:
-                        log_event("error","upsert_notice_failed", err=str(ex))
+                        log_event("error","upsert_notice_failed", err=str(ex)
             st.session_state["sam_page"] = page + 1
             _safe_rerun()
 
@@ -7568,9 +7547,9 @@ def _notice_files(nid: int):
 def _combined_checksum(nid: int) -> str:
     h = hashlib.sha256()
     for _, name, url, cks, _ in _notice_files(nid):
-        h.update((cks or "").encode("utf-8"))
-        h.update((url or "").encode("utf-8"))
-        h.update((name or "").encode("utf-8"))
+        h.update((cks or "").encode("utf-8")
+        h.update((url or "").encode("utf-8")
+        h.update((name or "").encode("utf-8")
     return h.hexdigest()
 
 def _download_file(url: str, timeout: int = 30):
@@ -7587,7 +7566,7 @@ def _parse_pdf_bytes(b: bytes) -> list:
     pages = []
     try:
         import PyPDF2
-        reader = PyPDF2.PdfReader(__import__("io").BytesIO(b))
+        reader = PyPDF2.PdfReader(__import__("io").BytesIO(b)
         for i, p in enumerate(reader.pages, start=1):
             try:
                 txt = p.extract_text() or ""
@@ -7604,7 +7583,7 @@ def _parse_docx_bytes(b: bytes) -> list:
     try:
         from docx import Document
         import io as _io
-        doc = Document(_io.BytesIO(b))
+        doc = Document(_io.BytesIO(b)
         text = "\n".join([p.text for p in doc.paragraphs])
         return [{"page": 1, "text": text}]
     except Exception:
@@ -7622,10 +7601,10 @@ def _index_chunks(nid: int, fname: str, pages: list):
         for p in pages:
             try:
                 conn.execute("INSERT INTO rfp_chunks(org_id, notice_id, file_name, page, text) VALUES(?,?,?,?,?)",
-                             (current_org_id(), int(nid), fname, int(p.get("page") or 1), p.get("text") or ""))
+                             (current_org_id(), int(nid), fname, int(p.get("page") or 1), p.get("text") or "")
             except Exception:
                 conn.execute("INSERT INTO rfp_chunks(notice_id, file_name, page, text) VALUES(?,?,?,?)",
-                             (int(nid), fname, int(p.get("page") or 1), p.get("text") or ""))
+                             (int(nid), fname, int(p.get("page") or 1), p.get("text") or "")
     except Exception:
         pass
 
@@ -7647,9 +7626,9 @@ def parse_rfp(notice_id: int) -> dict:
         try:
             res = {"cached": True, "summary": json.loads(r[0])}
             try:
-                _rfp_phase1_maybe_store(int(notice_id))
+                _rfp_phase1_maybe_store(int(notice_id)
             except Exception as _ex:
-                log_event("warn","rfp_phase1_store_failed", err=str(_ex))
+                log_event("warn","rfp_phase1_store_failed", err=str(_ex)
             return res
         except Exception:
             pass
@@ -7705,17 +7684,16 @@ def parse_rfp(notice_id: int) -> dict:
 
     summary = {"notice_id": int(notice_id), "version_hash": vhash, "sections": sections, "files": files_out}
     try:
-        _rfp_phase1_maybe_store(int(notice_id))
+        _rfp_phase1_maybe_store(int(notice_id)
     except Exception as _ex:
-        log_event("warn","rfp_phase1_store_failed", err=str(_ex))
-
+        log_event("warn","rfp_phase1_store_failed", err=str(_ex)
     if not _validate_summary_json(summary):
         return err_with_id("invalid_summary_json", notice_id=notice_id)
 
     # Store
     now = utc_now_iso()
     conn.execute("INSERT OR IGNORE INTO rfp_summaries(notice_id, version_hash, summary_json, created_at) VALUES(?,?,?,?)",
-                 (int(notice_id), vhash, json.dumps(summary, ensure_ascii=False), now))
+                 (int(notice_id), vhash, json.dumps(summary, ensure_ascii=False), now)
     return {"cached": False, "summary": summary}
 
 # Worker management
@@ -7726,7 +7704,7 @@ def start_rfp_worker(notice_id: int):
         st.session_state["rfp_worker_status"] = {"state":"running","started_at":_now_iso(),"notice_id":int(notice_id)}
         def _run():
             try:
-                res = parse_rfp(int(notice_id))
+                res = parse_rfp(int(notice_id)
                 st.session_state["rfp_worker_status"] = {"state":"done","result":res,"notice_id":int(notice_id),"finished_at":_now_iso()}
             except Exception as ex:
                 st.session_state["rfp_worker_status"] = {"state":"error","error":str(ex),"notice_id":int(notice_id),"finished_at":_now_iso()}
@@ -7752,7 +7730,7 @@ def _qa_from_chunks(notice_id: int, q: str, limit: int = 5):
         blobs = json.dumps(s, ensure_ascii=False)
         # naive find locations
         out = []
-        idx = blobs.lower().find(q.lower())
+        idx = blobs.lower().find(q.lower()
         if idx != -1:
             out.append({"file":"summary","page":0,"snippet":blobs[max(0,idx-60):idx+120]})
         return out
@@ -7781,7 +7759,7 @@ def render_rfp_panel():
             return
 
     # Status
-    st.write("Status:", st.session_state.get("rfp_worker_status", {}).get("state","idle"))
+    st.write("Status:", st.session_state.get("rfp_worker_status", {}).get("state","idle")
     if st.session_state.get("rfp_worker_status", {}).get("state") == "error":
         st.error(f"Parser error. Error id in logs.")
     # Show cached or parsed sections
@@ -7960,7 +7938,7 @@ def _store_rfp_schema_if_missing():
     r = conn.execute("SELECT 1 FROM rfp_schema_versions WHERE name=? AND version=?", (RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION)).fetchone()
     if not r:
         conn.execute("INSERT INTO rfp_schema_versions(name, version, schema_json, created_at) VALUES(?,?,?,?)",
-                     (RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION, json.dumps(RFP_SCHEMA_JSON, ensure_ascii=False), utc_now_iso()))
+                     (RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION, json.dumps(RFP_SCHEMA_JSON, ensure_ascii=False), utc_now_iso())
 
 def _is_iso_with_tz(s: str) -> bool:
     import re as _re
@@ -8048,7 +8026,7 @@ def validate_rfpv1(data: dict) -> tuple[bool, list]:
 def _rfp_version_hash_for_notice(nid: int) -> str:
     # Use combined file checksum if available, else sha of notice fields
     try:
-        return _combined_checksum(int(nid))
+        return _combined_checksum(int(nid)
     except Exception:
         conn = get_db()
         r = conn.execute("SELECT sam_notice_id, title, due_at FROM notices WHERE id=?", (int(nid),)).fetchone()
@@ -8069,10 +8047,10 @@ def save_rfp_json(notice_id: int, data: dict):
     if not ok:
         return {"ok": False, "errors": errs}
     conn = get_db()
-    vhash = _rfp_version_hash_for_notice(int(notice_id))
+    vhash = _rfp_version_hash_for_notice(int(notice_id)
     conn.execute("""INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at)
                     VALUES(?,?,?,?,?,?)""",
-                 (int(notice_id), RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION, vhash, json.dumps(data, ensure_ascii=False), utc_now_iso()))
+                 (int(notice_id), RFP_SCHEMA_NAME, RFP_SCHEMA_VERSION, vhash, json.dumps(data, ensure_ascii=False), utc_now_iso())
     return {"ok": True, "version_hash": vhash}
 
 def build_rfpv1_from_notice(notice_id: int) -> dict | None:
@@ -8122,14 +8100,14 @@ def _rfp_phase1_maybe_store(nid: int):
     import streamlit as st
     if not st.session_state.get("feature_flags", {}).get("rfp_schema"):
         return
-    doc = build_rfpv1_from_notice(int(nid))
+    doc = build_rfpv1_from_notice(int(nid)
     if not doc:
         return
     res = save_rfp_json(int(nid), doc)
     if res.get("ok"):
         st.session_state["rfp_schema_ready"] = True
     else:
-        log_event("warn","rfp_json_not_saved", notice_id=int(nid), errors=res.get("errors"))
+        log_event("warn","rfp_json_not_saved", notice_id=int(nid), errors=res.get("errors")
 # ===== end RFP Phase 1 =====
 
 # ===== RFP Parser Phase 2 =====
@@ -8159,7 +8137,7 @@ def _ensure_file_parse_and_index(nid: int, fid: int, name: str, url: str) -> Lis
         elif ftype == "docx": pages = _parse_docx_bytes(b)
         else: pages = [{"page": 1, "text": b.decode('utf-8', errors='ignore') if isinstance(b, (bytes, bytearray)) else ""}]
         conn.execute("INSERT OR IGNORE INTO file_parses(notice_file_id, checksum, parsed_json, created_at) VALUES(?,?,?,?)",
-                     (int(fid), sha, json.dumps(pages, ensure_ascii=False), utc_now_iso()))
+                     (int(fid), sha, json.dumps(pages, ensure_ascii=False), utc_now_iso())
         try: conn.execute("UPDATE notice_files SET checksum=?, bytes=? WHERE id=?", (sha, len(b), int(fid)))
         except Exception: pass
     try: conn.execute("DELETE FROM rfp_chunks WHERE notice_id=? AND file_name=?", (int(nid), name or url.split('/')[-1]))
@@ -8177,7 +8155,7 @@ def _extract_lm(pages: List[Dict], fname: str) -> Tuple[List[Dict], List[Dict]]:
         low = text.lower()
         if any(k in low for k in _L_KEYS) or any(k in low for k in _M_KEYS):
             for line in text.splitlines():
-                m = _re.search(r"\b([LM]\.\d+(?:\.\d+)*)\b(.*)", line.strip())
+                m = _re.search(r"\b([LM]\.\d+(?:\.\d+)*)\b(.*)", line.strip()
                 if m:
                     sec_id, txt = m.group(1), m.group(2).strip()
                     key = "L" if sec_id.startswith("L") else "M"
@@ -8216,7 +8194,7 @@ def _extract_submission(pages: List[Dict], fname: str) -> Dict:
         if "due" in low or "submission" in low or "closing" in low:
             m = _re.search(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?)\b", text)
             if m and not sub.get("due_datetime"):
-                iso = _norm_iso(m.group(1))
+                iso = _norm_iso(m.group(1)
                 if iso: sub["due_datetime"], sub["cite"] = iso, {"file": fname, "page": int(p.get("page") or 1)}
             if "email" in low: sub["method"] = "email"
             if "sam.gov" in low or "piee" in low: sub["method"] = "portal"
@@ -8226,7 +8204,7 @@ def _extract_submission(pages: List[Dict], fname: str) -> Dict:
             if m3: sub["file_naming_rules"] = m3.group(1).strip()
             m4 = _re.search(r"\b(\d+)\s*copies\b", low)
             if m4:
-                try: sub["copies"] = int(m4.group(1))
+                try: sub["copies"] = int(m4.group(1)
                 except Exception: pass
     return sub
 
@@ -8256,8 +8234,8 @@ def parse_rfp_v1(notice_id: int) -> dict:
         pages = _ensure_file_parse_and_index(nid, int(fid), fname, url)
         secs, lms = _extract_lm(pages, fname)
         data["sections"].extend(secs); data["lm_requirements"].extend(lms)
-        clauses.extend(_extract_clauses(pages, fname))
-        forms.extend(_extract_forms(pages, fname))
+        clauses.extend(_extract_clauses(pages, fname)
+        forms.extend(_extract_forms(pages, fname)
         sub = _extract_submission(pages, fname)
         if sub and "due_datetime" in sub and not submission.get("due_datetime"): submission = sub
 
@@ -8276,7 +8254,7 @@ def start_rfp_parser_worker(notice_id: int):
     def _run():
         st.session_state["rfp_parser_status"] = {"state":"running","notice_id": int(notice_id), "started_at": _now_iso()}
         try:
-            res = parse_rfp_v1(int(notice_id))
+            res = parse_rfp_v1(int(notice_id)
             st.session_state["rfp_parser_status"] = {"state":"done","notice_id": int(notice_id), "result": res, "finished_at": _now_iso()}
         except Exception as ex:
             st.session_state["rfp_parser_status"] = {"state":"error","notice_id": int(notice_id), "error": str(ex), "finished_at": _now_iso()}
@@ -8367,7 +8345,7 @@ def record_notice_version(notice_id: int, n: dict):
     # Insert version
     now = utc_now_iso()
     conn.execute("INSERT INTO notice_versions(notice_id, fetched_at, version_hash, payload_json) VALUES(?,?,?,?)",
-                 (int(notice_id), now, vhash, json.dumps(core, ensure_ascii=False)))
+                 (int(notice_id), now, vhash, json.dumps(core, ensure_ascii=False))
     # Create amendment row
     amend_no = None
     posted = n.get("posted_at") or None
@@ -8394,8 +8372,8 @@ def _load_versions(notice_id: int):
     return out
 
 def _diff_fields(prev: dict, curr: dict):
-    keys = ["title","agency","naics","psc","set_aside","posted_at","due_at","status","place_city","place_state","rfp_schema","rfp_parser","subfinder_paging","subfinder_filters","subfinder_sources","subfinder_outreach","rfqg_composer","rfqg_outreach","rfqg_intake","vendor_rfq_hooks"]
-    changes = []
+    keys = ["title","agency","naics","psc","set_aside","posted","response_due","type","url","place_of_performance","attachments_json","assignee","quick_note","rfqg_enabled","rfqg_composer","rfqg_outreach","rfqg_intake","vendor_rfq_hooks"]
+changes = []
     for k in keys:
         if (prev or {}).get(k) != (curr or {}).get(k):
             changes.append({
@@ -8413,8 +8391,8 @@ def _diff_fields(prev: dict, curr: dict):
 def _diff_files(prev_files: list, curr_files: list):
     ps = set(prev_files or [])
     cs = set(curr_files or [])
-    added = sorted(list(cs - ps))
-    removed = sorted(list(ps - cs))
+    added = sorted(list(cs - ps)
+    removed = sorted(list(ps - cs)
     unchanged = ps & cs
     return {"added": added, "removed": removed, "unchanged": sorted(list(unchanged))}
 
@@ -8449,7 +8427,7 @@ def render_diff_panel():
     # Mark reviewed placeholder
     if st.button("Mark reviewed"):
         # Placeholder: session-only clear
-        reviewed = set(st.session_state.get("_amend_reviewed", []))
+        reviewed = set(st.session_state.get("_amend_reviewed", [])
         reviewed.add(versions[0]["hash"])
         st.session_state["_amend_reviewed"] = list(reviewed)
         st.session_state["diff_tab_open"] = False
@@ -8483,7 +8461,7 @@ def log_event(level: str, message: str, **context):
     return evt
 
 def err_with_id(message: str, **context):
-    eid = str(uuid.uuid4())
+    eid = str(uuid.uuid4()
     evt = log_event("error", message, error_id=eid, **context)
     return {"error": message, "error_id": eid}
 
@@ -8557,7 +8535,7 @@ def create_api_client(base_url: str, api_key: str = None, timeout: int = 30, ret
             if cb["fails"] >= 3:
                 _trip_circuit()
                 break
-            time.sleep(min(2 ** attempt, 8))
+            time.sleep(min(2 ** attempt, 8)
         return err_with_id("request_failed", base_url=base_url, path=path, err=last_err)
 
     def post(path: str, json_body: dict = None):
@@ -8579,8 +8557,7 @@ def create_api_client(base_url: str, api_key: str = None, timeout: int = 30, ret
             cb["fails"] += 1
             if cb["fails"] >= 3:
                 _trip_circuit()
-            return err_with_id("request_failed", base_url=base_url, path=path, err=str(ex))
-
+            return err_with_id("request_failed", base_url=base_url, path=path, err=str(ex)
     return {"get": get, "post": post, "base_url": base_url, "timeout": timeout}
 
 def _init_feature_flags_session():
@@ -8620,7 +8597,7 @@ def _bootstrap_phase0():
             conn.execute("PRAGMA temp_store=MEMORY")
             conn.execute("PRAGMA foreign_keys=ON")
         except Exception as ex:
-            log_event("warn", "pragma_set_failed", err=str(ex))
+            log_event("warn", "pragma_set_failed", err=str(ex)
         # Ensure migrations table exists
         conn.execute("""CREATE TABLE IF NOT EXISTS migrations(
             id INTEGER PRIMARY KEY,
@@ -8632,14 +8609,14 @@ def _bootstrap_phase0():
         st.session_state["api_client_factory"] = create_api_client
         st.session_state["boot_done"] = True
     except Exception as ex:
-        log_event("error", "bootstrap_failed", err=str(ex), tb=traceback.format_exc())
+        log_event("error", "bootstrap_failed", err=str(ex), tb=traceback.format_exc()
         st.session_state["boot_done"] = False
 
 # Run bootstrap very early, but after imports exist
 try:
     _bootstrap_phase0()
 except Exception as _ex:
-    log_event("error", "bootstrap_call_failed", err=str(_ex))
+    log_event("error", "bootstrap_call_failed", err=str(_ex)
 # ===== end Phase 0 Bootstrap =====
 
 # LEGACY_REMOVED :
@@ -8648,7 +8625,7 @@ except Exception as _ex:
 # LEGACY_REMOVED     base = "https://api.sam.gov/opportunities/v2/search"
 # LEGACY_REMOVED     today = datetime.utcnow().date()
 # LEGACY_REMOVED     min_due_date = today + timedelta(days=min_days)
-# LEGACY_REMOVED     posted_from = _us_date(today - timedelta(days=posted_from_days))
+# LEGACY_REMOVED     posted_from = _us_date(today - timedelta(days=posted_from_days)
 # LEGACY_REMOVED     posted_to   = _us_date(today)
 # LEGACY_REMOVED
 # LEGACY_REMOVED     params = {
@@ -8787,8 +8764,7 @@ def save_opportunities(df, default_assignee=None):
         pass
 
     _ensure_opportunity_columns()
-    cols = set(_get_table_cols("opportunities"))
-
+    cols = set(_get_table_cols("opportunities")
     inserted = 0
     updated = 0
     conn = get_db(); cur = conn.cursor()
@@ -8831,7 +8807,7 @@ def save_opportunities(df, default_assignee=None):
             if "status" in cols:
                 insert_cols.append("status"); insert_vals.append("New")
             if "assignee" in cols:
-                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or ""))
+                insert_cols.append("assignee"); insert_vals.append(_to_sqlite_value(default_assignee or "")
             if "quick_note" in cols:
                 insert_cols.append("quick_note"); insert_vals.append("")
             placeholders = ",".join("?" for _ in insert_cols)
@@ -8843,9 +8819,9 @@ def save_opportunities(df, default_assignee=None):
 # ---------- UI ----------
 with st.sidebar:
     st.subheader("Configuration")
-    company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC"))
-    home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX"))
-    default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial"))
+    company_name = st.text_input("Company name", value=get_setting("company_name", "ELA Management LLC")
+    home_loc = st.text_input("Primary location", value=get_setting("home_loc", "Houston, TX")
+    default_trade = st.text_input("Default trade", value=get_setting("default_trade", "Janitorial")
     if st.button("Save configuration"):
         set_setting("company_name", company_name); set_setting("home_loc", home_loc); set_setting("default_trade", default_trade)
         st.success("Saved")
@@ -8857,15 +8833,14 @@ with st.sidebar:
     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
     st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
     if st.button("Test model"):
-        st.info(llm("You are a health check.", "Reply READY.", max_tokens=5))
-
+        st.info(llm("You are a health check.", "Reply READY.", max_tokens=5)
     # Company identifiers (ELA Management LLC)
     st.subheader("Company identifiers")
     st.code("DUNS: 14-483-4790\nCAGE: 14ZP6\nUEI: U32LBVK3DDF7", language=None)
 
     if st.button("Test SAM key"):
         try:
-            today_us = _us_date(datetime.utcnow().date())
+            today_us = _us_date(datetime.utcnow().date()
             test_params = {"api_key": SAM_API_KEY, "limit": "1", "response": "json",
                            "postedFrom": today_us, "postedTo": today_us}
             headers = {"X-Api-Key": SAM_API_KEY}
@@ -8896,7 +8871,7 @@ with st.sidebar:
     conn = get_db()
     df_saved = pd.read_sql_query("select code from naics_watch order by code", conn)
     saved_codes = df_saved["code"].tolist()
-    naics_options = sorted(set(saved_codes + NAICS_SEEDS))
+    naics_options = sorted(set(saved_codes + NAICS_SEEDS)
     st.multiselect("Choose or type NAICS codes then Save", options=naics_options,
                    default=saved_codes if saved_codes else sorted(set(NAICS_SEEDS[:20])), key="naics_watch")
     new_code = st.text_input("Add a single NAICS code")
@@ -8936,14 +8911,14 @@ with st.sidebar:
     with st.form("goals_form", clear_on_submit=False):
         col1, col2 = st.columns(2)
         with col1:
-            bids_target = st.number_input("Bids target", min_value=0, step=1, value=int(row["bids_target"]))
-            bids_submitted = st.number_input("Bids submitted", min_value=0, step=1, value=int(row["bids_submitted"]))
+            bids_target = st.number_input("Bids target", min_value=0, step=1, value=int(row["bids_target"])
+            bids_submitted = st.number_input("Bids submitted", min_value=0, step=1, value=int(row["bids_submitted"])
         with col2:
-            revenue_target = st.number_input("Revenue target", min_value=0.0, step=1000.0, value=float(row["revenue_target"]))
-            revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"]))
+            revenue_target = st.number_input("Revenue target", min_value=0.0, step=1000.0, value=float(row["revenue_target"])
+            revenue_won = st.number_input("Revenue won", min_value=0.0, step=1000.0, value=float(row["revenue_won"])
         if st.form_submit_button("Save goals"):
             conn.execute("update goals set bids_target=?, revenue_target=?, bids_submitted=?, revenue_won=? where id=?",
-                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id))
+                         (int(bids_target), float(revenue_target), int(bids_submitted), float(revenue_won), goal_id)
             conn.commit(); st.success("Goals updated")
     colq1, colq2 = st.columns(2)
     with colq1:
@@ -8958,8 +8933,8 @@ with st.sidebar:
             else:
                 st.info("Enter a positive amount")
     g = pd.read_sql_query("select * from goals limit 1", conn); row = g.iloc[0]
-    st.metric("Bids target", int(row["bids_target"]))
-    st.metric("Bids submitted", int(row["bids_submitted"]))
+    st.metric("Bids target", int(row["bids_target"])
+    st.metric("Bids submitted", int(row["bids_submitted"])
     st.metric("Revenue target", f"${float(row['revenue_target']):,.0f}")
     st.metric("Revenue won", f"${float(row['revenue_won']):,.0f}")
 
@@ -9002,7 +8977,7 @@ def render_rfp_analyzer():
             for up in uploads:
                 text = read_doc(up)[:800_000]
                 conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
-                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text))
+                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text)
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
@@ -9053,7 +9028,7 @@ def render_rfp_analyzer():
             for _, r in rows.iterrows():
                 cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
                 chunks.extend(cs)
-                labels.extend([r["filename"]]*len(cs))
+                labels.extend([r["filename"]]*len(cs)
             vec, X = embed_texts(chunks)
             top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
             parts, used = [], set()
@@ -9093,7 +9068,7 @@ def render_rfp_analyzer():
         if pending_prompt:
             # Save user turn
             conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "user", pending_prompt))
+                         (session_id, "user", pending_prompt)
             conn.commit()
 
             # Build system and context using company snapshot and RFP snippets
@@ -9125,12 +9100,12 @@ def render_rfp_analyzer():
                         pruned.append(m)
                         user_turns += 1
                     continue
-            msgs_window = list(reversed(pruned))
+            msgs_window = list(reversed(pruned)
             messages = [{"role": "system", "content": sys_text}] + msgs_window
 
             assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
             conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "assistant", assistant_out))
+                         (session_id, "assistant", assistant_out)
             conn.commit()
 
             st.chat_message("user").markdown(pending_prompt)
@@ -9278,7 +9253,7 @@ def render_proposal_builder():
                 chunks, labels = [], []
                 for _, r in rows.iterrows():
                     cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
+                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs)
                 vec, X = embed_texts(chunks)
                 top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
                 parts, used = [], set()
@@ -9296,8 +9271,8 @@ def render_proposal_builder():
             # Pull past performance selections text if any
             pp_text = ""
             if selected_pp_ids:
-                qmarks = ",".join(["?"]*len(selected_pp_ids))
-                df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
+                qmarks = ",".join(["?"]*len(selected_pp_ids)
+                df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids)
                 lines = []
                 for _, r in df_sel.iterrows():
                     lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
@@ -9415,8 +9390,7 @@ def render_proposal_builder():
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
                 for para in txt.split("\n\n"):
-                    doc.add_paragraph(_strip_markdown_to_plain(para))
-
+                    doc.add_paragraph(_strip_markdown_to_plain(para)
             bio = io.BytesIO()
             doc.save(bio)
             bio.seek(0)
@@ -9558,7 +9532,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
         p_center.paragraph_format.alignment = 1  # center
         run = p_center.add_run()
         try:
-            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in))
+            run.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_width_in)
         except Exception:
             pass
 
@@ -9624,7 +9598,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
         if _re.match(r"^\d+\.\s+", line):
             flush_bullets()
-            num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1))
+            num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)
             continue
 
         flush_bullets(); flush_numbers()
@@ -9701,7 +9675,7 @@ def ensure_deal_activities_table(conn):
         send_at TEXT,                 -- when to send (UTC)
         status TEXT DEFAULT 'queued', -- queued, sent, failed
         ref_activity_id INTEGER REFERENCES deal_activities(id) ON DELETE SET NULL,
-        created_at TEXT DEFAULT (datetime('now'))
+        created_at TEXT DEFAULT (datetime('now')
     )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_email_queue_status ON email_queue(status, send_at)")
     conn.commit()
@@ -9717,7 +9691,7 @@ def ensure_deal_activities_table(conn):
             agency text,
             due_date text,
             created_at text default (datetime('now')),
-            updated_at text default (datetime('now'))
+            updated_at text default (datetime('now')
         )
     """)
     cur.execute("create index if not exists deals_stage_idx on deals(stage)")
@@ -9781,13 +9755,13 @@ def upsert_deal_from_notice(user_id: str, notice_id: int, default_stage: str = "
         # Upsert by notice_id
         cur.execute(
             """INSERT INTO deals(title, stage, owner, amount, notes, agency, due_date, notice_id, updated_at)
-               VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
+               VALUES(?,?,?,?,?,?,?, ?, datetime('now')
                ON CONFLICT(notice_id) DO UPDATE SET
                    title=excluded.title,
                    agency=excluded.agency,
                    due_date=excluded.due_date,
                    updated_at=datetime('now')""",
-            (title, default_stage, user_id, None, "Auto-added from SAM", agency, due_date, int(notice_id))
+            (title, default_stage, user_id, None, "Auto-added from SAM", agency, due_date, int(notice_id)
         )
         conn.commit()
         _bump_deals_refresh()
@@ -9857,7 +9831,7 @@ def create_deal_activity(deal_id:int, type_:str, title:str="", note:str="", due_
     conn = get_db(); cur = conn.cursor()
     cur.execute("""INSERT INTO deal_activities(deal_id,type,title,note,due_at,status,created_by,updated_at)
                    VALUES(?,?,?,?,?,?,?, datetime('now'))""",
-                (int(deal_id), str(type_), title or "", note or "", due_at, status, created_by))
+                (int(deal_id), str(type_), title or "", note or "", due_at, status, created_by)
     conn.commit()
     return cur.lastrowid
 
@@ -9866,7 +9840,7 @@ def list_deal_activities(deal_id:int=None, type_filter:str=None, status:str=None
     sql = "SELECT id,deal_id,type,title,note,due_at,status,created_by,created_at,updated_at FROM deal_activities WHERE 1=1"
     params = []
     if deal_id is not None:
-        sql += " AND deal_id=?"; params.append(int(deal_id))
+        sql += " AND deal_id=?"; params.append(int(deal_id)
     if type_filter:
         sql += " AND type=?"; params.append(type_filter)
     if status:
@@ -9890,7 +9864,7 @@ def update_deal_activity(id_:int, **fields):
             set_clause.append(f"{k}=?"); params.append(v)
     if not set_clause:
         return False
-    params.append(int(id_))
+    params.append(int(id_)
     conn = get_db(); cur = conn.cursor()
     cur.execute(f"UPDATE deal_activities SET {', '.join(set_clause)}, updated_at=datetime('now') WHERE id=?", params)
     conn.commit()
@@ -9913,7 +9887,7 @@ def enqueue_task_due_email(activity_id:int, to_email:str=None):
     body = f"Deal: {deal_title}\nTask: {a_title}\nDue: {a_due or 'n/a'}\nNote: {a_note or ''}\nOwner: {owner or ''}"
     cur.execute("""INSERT INTO email_queue(to_email,subject,body,send_at,status,ref_activity_id)
                    VALUES(?,?,?,?, 'queued', ?)""",
-                (to_email, subject, body, a_due, int(activity_id)))
+                (to_email, subject, body, a_due, int(activity_id))
     conn.commit()
     return True
 
@@ -9941,7 +9915,7 @@ def forecast_by_period(mode: str = "month", owner: str = None):
         return _pd.DataFrame(columns=["period","count","amount","weighted"])
     df["amount"] = _pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
     df["win_prob"] = _pd.to_numeric(df["win_prob"], errors="coerce").fillna(0.2)
-    df["period"] = df["due_date"].apply(lambda x: _period_key(x, mode))
+    df["period"] = df["due_date"].apply(lambda x: _period_key(x, mode)
     df["weighted"] = df["amount"] * df["win_prob"]
     agg = df.groupby("period", as_index=False).agg(count=("id","count"), amount=("amount","sum"), weighted=("weighted","sum"))
     agg = agg.sort_values("period").reset_index(drop=True)
@@ -10003,11 +9977,11 @@ def compute_win_prob_from_signals(deal_id: int) -> float:
                     cov_delta = (avg/100.0 - 0.5) * 0.3  # -0.15 to +0.15
         except Exception:
             cov_delta = 0.0
-    p = max(0.01, min(0.95, base + comp_delta + cov_delta))
+    p = max(0.01, min(0.95, base + comp_delta + cov_delta)
     return p
 
 def update_win_prob_from_signals(deal_id: int) -> float:
-    p = compute_win_prob_from_signals(int(deal_id))
+    p = compute_win_prob_from_signals(int(deal_id)
     conn = get_db(); cur = conn.cursor()
     cur.execute("UPDATE deals SET win_prob=?, updated_at=datetime('now') WHERE id=?", (float(p), int(deal_id)))
     conn.commit()
@@ -10039,7 +10013,7 @@ def list_sla_blockers(stale_days: int = 7, soon_days: int = 7):
         try:
             items = _json.loads(js or "[]")
             if items:
-                last_ts = max(int(x.get("ts", 0)) for x in items if isinstance(x, dict))
+                last_ts = max(int(x.get("ts", 0)) for x in items if isinstance(x, dict)
                 last_change[did] = last_ts
         except Exception:
             pass
@@ -10112,7 +10086,7 @@ def create_deal(title: str, stage: str, owner: str | None, amount: float | None,
     cur.execute("""
         insert into deals (title, stage, owner, amount, notes, agency, due_date, stage_history)
         values (?,?,?,?,?,?,?, json('[{"ts":'||strftime('%s','now')||',"from":null,"to":'||quote(?)||',"who":quote(coalesce(?,'system'))||'}]'))
-    """, (title, stage, owner, amount, notes, agency, due_date))
+    """, (title, stage, owner, amount, notes, agency, due_date)
     
 try:
     cur.execute("UPDATE deals SET stage_history=json_insert(coalesce(stage_history,'[]'),'$[#]', json_object('ts', strftime('%s','now'), 'from', NULL, 'to', stage, 'who', coalesce(owner,'system'))) WHERE id=(SELECT max(id) FROM deals)")
@@ -10194,7 +10168,7 @@ if feature_flags().get("deals_activities"):
         with c1:
             if st.button("Log call"):
                 if sel_deal:
-                    create_deal_activity(deal_opts[sel_deal], "call", title="Call logged", note="", created_by=st.session_state.get("active_user"))
+                    create_deal_activity(deal_opts[sel_deal], "call", title="Call logged", note="", created_by=st.session_state.get("active_user")
                     st.success("Call logged")
         with c2:
             if st.button("Add note"):
@@ -10254,7 +10228,7 @@ if feature_flags().get("deals_forecast"):
     if not df_fc.empty and df_fc.iloc[-1]["period"] == "Total":
         tot = df_fc.iloc[-1]
         cA, cB, cC = st.columns(3)
-        cA.metric("Deals", int(tot["count"]))
+        cA.metric("Deals", int(tot["count"])
         cB.metric("Amount", f"${tot['amount']:,.0f}")
         cC.metric("Weighted", f"${tot['weighted']:,.0f}")
 l_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
@@ -10287,7 +10261,7 @@ l_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
             if submitted:
                 ok = True
                 if do_delete:
-                    ok = delete_deal_activity(int(aid))
+                    ok = delete_deal_activity(int(aid)
                 else:
                     ok = update_deal_activity(int(aid), status=new_status)
                 if ok:
@@ -10299,7 +10273,7 @@ l_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
 f sel_deal:
                     note_txt = st.text_input("Note", key="qa_note")
                     if note_txt:
-                        create_deal_activity(deal_opts[sel_deal], "note", title="Note", note=note_txt, created_by=st.session_state.get("active_user"))
+                        create_deal_activity(deal_opts[sel_deal], "note", title="Note", note=note_txt, created_by=st.session_state.get("active_user")
                         st.success("Note added")
         with c3:
             task_title = st.text_input("Task title", key="qa_task_title")
@@ -10311,7 +10285,7 @@ f sel_deal:
         with r2:
             if st.button("Create task"):
                 if sel_deal and task_title:
-                    act_id = create_deal_activity(deal_opts[sel_deal], "task", title=task_title, due_at=due, created_by=st.session_state.get("active_user"))
+                    act_id = create_deal_activity(deal_opts[sel_deal], "task", title=task_title, due_at=due, created_by=st.session_state.get("active_user")
                     if email_rem:
                         enqueue_task_due_email(act_id, to_email=None)
                     st.success("Task created")
@@ -10340,7 +10314,7 @@ egacy_tabs[13]:
         _stage_amounts = _pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         _stage_totals = _stage_amounts.groupby(df["stage"]).sum() if not df.empty else _pd.Series(dtype=float)
         _stage_totals = _stage_totals.reindex(DEAL_STAGES).fillna(0)
-        _cols = st.columns(len(DEAL_STAGES))
+        _cols = st.columns(len(DEAL_STAGES)
         for _i, _stage in enumerate(DEAL_STAGES):
             with _cols[_i]:
                 st.metric(_stage, f"${float(_stage_totals.get(_stage, 0.0)):,.2f}")
@@ -10434,7 +10408,7 @@ egacy_tabs[13]:
                     grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
                     st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
 
-                    cols = st.columns(len(DEAL_STAGES))
+                    cols = st.columns(len(DEAL_STAGES)
                     for i, stage_name in enumerate(DEAL_STAGES):
                         with cols[i]:
                             st.markdown(f"#### {stage_name}")
@@ -10568,7 +10542,7 @@ def extract_keywords_and_sections(src: str) -> Dict[str, List[str]]:
         if len(ln) <= 2:
             continue
         if re.match(r'^\s*(\d+(\.\d+)*)?\s*[A-Z][A-Za-z0-9 \-\/&]{3,}$', ln.strip()):
-            heads.append(ln.strip())
+            heads.append(ln.strip()
     hints = [h for h in SECTION_HINTS if h.lower() in src.lower()]
     return {
         "keywords": cap_keywords[:300],
@@ -10785,7 +10759,7 @@ def _clean_placeholders(text: str) -> str:
     t = _re_clean.sub(r"\.{4,}", "", t)
     t = _re_clean.sub(r"<<[^>]*>>", "", t)
     t = _re_clean.sub(r"\n{3,}", "\n\n", t)
-    t = "\n".join(line.rstrip() for line in t.splitlines())
+    t = "\n".join(line.rstrip() for line in t.splitlines()
     return t
 
 
@@ -10899,7 +10873,7 @@ def _sam_get_saved_filters():
 
 def _sam_set_saved_filters(filters_list):
     try:
-        set_setting("sam_saved_filters", _json.dumps(filters_list))
+        set_setting("sam_saved_filters", _json.dumps(filters_list)
     except Exception:
         pass
 
@@ -10945,7 +10919,7 @@ except NameError:
                 return {}
             info = conn.execute("PRAGMA table_info(opportunities)").fetchall()
             colnames = [c[1] for c in info]
-            return dict(zip(colnames, row))
+            return dict(zip(colnames, row)
         except Exception:
             return {}
 
@@ -10984,7 +10958,7 @@ INSERT
         try:
             conn = get_db()
             conn.execute("insert into tasks(opp_id,title,assignee,status) values(?,?,?,?)",
-                         (int(opp_id), "Proposal Started", "", "Open"))
+                         (int(opp_id), "Proposal Started", "", "Open")
             conn.execute("update opportunities set status=? where id=?", ("Proposal Started", int(opp_id)))
             conn.commit()
             try:
@@ -11123,7 +11097,7 @@ try:
                                     nid = str(r.get("sam_notice_id") or "")
                                     rid = int(hashlib.sha1(nid.encode("utf-8")).hexdigest(), 16) % 1000000000
                                 except Exception:
-                                    rid = int(_rand_id())
+                                    rid = int(_rand_id()
                                 loaded_rows.append((
                                     rid,
                                     r.get("title"),
@@ -11140,11 +11114,11 @@ try:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
             if _st.button("Generate quote", use_container_width=True) and opp_id:
-                p = proposal_quick_quote(int(opp_id))
+                p = proposal_quick_quote(int(opp_id)
                 _st.success("Draft created" if p else "Draft failed")
         with colD:
             if _st.button("Submit package", use_container_width=True) and opp_id:
-                ok = proposal_submit_package(int(opp_id))
+                ok = proposal_submit_package(int(opp_id)
                 _st.success("Submitted") if ok else _st.error("Update failed")
                 _st.subheader("Select opportunities to add to Pipeline")
 
@@ -11254,7 +11228,7 @@ try:
         import re as _re_deals
         def _extract_url_deals(_s):
             try:
-                m = _re_deals.search(r"(https?://\S+)", str(_s))
+                m = _re_deals.search(r"(https?://\S+)", str(_s)
                 return m.group(1).rstrip("),.;]") if m else ""
             except Exception:
                 return ""
@@ -11299,7 +11273,7 @@ try:
                         try:
                             cur.execute(
                                 "update opportunities set assignee=?, status=?, notes=? where id=?",
-                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"]))
+                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"])
                             )
                         except Exception:
                             continue
@@ -11333,7 +11307,7 @@ def _opp_header_data(opp_id: int):
     for k in ["set_aside","setAside","naics_set_aside","solicitation_set_aside","type_of_set_aside"]:
         v = d.get(k)
         if v:
-            set_asides.append(str(v))
+            set_asides.append(str(v)
     set_asides = list(dict.fromkeys(set_asides))[:4]
     return {"title": title, "agency": agency, "due": due, "set_asides": set_asides}
 
@@ -11354,7 +11328,7 @@ def _workspace_header(opp_id: int):
         st.caption(f"Due: **{badges['due'] or 'n/a'}**")
     with cols[2]:
         if badges["set_asides"]:
-            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"]))
+            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"])
         else:
             st.caption("Set-aside: **n/a**")
 
@@ -11398,7 +11372,7 @@ def _subtab_bar(active: str, opp_id: int):
     tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
     # Persist in session
     st.session_state["active_opportunity_tab"] = active
-    cols = st.columns(len(tabs))
+    cols = st.columns(len(tabs)
     for i, t in enumerate(tabs):
         with cols[i]:
             if st.button(t, type=("primary" if t == active else "secondary")):
@@ -11563,7 +11537,7 @@ def save_row(table, data, where_id, where_version):
     cur = conn.cursor()
     data = dict(data or {})
     data["version"] = int(where_version) + 1
-    cols = list(data.keys())
+    cols = list(data.keys()
     set_clause = ", ".join([f"{c}=?" for c in cols])
     args = [data[c] for c in cols] + [int(where_id), int(where_version)]
     sql = f"UPDATE {table} SET {set_clause} WHERE id=? AND version=?"
@@ -11781,7 +11755,7 @@ def fetch_notices(filters: Dict[str, Any], page: int, page_size: int) -> Dict[st
         try:
             data = client["get"](path, params=params)
         except Exception as ex:
-            eid = log_json("error", "sam_fetch_failed", error=str(ex))
+            eid = log_json("error", "sam_fetch_failed", error=str(ex)
             return {"items": [], "error_id": eid, "page": page, "page_size": page_size, "total": 0}
         # Normalize expected shape
         items = []
@@ -11891,7 +11865,7 @@ def list_notices(filters: Dict[str, Any], page: int, page_size: int, current_use
         kw = f"%{filters['keywords']}%"
         params.extend([kw, kw])
     if filters.get("types"):
-        qs = ",".join(["?"] * len(filters["types"]))
+        qs = ",".join(["?"] * len(filters["types"])
         where.append(f"notice_type IN ({qs})")
         params.extend(filters["types"])
     if filters.get("naics"):
@@ -11926,7 +11900,7 @@ def list_notices(filters: Dict[str, Any], page: int, page_size: int, current_use
         params.append(current_user_id)
     wh = ("WHERE " + " AND ".join(where)) if where else ""
     # Pagination
-    limit = max(1, int(page_size))
+    limit = max(1, int(page_size)
     offset = max(0, int(page)) * limit
     sql = f"""
         SELECT
@@ -11954,13 +11928,13 @@ def set_notice_state(user_id: str, notice_id: int, state: str):
     ts = datetime.datetime.utcnow().isoformat()
     cur.execute("""INSERT INTO notice_status(user_id, notice_id, state, ts)
                  VALUES(?,?,?,?)
-                 ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""", (user_id, notice_id, state, ts))
+                 ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""", (user_id, notice_id, state, ts)
     conn.commit()
 
 # Deals Phase 1: on save, upsert into deals when flagged
 try:
     if feature_flags().get("deals_core") and str(state).lower() == "saved":
-        upsert_deal_from_notice(user_id, int(notice_id))
+        upsert_deal_from_notice(user_id, int(notice_id)
 except Exception:
     pass
 
@@ -11992,7 +11966,7 @@ def set_user_page_size(user_id: str, size: int):
     cur = conn.cursor()
     cur.execute("""INSERT INTO user_prefs(user_id, sam_page_size)
                    VALUES(?,?)
-                   ON CONFLICT(user_id) DO UPDATE SET sam_page_size=excluded.sam_page_size""", (user_id, int(size)))
+                   ON CONFLICT(user_id) DO UPDATE SET sam_page_size=excluded.sam_page_size""", (user_id, int(size))
     conn.commit()
 
 def _sam_phase1_filters_panel():
@@ -12002,29 +11976,29 @@ def _sam_phase1_filters_panel():
     filt = st.session_state.setdefault("sam_filters", {})
     c1, c2 = st.columns([3, 2])
     with c1:
-        filt["keywords"] = st.text_input("Keywords", value=filt.get("keywords", ""))
+        filt["keywords"] = st.text_input("Keywords", value=filt.get("keywords", "")
     with c2:
         types = ["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"]
-        filt["types"] = st.multiselect("Notice types", options=types, default=filt.get("types", ["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"]))
+        filt["types"] = st.multiselect("Notice types", options=types, default=filt.get("types", ["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"])
     c3, c4 = st.columns(2)
     with c3:
         filt["naics"] = st.multiselect("NAICS", options=filt.get("naics_options", []), default=filt.get("naics", []), help="Type to add codes")
-        filt["psc"] = st.multiselect("PSC", options=filt.get("psc_options", []), default=filt.get("psc", []))
+        filt["psc"] = st.multiselect("PSC", options=filt.get("psc_options", []), default=filt.get("psc", [])
     with c4:
-        filt["agency"] = st.text_input("Agency contains", value=filt.get("agency", ""))
+        filt["agency"] = st.text_input("Agency contains", value=filt.get("agency", "")
         stt = st.selectbox("State", options=[""] + [
             "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"
         ], index= ([""] + ["AL"]).index(filt.get("place_state","")) if filt.get("place_state") else 0)
         filt["place_state"] = stt or None
-        filt["place_city"] = st.text_input("City", value=filt.get("place_city", ""))
+        filt["place_city"] = st.text_input("City", value=filt.get("place_city", "")
     # Posted window control, off by default
-    filt["posted_enabled"] = st.checkbox("Limit by posted date", value=filt.get("posted_enabled", False))
+    filt["posted_enabled"] = st.checkbox("Limit by posted date", value=filt.get("posted_enabled", False)
     if filt["posted_enabled"]:
         c5, c6 = st.columns(2)
         with c5:
-            filt["posted_from"] = st.text_input("Posted from (YYYY-MM-DD)", value=filt.get("posted_from",""))
+            filt["posted_from"] = st.text_input("Posted from (YYYY-MM-DD)", value=filt.get("posted_from","")
         with c6:
-            filt["posted_to"] = st.text_input("Posted to (YYYY-MM-DD)", value=filt.get("posted_to",""))
+            filt["posted_to"] = st.text_input("Posted to (YYYY-MM-DD)", value=filt.get("posted_to","")
     # Buttons
     b1, b2, b3 = st.columns([1,1,4])
     do_search = False
@@ -12037,7 +12011,7 @@ def _sam_phase1_filters_panel():
             st.session_state["sam_page"] = 0
             do_search = True
     # Show hidden toggle
-    show_hidden = st.checkbox("Show hidden saved/dismissed", value=st.session_state.get("sam_show_hidden", False))
+    show_hidden = st.checkbox("Show hidden saved/dismissed", value=st.session_state.get("sam_show_hidden", False)
     st.session_state["sam_show_hidden"] = show_hidden
     return filt, do_search, show_hidden
 
@@ -12055,9 +12029,9 @@ def _sam_phase1_results_grid():
     cols_top = st.columns([4,1])
     with cols_top[1]:
         if ff.get("sam_page_size", False) and user_id:
-            new_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(size))
+            new_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(size)
             if new_size != size:
-                set_user_page_size(user_id, int(new_size))
+                set_user_page_size(user_id, int(new_size)
                 size = int(new_size)
     # Fetch and upsert on demand
     filt = st.session_state.get("sam_filters", {})
@@ -12070,11 +12044,11 @@ def _sam_phase1_results_grid():
             try:
                 upsert_notice(it, files)
             except Exception as ex:
-                log_json("error", "upsert_notice_failed", error=str(ex))
+                log_json("error", "upsert_notice_failed", error=str(ex)
         st.session_state["sam_ingested_page"] = page
         st.session_state["sam_ingested_filters"] = dict(filt)
     # List from DB
-    res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False))
+    res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False)
     items = res["items"]
     # Table
     if not items:
@@ -12088,10 +12062,10 @@ def _sam_phase1_results_grid():
             with c1:
                 st.caption(row.get("notice_type") or "")
                 if feature_flags().get("pipeline_star", False) and user_id:
-                    starred = bool(row.get("starred"))
+                    starred = bool(row.get("starred")
                     label = "★" if starred else "☆"
                     if st.button(label, key=f"star_{row['id']}"):
-                        new_state = toggle_pipeline_star(user_id, int(row["id"]))
+                        new_state = toggle_pipeline_star(user_id, int(row["id"])
                         # reflect immediately
                         row["starred"] = new_state
             with c2:
@@ -12236,7 +12210,7 @@ def _parse_pdf_bytes(b: bytes) -> list:
     pages = []
     try:
         import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(b))
+        reader = PyPDF2.PdfReader(io.BytesIO(b)
         for i, p in enumerate(reader.pages, start=1):
             try:
                 t = p.extract_text() or ""
@@ -12251,7 +12225,7 @@ def _parse_docx_bytes(b: bytes) -> list:
     pages = []
     try:
         import docx
-        doc = docx.Document(io.BytesIO(b))
+        doc = docx.Document(io.BytesIO(b)
         buff = []
         page_num = 1
         for para in doc.paragraphs:
@@ -12371,10 +12345,10 @@ def parse_rfp(notice_id: int) -> dict:
         try:
             b = _download_bytes(furl)
         except Exception as ex:
-            eid = log_json("error", "rfp_download_failed", notice_id=notice_id, url=furl, error=str(ex))
+            eid = log_json("error", "rfp_download_failed", notice_id=notice_id, url=furl, error=str(ex)
             raise RuntimeError(f"download_failed error_id={eid}")
         checksum = _sha256_bytes(b)
-        combined.update(checksum.encode())
+        combined.update(checksum.encode()
         if not cks or cks != checksum:
             try:
                 cur.execute("UPDATE notice_files SET checksum=? WHERE id=?", (checksum, fid))
@@ -12392,7 +12366,7 @@ def parse_rfp(notice_id: int) -> dict:
         file_payloads.append(parsed)
         try:
             cur.execute("""INSERT OR IGNORE INTO file_parses(notice_file_id, checksum, parsed_json, created_at)
-                           VALUES(?,?,?,?)""", (fid, checksum, _json.dumps(parsed), _dt.datetime.utcnow().isoformat()))
+                           VALUES(?,?,?,?)""", (fid, checksum, _json.dumps(parsed), _dt.datetime.utcnow().isoformat())
             conn.commit()
         except Exception:
             pass
@@ -12400,7 +12374,7 @@ def parse_rfp(notice_id: int) -> dict:
             try:
                 for p in pages[:500]:
                     conn.execute("INSERT INTO rfp_chunks(notice_id, file_name, page, text) VALUES(?,?,?,?)",
-                                 (notice_id, fname or "", int(p.get("page") or 0), p.get("text") or ""))
+                                 (notice_id, fname or "", int(p.get("page") or 0), p.get("text") or "")
                 conn.commit()
             except Exception:
                 pass
@@ -12415,7 +12389,7 @@ def parse_rfp(notice_id: int) -> dict:
     if not valid:
         eid = log_json("error", "rfp_summary_validation_failed", notice_id=notice_id)
     cur.execute("""INSERT OR IGNORE INTO rfp_summaries(notice_id, version_hash, summary_json, created_at)
-                   VALUES(?,?,?,?)""", (notice_id, version_hash, _json.dumps(summary), _dt.datetime.utcnow().isoformat()))
+                   VALUES(?,?,?,?)""", (notice_id, version_hash, _json.dumps(summary), _dt.datetime.utcnow().isoformat())
     conn.commit()
     return {"cached": False, "summary": summary, "version_hash": version_hash}
 
@@ -12423,10 +12397,10 @@ def _start_parse_worker(notice_id: int):
     st.session_state["rfp_worker_status"] = {"state": "running", "notice_id": notice_id, "progress": 0, "error_id": None}
     def _run():
         try:
-            res = parse_rfp(int(notice_id))
+            res = parse_rfp(int(notice_id)
             st.session_state["rfp_worker_status"] = {"state": "done", "notice_id": notice_id, "progress": 100, "result": res}
         except Exception as ex:
-            eid = log_json("error", "rfp_parse_failed", notice_id=notice_id, error=str(ex))
+            eid = log_json("error", "rfp_parse_failed", notice_id=notice_id, error=str(ex)
             st.session_state["rfp_worker_status"] = {"state": "error", "notice_id": notice_id, "progress": 0, "error_id": eid}
     t = _threading.Thread(target=_run, daemon=True)
     t.start()
@@ -12483,7 +12457,7 @@ def _rfp_panel_ui(notice_id: int):
             except Exception:
                 data = {}
             st.subheader("Brief")
-            st.write(data.get("brief", ""))
+            st.write(data.get("brief", "")
             st.subheader("Factors")
             for f in data.get("factors", []):
                 st.write("• " + f)
@@ -12510,8 +12484,7 @@ def _rfp_panel_ui(notice_id: int):
                 st.write("Top matches from files:")
                 for h in hits:
                     st.caption(f"{h.get('file_name')} p.{h.get('page')}")
-                    st.write(h.get("text", ""))
-
+                    st.write(h.get("text", "")
 def _inject_rfp_button_into_row(row, user_id):
     if not feature_flags().get("rfp_analyzer_panel", False):
         return False
@@ -12536,7 +12509,7 @@ def _sam_phase2_results_grid_wrapper():
             filt = st.session_state.get("sam_filters", {})
             page = int(st.session_state.get("sam_page", 0) or 0)
             size = 50
-            res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False))
+            res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False)
             for row in res.get("items", []):
                 with st.expander(f"RFP tools for #{row.get('id')} · {row.get('title','')[:80]}", expanded=False):
                     if _inject_rfp_button_into_row(row, user_id):
@@ -12676,14 +12649,14 @@ def _record_notice_version(notice_id: int, core_now: dict):
     last_hash = row[0] if row else None
     if last_hash is None:
         cur.execute("INSERT INTO notice_versions(notice_id, fetched_at, version_hash, payload_json) VALUES(?,?,?,?)",
-                    (notice_id, _dt3.datetime.utcnow().isoformat(), vhash, _json3.dumps(payload)))
+                    (notice_id, _dt3.datetime.utcnow().isoformat(), vhash, _json3.dumps(payload))
         conn.commit()
         return None  # first version, no amendment
     if last_hash == vhash:
         return None  # no change
     # Insert new version and create amendment
     cur.execute("INSERT INTO notice_versions(notice_id, fetched_at, version_hash, payload_json) VALUES(?,?,?,?)",
-                (notice_id, _dt3.datetime.utcnow().isoformat(), vhash, _json3.dumps(payload)))
+                (notice_id, _dt3.datetime.utcnow().isoformat(), vhash, _json3.dumps(payload))
     # Build summary from diff
     try:
         prev_payload = _json3.loads(row[1]) if row and row[1] else {"core": {}, "files": []}
@@ -12692,13 +12665,13 @@ def _record_notice_version(notice_id: int, core_now: dict):
     d = _diff_versions({**prev_payload.get('core', {}), 'files': prev_payload.get('files', [])}, {**core_now, 'files': files_now})
     changed = [c['field'] for c in d.get('changed_fields', [])]
     parts = []
-    if changed: parts.append("fields: " + ", ".join(changed[:6]))
+    if changed: parts.append("fields: " + ", ".join(changed[:6])
     if d.get('files_added'): parts.append(f"files+:{len(d['files_added'])}")
     if d.get('files_removed'): parts.append(f"files-:{len(d['files_removed'])}")
     if d.get('files_changed'): parts.append(f"filesΔ:{len(d['files_changed'])}")
     summary = "; ".join(parts) if parts else "content changed"
     cur.execute("INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
-                (notice_id, None, core_now.get('posted_at'), core_now.get('url'), vhash, summary))
+                (notice_id, None, core_now.get('posted_at'), core_now.get('url'), vhash, summary)
     # Flip compliance_state
     try:
         cur.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (notice_id,))
@@ -12795,7 +12768,7 @@ def upsert_notice(notice: dict, files: Optional[list] = None) -> int:
             }
             _record_notice_version(int(nid), core)
     except Exception as ex:
-        log_json("error", "version_track_failed", notice_id=int(nid), error=str(ex))
+        log_json("error", "version_track_failed", notice_id=int(nid), error=str(ex)
     return int(nid)
 
 # Override list_notices to include amended/compliance_state flags
@@ -12814,7 +12787,7 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
         kw = f"%{filters['keywords']}%"
         params.extend([kw, kw])
     if filters.get("types"):
-        qs = ",".join(["?"] * len(filters["types"]))
+        qs = ",".join(["?"] * len(filters["types"])
         where.append(f"notice_type IN ({qs})")
         params.extend(filters["types"])
     if filters.get("naics"):
@@ -12845,7 +12818,7 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
         where.append("""id NOT IN (SELECT notice_id FROM notice_status WHERE user_id=?)""")
         params.append(current_user_id)
     wh = ("WHERE " + " AND ".join(where)) if where else ""
-    limit = max(1, int(page_size))
+    limit = max(1, int(page_size)
     offset = max(0, int(page)) * limit
     sql = f"""
         SELECT
@@ -12884,9 +12857,9 @@ def compute_notice_diff(notice_id: int) -> dict:
 def render_diff(opp_id: int):
     import streamlit as st
     st.subheader("Diff")
-    info = compute_notice_diff(int(opp_id))
+    info = compute_notice_diff(int(opp_id)
     if not info.get("has_diff"):
-        st.info(info.get("msg"))
+        st.info(info.get("msg")
         return
     d = info.get("diff", {})
     if d.get("changed_fields"):
@@ -12898,11 +12871,11 @@ def render_diff(opp_id: int):
     with c1:
         st.caption("Added")
         for f in d.get("files_added", []):
-            st.write(f.get("file_name") or f.get("file_url"))
+            st.write(f.get("file_name") or f.get("file_url")
     with c2:
         st.caption("Removed")
         for f in d.get("files_removed", []):
-            st.write(f.get("file_name") or f.get("file_url"))
+            st.write(f.get("file_name") or f.get("file_url")
     with c3:
         st.caption("Changed size")
         for f in d.get("files_changed", []):
@@ -12979,7 +12952,7 @@ def _sam_phase3_results_grid_wrapper():
         filt = st.session_state.get("sam_filters", {})
         page = int(st.session_state.get("sam_page", 0) or 0)
         size = 50
-        res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False))
+        res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False)
         for row in res.get("items", []):
             if row.get("amended") and row.get("compliance_state") == "Needs review" and feature_flags().get("amend_tracking", False):
                 with st.expander(f"Amendment detected for #{row.get('id')} · click to review", expanded=False):
@@ -12987,7 +12960,7 @@ def _sam_phase3_results_grid_wrapper():
                     with cols[0]:
                         st.caption("Amendment")
                     with cols[1]:
-                        st.write(row.get("title",""))
+                        st.write(row.get("title","")
                     with cols[2]:
                         if st.button("Open Diff", key=f"open_diff_{row['id']}"):
                             if feature_flags().get("workspace_enabled", False):
@@ -13133,13 +13106,12 @@ def render_admin():
     keys = ["workspace_enabled","sam_ingest_core","sam_page_size","pipeline_star","rfp_analyzer_panel","amend_tracking"]
     for i,k in enumerate(keys):
         with cols[i % 3]:
-            ff[k] = st.checkbox(k, value=ff.get(k, False))
+            ff[k] = st.checkbox(k, value=ff.get(k, False)
     st.session_state["feature_flags"] = ff
     st.caption("Identity")
     st.write({k: st.session_state.get(k) for k in ["org_id","user_id","role"]})
     st.caption("Routing")
-    st.write(get_route())
-
+    st.write(get_route()
 def render_sam():
     # If Phase 1 SAM UI is present and flagged on, use it
     if feature_flags().get("sam_ingest_core", False):
@@ -13227,7 +13199,7 @@ def _rfp_phase1_register_schema():
     name = "RFPv1"; ver = "1.0"
     schema = {"type": "object", "required": ["header", "sections", "lm_requirements", "submission"], "properties": {"header": {"type": "object", "required": ["notice_id", "title"], "properties": {"notice_id": {"type": "string"}, "title": {"type": "string"}, "agency": {"type": "string"}, "type": {"type": "string"}, "set_aside": {"type": "string"}, "place": {"type": "string"}, "pocs": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}}}, "volumes": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "required": {"type": "boolean"}, "page_limit": {"type": "integer"}, "file_type": {"type": "string"}, "font": {"type": "string"}, "spacing": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "sections": {"type": "array", "items": {"type": "object", "required": ["key", "title"], "properties": {"key": {"type": "string"}, "title": {"type": "string"}, "parent_volume": {"type": "string"}, "required": {"type": "boolean"}, "page_limit": {"type": "integer"}, "instructions": {"type": "array", "items": {"type": "string"}}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "lm_requirements": {"type": "array", "items": {"type": "object", "required": ["id", "text"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "factor": {"type": "string"}, "subfactor": {"type": "string"}, "evaluation_criterion": {"type": "string"}, "must_address": {"type": "array", "items": {"type": "string"}}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "deliverables_forms": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "form_no": {"type": "string"}, "fillable": {"type": "boolean"}, "where_to_upload": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "submission": {"type": "object", "required": ["due_datetime"], "properties": {"method": {"type": "string"}, "portals": {"type": "array", "items": {"type": "string"}}, "email": {"type": "string"}, "subject_line_format": {"type": "string"}, "due_datetime": {"type": "string"}, "timezone": {"type": "string"}, "copies": {"type": "integer"}, "file_naming_rules": {"type": "string"}, "zip_rules": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "milestones": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "due_datetime": {"type": "string"}, "origin": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "clauses": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "title": {"type": "string"}, "section": {"type": "string"}, "mandatory": {"type": "boolean"}, "notes": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "sow_tasks": {"type": "array", "items": {"type": "object", "properties": {"task_id": {"type": "string"}, "text": {"type": "string"}, "location": {"type": "string"}, "hours_hint": {"type": "number"}, "labor_cats_hint": {"type": "array", "items": {"type": "string"}}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "price_structure": {"type": "object", "properties": {"clins": {"type": "array", "items": {"type": "object", "properties": {"clin": {"type": "string"}, "desc": {"type": "string"}, "uom": {"type": "string"}, "qty_hint": {"type": "number"}, "options": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}, "wage_determinations": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string"}, "id": {"type": "string"}, "county_state": {"type": "string"}, "labor_cats": {"type": "array", "items": {"type": "string"}}, "rates": {"type": "string"}, "fringe": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}}}, "past_perf_rules": {"type": "object", "properties": {"count": {"type": "integer"}, "years_back": {"type": "integer"}, "relevance_dims": {"type": "string"}, "format": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "staffing_rules": {"type": "object", "properties": {"key_personnel": {"type": "string"}, "certs": {"type": "string"}, "clearances": {"type": "string"}, "badging": {"type": "string"}, "training": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "accessibility_rules": {"type": "object", "properties": {"req_508": {"type": "boolean"}, "pdf_tags": {"type": "boolean"}, "bookmarks": {"type": "boolean"}, "alt_text": {"type": "boolean"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}, "risks_assumptions": {"type": "array", "items": {"type": "object", "properties": {"risk": {"type": "string"}, "impact": {"type": "string"}, "mitigation": {"type": "string"}, "cite": {"type": "object", "properties": {"file": {"type": "string"}, "page": {"type": "integer"}}}}}}}}
     cur.execute("""INSERT OR IGNORE INTO rfp_schema_versions(name, version, schema_json, created_at)
-                 VALUES(?,?,?,?)""", (name, ver, schema, _dt.datetime.utcnow().isoformat()))
+                 VALUES(?,?,?,?)""", (name, ver, schema, _dt.datetime.utcnow().isoformat())
     conn.commit()
     import streamlit as st
     st.session_state["rfp_schema_ready"] = True
@@ -13235,7 +13207,7 @@ def _rfp_phase1_register_schema():
 def _is_iso_datetime_with_tz(s: str) -> bool:
     try:
         if s.endswith("Z"):
-            _dt.datetime.fromisoformat(s.replace("Z","+00:00"))
+            _dt.datetime.fromisoformat(s.replace("Z","+00:00")
             return True
         _dt.datetime.fromisoformat(s)
         return (s.endswith("Z") or ("+" in s[10:] or "-" in s[10:]))
@@ -13317,14 +13289,14 @@ def save_rfp_json(notice_id: int, payload: dict, schema_name: str="RFPv1", schem
     data_str = _json.dumps(payload, sort_keys=True, separators=(",",":"))
     vhash = _hash.sha256(data_str.encode("utf-8")).hexdigest()
     cur.execute("""INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at)
-                 VALUES(?,?,?,?,?,?)""", (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat()))
+                 VALUES(?,?,?,?,?,?)""", (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat())
     conn.commit()
     return {"ok": True, "version_hash": vhash}
 
 try:
     _rfp_phase1_register_schema()
 except Exception as _ex:
-    try: log_json("error", "rfp_phase1_register_failed", error=str(_ex))
+    try: log_json("error", "rfp_phase1_register_failed", error=str(_ex)
     except Exception: pass
 # === RFP PHASE 1 END ===
 
@@ -13345,8 +13317,7 @@ def _rfp_p2_notice_row(nid:int):
     row = conn.execute("SELECT id,sam_notice_id,notice_type,title,agency,set_aside,place_city,place_state FROM notices WHERE id=?", (int(nid),)).fetchone()
     if not row: return None
     cols = ["id","sam_notice_id","notice_type","title","agency","set_aside","place_city","place_state"]
-    return dict(zip(cols, row))
-
+    return dict(zip(cols, row)
 _TZMAP = {
     "ET":"+00:00", "EST":"-05:00", "EDT":"-04:00",
     "CT":"-06:00", "CST":"-06:00", "CDT":"-05:00",
@@ -13501,7 +13472,7 @@ def rfp_parse_and_store(notice_id: int):
         # Download
         b = _download_bytes(furl)
         sha = _sha256_bytes(b)
-        comb.update(sha.encode())
+        comb.update(sha.encode()
         if cks != sha:
             try: cur.execute("UPDATE notice_files SET checksum=? WHERE id=?", (sha, fid)); conn.commit()
             except Exception: pass
@@ -13518,7 +13489,7 @@ def rfp_parse_and_store(notice_id: int):
         # Persist file_parses
         try:
             cur.execute("INSERT OR IGNORE INTO file_parses(notice_file_id, checksum, parsed_json, created_at) VALUES(?,?,?,?)",
-                        (fid, sha, _json.dumps(payload), _dt.datetime.utcnow().isoformat()))
+                        (fid, sha, _json.dumps(payload), _dt.datetime.utcnow().isoformat())
             conn.commit()
         except Exception: pass
         # Populate FTS if available
@@ -13526,7 +13497,7 @@ def rfp_parse_and_store(notice_id: int):
             conn.execute("SELECT 1 FROM rfp_chunks LIMIT 1")
             for p in pages[:800]:
                 conn.execute("INSERT INTO rfp_chunks(notice_id, file_name, page, text) VALUES(?,?,?,?)",
-                             (int(notice_id), payload["file_name"], int(p.get("page") or 0), p.get("text") or ""))
+                             (int(notice_id), payload["file_name"], int(p.get("page") or 0), p.get("text") or "")
             conn.commit()
         except Exception: pass
     version_hash = comb.hexdigest()
@@ -13550,13 +13521,13 @@ def rfp_run_worker(notice_id: int):
     def _run():
         try:
             st.session_state["rfp_parser_status"]["progress"] = 10
-            res = rfp_parse_and_store(int(notice_id))
+            res = rfp_parse_and_store(int(notice_id)
             if res.get("ok"):
                 st.session_state["rfp_parser_status"] = {"state":"done","notice_id": int(notice_id), "progress": 100, "result": res}
             else:
                 st.session_state["rfp_parser_status"] = {"state":"error","notice_id": int(notice_id), "progress": 0, "error_id": str(res)}
         except Exception as ex:
-            eid = log_json("error","rfp_p2_worker_failed", notice_id=int(notice_id), error=str(ex))
+            eid = log_json("error","rfp_p2_worker_failed", notice_id=int(notice_id), error=str(ex)
             st.session_state["rfp_parser_status"] = {"state":"error","notice_id": int(notice_id), "progress": 0, "error_id": eid}
     t = _thr.Thread(target=_run, daemon=True); t.start()
 
@@ -13581,7 +13552,7 @@ def _rfp_panel_ui(notice_id: int):
         # Controls
         if _rfp_p2_feature_on():
             if st.button("Run parser"):
-                rfp_run_worker(int(notice_id))
+                rfp_run_worker(int(notice_id)
         else:
             if st.button("Enable rfp_parser flag in Admin to run parser"):
                 pass
@@ -13597,7 +13568,7 @@ def _rfp_panel_ui(notice_id: int):
             data = _json.loads(row[0])
             tabs = st.tabs(["Summary","L and M","Clauses","Forms","Submission","Q and A"])
             with tabs[0]:
-                st.write(data.get("header", {}))
+                st.write(data.get("header", {})
                 st.caption(f"Created: {row[1]}")
             with tabs[1]:
                 for it in data.get("lm_requirements", []):
@@ -13617,7 +13588,7 @@ def _rfp_panel_ui(notice_id: int):
                     if not hits: st.info("No matches.")
                     else:
                         for h in hits:
-                            st.caption(f"{h.get('file_name')} p.{h.get('page')}"); st.write(h.get("text",""))
+                            st.caption(f"{h.get('file_name')} p.{h.get('page')}"); st.write(h.get("text","")
         elif not row:
             st.caption("No analyzer JSON yet. Run parser.")
 # === RFP PHASE 2 END ===
@@ -13748,7 +13719,7 @@ def save_rfp_json(notice_id: int, payload: dict, schema_name: str="RFPv1", schem
         else:
             cur.execute(
                 "INSERT OR IGNORE INTO rfp_json(notice_id, schema_name, schema_version, version_hash, data_json, created_at) VALUES(?,?,?,?,?,?)",
-                (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat())
+                (int(notice_id), schema_name, schema_version, vhash, data_str, _dt.datetime.utcnow().isoformat()
             )
         conn.commit()
         res = {"ok": True, "version_hash": vhash}
@@ -13763,7 +13734,7 @@ def _run_tenancy_phase2():
         _tp2_add_columns_and_indexes()
         _tp2_backfill()
     except Exception as ex:
-        try: log_json("error", "tenancy_phase2_migration_failed", error=str(ex))
+        try: log_json("error", "tenancy_phase2_migration_failed", error=str(ex)
         except Exception: pass
 
 try:
@@ -13843,15 +13814,15 @@ def q_insert(table: str, data: dict):
     data.setdefault('visibility', 'team')
     if 'version' in [k.lower() for k in data.keys()]:
         try:
-            data['version'] = int(data.get('version', 0))
+            data['version'] = int(data.get('version', 0)
         except Exception:
             data['version'] = 0
-    cols = list(data.keys())
+    cols = list(data.keys()
     vals = [data[c] for c in cols]
-    placeholders = ','.join(['?']*len(cols))
+    placeholders = ','.join(['?']*len(cols)
     sql = f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders})"
     conn = get_db(); cur = conn.cursor()
-    cur.execute(sql, tuple(vals))
+    cur.execute(sql, tuple(vals)
     conn.commit()
     return int(cur.lastrowid)
 
@@ -13883,7 +13854,7 @@ def q_update(table: str, data: dict, where: dict):
         wh_cols.append('org_id=?'); wh_params.append(org)
     sql = f"UPDATE {table} SET {', '.join(set_cols)} WHERE {' AND '.join(wh_cols)}"
     conn = get_db(); cur = conn.cursor()
-    cur.execute(sql, tuple(params+wh_params))
+    cur.execute(sql, tuple(params+wh_params)
     conn.commit()
     return cur.rowcount
 
@@ -13897,7 +13868,7 @@ def q_delete(table: str, where: dict):
         wh_cols.append('org_id=?'); wh_params.append(org)
     sql = f"DELETE FROM {table} WHERE {' AND '.join(wh_cols)}"
     conn = get_db(); cur = conn.cursor()
-    cur.execute(sql, tuple(wh_params))
+    cur.execute(sql, tuple(wh_params)
     conn.commit()
     return cur.rowcount
 
@@ -13916,7 +13887,7 @@ def store_uploaded_file(file_bytes: bytes, filename: str, entity: str, entity_id
     import os
     org, user = _ids()
     org_id = org_id or org; owner_id = owner_id or user
-    base = os.path.join('data', 'files', str(org_id), str(owner_id), str(entity), str(entity_id))
+    base = os.path.join('data', 'files', str(org_id), str(owner_id), str(entity), str(entity_id)
     os.makedirs(base, exist_ok=True)
     checksum = _hash3.sha256(file_bytes).hexdigest()
     path = os.path.join(base, filename)
@@ -13929,7 +13900,7 @@ def store_uploaded_file(file_bytes: bytes, filename: str, entity: str, entity_id
     try:
         conn = get_db(); cur = conn.cursor()
         cur.execute("""INSERT OR IGNORE INTO files(org_id, owner_id, entity, entity_id, name, path, bytes, checksum, created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?)""", (org_id, owner_id, entity, int(entity_id), filename, path, len(file_bytes), checksum, _dt.datetime.utcnow().isoformat()))
+                        VALUES(?,?,?,?,?,?,?,?,?)""", (org_id, owner_id, entity, int(entity_id), filename, path, len(file_bytes), checksum, _dt.datetime.utcnow().isoformat())
         conn.commit()
     except Exception:
         pass
@@ -13951,7 +13922,7 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
         kw = f"%{filters['keywords']}%"
         params.extend([kw, kw])
     if filters.get('types'):
-        qs = ','.join(['?'] * len(filters['types']))
+        qs = ','.join(['?'] * len(filters['types'])
         where.append(f'notice_type IN ({qs})')
         params.extend(filters['types'])
     if filters.get('naics'):
@@ -13980,7 +13951,7 @@ def list_notices(filters: dict, page: int, page_size: int, current_user_id: Opti
         where.append('id NOT IN (SELECT notice_id FROM notice_status WHERE user_id=?)')
         params.append(current_user_id)
     wh = ('WHERE ' + ' AND '.join(where)) if where else ''
-    limit = max(1, int(page_size))
+    limit = max(1, int(page_size)
     offset = max(0, int(page)) * limit
     sql = f'''
         SELECT
@@ -14085,10 +14056,10 @@ def _run_job(job: dict):
     payload = job.get('payload') or {}
     try:
         if kind == 'parse_rfp':
-            nid = int(payload.get('notice_id'))
+            nid = int(payload.get('notice_id')
             res = rfp_parse_and_store(nid)
             if not res.get('ok'):
-                raise RuntimeError(str(res))
+                raise RuntimeError(str(res)
         elif kind == 'build_pack':
             # Placeholder for future packaging job
             pass
@@ -14096,8 +14067,7 @@ def _run_job(job: dict):
             raise ValueError(f'unknown_job_kind:{kind}')
         _finish_job(job['id'], 'done', None)
     except Exception as ex:
-        _finish_job(job['id'], 'error', str(ex))
-
+        _finish_job(job['id'], 'error', str(ex)
 _p5_worker_thread = None
 
 def start_job_worker():
@@ -14197,9 +14167,9 @@ def _sam_upsert_rows(payload) -> int:
         except Exception:
             try:
                 cur.execute("INSERT OR IGNORE INTO notices(sam_notice_id, notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, status, url, last_fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (sid, notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, None, url, _dt.datetime.utcnow().isoformat()))
+                            (sid, notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, None, url, _dt.datetime.utcnow().isoformat())
                 cur.execute("UPDATE notices SET notice_type=?, title=?, agency=?, naics=?, psc=?, set_aside=?, place_city=?, place_state=?, posted_at=?, due_at=?, url=?, last_fetched_at=? WHERE sam_notice_id=?",
-                            (notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, url, _dt.datetime.utcnow().isoformat(), sid))
+                            (notice_type, title, agency, naics, psc, set_aside, place_city, place_state, posted_at, due_at, url, _dt.datetime.utcnow().isoformat(), sid)
                 count += 1
             except Exception:
                 pass
@@ -14209,7 +14179,7 @@ def _sam_upsert_rows(payload) -> int:
 def render_sam_watch_minimal_ui():
     import streamlit as st
     st.subheader("SAM Watch")
-    key_present = bool(_sam_api_key())
+    key_present = bool(_sam_api_key()
     if not key_present:
         st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
     with st.form("sam_min_search", clear_on_submit=False):
@@ -14467,7 +14437,7 @@ def render_sam_watch_minimal_ui():
         with c2:
             if _ss_flag() and st.button("Run scheduler now"):
                 st.session_state["last_dry_run_result"] = run_saved_searches()
-    key_present = bool(_sam_api_key())
+    key_present = bool(_sam_api_key()
     if not key_present:
         st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
     with st.form("sam_min_search", clear_on_submit=False):
@@ -14504,7 +14474,7 @@ def render_sam_watch_minimal_ui():
                 try:
                     uid = st.session_state.get("user_id") or "user"
                     cur.execute("INSERT INTO saved_searches(user_id, name, query_json, cadence, recipients, active, last_run_at) VALUES(?,?,?,?,?,1,NULL)",
-                                (uid, name, _json4.dumps({"keywords": kw, "types": types}), cadence, recips))
+                                (uid, name, _json4.dumps({"keywords": kw, "types": types}), cadence, recips)
                     conn.commit()
                     st.success("Saved search created.")
                 except Exception as ex:
@@ -14620,7 +14590,7 @@ def _p5_create_or_get_proposal(notice_id: int, owner_id: str) -> int:
     n = cur.execute("SELECT title FROM notices WHERE id=?", (int(notice_id),)).fetchone()
     title = n[0] if n and n[0] else f"Proposal for Notice {notice_id}"
     cur.execute("INSERT OR IGNORE INTO proposals(notice_id, owner_id, title, status, created_at) VALUES(?,?,?,?,?)",
-                (int(notice_id), owner_id, title, "Draft", _dtp5.datetime.utcnow().isoformat()))
+                (int(notice_id), owner_id, title, "Draft", _dtp5.datetime.utcnow().isoformat())
     conn.commit()
     pid = cur.execute("SELECT id FROM proposals WHERE notice_id=? AND owner_id=?", (int(notice_id), owner_id)).fetchone()[0]
     return int(pid)
@@ -14643,7 +14613,7 @@ def _p5_seed_sections_from_rfp(notice_id: int, proposal_id: int):
     for s in sections[:30]:
         try:
             cur.execute("INSERT INTO proposal_sections(proposal_id, key, title, page_limit, font_name, font_size, writing_plan, content_md) VALUES(?,?,?,?,NULL,NULL,NULL,NULL)",
-                        (int(proposal_id), s["key"], s["title"], s.get("page_limit")))
+                        (int(proposal_id), s["key"], s["title"], s.get("page_limit"))
         except Exception:
             pass
     conn.commit()
@@ -14680,10 +14650,10 @@ def render_proposal_wizard(notice_id: int):
         data = _p5_latest_rfp_json(int(notice_id)) or {}
         st.write("Factors and requirements")
         for it in (data.get("lm_requirements") or [])[:50]:
-            st.markdown(f"- {it.get('text','')}".strip())
+            st.markdown(f"- {it.get('text','')}".strip()
         if st.button("Next → Sections"):
             st.session_state["wizard_step"] = 2
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
     if step == 2:
         st.subheader("Step 2 · Section stubs")
         conn = get_db(); cur = conn.cursor()
@@ -14697,12 +14667,12 @@ def render_proposal_wizard(notice_id: int):
                 plan = st.text_area("Writing plan", value=plan or "", key=f"wp_{sid}")
                 if st.button("Save section", key=f"sv_{sid}"):
                     cur.execute("UPDATE proposal_sections SET title=?, page_limit=?, font_name=?, font_size=?, writing_plan=? WHERE id=?",
-                                (new_title, None if new_pl==0 else int(new_pl), fname or None, None if fsize==0 else int(fsize), plan or None, sid))
+                                (new_title, None if new_pl==0 else int(new_pl), fname or None, None if fsize==0 else int(fsize), plan or None, sid)
                     conn.commit()
                     st.success("Saved")
         if st.button("Next → Uploads"):
             st.session_state["wizard_step"] = 3
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
     if step == 3:
         st.subheader("Step 3 · Supporting files")
         up = st.file_uploader("Upload resumes, past performance, etc.", accept_multiple_files=True)
@@ -14712,7 +14682,7 @@ def render_proposal_wizard(notice_id: int):
                 meta = store_uploaded_file(b, f.name, "proposal", pid)
                 conn = get_db(); cur = conn.cursor()
                 cur.execute("INSERT INTO proposal_files(proposal_id, file_name, file_id, uploaded_at) VALUES(?,?,?,?)",
-                            (pid, f.name, meta.get("checksum"), _dtp5.datetime.utcnow().isoformat()))
+                            (pid, f.name, meta.get("checksum"), _dtp5.datetime.utcnow().isoformat())
                 conn.commit()
         conn = get_db(); cur = conn.cursor()
         rows = cur.execute("SELECT id, file_name, uploaded_at FROM proposal_files WHERE proposal_id=? ORDER BY id DESC", (pid,)).fetchall()
@@ -14720,7 +14690,7 @@ def render_proposal_wizard(notice_id: int):
             st.caption(f"{fname} • {ts}")
         if st.button("Next → Package"):
             st.session_state["wizard_step"] = 4
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
     if step == 4:
         st.subheader("Step 4 · Package preview")
         conn = get_db(); cur = conn.cursor()
@@ -14734,20 +14704,19 @@ def render_proposal_wizard(notice_id: int):
         st.button("Export (disabled until compliance is Green)", disabled=not ok)
         if ok and st.button("Export now"):
             cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
-                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), _jsonp5.dumps({"placeholders": bad})))
+                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), _jsonp5.dumps({"placeholders": bad}))
             conn.commit()
             st.success("Export queued")
     cols = st.columns(3)
     with cols[0]:
         if st.button("← Back") and st.session_state["wizard_step"] > 1:
             st.session_state["wizard_step"] -= 1
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
     with cols[2]:
         if st.button("Close wizard"):
             st.session_state["current_proposal_id"] = None
             st.session_state["wizard_step"] = 1
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
-
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
 try:
     _orig_rfp_panel_ui_p5 = _rfp_panel_ui
 except Exception:
@@ -14770,7 +14739,7 @@ def _rfp_panel_ui(notice_id: int):
         except Exception as ex:
             st.warning(f"Analyzer panel partial: {ex}")
     if feature_flags().get("start_proposal_inline", False) and st.session_state.get("wizard_step") and st.session_state.get("wizard_step") >= 1:
-        render_proposal_wizard(int(notice_id))
+        render_proposal_wizard(int(notice_id)
 # === PROPOSAL PHASE 5 END ===
 
 
@@ -14808,7 +14777,7 @@ def _rfp6_load_versions(notice_id: int):
     to_hash, to_js = rows[0][0], rows[0][1]
     from_hash, from_js = rows[1][0], rows[1][1]
     try:
-        return (to_hash, _json6.loads(to_js or "{}"), from_hash, _json6.loads(from_js or "{}"))
+        return (to_hash, _json6.loads(to_js or "{}"), from_hash, _json6.loads(from_js or "{}")
     except Exception:
         return None
 
@@ -14842,7 +14811,7 @@ def _rfp6_compute_impact(prev: dict, curr: dict) -> dict:
                              text_fn=lambda c: f"{c.get('clin','')}|{c.get('desc','')}|{c.get('qty_hint','')}|{c.get('uom','')}" )
     dates = {"submission_changed": False, "milestones": {"added": [], "removed": [], "changed": []}}
     try:
-        dates["submission_changed"] = (prev.get("submission",{}).get("due_datetime") != curr.get("submission",{}).get("due_datetime"))
+        dates["submission_changed"] = (prev.get("submission",{}).get("due_datetime") != curr.get("submission",{}).get("due_datetime")
     except Exception:
         pass
     ms = _diff_list_by_key(prev.get("milestones"), curr.get("milestones"),
@@ -14857,7 +14826,7 @@ def _rfp6_compute_impact(prev: dict, curr: dict) -> dict:
 
 def compute_and_store_rfp_impact(notice_id: int) -> dict:
     _rfp6_schema()
-    v = _rfp6_load_versions(int(notice_id))
+    v = _rfp6_load_versions(int(notice_id)
     if not v:
         return {"ok": False, "error": "versions_insufficient"}
     to_hash, to_js, from_hash, from_js = v
@@ -14867,11 +14836,11 @@ def compute_and_store_rfp_impact(notice_id: int) -> dict:
     conn = get_db(); cur = conn.cursor()
     try:
         cur.execute("INSERT INTO rfp_impacts(notice_id, from_hash, to_hash, impact_json, created_at) VALUES(?,?,?,?,?)",
-                    (int(notice_id), from_hash, to_hash, _json6.dumps(impact, sort_keys=True), _dt6.datetime.utcnow().isoformat()))
+                    (int(notice_id), from_hash, to_hash, _json6.dumps(impact, sort_keys=True), _dt6.datetime.utcnow().isoformat())
         conn.commit()
     except Exception:
         pass
-    _set_needs_review(int(notice_id))
+    _set_needs_review(int(notice_id)
     return {"ok": True, "impact": impact, "from": from_hash, "to": to_hash}
 
 def latest_rfp_impact(notice_id: int):
@@ -14896,7 +14865,7 @@ def save_rfp_json(notice_id: int, payload: dict, schema_name: str="RFPv1", schem
     try:
         import streamlit as st
         if res.get("ok") and _rfp6_flag():
-            _ = compute_and_store_rfp_impact(int(notice_id))
+            _ = compute_and_store_rfp_impact(int(notice_id)
     except Exception:
         pass
     return res
@@ -14915,15 +14884,15 @@ def _rfp_panel_ui_p2_with_impact(notice_id: int):
         return
     with st.sidebar:
         st.markdown("### Impact")
-        data = latest_rfp_impact(int(notice_id))
+        data = latest_rfp_impact(int(notice_id)
         if not data:
             st.caption("No impact cached yet.")
             if st.button("Compute impact"):
-                res = compute_and_store_rfp_impact(int(notice_id))
+                res = compute_and_store_rfp_impact(int(notice_id)
                 if res.get("ok"):
                     st.success("Impact computed.")
                 else:
-                    st.warning(str(res))
+                    st.warning(str(res)
             return
         imp = data.get("impact") or {}
         def group_block(label, bucket):
@@ -14933,14 +14902,13 @@ def _rfp_panel_ui_p2_with_impact(notice_id: int):
             if added: st.caption("Added: " + ", ".join([str(x) for x in added][:10]))
             if removed: st.caption("Removed: " + ", ".join([str(x) for x in removed][:10]))
             if changed: st.caption("Changed: " + ", ".join([str(x) for x in changed][:10]))
-        group_block("Sections", imp.get("sections", {}))
-        group_block("Forms", imp.get("forms", {}))
-        group_block("CLINs", imp.get("clins", {}))
+        group_block("Sections", imp.get("sections", {})
+        group_block("Forms", imp.get("forms", {})
+        group_block("CLINs", imp.get("clins", {})
         d = imp.get("dates", {})
         if d.get("submission_changed"): st.caption("Due date changed.")
-        group_block("Milestones", d.get("milestones", {}))
-        group_block("RTM", imp.get("rtm", {}))
-
+        group_block("Milestones", d.get("milestones", {})
+        group_block("RTM", imp.get("rtm", {})
 try:
     _orig_rfp_panel_ui_p2 = _rfp_panel_ui_p2_with_impact
 except Exception:
@@ -14954,7 +14922,7 @@ except Exception:
 def render_proposal_wizard(notice_id: int):
     import streamlit as st
     if _rfp6_flag():
-        data = latest_rfp_impact(int(notice_id))
+        data = latest_rfp_impact(int(notice_id)
         if data and data.get("impact"):
             imp = data["impact"]
             with st.expander("Impact TODOs", expanded=True):
@@ -14973,7 +14941,7 @@ def render_proposal_wizard(notice_id: int):
                 else:
                     st.caption("No pending impact items.")
     if _orig_render_proposal_wizard_p6:
-        return _orig_render_proposal_wizard_p6(int(notice_id))
+        return _orig_render_proposal_wizard_p6(int(notice_id)
 # === RFP PHASE 6 END ===
 
 
@@ -15015,7 +14983,7 @@ def _b7_map_reqs_to_sections(an: dict, sections: list) -> dict:
             if sf and sf in title:
                 target = (s.get('key') or s.get('title')); break
         if not target and sections:
-            target = (sections[0].get('key') or sections[0].get('title'))
+            target = (sections[0].get('key') or sections[0].get('title')
         if target:
             out.setdefault(target, []).append(r)
     return out
@@ -15029,7 +14997,7 @@ def _b7_seed_sections_from_analyzer(notice_id: int, proposal_id: int):
     existing = cur.execute('SELECT COUNT(*) FROM proposal_sections WHERE proposal_id=?', (int(proposal_id),)).fetchone()[0]
     if not existing:
         try:
-            _p5_seed_sections_from_rfp(int(notice_id), int(proposal_id))
+            _p5_seed_sections_from_rfp(int(notice_id), int(proposal_id)
         except Exception:
             pass
     rows = cur.execute('SELECT id, key, title FROM proposal_sections WHERE proposal_id=?', (int(proposal_id),)).fetchall()
@@ -15110,11 +15078,11 @@ def _b7_seed_clins(notice_id: int, proposal_id: int):
         if 'qty' in has_cols: fields['qty'] = qty
         if not fields:
             continue
-        cols_sql = ','.join(fields.keys())
-        ph = ','.join(['?']*len(fields))
-        vals = list(fields.values())
+        cols_sql = ','.join(fields.keys()
+        ph = ','.join(['?']*len(fields)
+        vals = list(fields.values()
         try:
-            cur.execute(f'INSERT INTO price_lines({cols_sql}) VALUES({ph})', tuple(vals))
+            cur.execute(f'INSERT INTO price_lines({cols_sql}) VALUES({ph})', tuple(vals)
         except Exception:
             pass
     conn.commit()
@@ -15122,7 +15090,7 @@ def _b7_seed_clins(notice_id: int, proposal_id: int):
 def builder_prechecks(proposal_id: int) -> dict:
     res = {'placeholders': [], 'a11y': [], 'style': []}
     try:
-        res['placeholders'] = _p5_placeholder_scan(int(proposal_id))
+        res['placeholders'] = _p5_placeholder_scan(int(proposal_id)
     except Exception:
         res['placeholders'] = []
     try:
@@ -15154,8 +15122,8 @@ except Exception:
 def _p5_create_or_get_proposal(notice_id: int, owner_id: str) -> int:
     pid = _orig__p5_create_or_get_proposal_b7(int(notice_id), owner_id) if _orig__p5_create_or_get_proposal_b7 else 0
     try:
-        _b7_seed_sections_from_analyzer(int(notice_id), int(pid))
-        _b7_seed_clins(int(notice_id), int(pid))
+        _b7_seed_sections_from_analyzer(int(notice_id), int(pid)
+        _b7_seed_clins(int(notice_id), int(pid)
         import streamlit as st
         st.session_state['builder_adapter_ready'] = True
     except Exception:
@@ -15204,7 +15172,7 @@ def _geocode_center(address: str):
         if j.get("status") != "OK":
             return None
         loc = j["results"][0]["geometry"]["location"]
-        return (float(loc["lat"]), float(loc["lng"]))
+        return (float(loc["lat"]), float(loc["lng"])
     except Exception:
         return None
 
@@ -15213,8 +15181,7 @@ def _haversine_miles(lat1, lon1, lat2, lon2):
     p1 = _math_sub1.radians(lat1); p2 = _math_sub1.radians(lat2)
     dphi = _math_sub1.radians(lat2 - lat1); dl = _math_sub1.radians(lon2 - lon1)
     a = _math_sub1.sin(dphi/2)**2 + _math_sub1.cos(p1)*_math_sub1.cos(p2)*_math_sub1.sin(dl/2)**2
-    return 2*R*_math_sub1.asin(_math_sub1.sqrt(a))
-
+    return 2*R*_math_sub1.asin(_math_sub1.sqrt(a)
 def _norm_phone(p):
     if not p: return None
     digits = "".join([c for c in str(p) if c.isdigit()])
@@ -15261,7 +15228,7 @@ def _sub1_upsert_vendors(rows: list, center_latlng: tuple):
     for rank, it in enumerate(rows, start=1):
         name = it.get("name") or ""
         place_id = it.get("place_id") or it.get("placeId") or ""
-        phone = _norm_phone(it.get("formatted_phone_number") or it.get("formatted_phone") or it.get("international_phone_number"))
+        phone = _norm_phone(it.get("formatted_phone_number") or it.get("formatted_phone") or it.get("international_phone_number")
         website = it.get("website") or it.get("url")
         domain = _norm_domain(website)
         loc = (it.get("geometry") or {}).get("location") or {}
@@ -15306,8 +15273,8 @@ def _sub1_upsert_vendors(rows: list, center_latlng: tuple):
                 if not fields:
                     vid = None
                 else:
-                    cols_sql = ",".join(fields.keys())
-                    ph = ",".join(["?"]*len(fields))
+                    cols_sql = ",".join(fields.keys()
+                    ph = ",".join(["?"]*len(fields)
                     cur.execute(f"INSERT INTO vendors({cols_sql}) VALUES({ph})", tuple(fields.values()))
                     vid = int(cur.lastrowid)
                     inserted += 1
@@ -15326,8 +15293,8 @@ def _sub1_dedupe(items: list):
     seen_place = set(); seen_pair = set(); out = []
     for it in items:
         pid = it.get("place_id") or it.get("placeId")
-        dom = _norm_domain(it.get("website") or it.get("url"))
-        ph = _norm_phone(it.get("formatted_phone_number") or it.get("international_phone_number") or it.get("formatted_phone"))
+        dom = _norm_domain(it.get("website") or it.get("url")
+        ph = _norm_phone(it.get("formatted_phone_number") or it.get("international_phone_number") or it.get("formatted_phone")
         key2 = (dom or "", ph or "")
         if pid and pid in seen_place:
             continue
@@ -15363,7 +15330,7 @@ def subfinder_search(opp_id: int, query: str, use_pop: bool, radius_mi: int, pag
     if not run:
         now = __import__("datetime").datetime.utcnow().isoformat()
         cur.execute("INSERT INTO source_runs(user_id, opp_id, query, center, radius_mi, page_size, ran_at, next_page_token, total_returned) VALUES(?,?,?,?,?,?,?,NULL,0)",
-                    (uid, int(opp_id), query or "", str(center), float(radius_mi), int(page_size), now))
+                    (uid, int(opp_id), query or "", str(center), float(radius_mi), int(page_size), now)
         conn.commit()
         run = cur.execute("SELECT id, next_page_token, total_returned FROM source_runs WHERE user_id=? AND opp_id=? AND query=? AND center=? AND radius_mi=? AND page_size=? ORDER BY id DESC LIMIT 1",
                           (uid, int(opp_id), query or "", str(center), float(radius_mi), int(page_size))).fetchone()
@@ -15379,7 +15346,7 @@ def subfinder_search(opp_id: int, query: str, use_pop: bool, radius_mi: int, pag
         loc = (it.get("geometry") or {}).get("location") or {}
         lat = loc.get("lat"); lng = loc.get("lng")
         if center and (lat is not None) and (lng is not None):
-            it["distance_mi"] = _haversine_miles(center[0], center[1], float(lat), float(lng))
+            it["distance_mi"] = _haversine_miles(center[0], center[1], float(lat), float(lng)
         else:
             it["distance_mi"] = None
     results = _sub1_dedupe(results)
@@ -15415,7 +15382,7 @@ def render_vendors(opp_id: int):
     import streamlit as st
     if _orig_render_vendors_subtab:
         try:
-            return _orig_render_vendors_subtab(int(opp_id))
+            return _orig_render_vendors_subtab(int(opp_id)
         except Exception:
             pass
     # Fallback Subfinder UI
@@ -15433,7 +15400,7 @@ def render_vendors(opp_id: int):
         if st.button("Search"):
             st.session_state["sub1_results"] = []
             st.session_state["sub1_token"] = None
-            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size)
             if res.get("ok"):
                 st.session_state["sub1_results"] = res.get("items", [])
                 st.session_state["sub1_token"] = res.get("next_token")
@@ -15441,7 +15408,7 @@ def render_vendors(opp_id: int):
                 st.error(f"Search error: {res.get('error')}")
     with cols[1]:
         if st.button("Load more"):
-            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size)
             if res.get("ok"):
                 # append unique
                 cur = {(it.get("place_id") or "", it.get("name") or "") for it in st.session_state.get("sub1_results", [])}
@@ -15493,8 +15460,8 @@ def _sub2_state_from_addr(addr: str):
 
 def _sub2_find_vendor_id(cur, item):
     pid = item.get('place_id') or item.get('placeId')
-    dom = _norm_domain(item.get('website') or item.get('url'))
-    ph = _norm_phone(item.get('formatted_phone_number') or item.get('international_phone_number') or item.get('formatted_phone'))
+    dom = _norm_domain(item.get('website') or item.get('url')
+    ph = _norm_phone(item.get('formatted_phone_number') or item.get('international_phone_number') or item.get('formatted_phone')
     try:
         if pid:
             row = cur.execute('SELECT id FROM vendors WHERE place_id=?', (pid,)).fetchone()
@@ -15520,7 +15487,7 @@ def _sub2_apply_filters_and_rank(rows: list, naics_list: list, include_words: li
         name = (it.get('name') or '').lower()
         addr = it.get('formatted_address') or it.get('vicinity') or ''
         st = _sub2_state_from_addr(addr) or ''
-        phone = _norm_phone(it.get('formatted_phone_number') or it.get('international_phone_number') or it.get('formatted_phone'))
+        phone = _norm_phone(it.get('formatted_phone_number') or it.get('international_phone_number') or it.get('formatted_phone')
         web = (it.get('website') or '')
         dom = (_norm_domain(web) or '')
         # strict filters
@@ -15588,39 +15555,39 @@ def render_vendors(opp_id: int):
     flag = st.session_state.get('feature_flags', {}).get('subfinder_filters', False)
     if _orig_render_vendors_subtab_phase2 and not flag:
         try:
-            return _orig_render_vendors_subtab_phase2(int(opp_id))
+            return _orig_render_vendors_subtab_phase2(int(opp_id)
         except Exception:
             pass
     # Fallback or augmented UI
     st.subheader('Subcontractor Finder')
     # base inputs reused for paging flow if present
-    query = st.text_input('Search query', value=st.session_state.get('sub1_query', 'contractor'))
-    use_pop = st.checkbox('Use Place of Performance', value=st.session_state.get('sub1_use_pop', True))
-    radius = st.slider('Radius (miles)', 10, 150, st.session_state.get('sub1_radius', 50))
+    query = st.text_input('Search query', value=st.session_state.get('sub1_query', 'contractor')
+    use_pop = st.checkbox('Use Place of Performance', value=st.session_state.get('sub1_use_pop', True)
+    radius = st.slider('Radius (miles)', 10, 150, st.session_state.get('sub1_radius', 50)
     page_size = st.selectbox('Page size', [20,50,100], index={20:0,50:1,100:2}[st.session_state.get('sub1_page_size', 50)])
     st.session_state['sub1_query']=query; st.session_state['sub1_use_pop']=use_pop; st.session_state['sub1_radius']=radius; st.session_state['sub1_page_size']=page_size
     # Phase 2 filters
     st.markdown('**Filters**')
     c1,c2,c3 = st.columns([2,2,2])
     with c1:
-        naics_in = st.text_input('NAICS (comma-separated)', value=st.session_state.get('sub2_naics',''))
+        naics_in = st.text_input('NAICS (comma-separated)', value=st.session_state.get('sub2_naics','')
     with c2:
-        inc = st.text_input('Must include keywords (comma-separated)', value=st.session_state.get('sub2_inc',''))
+        inc = st.text_input('Must include keywords (comma-separated)', value=st.session_state.get('sub2_inc','')
     with c3:
-        exc = st.text_input('Exclude keywords (comma-separated)', value=st.session_state.get('sub2_exc',''))
+        exc = st.text_input('Exclude keywords (comma-separated)', value=st.session_state.get('sub2_exc','')
     c4,c5,c6 = st.columns([1,1,1])
     with c4:
-        has_phone = st.checkbox('Has phone', value=st.session_state.get('sub2_has_phone', False))
+        has_phone = st.checkbox('Has phone', value=st.session_state.get('sub2_has_phone', False)
     with c5:
-        has_web = st.checkbox('Has website', value=st.session_state.get('sub2_has_web', False))
+        has_web = st.checkbox('Has website', value=st.session_state.get('sub2_has_web', False)
     with c6:
-        state = st.text_input('State (e.g., VA)', value=st.session_state.get('sub2_state',''))
+        state = st.text_input('State (e.g., VA)', value=st.session_state.get('sub2_state','')
     cols = st.columns(3)
     with cols[0]:
         if st.button('Search'):
             st.session_state['sub1_results'] = []
             st.session_state['sub1_token'] = None
-            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size)
             if res.get('ok'):
                 st.session_state['sub1_results'] = res.get('items', [])
                 st.session_state['sub1_token'] = res.get('next_token')
@@ -15628,7 +15595,7 @@ def render_vendors(opp_id: int):
                 st.error(f"Search error: {res.get('error')}")
     with cols[1]:
         if st.button('Load more'):
-            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size)
             if res.get('ok'):
                 curset = {(it.get('place_id') or '', it.get('name') or '') for it in st.session_state.get('sub1_results', [])}
                 for it in res.get('items', []):
@@ -15658,7 +15625,7 @@ def render_vendors(opp_id: int):
     if has_phone: chips.append('Has phone')
     if has_web: chips.append('Has website')
     if state.strip(): chips.append(f"State: {state.strip().upper()}")
-    if chips: st.caption(' | '.join(chips))
+    if chips: st.caption(' | '.join(chips)
     # Results with filters and ranking
     rows = st.session_state.get('sub1_results', [])
     if rows:
@@ -15832,13 +15799,13 @@ def render_vendors(opp_id: int):
     flag_src = st.session_state.get('feature_flags', {}).get('subfinder_sources', False)
     if _orig_render_vendors_subtab_phase3 and not (flag_filt or flag_src):
         try:
-            return _orig_render_vendors_subtab_phase3(int(opp_id))
+            return _orig_render_vendors_subtab_phase3(int(opp_id)
         except Exception:
             pass
     # If the phase-2 UI exists, call it to render controls and results first
     if _orig_render_vendors_subtab_phase3:
         try:
-            _orig_render_vendors_subtab_phase3(int(opp_id))
+            _orig_render_vendors_subtab_phase3(int(opp_id)
         except Exception:
             pass
     # Augment controls for sources
@@ -15847,11 +15814,11 @@ def render_vendors(opp_id: int):
         st.markdown('**Federal sources**')
         cols = st.columns(3)
         with cols[0]:
-            awardees_only = st.checkbox('Only prior federal awardees', value=st.session_state.get('sub3_awardees_only', False))
+            awardees_only = st.checkbox('Only prior federal awardees', value=st.session_state.get('sub3_awardees_only', False)
         with cols[1]:
-            naics_csv = st.text_input('NAICS for import (comma)', value=st.session_state.get('sub3_naics',''))
+            naics_csv = st.text_input('NAICS for import (comma)', value=st.session_state.get('sub3_naics','')
         with cols[2]:
-            state = st.text_input('State for import (e.g., VA)', value=st.session_state.get('sub3_state',''))
+            state = st.text_input('State for import (e.g., VA)', value=st.session_state.get('sub3_state','')
         st.session_state['sub3_awardees_only']=awardees_only
         st.session_state['sub3_naics']=naics_csv
         st.session_state['sub3_state']=state
@@ -15931,13 +15898,13 @@ def _sub4_find_or_create_vendor(cur, item):
         fields["state"] = state
     if "domain" in cols:
         try:
-            dom = _norm_domain(item.get("website") or item.get("url"))
+            dom = _norm_domain(item.get("website") or item.get("url")
         except Exception:
             dom = None
         fields["domain"] = dom
     if not fields:
         return None
-    cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+    cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields)
     cur.execute(f"INSERT INTO vendors({cols_sql}) VALUES({ph})", tuple(fields.values()))
     return int(cur.lastrowid)
 
@@ -15963,7 +15930,7 @@ def _sub4_get_or_create_rfq(opp_id: int, owner_id: str):
         if "created_at" in cols: fields["created_at"] = _dt_sub4.datetime.utcnow().isoformat()
         if not fields:
             return None
-        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields)
         cur.execute(f"INSERT INTO rfq({cols_sql}) VALUES({ph})", tuple(fields.values()))
         conn.commit()
         rfq_id = int(cur.lastrowid)
@@ -15994,7 +15961,7 @@ def _sub4_send_rfqs(opp_id: int, vendor_items: list):
             if "vendor_id" in inv_cols: fields["vendor_id"] = int(vid)
             if "status" in inv_cols: fields["status"] = "Queued"
             if "created_at" in inv_cols: fields["created_at"] = _dt_sub4.datetime.utcnow().isoformat()
-            cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+            cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields)
             try:
                 cur.execute(f"INSERT INTO rfq_invites({cols_sql}) VALUES({ph})", tuple(fields.values()))
                 created += 1
@@ -16004,7 +15971,7 @@ def _sub4_send_rfqs(opp_id: int, vendor_items: list):
             # Fallback: queue an email
             try:
                 cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)",
-                            (it.get("email") or "", f"RFQ Invite for opportunity {opp_id}", f"Please respond to RFQ {rfq_id}", _dt_sub4.datetime.utcnow().isoformat()))
+                            (it.get("email") or "", f"RFQ Invite for opportunity {opp_id}", f"Please respond to RFQ {rfq_id}", _dt_sub4.datetime.utcnow().isoformat())
                 created += 1
             except Exception:
                 skipped += 1
@@ -16016,7 +15983,7 @@ def _sub4_save_vendor_search(name: str, filters: dict, cadence: str="weekly", re
     conn = get_db(); cur = conn.cursor()
     uid = __import__("streamlit").session_state.get("user_id") or "user"
     cur.execute("INSERT INTO saved_searches(user_id, name, query_json, cadence, recipients, active, last_run_at, type) VALUES(?,?,?,?,?,1,NULL,'vendors')",
-                (uid, name, _json_sub4.dumps(filters), cadence, recipients or ""))
+                (uid, name, _json_sub4.dumps(filters), cadence, recipients or "")
     conn.commit()
     return True
 
@@ -16031,7 +15998,7 @@ def render_vendors(opp_id: int):
     # Render existing UI first
     if _orig_render_vendors_subtab_phase4:
         try:
-            _orig_render_vendors_subtab_phase4(int(opp_id))
+            _orig_render_vendors_subtab_phase4(int(opp_id)
         except Exception:
             pass
     st.session_state.setdefault("vendor_stars", {})
@@ -16040,9 +16007,9 @@ def render_vendors(opp_id: int):
         st.markdown("---")
         st.markdown("**Outreach**")
         # Star toggles inline list
-        starred_keys = set(st.session_state.get("vendor_stars", {}).keys())
+        starred_keys = set(st.session_state.get("vendor_stars", {}).keys()
         for i, it in enumerate(rows[: st.session_state.get("sub1_page_size", 50) ]):
-            key = (it.get("place_id") or "") + "|" + (it.get("name") or str(i))
+            key = (it.get("place_id") or "") + "|" + (it.get("name") or str(i)
             cols = st.columns([5,1])
             with cols[0]:
                 nm = it.get("name") or ""
@@ -16054,7 +16021,7 @@ def render_vendors(opp_id: int):
                 else:
                     if st.button(f"☆", key=f"star_{i}"):
                         st.session_state["vendor_stars"][key] = it
-        star_count = len(st.session_state.get("vendor_stars", {}))
+        star_count = len(st.session_state.get("vendor_stars", {})
         c1,c2 = st.columns([2,2])
         with c1:
             st.caption(f"Starred: {star_count}")
@@ -16070,7 +16037,7 @@ def render_vendors(opp_id: int):
     _sub4_schema()
     with st.expander("Saved vendor searches"):
         st.caption("Save the current Vendor Finder inputs for reuse.")
-        name = st.text_input("Search name", key="sub4_ss_name", value=st.session_state.get("sub4_ss_name","My Vendor Search"))
+        name = st.text_input("Search name", key="sub4_ss_name", value=st.session_state.get("sub4_ss_name","My Vendor Search")
         cadence = st.selectbox("Cadence", ["weekly","monthly"], index=0, key="sub4_ss_cad")
         recips = st.text_input("Recipients (comma)", key="sub4_ss_recips", value=st.session_state.get("user_email","") or "")
         # gather current inputs if available
@@ -16109,13 +16076,13 @@ def render_vendors(opp_id: int):
                                 f = _json_sub4.loads(qj or "{}")
                                 st.session_state["sub1_query"]=f.get("query","contractor")
                                 st.session_state["sub1_use_pop"]=f.get("use_pop", True)
-                                st.session_state["sub1_radius"]=int(f.get("radius", 50))
-                                st.session_state["sub1_page_size"]=int(f.get("page_size", 50))
+                                st.session_state["sub1_radius"]=int(f.get("radius", 50)
+                                st.session_state["sub1_page_size"]=int(f.get("page_size", 50)
                                 st.session_state["sub2_naics"]=f.get("naics","")
                                 st.session_state["sub2_inc"]=f.get("include","")
                                 st.session_state["sub2_exc"]=f.get("exclude","")
-                                st.session_state["sub2_has_phone"]=bool(f.get("has_phone", False))
-                                st.session_state["sub2_has_web"]=bool(f.get("has_web", False))
+                                st.session_state["sub2_has_phone"]=bool(f.get("has_phone", False)
+                                st.session_state["sub2_has_web"]=bool(f.get("has_web", False)
                                 st.session_state["sub2_state"]=f.get("state","")
                                 st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
                             except Exception as ex:
@@ -16185,7 +16152,7 @@ def _rfqg_get_or_create_rfq(notice_id: int, owner_id: str):
         if "status" in cols: fields["status"] = "Draft"
         if "created_at" in cols: fields["created_at"] = _dt_rfqg.datetime.utcnow().isoformat()
         if not fields: return None
-        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields)
         cur.execute(f"INSERT INTO rfq({cols_sql}) VALUES({ph})", tuple(fields.values()))
         conn.commit()
         rfq_id = int(cur.lastrowid)
@@ -16196,7 +16163,7 @@ def _rfqg_seed_lines_from_analyzer(notice_id: int, rfq_id: int):
     cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq_lines)").fetchall()] if cur else []
     if not cols:
         return 0
-    an = _rfqg_latest_analyzer(int(notice_id))
+    an = _rfqg_latest_analyzer(int(notice_id)
     created = 0
     # Helper to insert a line with best-effort columns
     def add_line(data: dict):
@@ -16206,7 +16173,7 @@ def _rfqg_seed_lines_from_analyzer(notice_id: int, rfq_id: int):
             if k == "rfq_id" and "rfq_id" in cols: fields["rfq_id"] = int(rfq_id)
             elif k in cols and data.get(k) is not None: fields[k] = data.get(k)
         if not fields: return
-        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields)
         try:
             cur.execute(f"INSERT INTO rfq_lines({cols_sql}) VALUES({ph})", tuple(fields.values()))
             created += 1
@@ -16247,7 +16214,7 @@ def _rfqg_seed_terms_from_notice(notice_id: int, rfq_id: int):
         city = n[1] or ""; state = n[2] or ""
         if city or state: pop = f"{city}, {state}".strip(", ")
     due = n[3] if n else None
-    an = _rfqg_latest_analyzer(int(notice_id))
+    an = _rfqg_latest_analyzer(int(notice_id)
     # rudimentary clause classification for insurance/bonding and flowdowns
     insurance = ""; bonding = ""
     flows = []
@@ -16265,7 +16232,7 @@ def _rfqg_seed_terms_from_notice(notice_id: int, rfq_id: int):
         "flowdowns_json": _json_rfqg.dumps(flows)
     }
     cur.execute("INSERT INTO rfq_terms(rfq_id, pop_text, due_date, validity_days, insurance, bonding, flowdowns_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))",
-                (int(rfq_id), terms["pop_text"], terms["due_date"], int(terms["validity_days"]), terms["insurance"], terms["bonding"], terms["flowdowns_json"]))
+                (int(rfq_id), terms["pop_text"], terms["due_date"], int(terms["validity_days"]), terms["insurance"], terms["bonding"], terms["flowdowns_json"])
     conn.commit()
     return int(cur.lastrowid)
 
@@ -16283,18 +16250,17 @@ def _rfqg_minimal_pdf(text_title: str, fields: dict, out_path: str):
     parts = [b"%PDF-1.4\n"]
 
     # 1: font
-    xref.append(sum(len(p) for p in parts)); parts.append(obj(1, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(1, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     # 2: Resources
-    xref.append(sum(len(p) for p in parts)); parts.append(obj(2, "<< /ProcSet [/PDF /Text] /Font << /F1 1 0 R >> >>"))
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(2, "<< /ProcSet [/PDF /Text] /Font << /F1 1 0 R >> >>")
     # 3: Contents
     xref.append(sum(len(p) for p in parts)); parts.append(obj(3, f"<< /Length {len(content_stream)} >>\nstream\n".encode("latin-1") + content_stream + b"\nendstream\n"))
     # 4: Page
-    xref.append(sum(len(p) for p in parts)); parts.append(obj(4, "<< /Type /Page /Parent 5 0 R /Resources 2 0 R /MediaBox [0 0 612 792] /Contents 3 0 R >>"))
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(4, "<< /Type /Page /Parent 5 0 R /Resources 2 0 R /MediaBox [0 0 612 792] /Contents 3 0 R >>")
     # 5: Pages
-    xref.append(sum(len(p) for p in parts)); parts.append(obj(5, "<< /Type /Pages /Count 1 /Kids [4 0 R] >>"))
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(5, "<< /Type /Pages /Count 1 /Kids [4 0 R] >>")
     # 6: Catalog
-    xref.append(sum(len(p) for p in parts)); parts.append(obj(6, "<< /Type /Catalog /Pages 5 0 R >>"))
-
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(6, "<< /Type /Catalog /Pages 5 0 R >>")
     xref_off = sum(len(p) for p in parts)
     parts.append(b"xref\n0 7\n0000000000 65535 f \n" +                  b"".join([f"{off:010} 00000 n \n".encode("latin-1") for off in xref]))
     parts.append(b"trailer\n<< /Size 7 /Root 6 0 R >>\nstartxref\n" + str(xref_off).encode("latin-1") + b"\n%%EOF")
@@ -16315,7 +16281,7 @@ def _rfqg_build_pack(rfq_id: int, notice_id: int):
     cover_path = str(out_dir/"cover.pdf")
     _rfqg_minimal_pdf(title, fields, cover_path)
     # Build SOW excerpt text
-    an = _rfqg_latest_analyzer(int(notice_id))
+    an = _rfqg_latest_analyzer(int(notice_id)
     sow_txt = "\n".join([f"- {t.get('task_id') or ''}: {t.get('text') or ''}" for t in (an.get("sow_tasks") or [])[:200]])
     sow_bytes = sow_txt.encode("utf-8")
     # Zip assembly
@@ -16328,7 +16294,7 @@ def _rfqg_build_pack(rfq_id: int, notice_id: int):
             for fid, fn, url in cur.execute("SELECT id, file_name, file_url FROM notice_files WHERE notice_id=?", (int(notice_id),)).fetchall():
                 if any(fn.lower().endswith(ext) for ext in [".pdf",".dwg",".png",".jpg",".jpeg"]):
                     # we do not download here to keep pure; include a pointer text
-                    z.writestr(f"drawings/{fn}.txt", f"Download from: {url}".encode("utf-8"))
+                    z.writestr(f"drawings/{fn}.txt", f"Download from: {url}".encode("utf-8")
         except Exception:
             pass
     # checksum
@@ -16363,20 +16329,20 @@ def render_rfq_generator(opp_id: int):
         st.warning("RFQ table missing."); return
     # Seed on first open
     if st.button("Seed lines and terms from Analyzer"):
-        _rfqg_seed_lines_from_analyzer(int(opp_id), int(rfq_id))
-        _rfqg_seed_terms_from_notice(int(opp_id), int(rfq_id))
+        _rfqg_seed_lines_from_analyzer(int(opp_id), int(rfq_id)
+        _rfqg_seed_terms_from_notice(int(opp_id), int(rfq_id)
         st.success("Seeded from analyzer.")
-        (st.experimental_rerun() if hasattr(st,"experimental_rerun") else st.rerun())
+        (st.experimental_rerun() if hasattr(st,"experimental_rerun") else st.rerun()
     # Header form
     conn = get_db(); cur = conn.cursor()
-    tid = _rfqg_seed_terms_from_notice(int(opp_id), int(rfq_id))
+    tid = _rfqg_seed_terms_from_notice(int(opp_id), int(rfq_id)
     row = cur.execute("SELECT id, pop_text, due_date, validity_days, insurance, bonding, flowdowns_json FROM rfq_terms WHERE rfq_id=?", (int(rfq_id),)).fetchone()
     if row:
         _, pop, due, valid, ins, bond, flows_j = row
         c1,c2,c3 = st.columns(3)
         with c1: pop2 = st.text_input("Place of performance", value=pop or "")
         with c2: due2 = st.text_input("Due date", value=due or "")
-        with c3: valid2 = st.number_input("Validity (days)", min_value=0, max_value=365, value=int(valid or 30))
+        with c3: valid2 = st.number_input("Validity (days)", min_value=0, max_value=365, value=int(valid or 30)
         c4,c5 = st.columns(2)
         with c4: ins2 = st.text_input("Insurance", value=ins or "")
         with c5: bond2 = st.text_input("Bonding", value=bond or "")
@@ -16404,11 +16370,11 @@ def render_rfq_generator(opp_id: int):
                         cur.execute("UPDATE rfq_lines SET description=?, qty=?, uom=?, clin=?, location=? WHERE id=?",
                                     (desc2, None if qty2==0 else float(qty2), uom2, clin2, loc2, int(rid))); get_db().commit(); st.success("Saved line")    
         if st.button("Build RFQ pack"):
-            res = _rfqg_build_pack(int(rfq_id), int(opp_id))
+            res = _rfqg_build_pack(int(rfq_id), int(opp_id)
             st.success(f"Pack built. SHA256 {res.get('checksum')} Bytes {res.get('bytes')}")
     with rcol:
         st.markdown("**Flowdowns**")
-        an = _rfqg_latest_analyzer(int(opp_id))
+        an = _rfqg_latest_analyzer(int(opp_id)
         for cl in (an.get("clauses") or [])[:200]:
             cite = cl.get("cite") or {}
             c = f"{cite.get('file','')} p.{cite.get('page')}" if (cite.get('file') or cite.get('page') is not None) else ""
@@ -16423,11 +16389,11 @@ except Exception:
 def render_vendors(opp_id: int):
     import streamlit as st
     if _orig_render_vendors_for_rfqg:
-        try: _orig_render_vendors_for_rfqg(int(opp_id))
+        try: _orig_render_vendors_for_rfqg(int(opp_id)
         except Exception: pass
     if _rfqg_flag():
         st.markdown("---")
-        render_rfq_generator(int(opp_id))
+        render_rfq_generator(int(opp_id)
 # === RFQG PHASE 1 END ===
 
 
@@ -16492,7 +16458,7 @@ def _rfqg2_target(items: list, starred_only: bool, min_score: float, max_distanc
     rows = items or []
     if starred_only:
         stars = st.session_state.get('vendor_stars', {})
-        starset = set(stars.keys())
+        starset = set(stars.keys()
         def k(it):
             return ( (it.get('place_id') or '') + '|' + (it.get('name') or '') )
         rows = [it for it in rows if k(it) in starset]
@@ -16548,7 +16514,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
             except Exception: vid = None
         if vid is None:
             continue
-        tok = _rfqg2_get_token(int(rfq_id), int(vid))
+        tok = _rfqg2_get_token(int(rfq_id), int(vid)
         link = (app_base.rstrip('/') + '/?page=vendor_portal&token=' + tok) if app_base else ('/?page=vendor_portal&token=' + tok)
         subject = subj_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'))
         body = body_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'), link=link)
@@ -16565,7 +16531,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
                 except Exception: vid = None
             if vid is None:
                 skipped += 1; continue
-            tok = _rfqg2_get_token(int(rfq_id), int(vid))
+            tok = _rfqg2_get_token(int(rfq_id), int(vid)
             link = (app_base.rstrip('/') + '/?page=vendor_portal&token=' + tok) if app_base else ('/?page=vendor_portal&token=' + tok)
             subject = subj_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'))
             body = body_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'), link=link)
@@ -16598,7 +16564,7 @@ def render_rfq_generator(opp_id: int):
     rid = None
     if _orig_render_rfq_generator_phase2:
         try:
-            _orig_render_rfq_generator_phase2(int(opp_id))
+            _orig_render_rfq_generator_phase2(int(opp_id)
         except Exception:
             pass
     # retrieve existing rfq_id for current user if any
@@ -16609,7 +16575,7 @@ def render_rfq_generator(opp_id: int):
     except Exception:
         rid = None
     if rid is not None:
-        _rfqg2_render_outreach_panel(int(opp_id), int(rid))
+        _rfqg2_render_outreach_panel(int(opp_id), int(rid)
 # === RFQG PHASE 2 END ===
 
 
@@ -16657,7 +16623,7 @@ def _rfqg3_get_or_create_quote(rfq_id: int, vendor_id: int, status: str="draft")
             cur.execute("UPDATE vendor_quotes SET status=?, updated_at=datetime('now') WHERE id=?", (status, qid)); conn.commit()
         return qid
     cur.execute("INSERT INTO vendor_quotes(rfq_id, vendor_id, status, total_price, exceptions, created_at, updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))",
-                (int(rfq_id), int(vendor_id), status, None, None))
+                (int(rfq_id), int(vendor_id), status, None, None)
     conn.commit()
     return int(cur.lastrowid)
 
@@ -16668,7 +16634,7 @@ def _rfqg3_set_quote_lines(quote_id: int, lines: list):
     except Exception: pass
     created = 0; total = 0.0
     for ln in lines or []:
-        rfq_line_id = int(ln.get("rfq_line_id"))
+        rfq_line_id = int(ln.get("rfq_line_id")
         ext_price = float(ln.get("ext_price") or 0.0)
         notes = ln.get("notes")
         try:
@@ -16732,7 +16698,7 @@ def _rfqg3_upload_vendor_pdf(rfq_id: int, vendor_id: int, file_obj, filename: st
     h = _hash_rfqg3.sha256(data).hexdigest()
     conn = get_db(); cur = conn.cursor()
     cur.execute("INSERT INTO vendor_docs(vendor_id, rfq_id, file_name, path, bytes, checksum, uploaded_at) VALUES(?,?,?,?,?,?,datetime('now'))",
-                (int(vendor_id), int(rfq_id), filename, str(path), len(data), h))
+                (int(vendor_id), int(rfq_id), filename, str(path), len(data), h)
     conn.commit()
     return str(path), h, len(data)
 
@@ -16777,7 +16743,7 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
     # Status table
     if vendors:
         for vid, nm, em in vendors[:500]:
-            status = _rfqg3_status_label(cur, int(rfq_id), int(vid))
+            status = _rfqg3_status_label(cur, int(rfq_id), int(vid)
             with st.container(border=True):
                 st.markdown(f"**{nm}**  ·  {status}")
                 # show latest quote total if any
@@ -16826,7 +16792,7 @@ def render_rfq_generator(opp_id: int):
     rid = None
     if _orig_render_rfq_generator_phase3:
         try:
-            _orig_render_rfq_generator_phase3(int(opp_id))
+            _orig_render_rfq_generator_phase3(int(opp_id)
         except Exception:
             pass
     # find rfq id
@@ -16837,7 +16803,7 @@ def render_rfq_generator(opp_id: int):
     except Exception:
         rid = None
     if rid is not None:
-        _rfqg3_responses_panel(int(opp_id), int(rid))
+        _rfqg3_responses_panel(int(opp_id), int(rid)
 # === RFQG PHASE 3 END ===
 
 
@@ -16921,7 +16887,7 @@ def _p8_get_or_create_rfq(notice_id: int, owner_id: str):
     row = cur.execute('SELECT id FROM rfq WHERE notice_id=? AND owner_id=? ORDER BY id DESC LIMIT 1', (int(notice_id), owner_id)).fetchone()
     if row: return int(row[0])
     cur.execute("INSERT INTO rfq(notice_id, owner_id, sent_at, due_at, scope, attachments_json) VALUES(?,?,?,?,?,?)",
-                (int(notice_id), owner_id, None, None, None, None))
+                (int(notice_id), owner_id, None, None, None, None)
     conn.commit(); return int(cur.lastrowid)
 
 def _p8_seed_vendors_for_notice(notice_id: int, limit: int=100):
@@ -16953,7 +16919,7 @@ def _p8_seed_vendors_for_notice(notice_id: int, limit: int=100):
         if addr and ',' in addr:
             city = addr.split(',')[0].strip()
         cur.execute('INSERT INTO vendors(name, naics, city, state, phone, email, website, notes) VALUES(?,?,?,?,?,?,?,?)',
-                    (name, naics, city, st, phone, email, web, None))
+                    (name, naics, city, st, phone, email, web, None)
         created += 1
     # seed from session
     for it in results[:limit]:
@@ -16984,7 +16950,7 @@ def _p8_send_rfqs(rfq_id: int, vendor_ids: list, subject_t: str, body_t: str, at
         body = body_t.format(title=title, due_date=due_at or '', company=company)
         try:
             cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?, 'queued', 0)",
-                        (email, subject, body, _dt_p8.datetime.utcnow().isoformat()))
+                        (email, subject, body, _dt_p8.datetime.utcnow().isoformat())
             count += 1
         except Exception:
             pass
@@ -17041,7 +17007,7 @@ except Exception:
 def render_vendors(opp_id: int):
     import streamlit as st
     if _orig_render_vendors_phase8:
-        try: _orig_render_vendors_phase8(int(opp_id))
+        try: _orig_render_vendors_phase8(int(opp_id)
         except Exception: pass
     if not _p8_flag():
         return
@@ -17055,7 +17021,7 @@ def render_vendors(opp_id: int):
     c1,c2,c3 = st.columns(3)
     with c1:
         if st.button('Add vendors (seed by NAICS/State)'):
-            cnt = _p8_seed_vendors_for_notice(int(opp_id))
+            cnt = _p8_seed_vendors_for_notice(int(opp_id)
             st.success(f'Added {cnt} vendors from Finder results')
     with c2:
         subj = st.text_input('Email subject', value='RFQ for {title} — due {due_date}', key='p8_subj')
@@ -17075,11 +17041,11 @@ def render_vendors(opp_id: int):
     st.markdown('---')
     st.markdown('**Record quote**')
     # Select vendor and enter totals; per-line handled in RFQG intake but allow quick total+coverage recompute
-    sel2 = st.selectbox('Vendor', options=[(i, (cur.execute('SELECT name FROM vendors WHERE id=?', (i,)).fetchone() or ['Vendor'])[0]) for i in [r[0] for r in vrows]], format_func=lambda x: x[1] if isinstance(x, tuple) else str(x))
+    sel2 = st.selectbox('Vendor', options=[(i, (cur.execute('SELECT name FROM vendors WHERE id=?', (i,)).fetchone() or ['Vendor'])[0]) for i in [r[0] for r in vrows]], format_func=lambda x: x[1] if isinstance(x, tuple) else str(x)
     vid = sel2[0] if isinstance(sel2, tuple) else None
     if vid:
         # show coverage based on existing quote lines
-        cov = _p8_compute_coverage(int(rfq_id), int(vid))
+        cov = _p8_compute_coverage(int(rfq_id), int(vid)
         st.caption(f'Coverage: {cov:.1f}% of RFQ lines priced')
         name = st.text_input('Contact name')
         email = st.text_input('Contact email')
@@ -17090,7 +17056,7 @@ def render_vendors(opp_id: int):
     st.markdown('---')
     st.markdown('**Chase list**')
     action = st.text_input('Next action', value='Follow up call')
-    due = st.text_input('Due date ISO', value=_dt_p8.datetime.utcnow().date().isoformat())
+    due = st.text_input('Due date ISO', value=_dt_p8.datetime.utcnow().date().isoformat()
     if vid and st.button('Add chase item'):
         _p8_add_chase(int(rfq_id), int(vid), action, due); st.success('Chase added')
     # List pending items
