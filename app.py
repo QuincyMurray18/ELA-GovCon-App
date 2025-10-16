@@ -476,7 +476,29 @@ import streamlit as st
 
 
 
-# === EARLY DB BOOTSTRAP START ===\n# Ensure get_db exists before any import-time calls.\n# This early definition will be overridden by later phases if they redefine get_db.\nimport os as _os\n_os.makedirs("data", exist_ok=True)\n\nif "get_db" not in globals():\n    import streamlit as st\n    @st.cache_resource\n    def get_db():\n        import sqlite3\n        conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)\n        try:\n            conn.execute("PRAGMA journal_mode=WAL;")\n            conn.execute("PRAGMA synchronous=NORMAL;")\n            conn.execute("PRAGMA temp_store=MEMORY;")\n            conn.execute("PRAGMA foreign_keys=ON;")\n            conn.execute("""CREATE TABLE IF NOT EXISTS migrations(\n                id INTEGER PRIMARY KEY,\n                name TEXT NOT NULL,\n                applied_at TEXT NOT NULL\n            );""")\n        except Exception:\n            pass\n        return conn\n# === EARLY DB BOOTSTRAP END ===\n
+# === EARLY DB BOOTSTRAP START ===
+# Ensure get_db exists before any import-time calls.
+# This early definition will be overridden by later phases if they redefine get_db.
+import os as _os
+_os.makedirs("data", exist_ok=True)
+
+if "get_db" not in globals():
+    import streamlit as st
+    @st.cache_resource
+    def get_db():
+        import sqlite3
+        conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA temp_store=MEMORY;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+            conn.execute("CREATE TABLE IF NOT EXISTS migrations(id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);")
+        except Exception:
+            pass
+        return conn
+# === EARLY DB BOOTSTRAP END ===
+
 
 # === PHASE 0 CORE START ===
 # Bootstrap: feature flags, API client, SQLite PRAGMAs, secrets loader, structured logging.
