@@ -472,13 +472,13 @@ def _render_markdown_to_docx(doc, md_text):
 
 
 
-        # Bullets: -, *, •
+        # Bullets: -, *, -
 
-        if _re.match(r'^\s*(\-|\*|•)\s+', line):
+        if _re.match(r'^\s*(\-|\*|-)\s+', line):
 
             flush_numbers()
 
-            bullet_buf.append(_re.sub(r'^\s*(\-|\*|•)\s+', '', line, count=1))
+            bullet_buf.append(_re.sub(r'^\s*(\-|\*|-)\s+', '', line, count=1))
 
             continue
 
@@ -730,9 +730,9 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
             flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
 
-        if _re.match(r"^(\-|\*|•)\s+", line):
+        if _re.match(r"^(\-|\*|-)\s+", line):
 
-            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|-)\s+", "", line, count=1)); continue
 
         if _re.match(r"^\d+\.\s+", line):
 
@@ -868,9 +868,9 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
             flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
 
-        if _re.match(r"^(\-|\*|•)\s+", line):
+        if _re.match(r"^(\-|\*|-)\s+", line):
 
-            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|-)\s+", "", line, count=1)); continue
 
         if _re.match(r"^\d+\.\s+", line):
 
@@ -7196,7 +7196,7 @@ def _render_identity_chip():
 
             with c3:
 
-                st.caption(f"Org: {oname or 'unknown'}  •  User: {uname or 'unknown'}  •  Role: {role or 'unknown'}")
+                st.caption(f"Org: {oname or 'unknown'}  -  User: {uname or 'unknown'}  -  Role: {role or 'unknown'}")
 
     except Exception as _ex:
 
@@ -7206,7 +7206,7 @@ def _render_identity_chip():
 
 _render_identity_chip()
 
-st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+st.caption("SubK sourcing - SAM watcher - proposals - outreach - CRM - goals - chat with memory & file uploads")
 
 DB_PATH = "data/app.db"
 
@@ -7300,7 +7300,7 @@ def _strip_markdown_to_plain(txt: str) -> str:
 
     # Remove list markers
 
-    s = _re.sub(r"^[ \t]*([-*•]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
+    s = _re.sub(r"^[ \t]*([-*-]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
 
     # Remove table pipes (keep content)
 
@@ -7774,13 +7774,13 @@ def _render_markdown_to_docx(doc, md_text):
 
 
 
-        # Bullets: -, *, •
+        # Bullets: -, *, -
 
-        if _re.match(r'^\s*(\-|\*|•)\s+', line):
+        if _re.match(r'^\s*(\-|\*|-)\s+', line):
 
             flush_numbers()
 
-            bullet_buf.append(_re.sub(r'^\s*(\-|\*|•)\s+', '', line, count=1))
+            bullet_buf.append(_re.sub(r'^\s*(\-|\*|-)\s+', '', line, count=1))
 
             continue
 
@@ -8032,9 +8032,9 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
             flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
 
-        if _re.match(r"^(\-|\*|•)\s+", line):
+        if _re.match(r"^(\-|\*|-)\s+", line):
 
-            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|-)\s+", "", line, count=1)); continue
 
         if _re.match(r"^\d+\.\s+", line):
 
@@ -8170,9 +8170,9 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
             flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
 
-        if _re.match(r"^(\-|\*|•)\s+", line):
+        if _re.match(r"^(\-|\*|-)\s+", line):
 
-            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|-)\s+", "", line, count=1)); continue
 
         if _re.match(r"^\d+\.\s+", line):
 
@@ -14382,7 +14382,7 @@ def _render_identity_chip():
 
             with c3:
 
-                st.caption(f"Org: {oname or 'unknown'}  •  User: {uname or 'unknown'}  •  Role: {role or 'unknown'}")
+                st.caption(f"Org: {oname or 'unknown'}  -  User: {uname or 'unknown'}  -  Role: {role or 'unknown'}")
 
     except Exception as _ex:
 
@@ -14392,7 +14392,7 @@ def _render_identity_chip():
 
 _render_identity_chip()
 
-st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+st.caption("SubK sourcing - SAM watcher - proposals - outreach - CRM - goals - chat with memory & file uploads")
 
 DB_PATH = "data/app.db"
 
@@ -15580,9 +15580,9 @@ def _normalize_markdown_sections(md_text: str) -> str:
 
     Clean common generation artifacts:
 
-      • Collapse immediately repeated headings with the same text
+#       - Collapse immediately repeated headings with the same text
 
-      • Trim double spaces after heading text
+#       - Trim double spaces after heading text
 
     """
 
@@ -15658,7 +15658,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
       - Headings: lines starting with #, ##, ### map to H1/H2/H3
 
-      - Bullets: lines starting with -, *, or • map to bullets
+      - Bullets: lines starting with -, *, or - map to bullets
 
       - Numbered: lines like "1. text" map to numbered list (approx)
 
@@ -15824,11 +15824,11 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
 
         # Bullets
 
-        if re.match(r"^(\-|\*|•)\s+", line):
+        if re.match(r"^(\-|\*|-)\s+", line):
 
             flush_numbers()
 
-            bullet_buf.append(re.sub(r"^(\-|\*|•)\s+", "", line, count=1))
+            bullet_buf.append(re.sub(r"^(\-|\*|-)\s+", "", line, count=1))
 
             continue
 
@@ -16586,7 +16586,7 @@ try:
 
                 location = st.text_input("Location", value="")
 
-                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
+                highlights = st.text_area("Highlights bullets", height=120, value="- Scope coverage\n- Key metrics\n- Outcomes")
 
             contact_name = st.text_input("POC name", value="")
 
@@ -18348,7 +18348,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
 
                 for _, r in best.iterrows():
 
-                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} -- {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
+                    lines.append(f"- [{int(r['Score'])}] {str(r.get('title',''))[:90]} -- {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
 
                 try:
 
@@ -19008,7 +19008,7 @@ except Exception:
 
                         for _, r in best.iterrows():
 
-                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} -- {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
+                            lines.append(f"- [{int(r['Score'])}] {str(r.get('title',''))[:90]} -- {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
 
                         try:
 
@@ -19388,11 +19388,11 @@ with legacy_tabs[6]:
 
     core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
 
-    diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
+    diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization - Quality controls - Transparent reporting - Nationwide partner network")
 
     past_perf = st.text_area("Representative experience", key="cap_past_textarea_capability_builder", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
 
-    contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
+    contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC - info@elamanagement.com - 555 555 5555 - UEI XXXXXXX - CAGE XXXXX")
 
 
 
@@ -19476,7 +19476,7 @@ with legacy_tabs[7]:
 
     thesis = st.text_area("Thesis", key="wp_thesis_textarea_whitepaper_builder", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
 
-    audience = st.text_input("Audience", key="wp_audience_input_whitepaper_builder", value="Facility Managers • Contracting Officers • Program Managers")
+    audience = st.text_input("Audience", key="wp_audience_input_whitepaper_builder", value="Facility Managers - Contracting Officers - Program Managers")
 
 
 
@@ -22796,7 +22796,7 @@ def render_rfp_panel():
 
     st.subheader("RFP Analyzer")
 
-    st.caption(f"{meta['title']}  •  {meta['agency']}  •  Due {meta['due'] or 'n/a'}")
+    st.caption(f"{meta['title']}  -  {meta['agency']}  -  Due {meta['due'] or 'n/a'}")
 
 
 
@@ -24512,7 +24512,7 @@ def render_compliance_v2_evidence_viewer():
 
     _, fname, url, ctype, local_path = row
 
-    st.caption(f"{fname} • page {page if page else '?'}")
+    st.caption(f"{fname} - page {page if page else '?'}")
 
     # Simple preview: try to extract text of the page for quick context
 
@@ -26524,7 +26524,7 @@ with st.sidebar:
 
     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
 
-    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
+    st.caption(f"OpenAI SDK: {_openai_version} - Model: {OPENAI_MODEL}")
 
     if st.button("Test model"):
 
@@ -27298,15 +27298,15 @@ def render_proposal_builder():
 
                         f'## {heading}',
 
-                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
+                        '- Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
 
-                        '• Roles and responsibilities: Identify key staff and escalation paths.',
+                        '- Roles and responsibilities: Identify key staff and escalation paths.',
 
-                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
+                        '- Quality assurance: Inspections, KPIs, and corrective actions.',
 
-                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
+                        '- Risk mitigation: Top risks and mitigations tied to timeline.',
 
-                        '• Compliance notes: Where Section L & M items are satisfied.',
+                        '- Compliance notes: Where Section L & M items are satisfied.',
 
                     ]
 
@@ -27330,15 +27330,15 @@ def render_proposal_builder():
 
                         f'## {heading}',
 
-                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
+                        '- Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
 
-                        '• Roles and responsibilities: Identify key staff and escalation paths.',
+                        '- Roles and responsibilities: Identify key staff and escalation paths.',
 
-                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
+                        '- Quality assurance: Inspections, KPIs, and corrective actions.',
 
-                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
+                        '- Risk mitigation: Top risks and mitigations tied to timeline.',
 
-                        '• Compliance notes: Where Section L & M items are satisfied.',
+                        '- Compliance notes: Where Section L & M items are satisfied.',
 
                     ]
 
@@ -28056,11 +28056,11 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
 
 
-        if _re.match(r"^(\-|\*|•)\s+", line):
+        if _re.match(r"^(\-|\*|-)\s+", line):
 
             flush_numbers()
 
-            bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1))
+            bullet_buf.append(_re.sub(r"^(\-|\*|-)\s+", "", line, count=1))
 
             continue
 
@@ -28862,7 +28862,7 @@ try:
 
                 st.markdown(f"#### {stage_name}")
 
-                st.caption(f"{int(_counts.get(stage_name, 0))} deals • ${float(_totals.get(stage_name, 0.0)):,.2f}")
+                st.caption(f"{int(_counts.get(stage_name, 0))} deals - ${float(_totals.get(stage_name, 0.0)):,.2f}")
 
 
 
@@ -28908,7 +28908,7 @@ try:
 
                         st.markdown(f"**{row['title']}**")
 
-                        st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
+                        st.caption(f"Owner: {row['owner'] or 'Unassigned'}  -  Amount: ${float(row['amount'] or 0):,.2f}")
 
                         kc1, kc2 = st.columns([1,1])
 
@@ -33398,13 +33398,13 @@ def _rfp_panel_ui(notice_id: int):
 
             for f in data.get("factors", []):
 
-                st.write("• " + f)
+                st.write("- " + f)
 
             st.subheader("Clauses")
 
             for c in data.get("clauses", []):
 
-                st.write("• " + c)
+                st.write("- " + c)
 
             st.subheader("Dates")
 
@@ -33416,13 +33416,13 @@ def _rfp_panel_ui(notice_id: int):
 
             for f in data.get("forms", []):
 
-                st.write("• " + f)
+                st.write("- " + f)
 
             st.subheader("Milestones")
 
             for m in data.get("milestones", []):
 
-                st.write("• " + m)
+                st.write("- " + m)
 
         st.markdown("---")
 
@@ -37074,7 +37074,7 @@ def render_sam_watch_minimal_ui():
 
             with st.container(border=True):
 
-                st.write(r.get("title")); st.caption(f"{r.get('agency','')} • {r.get('notice_type','')} • Due {r.get('due_at','')}")
+                st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
 
 
 
@@ -37610,7 +37610,7 @@ def render_sam_watch_minimal_ui():
 
             with st.container(border=True):
 
-                st.write(r.get("title")); st.caption(f"{r.get('agency','')} • {r.get('notice_type','')} • Due {r.get('due_at','')}")
+                st.write(r.get("title")); st.caption(f"{r.get('agency','')} - {r.get('notice_type','')} - Due {r.get('due_at','')}")
 
     if _ss_flag() and st.session_state.get("saved_search_modal_open"):
 
@@ -37630,7 +37630,7 @@ def render_sam_watch_minimal_ui():
 
             for rid, name, cad, rec, active, last_run, qj in rows:
 
-                with st.expander(f"{name} • {cad} • {'active' if active else 'inactive'}", expanded=False):
+                with st.expander(f"{name} - {cad} - {'active' if active else 'inactive'}", expanded=False):
 
                     st.caption(f"Recipients: {rec}")
 
@@ -38022,7 +38022,7 @@ def render_proposal_wizard(notice_id: int):
 
         for fid, fname, ts in rows:
 
-            st.caption(f"{fname} • {ts}")
+            st.caption(f"{fname} - {ts}")
 
         if st.button("Next -> Package"):
 
@@ -40810,7 +40810,7 @@ def render_vendors(opp_id: int):
 
             for rid, nm, cad, rcps, active, last_run, qj in rows:
 
-                with st.expander(f"{nm} • {cad} • {'active' if active else 'inactive'}", expanded=False):
+                with st.expander(f"{nm} - {cad} - {'active' if active else 'inactive'}", expanded=False):
 
                     st.caption(f"Recipients: {rcps}")
 
@@ -41434,7 +41434,7 @@ def render_rfq_generator(opp_id: int):
 
             c = f"{cite.get('file','')} p.{cite.get('page')}" if (cite.get('file') or cite.get('page') is not None) else ""
 
-            st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('• ' + c) if c else ''}")
+            st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('- ' + c) if c else ''}")
 
 
 
@@ -42176,7 +42176,7 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
 
                 if row and row[0] is not None:
 
-                    st.caption(f"Total: {row[0]:.2f}  •  updated {row[2]}")
+                    st.caption(f"Total: {row[0]:.2f}  -  updated {row[2]}")
 
                 # Manual intake form
 
@@ -42808,7 +42808,7 @@ def render_vendors(opp_id: int):
 
             cA, cB = st.columns([3,1])
 
-            with cA: st.caption(f"{nm} • {act} • due {d}")
+            with cA: st.caption(f"{nm} - {act} - due {d}")
 
             with cB:
 
@@ -43340,7 +43340,7 @@ def render_admin_observability():
 
     ensure_observability_schema()
 
-    st.subheader("Admin • Logs and Metrics")
+    st.subheader("Admin - Logs and Metrics")
 
     d1, d2 = st.columns(2)
 
