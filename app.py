@@ -627,7 +627,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 # ---- Feature flags ----
 _FEATURE_KEYS = [
     "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban", "deals_activities", "deals_forecast"]
+    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban", "deals_activities"]
 def init_feature_flags():
 
 # Deals Phase 1: init refresh token
@@ -9660,16 +9660,6 @@ DEAL_STAGES = [
 
 def ensure_deals_table(conn):
 
-# Deals Phase 4: add win_prob column for weighted pipeline
-try:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(deals)")}
-    if "win_prob" not in cols:
-        conn.execute("ALTER TABLE deals ADD COLUMN win_prob REAL")
-        conn.execute("UPDATE deals SET win_prob = 0.2 WHERE win_prob IS NULL")
-except Exception:
-    pass
-
-
 
 def ensure_deal_activities_table(conn):
     """
@@ -9916,179 +9906,13 @@ def enqueue_task_due_email(activity_id:int, to_email:str=None):
                 (to_email, subject, body, a_due, int(activity_id)))
     conn.commit()
     return True
-
-
-# === DEALS PHASE 4 HELPERS START ===
-def _period_key(date_txt: str, mode: str = "month") -> str:
-    if not date_txt:
-        return "Unscheduled"
-    d = str(date_txt)[:10]
-    y, m = d.split("-")[0:2] if "-" in d else (None, None)
-    if not y or not m or len(y) != 4:
-        return "Unscheduled"
-    if mode == "quarter":
-        q = (int(m)-1)//3 + 1
-        return f"{y}-Q{q}"
-    return f"{y}-{m}"
-
-def forecast_by_period(mode: str = "month", owner: str = None):
-    import pandas as _pd
-    conn = get_db()
-    df = _pd.read_sql_query("SELECT id,title,owner,stage,amount,win_prob,due_date FROM deals", conn)
-    if owner:
-        df = df[df["owner"].fillna("").str.contains(owner, case=False)]
-    if df.empty:
-        return _pd.DataFrame(columns=["period","count","amount","weighted"])
-    df["amount"] = _pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
-    df["win_prob"] = _pd.to_numeric(df["win_prob"], errors="coerce").fillna(0.2)
-    df["period"] = df["due_date"].apply(lambda x: _period_key(x, mode))
-    df["weighted"] = df["amount"] * df["win_prob"]
-    agg = df.groupby("period", as_index=False).agg(count=("id","count"), amount=("amount","sum"), weighted=("weighted","sum"))
-    agg = agg.sort_values("period").reset_index(drop=True)
-    totals = {"period":"Total", "count":int(agg["count"].sum() if not agg.empty else 0),
-              "amount":float(agg["amount"].sum() if not agg.empty else 0.0),
-              "weighted":float(agg["weighted"].sum() if not agg.empty else 0.0)}
-    if not agg.empty:
-        agg = _pd.concat([agg, _pd.DataFrame([totals])], ignore_index=True)
-    else:
-        agg = _pd.DataFrame([totals])
-    return agg
-
-def _map_compliance_to_prob(state: str) -> float:
-    s = str(state or "").lower()
-    if s in {"", "unreviewed", "unknown"}:
-        return 0.0
-    if "non" in s and "compliant" in s:
-        return -0.25
-    if "gap" in s:
-        return -0.1
-    if "compliant" in s:
-        return 0.25
-    return 0.0
-
-def compute_win_prob_from_signals(deal_id: int) -> float:
-    """Heuristic win probability from stage, compliance_state, rfq coverage."""
-    conn = get_db(); cur = conn.cursor()
-    row = cur.execute("SELECT id, stage, notice_id, coalesce(win_prob,0.2) FROM deals WHERE id=?", (int(deal_id),)).fetchone()
-    if not row:
-        return 0.2
-    _, stage, notice_id, current = row
-    base = 0.2
-    # Stage influence
-    s = str(stage or "").lower()
-    if "no contact" in s: base += 0.0
-    elif "contact" in s: base += 0.05
-    elif "qualified" in s or "viable" in s: base += 0.1
-    elif "proposal" in s: base += 0.2
-    elif "negotiation" in s or "best and final" in s: base += 0.3
-    # Signals
-    comp_delta = 0.0
-    cov_delta = 0.0
-    if notice_id:
-        try:
-            # compliance_state from notices
-            comp = get_db().execute("SELECT compliance_state FROM notices WHERE id=?", (int(notice_id),)).fetchone()
-            comp_delta = _map_compliance_to_prob(comp[0] if comp else None)
-        except Exception:
-            comp_delta = 0.0
-        try:
-            # RFQ coverage from vendor_quotes via latest RFQ
-            rfq_row = get_db().execute("SELECT id FROM rfq WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
-            if rfq_row:
-                rfq_id = int(rfq_row[0])
-                cov_rows = get_db().execute("SELECT coverage_score FROM vendor_quotes WHERE rfq_id=?", (rfq_id,)).fetchall()
-                scores = [float(r[0]) for r in cov_rows if r and r[0] is not None]
-                if scores:
-                    avg = sum(scores)/len(scores)
-                    cov_delta = (avg/100.0 - 0.5) * 0.3  # -0.15 to +0.15
-        except Exception:
-            cov_delta = 0.0
-    p = max(0.01, min(0.95, base + comp_delta + cov_delta))
-    return p
-
-def update_win_prob_from_signals(deal_id: int) -> float:
-    p = compute_win_prob_from_signals(int(deal_id))
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("UPDATE deals SET win_prob=?, updated_at=datetime('now') WHERE id=?", (float(p), int(deal_id)))
-    conn.commit()
-    return p
-
-def recompute_all_win_probs():
-    conn = get_db()
-    ids = [int(r[0]) for r in conn.execute("SELECT id FROM deals").fetchall()]
-    out = []
-    for did in ids:
-        out.append((did, update_win_prob_from_signals(did)))
-    return out
-
-def list_sla_blockers(stale_days: int = 7, soon_days: int = 7):
-    """Return blockers based on missing next_action, overdue due_date, stale stage, low RFQ coverage when due soon."""
-    import pandas as _pd
-    conn = get_db()
-    df = _pd.read_sql_query("SELECT id,title,owner,stage,next_action,due_date,notice_id FROM deals", conn)
-    if df.empty:
-        return _pd.DataFrame(columns=["deal_id","title","owner","blocker","severity"])
-    rows = []
-    from datetime import datetime, timedelta
-    today = datetime.utcnow().date()
-    # Build a map of last stage change from history
-    hist = {int(r[0]): r[1] for r in conn.execute("SELECT id, stage_history FROM deals").fetchall()}
-    last_change = {}
-    import json as _json
-    for did, js in hist.items():
-        try:
-            items = _json.loads(js or "[]")
-            if items:
-                last_ts = max(int(x.get("ts", 0)) for x in items if isinstance(x, dict))
-                last_change[did] = last_ts
-        except Exception:
-            pass
-    for _, r in df.iterrows():
-        did = int(r["id"]); title = r["title"]; owner = r.get("owner")
-        # Missing next action
-        if not str(r.get("next_action") or "").strip():
-            rows.append((did, title, owner, "No next action", "med"))
-        # Overdue deal due_date
-        dd = str(r.get("due_date") or "")[:10]
-        try:
-            if dd:
-                ddate = datetime.fromisoformat(dd).date()
-                if ddate < today:
-                    rows.append((did, title, owner, f"Overdue deal due {dd}", "high"))
-                elif (ddate - today).days <= soon_days:
-                    # if soon and low RFQ coverage
-                    try:
-                        n_id = int(r.get("notice_id") or 0)
-                        if n_id:
-                            row_cov = conn.execute("SELECT id FROM rfq WHERE notice_id=? ORDER BY id DESC LIMIT 1", (n_id,)).fetchone()
-                            if row_cov:
-                                rfq_id = int(row_cov[0])
-                                cov_rows = conn.execute("SELECT coverage_score FROM vendor_quotes WHERE rfq_id=?", (rfq_id,)).fetchall()
-                                scores = [float(x[0]) for x in cov_rows if x and x[0] is not None]
-                                avg = sum(scores)/len(scores) if scores else 0.0
-                                if avg < 60.0:
-                                    rows.append((did, title, owner, f"Low RFQ coverage {avg:.0f}% with due soon", "high"))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        # Stale stage
-        ts = last_change.get(did)
-        if ts:
-            from datetime import datetime
-            age_days = (datetime.utcnow() - datetime.utcfromtimestamp(ts)).days
-            if age_days > stale_days:
-                rows.append((did, title, owner, f"Stage stale {age_days}d", "med"))
-    out = _pd.DataFrame(rows, columns=["deal_id","title","owner","blocker","severity"])
-    return out.sort_values(["severity","deal_id"])
-# === DEALS PHASE 4 HELPERS END ===
 # === DEALS PHASE 3 HELPERS END ===
 # === DEALS PHASE 1 HELPERS END ===
 def list_deals(stage: str | None = None, q: str | None = None):
     conn = get_db()
     ensure_deals_table(conn)
     cur = conn.cursor()
-    sql = "select id, title, stage, owner, amount, notes, agency, due_date, next_action, notice_id, win_prob, created_at, updated_at from deals"
+    sql = "select id, title, stage, owner, amount, notes, agency, due_date, next_action, notice_id, created_at, updated_at from deals"
     params = []
     where = []
     if stage and stage != "All":
@@ -10101,7 +9925,7 @@ def list_deals(stage: str | None = None, q: str | None = None):
         sql += " where " + " and ".join(where)
     sql += " order by updated_at desc, id desc"
     rows = cur.execute(sql, params).fetchall()
-    cols = ["id","title","stage","owner","amount","notes","agency","due_date","next_action","notice_id","win_prob","created_at","updated_at"]
+    cols = ["id","title","stage","owner","amount","notes","agency","due_date","next_action","notice_id","created_at","updated_at"]
     import pandas as pd
     return pd.DataFrame(rows, columns=cols)
 
@@ -10222,42 +10046,7 @@ if feature_flags().get("deals_activities"):
     else:
         df_tasks = _pd.DataFrame(columns=["id","deal_id","type","task_title","note","date","status","created_by","created_at","updated_at","kind"])
     # Combine
-    cal = _pd.concat([df_deals[["id","title","date","kind"]], df_tasks[["id","dea
-
-if feature_flags().get("deals_forecast"):
-    st.divider()
-    st.markdown("### Forecast")
-
-if feature_flags().get("deals_forecast"):
-    st.divider()
-    st.markdown("### Signals and SLAs")
-    stale_days = st.number_input("Stale if no stage change for days", min_value=1, value=7, step=1, key="sla_stale_days")
-    soon_days = st.number_input("Due soon window days", min_value=1, value=7, step=1, key="sla_soon_days")
-    df_blk = list_sla_blockers(stale_days=stale_days, soon_days=soon_days)
-    if not df_blk.empty:
-        st.dataframe(df_blk, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No blockers triggered.")
-
-    f1, f2, f3 = st.columns([1,1,2])
-    with f1:
-        mode = st.selectbox("Period", ["month","quarter"], index=0, key="fc_mode")
-    with f2:
-        owner_f = st.text_input("Owner contains", key="fc_owner")
-    with f3:
-        if st.button("Recompute win probabilities"):
-            res = recompute_all_win_probs()
-            st.caption(f"Updated {len(res)} deals.")
-    df_fc = forecast_by_period(mode=mode, owner=owner_f or None)
-    st.dataframe(df_fc, use_container_width=True, hide_index=True)
-    # Totals display
-    if not df_fc.empty and df_fc.iloc[-1]["period"] == "Total":
-        tot = df_fc.iloc[-1]
-        cA, cB, cC = st.columns(3)
-        cA.metric("Deals", int(tot["count"]))
-        cB.metric("Amount", f"${tot['amount']:,.0f}")
-        cC.metric("Weighted", f"${tot['weighted']:,.0f}")
-l_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
+    cal = _pd.concat([df_deals[["id","title","date","kind"]], df_tasks[["id","deal_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
     if month:
         cal = cal[cal["date"].fillna("").str.startswith(month)]
     # Simple grouped agenda
