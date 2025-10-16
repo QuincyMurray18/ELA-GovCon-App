@@ -1145,6 +1145,30 @@ def render_analyzer(opp_id):
             render_forms_and_submission_tabs(int(opp_id))
     except Exception:
         pass
+    try:
+        if feature_flags().get('sow_price_hints', False):
+            st.markdown('---')
+            st.subheader('SOW & Price hints')
+            render_sow_price_tabs(int(opp_id))
+    except Exception:
+        pass
+    try:
+        if feature_flags().get('rfp_impact', False):
+            st.markdown('---')
+            st.subheader('Impact')
+            render_rfp_impact_tab(int(opp_id))
+    except Exception:
+        pass
+    try:
+        if feature_flags().get('builder_from_analyzer', False):
+            st.markdown('---')
+            st.subheader('Builder')
+            render_builder_adapter_ui(int(opp_id))
+    except Exception:
+        pass
+
+
+
 
 
 
@@ -11428,7 +11452,49 @@ def render_rfp_panel():
             with st.expander("Clauses"): st.write(s.get("sections",{}).get("Clauses",[]) or "None")
             with st.expander("Dates"): st.write(s.get("sections",{}).get("Dates",[]) or "None")
             with st.expander("Forms"): st.write(s.get("sections",{}).get("Forms",[]) or "None")
-            with st.expander("Milestones"): st.write(s.get("sections",{}).get("Milestones",[]) or "None")
+            
+        # Impact-based To Do
+        try:
+            if feature_flags().get('rfp_impact', False):
+                data, ts = latest_rfp_impact(int(notice_id)) if 'notice_id' in locals() else (None,None)
+                if data and data.get('items'):
+                    st.markdown("#### To Do from latest amendment")
+                    for it in data['items']:
+                        t = it.get('type')
+                        if t == 'forms' and it.get('added'):
+                            st.warning("New forms to review: " + ", ".join(it['added'][:5]))
+                        if t == 'clins' and it.get('added'):
+                            st.warning("New CLINs to model: " + ", ".join(it['added'][:5]))
+                        if t == 'dates' and it.get('added'):
+                            st.info("New/changed dates: " + ", ".join(it['added'][:5]))
+        except Exception:
+            pass
+
+        # Price step seeded CLINs overview
+        try:
+            if feature_flags().get('builder_from_analyzer', False) and 'notice_id' in locals():
+                conn = get_db()
+                rowp = conn.execute("select id from proposals where notice_id=? order by id desc limit 1", (int(notice_id),)).fetchone()
+                if rowp:
+                    pid = int(rowp[0])
+                    try:
+                        import pandas as pd
+                        dfc = pd.read_sql_query("select clin, descr as desc, uom, qty_hint from price_lines where proposal_id=?", conn, params=(pid,))
+                    except Exception:
+                        dfc = None
+                    st.markdown("#### CLINs seeded for pricing")
+                    if dfc is not None and not dfc.empty:
+                        st.dataframe(dfc, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No price_lines table or no CLINs seeded; using clin_hints instead.")
+                        try:
+                            d2 = pd.read_sql_query("select clin, desc, uom, qty_hint from clin_hints where notice_id=?", conn, params=(int(notice_id),))
+                            st.dataframe(d2, use_container_width=True, hide_index=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+with st.expander("Milestones"): st.write(s.get("sections",{}).get("Milestones",[]) or "None")
         except Exception:
             st.info("No summary parsed yet.")
 
@@ -11769,6 +11835,13 @@ def _rfp_phase1_maybe_store(nid: int):
         log_event('warn','lm_seed_failed', notice_id=int(nid), err=str(_seed_ex))
     try:
         if res.get('ok'):
+        try:
+            if feature_flags().get('rfp_impact', False):
+                compute_rfp_impact(int(nid))
+                import streamlit as st
+                st.session_state['impact_tab_open'] = True
+        except Exception:
+            pass
         try:
             if feature_flags().get('rtm', False):
                 doc = build_rfpv1_from_notice(int(nid))
@@ -17249,6 +17322,30 @@ def route_to(page, opp_id=None, tab=None):
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
 
+# Builder-from-analyzer flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('builder_from_analyzer', False)
+except Exception:
+    pass
+
+
+# RFP impact flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('rfp_impact', False)
+except Exception:
+    pass
+
+
+# SOW/Price hints flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('sow_price_hints', False)
+except Exception:
+    pass
+
+
 # Submission rules flag default
 try:
     ff = feature_flags()
@@ -22110,3 +22207,444 @@ def render_forms_and_submission_tabs(nid:int):
         else:
             st.success("No obvious issues detected.")
 # === END RFP PHASE 4 ===
+
+
+
+# === RFP PHASE 5: SOW tasks and Price hints ===
+import re as _re
+
+def ensure_sow_price_schema():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS sow_tasks(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        location TEXT,
+        hours_hint REAL,
+        labor_cats_hint TEXT,
+        cite_file TEXT,
+        cite_page INTEGER
+    );""" )
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_sow_task ON sow_tasks(notice_id, task_id);")
+    cur.execute("""CREATE TABLE IF NOT EXISTS clin_hints(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        clin TEXT,
+        desc TEXT,
+        uom TEXT,
+        qty_hint REAL,
+        cite_file TEXT,
+        cite_page INTEGER
+    );""" )
+    conn.commit()
+
+def _flatten_text_with_cites(doc: dict):
+    """Yield tuples (text, file, page) from analyzer JSON best-effort."""
+    if not doc:
+        return
+    def walk(x, file=None, page=None):
+        if isinstance(x, dict):
+            file = x.get('cite_file', file)
+            page = x.get('cite_page', page)
+            for k,v in x.items():
+                if isinstance(v, (dict,list)):
+                    yield from walk(v, file, page)
+                elif isinstance(v, str):
+                    yield v, file, page
+        elif isinstance(x, list):
+            for i in x:
+                yield from walk(i, file, page)
+    yield from walk(doc)
+
+def _stable_id(*parts):
+    import hashlib
+    base = "|".join([str(p or "") for p in parts]).lower().strip()
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+
+def harvest_sow_tasks(nid: int, rfp_json: dict):
+    if not feature_flags().get('sow_price_hints', False):
+        return {'ok': False, 'disabled': True}
+    ensure_sow_price_schema()
+    conn = get_db(); cur = conn.cursor()
+    nid = int(nid)
+    inserted = 0
+    for text, cfile, cpage in _flatten_text_with_cites(rfp_json or {}):
+        t = text.strip()
+        low = t.lower()
+        if len(t) > 40 and any(k in low for k in ["shall", "will", "perform", "provide", "deliver"]):
+            loc = None
+            mloc = _re.search(r"(?:at|in)\s+([A-Z][A-Za-z\-\s]+)", t)
+            if mloc: loc = mloc.group(1)[:80]
+            hours = None
+            mh = _re.search(r"(\d{1,3}(?:\.\d+)?)\s*(?:hours?|hrs?)", low)
+            if mh:
+                try: hours = float(mh.group(1))
+                except Exception: hours = None
+            cats = None
+            mcat = _re.search(r"(?:labor|personnel)\s+(?:category|cat(?:egory)?)\s*[:\-]?\s*([^\.;\n]{1,80})", low)
+            if mcat: cats = mcat.group(1)
+            tid = _stable_id(t[:120], cfile or "", cpage or 0)
+            try:
+                cur.execute("""INSERT OR IGNORE INTO sow_tasks(notice_id, task_id, text, location, hours_hint, labor_cats_hint, cite_file, cite_page)
+                              VALUES(?,?,?,?,?,?,?,?)""", (nid, tid, t, loc, hours, cats, cfile, int(cpage) if cpage else None))
+                if cur.rowcount:
+                    inserted += 1
+            except Exception:
+                pass
+    conn.commit()
+    return {'ok': True, 'inserted': inserted}
+
+def harvest_clins(nid: int, rfp_json: dict):
+    if not feature_flags().get('sow_price_hints', False):
+        return {'ok': False, 'disabled': True}
+    ensure_sow_price_schema()
+    conn = get_db(); cur = conn.cursor()
+    nid = int(nid)
+    inserted = 0
+    for text, cfile, cpage in _flatten_text_with_cites(rfp_json or {}):
+        # Detect CLIN like "CLIN 0001"
+        m = _re.search(r"clin\s+([0-9A-Za-z]{3,6})", text, flags=_re.IGNORECASE)
+        if m:
+            clin = m.group(1)
+            uom = None; qty = None
+            mu = _re.search(r"(?:uom|unit(?: of)? measure)[:\s]+([A-Za-z/]{2,10})", text, flags=_re.IGNORECASE)
+            if mu: uom = mu.group(1).upper()
+            mq = _re.search(r"(?:qty|quantity)[:\s]+(\d+(?:\.\d+)?)", text, flags=_re.IGNORECASE)
+            if mq:
+                try: qty = float(mq.group(1))
+                except Exception: pass
+            desc = text.strip()[:300]
+            try:
+                cur.execute("""INSERT INTO clin_hints(notice_id, clin, desc, uom, qty_hint, cite_file, cite_page)
+                              VALUES(?,?,?,?,?,?,?)""", (nid, clin, desc, uom, qty, cfile, int(cpage) if cpage else None))
+                inserted += 1
+            except Exception:
+                pass
+    conn.commit()
+    return {'ok': True, 'inserted': inserted}
+
+def render_sow_price_tabs(nid:int):
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('sow_price_hints', False):
+        return
+    ensure_sow_price_schema()
+    conn = get_db()
+    try:
+        doc = build_rfpv1_from_notice(int(nid))
+    except Exception:
+        doc = None
+    if conn.execute("select count(*) from sow_tasks where notice_id=?", (int(nid),)).fetchone()[0] == 0:
+        try: harvest_sow_tasks(nid, doc or {})
+        except Exception: pass
+    if conn.execute("select count(*) from clin_hints where notice_id=?", (int(nid),)).fetchone()[0] == 0:
+        try: harvest_clins(nid, doc or {})
+        except Exception: pass
+    tabs = st.tabs(["SOW", "Price"])
+    with tabs[0]:
+        st.markdown("#### SOW tasks")
+        df = pd.read_sql_query("select task_id, text, location, hours_hint, labor_cats_hint, cite_file, cite_page from sow_tasks where notice_id=? order by id", conn, params=(int(nid),))
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    with tabs[1]:
+        st.markdown("#### CLINs and hints")
+        df2 = pd.read_sql_query("select clin, desc, uom, qty_hint, cite_file, cite_page from clin_hints where notice_id=? order by id", conn, params=(int(nid),))
+        st.dataframe(df2, use_container_width=True, hide_index=True)
+        # Wage determination presence hint
+        try:
+            txt = "\n".join([t for t,_,_ in _flatten_text_with_cites(doc or {})])
+        except Exception:
+            txt = ""
+        wd = "SCA" if "service contract act" in txt.lower() or "wd " in txt.lower() else None
+        if wd:
+            st.caption("Wage determination references detected (e.g., SCA). Map to labor categories in next phase.")
+# === END RFP PHASE 5 ===
+
+
+
+# === RFP PHASE 6: Amendment impact ===
+import hashlib as _hash
+import datetime as _dt
+
+def ensure_rfp_impact_schema():
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS rfp_impacts(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        from_hash TEXT NOT NULL,
+        to_hash TEXT NOT NULL,
+        impact_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );""" )
+    conn.commit()
+
+def _hash_doc(doc: dict) -> str:
+    try:
+        s = json.dumps(doc or {}, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        s = str(doc)
+    return _hash.sha1(s.encode('utf-8')).hexdigest()
+
+def _collect_forms(doc: dict) -> set:
+    try:
+        res = {f.get('form') for f in detect_sf_forms(doc or {}) if f.get('form')}
+        return set(res)
+    except Exception:
+        return set()
+
+def _collect_clins(doc: dict) -> set:
+    try:
+        tmp = []
+        for text, _, _ in _flatten_text_with_cites(doc or {}):
+            m = re.search(r"(?i)clin\s+([0-9A-Za-z]{3,6})", text)
+            if m:
+                tmp.append(m.group(1))
+        return set(tmp)
+    except Exception:
+        return set()
+
+def _collect_dates(doc: dict) -> set:
+    try:
+        txt = "\n".join([t for t,_,_ in _flatten_text_with_cites(doc or {})])
+    except Exception:
+        txt = ""
+    pats = [r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4}\b"]
+    out = set()
+    for p in pats:
+        for m in re.findall(p, txt, flags=re.IGNORECASE):
+            out.add(m.strip())
+    return out
+
+def _collect_rtm_keys(nid:int) -> set:
+    conn = get_db()
+    try:
+        rows = conn.execute("select req_id from rtm where notice_id=?", (int(nid),)).fetchall()
+        if not rows:
+            rows = conn.execute("select req_id from lm_checklist where notice_id=?", (int(nid),)).fetchall()
+        return {r[0] for r in rows if r and r[0]}
+    except Exception:
+        return set()
+
+def compute_rfp_impact(nid:int):
+    if not feature_flags().get('rfp_impact', False):
+        return {'ok': False, 'disabled': True}
+    ensure_rfp_impact_schema()
+    try:
+        versions = _load_versions(int(nid))
+    except Exception:
+        versions = []
+    if not versions or len(versions) < 2:
+        return {'ok': False, 'reason': 'not_enough_versions'}
+    v_new = versions[0]['payload']; v_old = versions[1]['payload']
+    h_new = _hash_doc(v_new); h_old = _hash_doc(v_old)
+    conn = get_db()
+    row = conn.execute("select id from rfp_impacts where notice_id=? and from_hash=? and to_hash=?", (int(nid), h_old, h_new)).fetchone()
+    if row:
+        return {'ok': True, 'cached': True}
+    impacts = []
+    try:
+        secs_new = set((s.get('title') or s.get('name') or '').strip() for s in (v_new.get('sections') or {}).get('list', []) if isinstance(s, dict))
+        secs_old = set((s.get('title') or s.get('name') or '').strip() for s in (v_old.get('sections') or {}).get('list', []) if isinstance(s, dict))
+        added = sorted([s for s in secs_new - secs_old if s])
+        removed = sorted([s for s in secs_old - secs_new if s])
+        if added or removed:
+            impacts.append({'type':'sections','added':added,'removed':removed})
+    except Exception:
+        pass
+    f_new = _collect_forms(v_new); f_old = _collect_forms(v_old)
+    f_add = sorted(list(f_new - f_old)); f_rem = sorted(list(f_old - f_new))
+    if f_add or f_rem:
+        impacts.append({'type':'forms','added':f_add,'removed':f_rem})
+    c_new = _collect_clins(v_new); c_old = _collect_clins(v_old)
+    c_add = sorted(list(c_new - c_old)); c_rem = sorted(list(c_old - c_new))
+    if c_add or c_rem:
+        impacts.append({'type':'clins','added':c_add,'removed':c_rem})
+    d_new = _collect_dates(v_new); d_old = _collect_dates(v_old)
+    d_add = sorted(list(d_new - d_old)); d_rem = sorted(list(d_old - d_new))
+    if d_add or d_rem:
+        impacts.append({'type':'dates','added':d_add,'removed':d_rem})
+    r_keys = _collect_rtm_keys(int(nid))
+    if r_keys:
+        impacts.append({'type':'rtm','note':'Check RTM rows for affected requirements','count': len(r_keys)})
+    impact_json = json.dumps({'items': impacts}, ensure_ascii=False)
+    conn.execute("INSERT INTO rfp_impacts(notice_id, from_hash, to_hash, impact_json, created_at) VALUES(?,?,?,?,?)",
+                 (int(nid), h_old, h_new, impact_json, _dt.datetime.utcnow().isoformat()+'Z'))
+    try:
+        conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(nid),))
+    except Exception:
+        pass
+    conn.commit()
+    return {'ok': True, 'impacts': impacts}
+
+def latest_rfp_impact(nid:int):
+    ensure_rfp_impact_schema()
+    conn = get_db()
+    row = conn.execute("select impact_json, created_at from rfp_impacts where notice_id=? order by id desc limit 1", (int(nid),)).fetchone()
+    if not row:
+        return None, None
+    try:
+        data = json.loads(row[0])
+    except Exception:
+        data = {'items': []}
+    return data, row[1]
+
+def render_rfp_impact_tab(nid:int):
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('rfp_impact', False):
+        return
+    st.markdown("#### Amendment impact")
+    data, ts = latest_rfp_impact(int(nid))
+    if not data:
+        st.info("No impact computed yet.")
+        return
+    st.caption(f"Computed at {ts}")
+    items = data.get('items') or []
+    if not items:
+        st.success("No impactful changes detected.")
+        return
+    rows = []
+    for it in items:
+        t = it.get('type')
+        if t in ('sections','forms','clins','dates'):
+            for a in (it.get('added') or []):
+                rows.append({'type': t, 'change': 'added', 'value': a})
+            for r in (it.get('removed') or []):
+                rows.append({'type': t, 'change': 'removed', 'value': r})
+        else:
+            rows.append({'type': t, 'change': it.get('note') or '', 'value': it.get('count')})
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+# === END RFP PHASE 6 ===
+
+
+
+# === RFP PHASE 7: Builder adapters + Lint ===
+def ensure_section_requirements_schema():
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS section_requirements(
+      id INTEGER PRIMARY KEY,
+      proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+      section_key TEXT NOT NULL,
+      req_id TEXT NOT NULL,
+      UNIQUE(proposal_id, section_key, req_id)
+    );""" )
+    conn.commit()
+
+def _guess_outline_from_analyzer(doc: dict):
+    secs = []
+    if not doc:
+        return secs
+    sections = (doc.get('sections') or {})
+    vols = sections.get('volumes') or []
+    if isinstance(vols, list) and vols:
+        for v in vols:
+            vt = v.get('title') or v.get('name') or 'Volume'
+            children = v.get('sections') or v.get('list') or []
+            if children:
+                for s in children:
+                    skey = (s.get('key') or s.get('title') or s.get('name') or vt)[:60]
+                    secs.append({'key': skey, 'title': (s.get('title') or s.get('name') or skey), 'volume': vt})
+    if not secs:
+        lst = sections.get('list') or []
+        for s in lst:
+            skey = (s.get('key') or s.get('title') or s.get('name') or '')[:60]
+            if skey:
+                secs.append({'key': skey, 'title': s.get('title') or s.get('name') or skey})
+    return secs
+
+def _must_address_bullets(conn, notice_id: int):
+    rows = conn.execute("select req_id, factor, subfactor, requirement, cite_file, cite_page from lm_checklist where notice_id=? order by id", (int(notice_id),)).fetchall()
+    bullets = []
+    for req_id, factor, subfactor, req, cfile, cpage in rows:
+        cite = f" [{cfile or ''} p.{cpage}]" if cfile else ""
+        bullets.append({'req_id': req_id, 'text': f"{factor or ''} {subfactor or ''} — {req}{cite}".strip()})
+    return bullets
+
+def build_proposal_from_analyzer(notice_id: int):
+    if not feature_flags().get('builder_from_analyzer', False):
+        return {'ok': False, 'disabled': True}
+    ensure_section_requirements_schema()
+    conn = get_db(); cur = conn.cursor()
+    doc = build_rfpv1_from_notice(int(notice_id))
+    outline = _guess_outline_from_analyzer(doc or {})
+    if not outline:
+        return {'ok': False, 'reason': 'no_outline'}
+    cur.execute("INSERT INTO proposals(notice_id, title, created_at) VALUES(?,?, datetime('now'))", (int(notice_id), f"Proposal for {int(notice_id)}"))
+    pid = cur.lastrowid
+    limits = (doc or {}).get('page_limits') or {}
+    default_font = ((doc or {}).get('styles') or {}).get('font') or 'Times New Roman 11'
+    default_spacing = ((doc or {}).get('styles') or {}).get('spacing') or 'single'
+    bullets = _must_address_bullets(conn, int(notice_id))
+    for s in outline:
+        key = s.get('key') or s.get('title')
+        title = s.get('title') or key
+        plimit = limits.get(key) or limits.get(title) or ''
+        content = f"## {title}\n\n_Must address bullets will be tracked below._\n\n"
+        try:
+            cur.execute("INSERT INTO proposal_sections(proposal_id, section_key, title, content) VALUES(?,?,?,?)", (int(pid), key, title, content))
+        except Exception:
+            try:
+                cur.execute("INSERT INTO proposal_sections(proposal_id, section_key, title) VALUES(?,?,?)", (int(pid), key, title))
+            except Exception:
+                pass
+        for b in bullets[:10]:
+            try:
+                cur.execute("INSERT OR IGNORE INTO section_requirements(proposal_id, section_key, req_id) VALUES(?,?,?)", (int(pid), key, b['req_id'] or ''))
+            except Exception:
+                pass
+        try:
+            cur.execute("UPDATE proposal_sections SET page_limit=?, font=?, spacing=? WHERE proposal_id=? AND section_key=?", (plimit, default_font, default_spacing, int(pid), key))
+        except Exception:
+            pass
+    try:
+        clins = cur.execute("select clin, desc, uom, qty_hint from clin_hints where notice_id=?", (int(notice_id),)).fetchall()
+        try:
+            for clin, desc, uom, qty in clins:
+                cur.execute("INSERT INTO price_lines(proposal_id, clin, descr, uom, qty_hint) VALUES(?,?,?,?,?)", (int(pid), clin, desc, uom, qty))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    conn.commit()
+    return {'ok': True, 'proposal_id': int(pid), 'sections': len(outline)}
+
+def lint_proposal(pid:int):
+    conn = get_db(); cur = conn.cursor()
+    findings = []
+    try:
+        rows = cur.execute("select section_key, content from proposal_sections where proposal_id=?", (int(pid),)).fetchall()
+    except Exception:
+        rows = []
+    for key, content in rows:
+        txt = (content or '')[:10000]
+        if any(w in txt for w in ['TBD','Lorem ipsum','<<','[[', 'XX']):
+            findings.append({'section': key, 'issue': 'Placeholder text detected'})
+        if 'Figure' in txt and 'alt=' not in txt:
+            findings.append({'section': key, 'issue': '508: image without alt text hint'})
+        if 'Times New Roman' not in txt and 'Arial' not in txt:
+            findings.append({'section': key, 'issue': 'Style: font not indicated'})
+    return findings
+
+def render_builder_adapter_ui(nid:int):
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('builder_from_analyzer', False):
+        return
+    st.markdown("#### Builder from Analyzer (beta)")
+    if st.button("Build sections from Analyzer"):
+        res = build_proposal_from_analyzer(int(nid))
+        if not res.get('ok'):
+            st.warning(f"Adapter failed: {res}")
+        else:
+            st.success(f"Created proposal {res.get('proposal_id')} with {res.get('sections')} sections.")
+            st.session_state['builder_adapter_ready'] = True
+    conn = get_db()
+    row = conn.execute("select id from proposals where notice_id=? order by id desc limit 1", (int(nid),)).fetchone()
+    if row:
+        pid = int(row[0])
+        f = lint_proposal(pid)
+        st.markdown("#### Prechecks")
+        if f:
+            st.dataframe(pd.DataFrame(f), use_container_width=True, hide_index=True)
+        else:
+            st.success("No lint findings.")
+# === END RFP PHASE 7 ===
