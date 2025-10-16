@@ -360,7 +360,7 @@ def _add_paragraph_with_inlines(doc, text, style=None):
 
                 else:
 
-pass
+    pass
 
 
 
