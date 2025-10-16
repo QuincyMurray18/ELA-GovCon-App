@@ -1202,7 +1202,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 
 # ---- Feature flags ----
 
-, "deals_core"]
+_FEATURE_KEYS = ["deals_core"]
 
 def init_feature_flags():
 
@@ -8504,7 +8504,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 
 # ---- Feature flags ----
 
-, "deals_core"]
+_FEATURE_KEYS = ["deals_core"]
 
 def init_feature_flags():
 
