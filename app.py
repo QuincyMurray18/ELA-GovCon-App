@@ -3863,32 +3863,27 @@ def q_delete(table: str, where: dict):
 
 # ===== Tenancy Phase 1: Identity, Orgs, Roles =====
 def _ensure_tenancy_phase1():
-    """
-    Create orgs and users tables and seed one org with three users.
-    """
+    """Create orgs/users if missing and seed users against a guaranteed org to avoid FK errors."""
     conn = get_db()
     cur = conn.cursor()
-    # Create tables if missing
+    # Tables
     cur.execute("CREATE TABLE IF NOT EXISTS orgs(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
     cur.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, email TEXT NOT NULL UNIQUE, display_name TEXT, role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')), created_at TEXT NOT NULL)")
-    # Seed default org
-    r = cur.execute("SELECT id FROM orgs LIMIT 1").fetchone()
-    if not r:
-        cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", ("org-ela","ELA Management LLC"))
-    # Seed default users mapped to that org
-    # Map Streamlit sidebar USERS into DB identities
+    # Pick an org id: prefer existing; else create 'org-ela'
+    row = cur.execute("SELECT id FROM orgs ORDER BY created_at LIMIT 1").fetchone()
+    org_id = row[0] if row else "org-ela"
+    if not row:
+        cur.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (org_id, "ELA Management LLC"))
+    # Seed users referencing selected org to satisfy FK constraint
     defaults = [
-        ("u-quincy","org-ela","quincy@ela.local","Quincy","Admin"),
-        ("u-charles","org-ela","charles@ela.local","Charles","Member"),
-        ("u-collin","org-ela","collin@ela.local","Collin","Member"),
+        ("u-quincy", org_id, "quincy@ela.local", "Quincy", "Admin"),
+        ("u-charles", org_id, "charles@ela.local", "Charles", "Member"),
+        ("u-collin",  org_id, "collin@ela.local",  "Collin",  "Member"),
     ]
     for uid, oid, email, dname, role in defaults:
         cur.execute("""INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at)
-                      VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
-    try:
-        conn.commit()
-    except Exception:
-        pass
+                       VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
+    conn.commit()
 
 def current_user_role():
     import streamlit as st
