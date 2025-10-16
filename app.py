@@ -627,8 +627,12 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 # ---- Feature flags ----
 _FEATURE_KEYS = [
     "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking", "rfp_schema"]
+    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban", "deals_activities", "deals_forecast"]
 def init_feature_flags():
+
+# Deals Phase 1: init refresh token
+st.session_state.setdefault("deals_refresh", 0)
+
     flags = st.session_state.setdefault("feature_flags", {})
     # Do not remove existing keys. Only set missing to False.
     for k in _FEATURE_KEYS:
@@ -7437,18 +7441,27 @@ def render_sam_watch_ingest():
         with c3:
             if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
                 for nid in selected_ids:
-                    toggle_pipeline_star(user_id, nid)
-        # Diff controls
-        if st.session_state.get("feature_flags", {}).get("amend_tracking"):
-            d1, d2 = st.columns([1,5])
-            with d1:
-                if st.form_submit_button("Open Diff"):
-                    if selected_ids:
-                        st.session_state["selected_notice_id"] = int(selected_ids[0])
-                        st.session_state["diff_tab_open"] = True
+                    res = toggle_pipeline_star(user_id, nid)
+                    try:
+                        if feature_flags().get("deals_core"):
+                            if res:
+                                upsert_deal_from_notice(user_id, int(nid))
+                            else:
+                                delete_deal_for_notice(int(nid))
+                    except Exception:
+                        pass
 
     # Render diff panel below
-    render_diff_panel()
+    
+    # Diff controls
+    if st.session_state.get("feature_flags", {}).get("amend_tracking"):
+        try:
+            if selected_ids:
+                st.session_state["selected_notice_id"] = int(selected_ids[0])
+                st.session_state["diff_tab_open"] = True
+        except Exception:
+            pass
+render_diff_panel()
 
     # Footer paging
     p1, p2, p3 = st.columns([1,1,6])
@@ -9646,6 +9659,52 @@ DEAL_STAGES = [
 ]
 
 def ensure_deals_table(conn):
+
+# Deals Phase 4: add win_prob column for weighted pipeline
+try:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(deals)")}
+    if "win_prob" not in cols:
+        conn.execute("ALTER TABLE deals ADD COLUMN win_prob REAL")
+        conn.execute("UPDATE deals SET win_prob = 0.2 WHERE win_prob IS NULL")
+except Exception:
+    pass
+
+
+
+def ensure_deal_activities_table(conn):
+    """
+    Activities for each deal and a lightweight email queue for reminders.
+    """
+    cur = conn.cursor()
+    # Activities
+    cur.execute("""CREATE TABLE IF NOT EXISTS deal_activities(
+        id INTEGER PRIMARY KEY,
+        deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,            -- call, note, task
+        title TEXT,
+        note TEXT,
+        due_at TEXT,                   -- ISO date or datetime
+        status TEXT DEFAULT 'open',    -- open, done, canceled
+        created_by TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_deal_acts_deal ON deal_activities(deal_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_deal_acts_due ON deal_activities(due_at)")
+
+    # Email queue
+    cur.execute("""CREATE TABLE IF NOT EXISTS email_queue(
+        id INTEGER PRIMARY KEY,
+        to_email TEXT,
+        subject TEXT,
+        body TEXT,
+        send_at TEXT,                 -- when to send (UTC)
+        status TEXT DEFAULT 'queued', -- queued, sent, failed
+        ref_activity_id INTEGER REFERENCES deal_activities(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_email_queue_status ON email_queue(status, send_at)")
+    conn.commit()
     cur = conn.cursor()
     cur.execute("""
         create table if not exists deals (
@@ -9665,11 +9724,371 @@ def ensure_deals_table(conn):
     cur.execute("create index if not exists deals_updated_idx on deals(updated_at)")
     conn.commit()
 
+# Add notice_id link to notices if missing
+try:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(deals)")}
+    if "notice_id" not in cols:
+        conn.execute("ALTER TABLE deals ADD COLUMN notice_id INTEGER REFERENCES notices(id)")
+    # Unique per notice when linked
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_deals_notice ON deals(notice_id) WHERE notice_id IS NOT NULL")
+except Exception:
+    pass
+
+
+
+
+
+
+
+def get_deal_history(deal_id: int):
+    conn = get_db()
+    cur = conn.cursor()
+    row = cur.execute("SELECT stage_history FROM deals WHERE id=?", (int(deal_id),)).fetchone()
+    import json as _json
+    try:
+        return _json.loads(row[0] or "[]") if row else []
+    except Exception:
+        return []
+# === DEALS PHASE 1 HELPERS START ===
+def _bump_deals_refresh():
+    import streamlit as st
+    st.session_state["deals_refresh"] = int(st.session_state.get("deels_refresh_fix", st.session_state.get("deals_refresh", 0)) ) + 1
+    # migrate key typo forward compatibility
+    st.session_state["deels_refresh_fix"] = st.session_state["deals_refresh"]
+
+# Deals Phase 2: add stage_history and next_action
+try:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(deals)")}
+    if "stage_history" not in cols:
+        conn.execute("ALTER TABLE deals ADD COLUMN stage_history TEXT DEFAULT '[]'")
+    if "next_action" not in cols:
+        conn.execute("ALTER TABLE deals ADD COLUMN next_action TEXT")
+except Exception:
+    pass
+
+
+
+def upsert_deal_from_notice(user_id: str, notice_id: int, default_stage: str = "No Contact Made"):
+    """Create or refresh a Deal row from a SAM notice. Idempotent via unique notice_id index."""
+    try:
+        conn = get_db()
+        ensure_deals_table(conn)
+        cur = conn.cursor()
+        r = cur.execute("SELECT title, agency, due_at FROM notices WHERE id=?", (int(notice_id),)).fetchone()
+        if not r:
+            return False
+        title, agency, due_date = r[0], r[1], r[2]
+        # Upsert by notice_id
+        cur.execute(
+            """INSERT INTO deals(title, stage, owner, amount, notes, agency, due_date, notice_id, updated_at)
+               VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
+               ON CONFLICT(notice_id) DO UPDATE SET
+                   title=excluded.title,
+                   agency=excluded.agency,
+                   due_date=excluded.due_date,
+                   updated_at=datetime('now')""",
+            (title, default_stage, user_id, None, "Auto-added from SAM", agency, due_date, int(notice_id))
+        )
+        conn.commit()
+        _bump_deals_refresh()
+        try:
+            import streamlit as st
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
+            else:
+                st.rerun()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+def delete_deal_for_notice(notice_id: int) -> bool:
+    """Delete a Deal row linked to a given notice_id."""
+    try:
+        conn = get_db()
+        ensure_deals_table(conn)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM deals WHERE notice_id=?", (int(notice_id),))
+        conn.commit()
+        _bump_deals_refresh()
+        try:
+            import streamlit as st
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
+            else:
+                st.rerun()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+# Cached deals loader keyed on refresh token
+import streamlit as _st_deals_cache_alias  # alias to avoid shadowing
+@_st_deals_cache_alias.cache_data(show_spinner=False)
+def _load_deals(stage, q, _refresh_key):
+    return list_deals(stage, q)
+
+
+def deal_badges(notice_id: int) -> dict:
+    """Return badges for compliance_state and rfq_coverage for a notice_id."""
+    out = {"compliance_state": None, "rfq_coverage": None}
+    try:
+        conn = get_db(); cur = conn.cursor()
+        # compliance_state from notices
+        row = cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(notice_id),)).fetchone()
+        out["compliance_state"] = (row[0] or "Unreviewed") if row else None
+        # rfq coverage from vendor_quotes linked via rfq table
+        rfq_row = cur.execute("SELECT id FROM rfq WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
+        if rfq_row:
+            rfq_id = int(rfq_row[0])
+            cov_rows = cur.execute("SELECT coverage_score FROM vendor_quotes WHERE rfq_id=?", (rfq_id,)).fetchall()
+            scores = [float(r[0] or 0.0) for r in cov_rows if r and r[0] is not None]
+            if scores:
+                out["rfq_coverage"] = sum(scores)/len(scores)
+    except Exception:
+        pass
+    return out
+
+
+# === DEALS PHASE 3 HELPERS START ===
+def create_deal_activity(deal_id:int, type_:str, title:str="", note:str="", due_at:str=None, status:str="open", created_by:str=None):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""INSERT INTO deal_activities(deal_id,type,title,note,due_at,status,created_by,updated_at)
+                   VALUES(?,?,?,?,?,?,?, datetime('now'))""",
+                (int(deal_id), str(type_), title or "", note or "", due_at, status, created_by))
+    conn.commit()
+    return cur.lastrowid
+
+def list_deal_activities(deal_id:int=None, type_filter:str=None, status:str=None, month:str=None):
+    conn = get_db(); cur = conn.cursor()
+    sql = "SELECT id,deal_id,type,title,note,due_at,status,created_by,created_at,updated_at FROM deal_activities WHERE 1=1"
+    params = []
+    if deal_id is not None:
+        sql += " AND deal_id=?"; params.append(int(deal_id))
+    if type_filter:
+        sql += " AND type=?"; params.append(type_filter)
+    if status:
+        sql += " AND status=?"; params.append(status)
+    if month:
+        # month format YYYY-MM; match first 7 chars of due_at
+        sql += " AND substr(coalesce(due_at,''),1,7)=?"; params.append(month)
+    sql += " ORDER BY coalesce(due_at,'9999-99-99'), id DESC"
+    import pandas as _pd
+    df = _pd.read_sql_query(sql, get_db(), params=params)
+    return df
+
+def update_deal_activity(id_:int, **fields):
+    if not fields:
+        return False
+    allowed = {"deal_id","type","title","note","due_at","status"}
+    set_clause = []
+    params = []
+    for k,v in fields.items():
+        if k in allowed:
+            set_clause.append(f"{k}=?"); params.append(v)
+    if not set_clause:
+        return False
+    params.append(int(id_))
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"UPDATE deal_activities SET {', '.join(set_clause)}, updated_at=datetime('now') WHERE id=?", params)
+    conn.commit()
+    return cur.rowcount > 0
+
+def delete_deal_activity(id_:int):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("DELETE FROM deal_activities WHERE id=?", (int(id_),))
+    conn.commit()
+    return cur.rowcount > 0
+
+def enqueue_task_due_email(activity_id:int, to_email:str=None):
+    # Create a queued email for a due task
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT da.id, da.title, da.note, da.due_at, d.title, d.owner FROM deal_activities da JOIN deals d ON d.id=da.deal_id WHERE da.id=?", (int(activity_id),)).fetchone()
+    if not row:
+        return False
+    act_id, a_title, a_note, a_due, deal_title, owner = row
+    subject = f"Task due: {a_title or 'Deal task'} · {deal_title}"
+    body = f"Deal: {deal_title}\nTask: {a_title}\nDue: {a_due or 'n/a'}\nNote: {a_note or ''}\nOwner: {owner or ''}"
+    cur.execute("""INSERT INTO email_queue(to_email,subject,body,send_at,status,ref_activity_id)
+                   VALUES(?,?,?,?, 'queued', ?)""",
+                (to_email, subject, body, a_due, int(activity_id)))
+    conn.commit()
+    return True
+
+
+# === DEALS PHASE 4 HELPERS START ===
+def _period_key(date_txt: str, mode: str = "month") -> str:
+    if not date_txt:
+        return "Unscheduled"
+    d = str(date_txt)[:10]
+    y, m = d.split("-")[0:2] if "-" in d else (None, None)
+    if not y or not m or len(y) != 4:
+        return "Unscheduled"
+    if mode == "quarter":
+        q = (int(m)-1)//3 + 1
+        return f"{y}-Q{q}"
+    return f"{y}-{m}"
+
+def forecast_by_period(mode: str = "month", owner: str = None):
+    import pandas as _pd
+    conn = get_db()
+    df = _pd.read_sql_query("SELECT id,title,owner,stage,amount,win_prob,due_date FROM deals", conn)
+    if owner:
+        df = df[df["owner"].fillna("").str.contains(owner, case=False)]
+    if df.empty:
+        return _pd.DataFrame(columns=["period","count","amount","weighted"])
+    df["amount"] = _pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df["win_prob"] = _pd.to_numeric(df["win_prob"], errors="coerce").fillna(0.2)
+    df["period"] = df["due_date"].apply(lambda x: _period_key(x, mode))
+    df["weighted"] = df["amount"] * df["win_prob"]
+    agg = df.groupby("period", as_index=False).agg(count=("id","count"), amount=("amount","sum"), weighted=("weighted","sum"))
+    agg = agg.sort_values("period").reset_index(drop=True)
+    totals = {"period":"Total", "count":int(agg["count"].sum() if not agg.empty else 0),
+              "amount":float(agg["amount"].sum() if not agg.empty else 0.0),
+              "weighted":float(agg["weighted"].sum() if not agg.empty else 0.0)}
+    if not agg.empty:
+        agg = _pd.concat([agg, _pd.DataFrame([totals])], ignore_index=True)
+    else:
+        agg = _pd.DataFrame([totals])
+    return agg
+
+def _map_compliance_to_prob(state: str) -> float:
+    s = str(state or "").lower()
+    if s in {"", "unreviewed", "unknown"}:
+        return 0.0
+    if "non" in s and "compliant" in s:
+        return -0.25
+    if "gap" in s:
+        return -0.1
+    if "compliant" in s:
+        return 0.25
+    return 0.0
+
+def compute_win_prob_from_signals(deal_id: int) -> float:
+    """Heuristic win probability from stage, compliance_state, rfq coverage."""
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT id, stage, notice_id, coalesce(win_prob,0.2) FROM deals WHERE id=?", (int(deal_id),)).fetchone()
+    if not row:
+        return 0.2
+    _, stage, notice_id, current = row
+    base = 0.2
+    # Stage influence
+    s = str(stage or "").lower()
+    if "no contact" in s: base += 0.0
+    elif "contact" in s: base += 0.05
+    elif "qualified" in s or "viable" in s: base += 0.1
+    elif "proposal" in s: base += 0.2
+    elif "negotiation" in s or "best and final" in s: base += 0.3
+    # Signals
+    comp_delta = 0.0
+    cov_delta = 0.0
+    if notice_id:
+        try:
+            # compliance_state from notices
+            comp = get_db().execute("SELECT compliance_state FROM notices WHERE id=?", (int(notice_id),)).fetchone()
+            comp_delta = _map_compliance_to_prob(comp[0] if comp else None)
+        except Exception:
+            comp_delta = 0.0
+        try:
+            # RFQ coverage from vendor_quotes via latest RFQ
+            rfq_row = get_db().execute("SELECT id FROM rfq WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
+            if rfq_row:
+                rfq_id = int(rfq_row[0])
+                cov_rows = get_db().execute("SELECT coverage_score FROM vendor_quotes WHERE rfq_id=?", (rfq_id,)).fetchall()
+                scores = [float(r[0]) for r in cov_rows if r and r[0] is not None]
+                if scores:
+                    avg = sum(scores)/len(scores)
+                    cov_delta = (avg/100.0 - 0.5) * 0.3  # -0.15 to +0.15
+        except Exception:
+            cov_delta = 0.0
+    p = max(0.01, min(0.95, base + comp_delta + cov_delta))
+    return p
+
+def update_win_prob_from_signals(deal_id: int) -> float:
+    p = compute_win_prob_from_signals(int(deal_id))
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("UPDATE deals SET win_prob=?, updated_at=datetime('now') WHERE id=?", (float(p), int(deal_id)))
+    conn.commit()
+    return p
+
+def recompute_all_win_probs():
+    conn = get_db()
+    ids = [int(r[0]) for r in conn.execute("SELECT id FROM deals").fetchall()]
+    out = []
+    for did in ids:
+        out.append((did, update_win_prob_from_signals(did)))
+    return out
+
+def list_sla_blockers(stale_days: int = 7, soon_days: int = 7):
+    """Return blockers based on missing next_action, overdue due_date, stale stage, low RFQ coverage when due soon."""
+    import pandas as _pd
+    conn = get_db()
+    df = _pd.read_sql_query("SELECT id,title,owner,stage,next_action,due_date,notice_id FROM deals", conn)
+    if df.empty:
+        return _pd.DataFrame(columns=["deal_id","title","owner","blocker","severity"])
+    rows = []
+    from datetime import datetime, timedelta
+    today = datetime.utcnow().date()
+    # Build a map of last stage change from history
+    hist = {int(r[0]): r[1] for r in conn.execute("SELECT id, stage_history FROM deals").fetchall()}
+    last_change = {}
+    import json as _json
+    for did, js in hist.items():
+        try:
+            items = _json.loads(js or "[]")
+            if items:
+                last_ts = max(int(x.get("ts", 0)) for x in items if isinstance(x, dict))
+                last_change[did] = last_ts
+        except Exception:
+            pass
+    for _, r in df.iterrows():
+        did = int(r["id"]); title = r["title"]; owner = r.get("owner")
+        # Missing next action
+        if not str(r.get("next_action") or "").strip():
+            rows.append((did, title, owner, "No next action", "med"))
+        # Overdue deal due_date
+        dd = str(r.get("due_date") or "")[:10]
+        try:
+            if dd:
+                ddate = datetime.fromisoformat(dd).date()
+                if ddate < today:
+                    rows.append((did, title, owner, f"Overdue deal due {dd}", "high"))
+                elif (ddate - today).days <= soon_days:
+                    # if soon and low RFQ coverage
+                    try:
+                        n_id = int(r.get("notice_id") or 0)
+                        if n_id:
+                            row_cov = conn.execute("SELECT id FROM rfq WHERE notice_id=? ORDER BY id DESC LIMIT 1", (n_id,)).fetchone()
+                            if row_cov:
+                                rfq_id = int(row_cov[0])
+                                cov_rows = conn.execute("SELECT coverage_score FROM vendor_quotes WHERE rfq_id=?", (rfq_id,)).fetchall()
+                                scores = [float(x[0]) for x in cov_rows if x and x[0] is not None]
+                                avg = sum(scores)/len(scores) if scores else 0.0
+                                if avg < 60.0:
+                                    rows.append((did, title, owner, f"Low RFQ coverage {avg:.0f}% with due soon", "high"))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Stale stage
+        ts = last_change.get(did)
+        if ts:
+            from datetime import datetime
+            age_days = (datetime.utcnow() - datetime.utcfromtimestamp(ts)).days
+            if age_days > stale_days:
+                rows.append((did, title, owner, f"Stage stale {age_days}d", "med"))
+    out = _pd.DataFrame(rows, columns=["deal_id","title","owner","blocker","severity"])
+    return out.sort_values(["severity","deal_id"])
+# === DEALS PHASE 4 HELPERS END ===
+# === DEALS PHASE 3 HELPERS END ===
+# === DEALS PHASE 1 HELPERS END ===
 def list_deals(stage: str | None = None, q: str | None = None):
     conn = get_db()
     ensure_deals_table(conn)
     cur = conn.cursor()
-    sql = "select id, title, stage, owner, amount, notes, agency, due_date, created_at, updated_at from deals"
+    sql = "select id, title, stage, owner, amount, notes, agency, due_date, next_action, notice_id, win_prob, created_at, updated_at from deals"
     params = []
     where = []
     if stage and stage != "All":
@@ -9682,7 +10101,7 @@ def list_deals(stage: str | None = None, q: str | None = None):
         sql += " where " + " and ".join(where)
     sql += " order by updated_at desc, id desc"
     rows = cur.execute(sql, params).fetchall()
-    cols = ["id","title","stage","owner","amount","notes","agency","due_date","created_at","updated_at"]
+    cols = ["id","title","stage","owner","amount","notes","agency","due_date","next_action","notice_id","win_prob","created_at","updated_at"]
     import pandas as pd
     return pd.DataFrame(rows, columns=cols)
 
@@ -9691,9 +10110,15 @@ def create_deal(title: str, stage: str, owner: str | None, amount: float | None,
     ensure_deals_table(conn)
     cur = conn.cursor()
     cur.execute("""
-        insert into deals (title, stage, owner, amount, notes, agency, due_date)
-        values (?,?,?,?,?,?,?)
+        insert into deals (title, stage, owner, amount, notes, agency, due_date, stage_history)
+        values (?,?,?,?,?,?,?, json('[{"ts":'||strftime('%s','now')||',"from":null,"to":'||quote(?)||',"who":quote(coalesce(?,'system'))||'}]'))
     """, (title, stage, owner, amount, notes, agency, due_date))
+    
+try:
+    cur.execute("UPDATE deals SET stage_history=json_insert(coalesce(stage_history,'[]'),'$[#]', json_object('ts', strftime('%s','now'), 'from', NULL, 'to', stage, 'who', coalesce(owner,'system'))) WHERE id=(SELECT max(id) FROM deals)")
+except Exception:
+    pass
+
     conn.commit()
     return cur.lastrowid
 
@@ -9706,6 +10131,15 @@ def add_deal(title: str, stage: str = "No Contact Made", owner: str | None = Non
     Ignores source/url for now but keeps signature stable."""
     return create_deal(title, stage, owner, amount, notes, agency, due_date)
 def update_deal(id_: int, **fields):
+# Detect stage change for history
+_old = None
+if "stage" in fields:
+    try:
+        _cur = conn.execute("SELECT stage FROM deals WHERE id=?", (int(id_),)).fetchone()
+        _old = _cur[0] if _cur else None
+    except Exception:
+        _old = None
+
     if not fields: return False
     conn = get_db()
     ensure_deals_table(conn)
@@ -9713,7 +10147,7 @@ def update_deal(id_: int, **fields):
     sets = []
     vals = []
     for k,v in fields.items():
-        if k not in {"title","stage","owner","amount","notes","agency","due_date"}:
+        if k not in {"title","stage","owner","amount","notes","agency","due_date","next_action"}:
             continue
         sets.append(f"{k} = ?")
         vals.append(v)
@@ -9724,6 +10158,15 @@ def update_deal(id_: int, **fields):
     cur.execute(sql, vals)
     conn.commit()
     return cur.rowcount > 0
+
+# Append stage history if changed
+try:
+    if "stage" in fields and _old is not None and fields.get("stage") != _old:
+        conn.execute("UPDATE deals SET stage_history = json_insert(coalesce(stage_history,'[]'),'$[#]', json_object('ts', strftime('%s','now'), 'from', ?, 'to', ?, 'who', coalesce(owner,'system'))) WHERE id = ?", (_old, fields.get("stage"), int(id_)))
+        conn.commit()
+except Exception:
+    pass
+
 
 def delete_deal(id_: int):
     conn = get_db()
@@ -9736,7 +10179,143 @@ def delete_deal(id_: int):
 
 # === Deals (CRM Pipeline) tab ===
 try:
-    with legacy_tabs[13]:
+    with l
+
+# Quick activity
+if feature_flags().get("deals_activities"):
+    with st.expander("Quick activity", expanded=False):
+        try:
+            _df_all = _load_deals(None, "", int(st.session_state.get('deals_refresh', 0)))
+        except Exception:
+            _df_all = list_deals(None, "")
+        deal_opts = {f"{int(r['id'])} · {r['title']}": int(r["id"]) for _, r in _df_all.iterrows()} if len(_df_all) else {}
+        sel_deal = st.selectbox("Deal", options=list(deal_opts.keys()) if deal_opts else [], index=0 if deal_opts else None, key="qa_deal")
+        c1,c2,c3,c4 = st.columns([1,1,2,2])
+        with c1:
+            if st.button("Log call"):
+                if sel_deal:
+                    create_deal_activity(deal_opts[sel_deal], "call", title="Call logged", note="", created_by=st.session_state.get("active_user"))
+                    st.success("Call logged")
+        with c2:
+            if st.button("Add note"):
+                i
+
+if feature_flags().get("deals_activities"):
+    st.divider()
+    st.markdown("### Activities")
+
+if feature_flags().get("deals_activities"):
+    st.divider()
+    st.markdown("### Calendar")
+    month = st.text_input("Month YYYY-MM", key="cal_month")
+    import pandas as _pd
+    # Deals due
+    conn = get_db()
+    df_deals = _pd.read_sql_query("SELECT id, title, due_date FROM deals WHERE due_date IS NOT NULL", conn)
+    df_deals["kind"] = "deal_due"
+    df_deals = df_deals.rename(columns={"due_date":"date"})
+    # Tasks
+    df_tasks = list_deal_activities(type_filter="task", month=month or None)
+    if not df_tasks.empty:
+        df_tasks = df_tasks.rename(columns={"due_at":"date","title":"task_title"})
+        df_tasks["kind"] = "task"
+    else:
+        df_tasks = _pd.DataFrame(columns=["id","deal_id","type","task_title","note","date","status","created_by","created_at","updated_at","kind"])
+    # Combine
+    cal = _pd.concat([df_deals[["id","title","date","kind"]], df_tasks[["id","dea
+
+if feature_flags().get("deals_forecast"):
+    st.divider()
+    st.markdown("### Forecast")
+
+if feature_flags().get("deals_forecast"):
+    st.divider()
+    st.markdown("### Signals and SLAs")
+    stale_days = st.number_input("Stale if no stage change for days", min_value=1, value=7, step=1, key="sla_stale_days")
+    soon_days = st.number_input("Due soon window days", min_value=1, value=7, step=1, key="sla_soon_days")
+    df_blk = list_sla_blockers(stale_days=stale_days, soon_days=soon_days)
+    if not df_blk.empty:
+        st.dataframe(df_blk, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No blockers triggered.")
+
+    f1, f2, f3 = st.columns([1,1,2])
+    with f1:
+        mode = st.selectbox("Period", ["month","quarter"], index=0, key="fc_mode")
+    with f2:
+        owner_f = st.text_input("Owner contains", key="fc_owner")
+    with f3:
+        if st.button("Recompute win probabilities"):
+            res = recompute_all_win_probs()
+            st.caption(f"Updated {len(res)} deals.")
+    df_fc = forecast_by_period(mode=mode, owner=owner_f or None)
+    st.dataframe(df_fc, use_container_width=True, hide_index=True)
+    # Totals display
+    if not df_fc.empty and df_fc.iloc[-1]["period"] == "Total":
+        tot = df_fc.iloc[-1]
+        cA, cB, cC = st.columns(3)
+        cA.metric("Deals", int(tot["count"]))
+        cB.metric("Amount", f"${tot['amount']:,.0f}")
+        cC.metric("Weighted", f"${tot['weighted']:,.0f}")
+l_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
+    if month:
+        cal = cal[cal["date"].fillna("").str.startswith(month)]
+    # Simple grouped agenda
+    for day, g in cal.sort_values("date").groupby(cal["date"].fillna("n/a")):
+        st.markdown(f"**{day}**")
+        for _, r in g.iterrows():
+            if r["kind"] == "deal_due":
+                st.caption(f"Deal due · #{int(r['id'])} · {r['title']}")
+            else:
+                st.caption(f"Task · #{int(r['id'])} · deal {int(r['deal_id']) if r.get('deal_id')==r.get('deal_id') else ''} · {r.get('task_title','')} · {r.get('status','')}")
+
+    c1,c2,c3 = st.columns([1,1,2])
+    with c1:
+        type_filter = st.selectbox("Type", ["", "call","note","task"], index=0, key="act_type")
+    with c2:
+        status_filter = st.selectbox("Status", ["", "open","done","canceled"], index=0, key="act_status")
+    with c3:
+        month_filter = st.text_input("Month YYYY-MM", key="act_month")
+    df_acts = list_deal_activities(type_filter=type_filter or None, status=status_filter or None, month=month_filter or None)
+    if len(df_acts):
+        st.dataframe(df_acts, use_container_width=True, hide_index=True)
+        with st.form("act_inline"):
+            aid = st.number_input("Activity ID", min_value=1, step=1)
+            new_status = st.selectbox("Set status", ["open","done","canceled"], index=0)
+            do_delete = st.checkbox("Delete")
+            submitted = st.form_submit_button("Apply")
+            if submitted:
+                ok = True
+                if do_delete:
+                    ok = delete_deal_activity(int(aid))
+                else:
+                    ok = update_deal_activity(int(aid), status=new_status)
+                if ok:
+                    st.success("Updated.")
+                else:
+                    st.error("No change.")
+    else:
+        st.caption("No activities yet.")
+f sel_deal:
+                    note_txt = st.text_input("Note", key="qa_note")
+                    if note_txt:
+                        create_deal_activity(deal_opts[sel_deal], "note", title="Note", note=note_txt, created_by=st.session_state.get("active_user"))
+                        st.success("Note added")
+        with c3:
+            task_title = st.text_input("Task title", key="qa_task_title")
+        with c4:
+            due = st.text_input("Due YYYY-MM-DD", key="qa_task_due")
+        r1,r2 = st.columns([1,2])
+        with r1:
+            email_rem = st.checkbox("Email reminder", value=True, key="qa_task_email")
+        with r2:
+            if st.button("Create task"):
+                if sel_deal and task_title:
+                    act_id = create_deal_activity(deal_opts[sel_deal], "task", title=task_title, due_at=due, created_by=st.session_state.get("active_user"))
+                    if email_rem:
+                        enqueue_task_due_email(act_id, to_email=None)
+                    st.success("Task created")
+egacy_tabs[13]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
 
@@ -9747,10 +10326,13 @@ try:
         with c2:
             q = st.text_input("Search", key="deals_search")
         with c3:
-            st.markdown(" ")
+            owner_filter = st.text_input("Owner filter", key="deals_owner_filter")
 
         # Data
-        df = list_deals(stage_filter, q)
+        df = _load_deals(stage_filter, q, int(st.session_state.get('deals_refresh', 0)))
+        if owner_filter:
+            df = df[df["owner"].fillna("").str.contains(owner_filter, case=False)]
+        ))
 
         # Totals by stage (above grid)
         st.markdown("#### Totals by stage")
@@ -9804,7 +10386,7 @@ try:
             st.info("No deals yet. Add your first deal above.")
         else:
             edited = st.data_editor(
-                df[["id","title","stage","owner","amount","agency","due_date","notes"]],
+                df[["id","title","stage","owner","amount","agency","due_date","next_action","notes"]],
                 key="deals_editor",
                 num_rows="dynamic",
                 column_config={
@@ -9816,6 +10398,7 @@ try:
                     "agency": st.column_config.TextColumn("Agency"),
                     "owner": st.column_config.TextColumn("Owner"),
                     "due_date": st.column_config.TextColumn("Due date"),
+                    "next_action": st.column_config.TextColumn("Next action", width="medium"),
                 },
                 hide_index=True
             )
@@ -9824,7 +10407,7 @@ try:
             for _, row in edited.iterrows():
                 orig = df.loc[df["id"]==row["id"]].iloc[0]
                 updates = {}
-                for col in ["title","stage","owner","amount","notes","agency","due_date"]:
+                for col in ["title","stage","owner","amount","notes","agency","due_date","next_action"]:
                     if pd.isna(row[col]) and pd.isna(orig[col]):
                         continue
                     if (row[col] != orig[col]) and not (pd.isna(row[col]) and orig[col] in ("", None)):
@@ -9837,70 +10420,77 @@ try:
                 st.success(f"Saved {len(changes)} change(s).")
 
         # Kanban board
-        st.divider()
-        st.markdown("### Board view")
-        st.caption("Column per stage with quick add, inline edits, and move.")
+        if feature_flags().get('deals_kanban'):
+            st.divider()
+                    if feature_flags().get('deals_kanban'):
+            st.markdown("### Board view  \n*Feature: deals_kanban*")
+                    st.caption("Column per stage with quick add, inline edits, and move.")
 
-        df_board = list_deals(stage=None, q=q)
-        import pandas as _pd2
-        _counts = df_board.groupby("stage")["id"].count() if not df_board.empty else _pd2.Series(dtype=int)
-        _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
-        _totals = _amounts.groupby(df_board["stage"]).sum() if not df_board.empty else _pd2.Series(dtype=float)
-        grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
-        st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
+                    df_board = _load_deals(None, q, int(st.session_state.get('deals_refresh', 0)))
+                    import pandas as _pd2
+                    _counts = df_board.groupby("stage")["id"].count() if not df_board.empty else _pd2.Series(dtype=int)
+                    _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
+                    _totals = _amounts.groupby(df_board["stage"]).sum() if not df_board.empty else _pd2.Series(dtype=float)
+                    grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
+                    st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
 
-        cols = st.columns(len(DEAL_STAGES))
-        for i, stage_name in enumerate(DEAL_STAGES):
-            with cols[i]:
-                st.markdown(f"#### {stage_name}")
-                st.caption(f"{int(_counts.get(stage_name, 0))} deals • ${float(_totals.get(stage_name, 0.0)):,.2f}")
+                    cols = st.columns(len(DEAL_STAGES))
+                    for i, stage_name in enumerate(DEAL_STAGES):
+                        with cols[i]:
+                            st.markdown(f"#### {stage_name}")
+                            st.caption(f"{int(_counts.get(stage_name, 0))} deals • ${float(_totals.get(stage_name, 0.0)):,.2f}")
 
-                # Quick add in this stage
-                with st.container(border=True):
-                    _new_title = st.text_input("New deal title", key=f"quick_new_title_{i}")
-                    qa1, qa2 = st.columns([1,1])
-                    with qa1:
-                        _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
-                    with qa2:
-                        _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
-                    if st.button("New in this stage", key=f"quick_new_btn_{i}"):
-                        if _new_title.strip():
-                            create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
-                            st.success("Deal created")
-                            st.rerun()
-                        else:
-                            st.warning("Enter a title first")
-
-                # Cards for deals in this stage
-                stage_rows = df_board[df_board["stage"] == stage_name]
-                for _, row in stage_rows.iterrows():
-                    with st.container(border=True):
-                        st.markdown(f"**{row['title']}**")
-                        st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
-                        kc1, kc2 = st.columns([1,1])
-                        with kc1:
-                            new_owner = st.text_input("Owner", value=row["owner"] or "", key=f"owner_{row['id']}")
-                        with kc2:
-                            new_amt = st.number_input("Amount", value=float(row["amount"] or 0.0), step=100.0, format="%.2f", key=f"amt_{row['id']}")
-                        km1, km2 = st.columns([2,1])
-                        with km1:
-                            new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
-                        with km2:
-                            if st.button("Save", key=f"save_{row['id']}"):
-                                changes = {}
-                                if new_owner != (row["owner"] or ""):
-                                    changes["owner"] = new_owner or None
-                                if float(new_amt) != float(row["amount"] or 0.0):
-                                    changes["amount"] = float(new_amt)
-                                if new_stage != row["stage"]:
-                                    changes["stage"] = new_stage
-                                if changes:
-                                    ok = update_deal(int(row["id"]), **changes)
-                                    if ok:
-                                        st.success("Updated")
+                            # Quick add in this stage
+                            with st.container(border=True):
+                                _new_title = st.text_input("New deal title", key=f"quick_new_title_{i}")
+                                qa1, qa2 = st.columns([1,1])
+                                with qa1:
+                                    _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
+                                with qa2:
+                                    _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
+                                if st.button("New in this stage", key=f"quick_new_btn_{i}"):
+                                    if _new_title.strip():
+                                        create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
+                                        st.success("Deal created")
                                         st.rerun()
                                     else:
-                                        st.error("No changes saved")
+                                        st.warning("Enter a title first")
+
+                            # Cards for deals in this stage
+                            stage_rows = df_board[df_board["stage"] == stage_name]
+                            for _, row in stage_rows.iterrows():
+                                with st.container(border=True):
+                                    _b = deal_badges(int(row.get('notice_id') or 0)) if row.get('notice_id') else {}
+                                    _cov = _b.get('rfq_coverage')
+                                    _state = _b.get('compliance_state')
+                                    badge = ''
+                                    if _state:
+                                        badge += f"  ·  Compliance: {_state}"
+                                    if _cov is not None:
+                                        try: badge += f"  ·  RFQ coverage: {float(_cov):.0f}%"
+                                        except Exception: pass
+                                    st.markdown(f"**{row['title']}**{badge}")
+                                    st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
+                                    kc1, kc2 = st.columns([1,1])
+                                    with kc1:
+                                        next_action = st.text_input('Next action', value=row.get('next_action') or '', key=f"next_{row['id']}")
+                                        new_owner = st.text_input("Owner", value=row["owner"] or "", key=f"owner_{row['id']}")
+                                    with kc2:
+                                        new_amt = st.number_input("Amount", value=float(row["amount"] or 0.0), step=100.0, format="%.2f", key=f"amt_{row['id']}")
+                                    km1, km2 = st.columns([2,1])
+                                    with km1:
+                                        new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
+                                                 if float(new_amt) != float(row["amount"] or 0.0):
+                                                changes["amount"] = float(new_amt)
+                                            if new_stage != row["stage"]:
+                                                changes["stage"] = new_stage
+                                            if changes:
+                                                ok = update_deal(int(row["id"]), **changes)
+                                                if ok:
+                                                    st.success("Updated")
+                                                    st.rerun()
+                                                else:
+                                                    st.error("No changes saved")
 
         # Danger zone
         with st.expander("Danger zone: delete a deal"):
@@ -11366,6 +11956,13 @@ def set_notice_state(user_id: str, notice_id: int, state: str):
                  VALUES(?,?,?,?)
                  ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""", (user_id, notice_id, state, ts))
     conn.commit()
+
+# Deals Phase 1: on save, upsert into deals when flagged
+try:
+    if feature_flags().get("deals_core") and str(state).lower() == "saved":
+        upsert_deal_from_notice(user_id, int(notice_id))
+except Exception:
+    pass
 
 def toggle_pipeline_star(user_id: str, notice_id: int) -> bool:
     conn = get_db()
