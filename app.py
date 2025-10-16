@@ -1044,7 +1044,7 @@ def _tenancy_phase1_bootstrap():
 
 #                 cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
-                            (uid, oid, email, name, role))
+#                             (uid, oid, email, name, role))
 
         conn.commit()
 
@@ -8346,7 +8346,7 @@ def _tenancy_phase1_bootstrap():
 
 #                 cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
 
-                            (uid, oid, email, name, role))
+#                             (uid, oid, email, name, role))
 
         conn.commit()
 
