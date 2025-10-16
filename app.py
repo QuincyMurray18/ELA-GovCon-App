@@ -516,7 +516,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
 
     """
 
-    Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+    Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
 
     """
 
@@ -3412,7 +3412,7 @@ with st.sidebar:
 
 
 
-# === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
+# === Outreach Email (per-user) -- Gmail SMTP (added 2025-10-08) ===
 
 # Supports per-user "From" emails, stored credentials, and a sidebar composer.
 
@@ -3484,7 +3484,7 @@ def set_user_smtp_app_password(user: str, app_password: str):
 
     u = store.get(user, {})
 
-    # Light obfuscation (not true encryption) — recommend using Gmail App Passwords
+    # Light obfuscation (not true encryption) -- recommend using Gmail App Passwords
 
     u["smtp_host"] = "smtp.gmail.com"
 
@@ -6658,7 +6658,7 @@ def sam_search(
 
 
 
-# ---- Hoisted helper implementations (duplicate for e# === SAM Watch → Contacts auto sync helpers ===
+# ---- Hoisted helper implementations (duplicate for e# === SAM Watch -> Contacts auto sync helpers ===
 
 
 
@@ -7818,7 +7818,7 @@ def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times
 
     """
 
-    Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+    Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
 
     """
 
@@ -10624,7 +10624,7 @@ with st.sidebar:
 
 
 
-# === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
+# === Outreach Email (per-user) -- Gmail SMTP (added 2025-10-08) ===
 
 # Supports per-user "From" emails, stored credentials, and a sidebar composer.
 
@@ -10696,7 +10696,7 @@ def set_user_smtp_app_password(user: str, app_password: str):
 
     u = store.get(user, {})
 
-    # Light obfuscation (not true encryption) — recommend using Gmail App Passwords
+    # Light obfuscation (not true encryption) -- recommend using Gmail App Passwords
 
     u["smtp_host"] = "smtp.gmail.com"
 
@@ -13870,7 +13870,7 @@ def sam_search(
 
 
 
-# ---- Hoisted helper implementations (duplicate for e# === SAM Watch → Contacts auto sync helpers ===
+# ---- Hoisted helper implementations (duplicate for e# === SAM Watch -> Contacts auto sync helpers ===
 
 
 
@@ -15524,7 +15524,7 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 
     Returns a tuple: (issues: list[str], estimated_pages: int)
 
-    Heuristics only — cannot actually inspect fonts from Markdown.
+    Heuristics only -- cannot actually inspect fonts from Markdown.
 
     """
 
@@ -17064,7 +17064,7 @@ with legacy_tabs[0]:
 
         __ctx_pipeline = True
 
-        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+        st.success(f"Saved -- updated {updated} row(s), deleted {deleted} row(s).")
 
 
 
@@ -17460,7 +17460,7 @@ with legacy_tabs[1]:
 
             if not GOOGLE_PLACES_KEY:
 
-                msg += " — Google Places key is missing."
+                msg += " -- Google Places key is missing."
 
             st.warning(msg)
 
@@ -18348,7 +18348,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
 
                 for _, r in best.iterrows():
 
-                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
+                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} -- {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
 
                 try:
 
@@ -18644,7 +18644,7 @@ with legacy_tabs[4]:
 
     st.subheader("SAM Watch: Auto Search + Attachments + Saved Searches")
 
-    st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
+    st.markdown("> **Flow:** Set All active -> apply filters -> open attachments -> choose assignee -> **Search** then **Save to pipeline**")
 
     conn = get_db()
 
@@ -19008,7 +19008,7 @@ except Exception:
 
                         for _, r in best.iterrows():
 
-                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
+                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} -- {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
 
                         try:
 
@@ -19160,7 +19160,7 @@ except Exception:
 
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
 
-            st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+            st.success(f"Saved to pipeline -- inserted {ins}, updated {upd}.")
 
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 
@@ -19262,7 +19262,7 @@ except Exception as _e_sync:
 
 # [disabled to fix indentation]                         st.session_state['mail_bodies'] = bods
 
-# [disabled to fix indentation]                         st.success("Drafts prepared — open the Outreach tab to review and send.")
+# [disabled to fix indentation]                         st.success("Drafts prepared -- open the Outreach tab to review and send.")
 
 # [disabled to fix indentation]                 except Exception as _e_prep:
 
@@ -19658,7 +19658,7 @@ with legacy_tabs[11]:
 
             cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
 
-            st.caption(f"Session #{session_id} — {cur_title}")
+            st.caption(f"Session #{session_id} -- {cur_title}")
 
 
 
@@ -27414,7 +27414,7 @@ def render_proposal_builder():
 
                 for _, r in df_sel.iterrows():
 
-                    lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                    lines.append(f"- {r['title']} -- {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
 
                 pp_text = "\n".join(lines)
 
@@ -30188,7 +30188,7 @@ def _send_team_alert(msg: str):
 
 
 
-# === [MERGE UI] SAM Watch — Minimal UI (final) ===
+# === [MERGE UI] SAM Watch -- Minimal UI (final) ===
 
 try:
 
@@ -34210,7 +34210,7 @@ def render_diff(opp_id: int):
 
         for c in d["changed_fields"]:
 
-            st.write(f"{c['field']}: '{c.get('from')}' → '{c.get('to')}'")
+            st.write(f"{c['field']}: '{c.get('from')}' -> '{c.get('to')}'")
 
     st.markdown("**Files**")
 
@@ -37950,7 +37950,7 @@ def render_proposal_wizard(notice_id: int):
 
             st.markdown(f"- {it.get('text','')}".strip())
 
-        if st.button("Next → Sections"):
+        if st.button("Next -> Sections"):
 
             st.session_state["wizard_step"] = 2
 
@@ -37988,7 +37988,7 @@ def render_proposal_wizard(notice_id: int):
 
                     st.success("Saved")
 
-        if st.button("Next → Uploads"):
+        if st.button("Next -> Uploads"):
 
             st.session_state["wizard_step"] = 3
 
@@ -38024,7 +38024,7 @@ def render_proposal_wizard(notice_id: int):
 
             st.caption(f"{fname} • {ts}")
 
-        if st.button("Next → Package"):
+        if st.button("Next -> Package"):
 
             st.session_state["wizard_step"] = 4
 
@@ -41658,7 +41658,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
 
     st.markdown('**Email template**')
 
-    subj_t = st.text_input('Subject', value='RFQ: {title} — reply by {due_date}', key='rfqg2_subj')
+    subj_t = st.text_input('Subject', value='RFQ: {title} -- reply by {due_date}', key='rfqg2_subj')
 
     body_t = st.text_area('Body', value='Hello {company},\n\nWe invite you to quote for {title}. Please submit by {due_date}.\nOpen your secure link: {link}\n\nThank you.', key='rfqg2_body', height=140)
 
@@ -42190,7 +42190,7 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
 
                     for lid, desc in lines[:200]:
 
-                        price_inputs[lid] = st.number_input(f"Ext price — {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
+                        price_inputs[lid] = st.number_input(f"Ext price -- {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
 
                     ex = st.text_area("Exceptions / notes", key=f"exc_{vid}")
 
@@ -42726,7 +42726,7 @@ def render_vendors(opp_id: int):
 
     with c2:
 
-        subj = st.text_input('Email subject', value='RFQ for {title} — due {due_date}', key='p8_subj')
+        subj = st.text_input('Email subject', value='RFQ for {title} -- due {due_date}', key='p8_subj')
 
     with c3:
 
@@ -42742,7 +42742,7 @@ def render_vendors(opp_id: int):
 
     vrows = cur.execute("SELECT id, name, state, naics, email FROM vendors WHERE (state=? OR ?='') AND (naics LIKE ? OR ?='') ORDER BY name", (stt, stt, f'%{ncs}%', ncs)).fetchall()
 
-    choices = {f"{v} — {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
+    choices = {f"{v} -- {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
 
     sel = st.multiselect('Target vendors', options=list(choices.keys()))
 
@@ -45058,7 +45058,7 @@ def _must_address_bullets(conn, notice_id: int):
 
         cite = f" [{cfile or ''} p.{cpage}]" if cfile else ""
 
-        bullets.append({'req_id': req_id, 'text': f"{factor or ''} {subfactor or ''} — {req}{cite}".strip()})
+        bullets.append({'req_id': req_id, 'text': f"{factor or ''} {subfactor or ''} -- {req}{cite}".strip()})
 
     return bullets
 
