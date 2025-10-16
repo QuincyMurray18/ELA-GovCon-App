@@ -8331,7 +8331,8 @@ def _payload_version_hash(core: dict) -> str:
 def record_notice_version(notice_id: int, n: dict):
     """
     Compute version hash from core fields and attachments list.
-    If changed from the latest version, insert version row and create amendment, set compliance_state.
+    If changed from the latest version for this notice, insert a version row,
+    create an amendment row, and mark the notice as Needs review.
     """
     if not n or not isinstance(n, dict):
         return None
@@ -8339,20 +8340,27 @@ def record_notice_version(notice_id: int, n: dict):
     conn = get_db()
     core = _core_payload_for_hash(n)
     vhash = _payload_version_hash(core)
-    prev = conn.execute("SELECT version_hash, payload_json FROM notice_versions WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
+    prev = conn.execute(
+        "SELECT version_hash FROM notice_versions WHERE notice_id=? ORDER BY id DESC LIMIT 1",
+        (int(notice_id),)
+    ).fetchone()
     if prev and prev[0] == vhash:
         return vhash  # no change
     # Insert version
     now = utc_now_iso()
-    conn.execute("INSERT INTO notice_versions(notice_id, fetched_at, version_hash, payload_json) VALUES(?,?,?,?)",
-                 (int(notice_id), now, vhash, json.dumps(core, ensure_ascii=False))
+    conn.execute(
+        "INSERT INTO notice_versions(notice_id, fetched_at, version_hash, payload_json) VALUES(?,?,?,?)",
+        (int(notice_id), now, vhash, json.dumps(core, ensure_ascii=False))
+    )
     # Create amendment row
     amend_no = None
     posted = n.get("posted_at") or None
     url = n.get("url") or None
     summary = "Auto detected change"
-    conn.execute("INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
-                 (int(notice_id), amend_no, posted, url, vhash, summary))
+    conn.execute(
+        "INSERT INTO amendments(notice_id, amend_number, posted_at, url, version_hash, summary) VALUES(?,?,?,?,?,?)",
+        (int(notice_id), amend_no, posted, url, vhash, summary)
+    )
     # Mark compliance
     try:
         conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(notice_id),))
@@ -8362,37 +8370,41 @@ def record_notice_version(notice_id: int, n: dict):
 
 def _load_versions(notice_id: int):
     conn = get_db()
-    rows = conn.execute("SELECT id, fetched_at, version_hash, payload_json FROM notice_versions WHERE notice_id=? ORDER BY id DESC LIMIT 2", (int(notice_id),)).fetchall()
+    rows = conn.execute(
+        "SELECT id, fetched_at, version_hash, payload_json FROM notice_versions WHERE notice_id=? ORDER BY id DESC LIMIT 2",
+        (int(notice_id),)
+    ).fetchall()
     out = []
     for r in rows:
         try:
-            out.append({"id": r[0], "fetched_at": r[1], "hash": r[2], "payload": json.loads(r[3])})
+            payload = json.loads(r[3]) if isinstance(r[3], str) else {}
         except Exception:
-            out.append({"id": r[0], "fetched_at": r[1], "hash": r[2], "payload": {}})
+            payload = {}
+        out.append({"id": r[0], "fetched_at": r[1], "hash": r[2], "payload": payload})
     return out
 
-def _diff_fields(prev: dict, curr: dict):
-    keys = ["title","agency","naics","psc","set_aside","posted","response_due","type","url","place_of_performance","attachments_json","assignee","quick_note","rfqg_enabled","rfqg_composer","rfqg_outreach","rfqg_intake","vendor_rfq_hooks"]
-changes = []
-    for k in keys:
-        if (prev or {}).get(k) != (curr or {}).get(k):
-            changes.append({
-                "field": k,
-                "before": (prev or {}).get(k),
-                "after": (curr or {}).get(k),
-                "diff": "\n".join(difflib.unified_diff(
-                    [str((prev or {}).get(k) or "")],
-                    [str((curr or {}).get(k) or "")],
-                    lineterm=""
-                ))
-            })
-    return changes
 
+def _diff_fields(prev: dict, curr: dict):
+    import difflib
+    keys = ["title","agency","naics","psc","set_aside","posted","response_due","type","url","place_of_performance","attachments_json","assignee","quick_note","rfqg_enabled","rfqg_composer","rfqg_outreach","rfqg_intake","vendor_rfq_hooks"]
+    changes = []
+    for k in keys:
+        pv = (prev or {}).get(k)
+        cv = (curr or {}).get(k)
+        if pv != cv:
+            before = str(pv or "")
+            after = str(cv or "")
+            try:
+                diff_text = "\n".join(difflib.unified_diff([before], [after], lineterm=""))
+            except Exception:
+                diff_text = ""
+            changes.append({"field": k, "before": pv, "after": cv, "diff": diff_text})
+    return changes
 def _diff_files(prev_files: list, curr_files: list):
     ps = set(prev_files or [])
     cs = set(curr_files or [])
-    added = sorted(list(cs - ps)
-    removed = sorted(list(ps - cs)
+    added = sorted(list(cs - ps))
+    removed = sorted(list(ps - cs))
     unchanged = ps & cs
     return {"added": added, "removed": removed, "unchanged": sorted(list(unchanged))}
 
