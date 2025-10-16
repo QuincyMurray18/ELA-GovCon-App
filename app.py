@@ -13320,160 +13320,6 @@ def update_deal(id_: int, **fields):
     conn.commit()
     return cur.rowcount > 0
 
-
-# === DEALS PHASE 3: Activities + Calendar ===
-def ensure_deal_activities_schema(conn):
-    cur = conn.cursor()
-    try:
-        cur.execute("""CREATE TABLE IF NOT EXISTS deal_activities(
-            id INTEGER PRIMARY KEY,
-            deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
-            type TEXT NOT NULL,
-            title TEXT,
-            body TEXT,
-            due_at TEXT,
-            completed_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            created_by TEXT
-        );""")
-        cur.execute("""CREATE INDEX IF NOT EXISTS idx_dact_deal ON deal_activities(deal_id);""" )
-        cur.execute("""CREATE INDEX IF NOT EXISTS idx_dact_due ON deal_activities(due_at);""" )
-    except Exception:
-        pass
-    conn.commit()
-
-def list_activities(deal_id=None, include_completed=True, q=""):
-    conn = get_db()
-    ensure_deal_activities_schema(conn)
-    sql = "SELECT id, deal_id, type, COALESCE(title,'') as title, COALESCE(body,'') as body, due_at, completed_at, created_at, created_by FROM deal_activities WHERE 1=1"
-    params = []
-    if deal_id:
-        sql += " AND deal_id = ?"
-        params.append(int(deal_id))
-    if not include_completed:
-        sql += " AND completed_at IS NULL"
-    if q:
-        sql += " AND (title LIKE ? OR body LIKE ?)"
-        params += [f"%{q}%", f"%{q}%"]
-    sql += " ORDER BY COALESCE(due_at, created_at) ASC, id DESC"
-    import pandas as _pd
-    try:
-        df = _pd.read_sql_query(sql, get_db(), params=params)
-    except Exception:
-        df = _pd.DataFrame(columns=["id","deal_id","type","title","body","due_at","completed_at","created_at","created_by"])  # empty
-    return df
-
-def create_activity(deal_id:int, type_:str, title:str="", body:str="", due_at:str=None, created_by:str=None):
-    conn = get_db()
-    ensure_deal_activities_schema(conn)
-    cur = conn.cursor()
-    cur.execute("""INSERT INTO deal_activities(deal_id,type,title,body,due_at,created_by)
-                 VALUES(?,?,?,?,?,?)""", (int(deal_id), type_, title or None, body or None, due_at, created_by))
-    conn.commit()
-    # enqueue reminder if task with due_at and email_queue exists
-    try:
-        if type_ == 'task' and due_at:
-            subj = f"Task due for deal {deal_id}: {title or body or '(no title)'}"
-            msg = f"Task due at {due_at}:\n\n{body or title or ''}"
-            cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?, datetime('now'))",
-                        (st.session_state.get('user_email') or 'alerts@localhost', subj, msg))
-            conn.commit()
-    except Exception:
-        pass
-    return True
-
-def update_activity(act_id:int, **fields):
-    if not fields: return False
-    allowed = {"title","body","due_at","completed_at","type"}
-    sets = []
-    vals = []
-    for k,v in fields.items():
-        if k in allowed:
-            sets.append(f"{k} = ?")
-            vals.append(v)
-    if not sets: return False
-    sql = "UPDATE deal_activities SET " + ", ".join(sets) + " WHERE id = ?"
-    vals.append(int(act_id))
-    conn = get_db()
-    ensure_deal_activities_schema(conn)
-    conn.execute(sql, vals)
-    conn.commit()
-    return True
-
-def delete_activity(act_id:int):
-    conn = get_db()
-    ensure_deal_activities_schema(conn)
-    conn.execute("DELETE FROM deal_activities WHERE id = ?", (int(act_id),))
-    conn.commit()
-    return True
-
-def _render_deals_activities_and_calendar():
-    import streamlit as st
-    conn = get_db()
-    ensure_deal_activities_schema(conn)
-    # Quick actions
-    st.markdown("### Activities")
-    c1,c2,c3,c4 = st.columns([2,1,2,2])
-    with c1:
-        deal_id = st.number_input("Deal ID", min_value=1, step=1, value=1, key="qa_deal_id")
-    with c2:
-        type_ = st.selectbox("Type", ["call","note","task"], key="qa_type")
-    with c3:
-        title = st.text_input("Title", key="qa_title")
-    with c4:
-        due_at = st.text_input("Due (YYYY-MM-DD HH:MM)", key="qa_due") if type_=="task" else st.text_input("Due (optional)", key="qa_due2")
-    body = st.text_area("Notes", key="qa_body", height=80)
-    b1,b2,b3 = st.columns(3)
-    if b1.button("Log call"):
-        create_activity(deal_id, "call", title or "Call", body or "", None, st.session_state.get("user_id"))
-        st.success("Call logged."); st.session_state["deals_refresh"] = st.session_state.get("deals_refresh",0) + 1; st.rerun()
-    if b2.button("Add note"):
-        create_activity(deal_id, "note", title or "Note", body or "", None, st.session_state.get("user_id"))
-        st.success("Note added."); st.session_state["deals_refresh"] += 1; st.rerun()
-    if b3.button("Create task"):
-        create_activity(deal_id, "task", title or "Task", body or "", due_at or None, st.session_state.get("user_id"))
-        st.success("Task created and reminder enqueued."); st.session_state["deals_refresh"] += 1; st.rerun()
-
-    # Activity list with inline complete/delete
-    st.markdown("#### Open items")
-    q = st.text_input("Filter", key="dact_q")
-    df_open = list_activities(include_completed=False, q=q)
-    st.dataframe(df_open, use_container_width=True, hide_index=True)
-    # Inline complete
-    act_id = st.number_input("Complete activity ID", min_value=0, step=1, value=0, key="comp_id")
-    if st.button("Mark complete") and act_id:
-        update_activity(int(act_id), completed_at=dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
-        st.session_state["deals_refresh"] += 1; st.rerun()
-
-    # Calendar view
-    st.divider()
-    st.markdown("### Calendar")
-    import pandas as _pd
-    df_tasks = list_activities(include_completed=False)
-    df_tasks = df_tasks[df_tasks["type"]=="task"].copy()
-    if not df_tasks.empty:
-        # Normalize dates
-        def _norm(s):
-            try:
-                return _pd.to_datetime(s)
-            except Exception:
-                return _pd.NaT
-        df_tasks["start"] = df_tasks["due_at"].apply(_norm)
-        df_tasks["end"] = df_tasks["start"]
-        df_tasks["name"] = df_tasks["title"].fillna("Task")
-        try:
-            import plotly.express as px
-            fig = px.timeline(df_tasks, x_start="start", x_end="end", y="deal_id", hover_name="name", hover_data=["body","id"])
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception:
-            st.dataframe(df_tasks[["deal_id","title","due_at"]], use_container_width=True, hide_index=True)
-    else:
-        st.info("No upcoming tasks.")
-# === END DEALS PHASE 3 ===
-
-
-
-
 def delete_deal(id_: int):
     conn = get_db()
     ensure_deals_table(conn)
@@ -13660,12 +13506,6 @@ try:
                     st.rerun()
                 else:
                     st.error("Delete failed or ID not found.")
-
-        # --- Activities + Calendar (flagged) ---
-        ff = feature_flags()
-        if ff.get('deals_activities', True):
-            st.divider()
-            _render_deals_activities_and_calendar()
 except Exception as _e_deals:
     try:
         st.caption(f"[Deals tab note: {_e_deals}]")
@@ -14401,243 +14241,85 @@ except Exception as _e_ui:
 
 
 # === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
-
-# === Deals tab – GO DEALS PHASE 2: Kanban + List ===
 try:
-    # Ensure flag exists
-    ff = st.session_state.setdefault("feature_flags", {})
-    ff.setdefault("deals_core", True)
-    ff.setdefault("deals_kanban", True)
-    # Ensure refresh token exists
-    st.session_state.setdefault('deals_refresh', 0)
+    with tabs[TAB['Deals']]:
+        st.subheader("Deals")
+        conn = get_db()
+        @st.cache_data(show_spinner=False)
+        def load_deals_data(_refresh:int):
+            try:
+                return pd.read_sql_query("select * from opportunities order by COALESCE(response_due, posted) asc, posted desc", conn)
+            except Exception:
+                return pd.DataFrame()
+        df_deals = load_deals_data(st.session_state.get('deals_refresh', 0))
 
-    def _has_col(conn, table, col):
-        try:
-            cur = conn.execute(f"PRAGMA table_info({table})")
-            return any(r[1] == col for r in cur.fetchall())
-        except Exception:
-            return False
+        # Ensure expected cols
+        for _col, _default in {"assignee":"", "status":"New", "notes":""}.items():
+            if _col not in df_deals.columns:
+                df_deals[_col] = _default
 
-    def _add_col_if_missing(conn, table, col_def):
+        # Build Link from first URL in notes
+        import re as _re_deals
+        def _extract_url_deals(_s):
+            try:
+                m = _re_deals.search(r"(https?://\S+)", str(_s))
+                return m.group(1).rstrip("),.;]") if m else ""
+            except Exception:
+                return ""
+        df_deals["Link"] = df_deals.get("notes", pd.Series("", index=df_deals.index)).apply(_extract_url_deals)
+
+        # Optional filters
+        c1, c2 = st.columns(2)
+        with c1:
+            _assignees = [""] + sorted([x for x in df_deals.get("assignee", pd.Series()).dropna().unique().tolist() if x])
+            a_filter = st.selectbox("Filter by assignee", _assignees, index=0)
+        with c2:
+            s_filter = st.selectbox("Filter by status", ["","New","Reviewing","Bidding","Submitted"], index=0)
         try:
-            col_name = col_def.split()[0]
-            if not _has_col(conn, table, col_name):
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            if a_filter:
+                df_deals = df_deals[df_deals["assignee"].fillna("")==a_filter]
+            if s_filter:
+                df_deals = df_deals[df_deals["status"].fillna("")==s_filter]
         except Exception:
             pass
 
-    # Migrations for opportunities and stage history
-    try:
-        conn = get_db()
-        conn.execute("""create table if not exists stage_history(
-            id integer primary key,
-            opp_id integer not null,
-            old_stage text,
-            new_stage text,
-            changed_at text default current_timestamp,
-            changed_by text
-        );""")
-        for coldef in [
-            "stage text default 'New'",
-            "next_action text",
-            "due_at text",
-            "compliance_state text",
-            "rfq_coverage real"
-        ]:
-            _add_col_if_missing(conn, "opportunities", coldef)
-    except Exception as _e_schema:
-        st.warning(f"[Deals schema note: {_e_schema}]")
+        edit_deals = st.data_editor(
+            df_deals,
+            column_config={
+                "status": st.column_config.SelectboxColumn("status", options=["New","Reviewing","Bidding","Submitted"]),
+                "Link": st.column_config.LinkColumn("Link", display_text="Open in SAM")
+            },
+            use_container_width=True, num_rows="dynamic", key="deals_grid"
+        )
 
-    # Loader keyed on refresh
-    @st.cache_data(show_spinner=False)
-    def _load_deals(refresh_token:int):
-        try:
-            conn = get_db()
-            df = pd.read_sql_query("""
-                select
-                    id, notice_id, title, agency, office, sub_tier,
-                    naics, set_aside, posted, response_due,
-                    stage, next_action, due_at, compliance_state, rfq_coverage,
-                    value_estimate, place_state, place_city
-                from opportunities
-                order by coalesce(response_due, posted) asc, posted desc
-            """, conn)
-            return df
-        except Exception as e:
-            st.caption(f"[Deals load note: {e}]")
-            return pd.DataFrame()
-
-    df_deals = _load_deals(st.session_state.get('deals_refresh', 0)).copy()
-
-    # Stage catalog
-    DEFAULT_STAGES = [
-        "New",
-        "Qualify",
-        "Pursue",
-        "RFQ Out",
-        "Pricing",
-        "Review",
-        "Submitted",
-        "Awarded",
-        "Closed Lost"
-    ]
-    stages = st.session_state.setdefault("deal_stages", DEFAULT_STAGES)
-
-    # Small helpers
-    def _badge(txt, kind="muted"):
-        color = {"ok":"green","warn":"orange","bad":"red","muted":"gray"}.get(kind, "gray")
-        return f"<span style='padding:2px 6px;border-radius:999px;background:{color};color:white;font-size:12px'>{txt}</span>"
-
-    def _persist_stage(opp_id:int, new_stage:str):
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-            old = cur.execute("select stage from opportunities where id=?", (opp_id,)).fetchone()
-            old_stage = old[0] if old else None
-            cur.execute("update opportunities set stage=?, updated_at=current_timestamp where id=?", (new_stage, opp_id))
-            cur.execute("insert into stage_history(opp_id, old_stage, new_stage, changed_by) values(?,?,?,?)",
-                        (opp_id, old_stage, new_stage, st.session_state.get("active_user","")))
-            conn.commit()
-            st.session_state['deals_refresh'] += 1
-            st.experimental_rerun()
-        except Exception as e:
-            st.warning(f"[Stage persist note: {e}]")
-
-    def _persist_inline(opp_id:int, next_action:str, due_at):
-        try:
-            due_str = str(due_at) if due_at else None
-            conn = get_db()
-            conn.execute("update opportunities set next_action=?, due_at=?, updated_at=current_timestamp where id=?",
-                         (next_action, due_str, opp_id))
-            st.session_state['deals_refresh'] += 1
-        except Exception as e:
-            st.warning(f"[Inline persist note: {e}]")
-
-    with tabs[TAB['Deals']]:
-        st.subheader("Deals")
-
-        view = st.segmented_control("View", options=["Kanban","List"], key="deals_view", default="Kanban") if ff.get("deals_kanban") else "List"
-
-        if view == "Kanban":
-            # Try true drag and drop if streamlit_sortables is installed
-            used_drag = False
+        if st.button("Save Deals updates"):
+            # Do not persist the derived Link column
             try:
-                from streamlit_sortables import sort_items
-                groups = {}
-                for stg in stages:
-                    g = df_deals[df_deals['stage'].fillna("New") == stg]
-                    groups[stg] = [
-                        f"{int(r.id)} │ {str(r.title)[:60]}"
-                        for _, r in g.iterrows()
-                    ]
-                order = sort_items(groups, multi_containers=True, direction="vertical", key="kanban_sortables")
-                used_drag = True
-                # Determine moved items by comparing assignment
-                current_owner = {}
-                for stg, items in groups.items():
-                    for label in items:
-                        oid = int(label.split("│",1)[0].strip())
-                        current_owner[oid] = stg
-                new_owner = {}
-                for stg, items in order.items():
-                    for label in items:
+                edit_deals = edit_deals.drop(columns=["Link"], errors="ignore")
+            except Exception:
+                pass
+
+            # Persist minimal safe fields back to opportunities by id
+            try:
+                cur = conn.cursor()
+                if "id" in edit_deals.columns:
+                    for _, r in edit_deals.iterrows():
                         try:
-                            oid = int(label.split("│",1)[0].strip())
+                            cur.execute(
+                                "update opportunities set assignee=?, status=?, notes=? where id=?",
+                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"]))
+                            )
                         except Exception:
                             continue
-                        new_owner[oid] = stg
-                moved = [(oid, current_owner.get(oid), new_owner.get(oid)) for oid in new_owner if new_owner.get(oid) != current_owner.get(oid)]
-                if moved:
-                    # Persist first change then rerun
-                    oid, old_s, new_s = moved[0]
-                    _persist_stage(oid, new_s)
-            except Exception as _e_drag:
-                used_drag = False
-                st.caption("[Kanban drag unavailable. Falling back to click to move.]")
-
-            # Fallback UI columns with move controls
-            if not used_drag:
-                cols = st.columns(len(stages))
-                for idx, stg in enumerate(stages):
-                    with cols[idx]:
-                        st.markdown(f"**{stg}**")
-                        g = df_deals[df_deals['stage'].fillna("New") == stg]
-                        for _, r in g.iterrows():
-                            with st.container(border=True):
-                                st.caption(f"{r.agency or ''}")
-                                st.write(str(r.title))
-                                # Badges
-                                comp = str(r.compliance_state or "unknown").title()
-                                rfq = r.rfq_coverage if pd.notna(r.get("rfq_coverage")) else None
-                                b1 = _badge(comp, "ok" if comp.lower()=="pass" else "warn" if comp.lower()=="partial" else "bad")
-                                b2 = _badge(f"RFQ {int(rfq)}%" if rfq is not None else "RFQ 0%", "ok" if (rfq or 0) >= 80 else "warn" if (rfq or 0) >= 40 else "bad")
-                                st.markdown(b1 + " " + b2, unsafe_allow_html=True)
-                                move_to = st.selectbox("Move to", stages, index=stages.index(stg), key=f"mv_{int(r.id)}")
-                                if move_to != stg:
-                                    if st.button("Update", key=f"mv_btn_{int(r.id)}"):
-                                        _persist_stage(int(r.id), move_to)
-
-        else:
-            # List view with filters and inline edits
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                stage_f = st.multiselect("Stage", stages, default=st.session_state.get("deals_stage_filter", stages))
-                st.session_state["deals_stage_filter"] = stage_f
-            with c2:
-                agency_f = st.text_input("Agency contains", st.session_state.get("deals_agency_filter",""))
-                st.session_state["deals_agency_filter"] = agency_f
-            with c3:
-                search = st.text_input("Search title or NAICS", st.session_state.get("deals_search",""))
-                st.session_state["deals_search"] = search
-
-            df = df_deals.copy()
-            if stage_f:
-                df = df[df['stage'].fillna("New").isin(stage_f)]
-            if agency_f:
-                df = df[df['agency'].fillna("").str.contains(agency_f, case=False, na=False)]
-            if search:
-                df = df[
-                    df['title'].fillna("").str.contains(search, case=False, na=False)
-                    | df['naics'].fillna("").str.contains(search, case=False, na=False)
-                ]
-
-            # Build editable subset
-            edit_cols = ['id','title','agency','stage','next_action','due_at','compliance_state','rfq_coverage','response_due']
-            for c in edit_cols:
-                if c not in df.columns:
-                    df[c] = None
-            df_view = df[edit_cols].sort_values(by=['response_due','id'], na_position='last')
-
-            edited = st.data_editor(
-                df_view,
-                hide_index=True,
-                use_container_width=True,
-                disabled=['id','title','agency','compliance_state','rfq_coverage','response_due'],
-                key="deals_editor"
-            )
-
-            # Detect and persist inline changes
-            try:
-                merged = edited.merge(df_view, on='id', how='left', suffixes=('', '_old'))
-                dirty = []
-                for _, row in merged.iterrows():
-                    if str(row.get('next_action')) != str(row.get('next_action_old')) or str(row.get('due_at')) != str(row.get('due_at_old')) or str(row.get('stage')) != str(row.get('stage_old')):
-                        dirty.append(row)
-                if dirty:
-                    if st.button("Save changes"):
-                        for row in dirty:
-                            oid = int(row['id'])
-                            if str(row.get('stage')) != str(row.get('stage_old')):
-                                _persist_stage(oid, str(row.get('stage') or 'New'))
-                            _persist_inline(oid, str(row.get('next_action') or ''), row.get('due_at'))
-                        st.experimental_rerun()
+                    conn.commit()
+                    st.success("Deals saved.")
                 else:
-                    st.caption("No edits pending.")
-            except Exception as _e_merge:
-                st.caption(f"[Deals persist note: {_e_merge}]")
-
+                    st.info("No ID column found; cannot save changes.")
+            except Exception as _e_deals_save:
+                st.warning(f"[Deals save note: {_e_deals_save}]")
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
+
 # ===== Layout Phase 2: Opportunity workspace subtabs =====
 # Deep-link helpers
 def open_details(opp): route_to("opportunity", opp_id=opp, tab="Details")
