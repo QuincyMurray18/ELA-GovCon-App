@@ -5919,7 +5919,10 @@ def crawl_site_for_emails(seed_url: str, max_pages=5, delay_s=0.7, same_domain_o
 def sam_search(
     naics_list, min_days=3, limit=100, keyword=None, posted_from_days=30,
     notice_types="Combined Synopsis/Solicitation,Solicitation,Presolicitation,SRCSGT", active="true"
-)
+):
+    """Legacy stub. Use fetch_notices instead."""
+    return {}
+
 
 # ===== Phase 0 Bootstrap =====
 
@@ -6301,6 +6304,7 @@ def set_user_page_size(user_id: str, value: int):
 
 def render_sam_watch_ingest():
     import streamlit as st
+    import pandas as pd
     if not st.session_state.get("feature_flags", {}).get("sam_ingest_core"):
         return
     ensure_sam_ingest_tables()
@@ -6381,8 +6385,6 @@ def render_sam_watch_ingest():
 
     # Results table
     st.caption(f"{total} total. Page {page}.")
-    # Build simple table
-    import pandas as pd
     df = pd.DataFrame([{
         "Type": r["type"],
         "Title": r["title"],
@@ -6400,16 +6402,16 @@ def render_sam_watch_ingest():
         "ID": r["id"],
     } for r in rows])
 
-    # Actions per row via form with multiselect of ids
-    
-    # Amendments and compliance columns
+    # Extra columns if amendments tracking is on
     if st.session_state.get("feature_flags", {}).get("amend_tracking"):
         try:
             df["Amendments"] = [int(r.get("amendments_count",0)) for r in rows]
             df["Compliance"] = [r.get("compliance_state","") for r in rows]
         except Exception:
             pass
-with st.form("sam_actions"):
+
+    # Actions per row via form with multiselect of ids
+    with st.form("sam_actions"):
         st.dataframe(df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
         c1, c2, c3, c4 = st.columns([1,1,1,6])
         sel_ids = st.multiselect("Select rows by Title to act on", options=[r["Title"] for r in df.to_dict("records")], key="sam_sel_titles")
@@ -6429,10 +6431,6 @@ with st.form("sam_actions"):
             if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
                 for nid in selected_ids:
                     toggle_pipeline_star(user_id, nid)
-
-    # Footer paging
-    p1, p2, p3 = st.columns([1,1,6])
-    
         # Diff controls
         if st.session_state.get("feature_flags", {}).get("amend_tracking"):
             d1, d2 = st.columns([1,5])
@@ -6441,9 +6439,13 @@ with st.form("sam_actions"):
                     if selected_ids:
                         st.session_state["selected_notice_id"] = int(selected_ids[0])
                         st.session_state["diff_tab_open"] = True
-        # Render diff panel below
-        render_diff_panel()
-with p1:
+
+    # Render diff panel below
+    render_diff_panel()
+
+    # Footer paging
+    p1, p2, p3 = st.columns([1,1,6])
+    with p1:
         if st.button("Prev") and page > 1:
             st.session_state["sam_page"] = page - 1
             st.experimental_rerun()
@@ -6457,10 +6459,13 @@ with p1:
             res, _ = fetch_notices(filters, page=page+1, page_size=page_size)
             if "error" not in res:
                 for item in res.get("items", []):
-                    try: upsert_notice(item)
-                    except Exception as ex: log_event("error","upsert_notice_failed", err=str(ex))
+                    try:
+                        upsert_notice(item)
+                    except Exception as ex:
+                        log_event("error","upsert_notice_failed", err=str(ex))
             st.session_state["sam_page"] = page + 1
             st.experimental_rerun()
+
 # ===== end SAM Ingest Phase 1 =====
 
 # ===== RFP Analyzer Phase 2 =====
@@ -7142,90 +7147,90 @@ except Exception as _ex:
     log_event("error", "bootstrap_call_failed", err=str(_ex))
 # ===== end Phase 0 Bootstrap =====
 
-:
-    if not SAM_API_KEY:
-        return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
-    base = "https://api.sam.gov/opportunities/v2/search"
-    today = datetime.utcnow().date()
-    min_due_date = today + timedelta(days=min_days)
-    posted_from = _us_date(today - timedelta(days=posted_from_days))
-    posted_to   = _us_date(today)
-
-    params = {
-        "api_key": SAM_API_KEY,
-        "limit": str(limit),
-        "response": "json",
-        "sort": "-publishedDate",
-        "active": active,
-        "postedFrom": posted_from,   # MM/dd/yyyy
-        "postedTo": posted_to,       # MM/dd/yyyy
-    }
-    # Enforce only Solicitation + Combined when notice_types is blank
-    if not notice_types:
-        notice_types = "Combined Synopsis/Solicitation,Solicitation"
-    params["noticeType"] = notice_types
-
-    if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
-    if keyword:      params["keywords"] = keyword
-
-    try:
-        headers = {"X-Api-Key": SAM_API_KEY}
-        r = requests.get(base, params=params, headers=headers, timeout=40)
-        status = r.status_code
-        raw_preview = (r.text or "")[:1000]
-        try:
-            data = r.json()
-        except Exception:
-            return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
-        if status != 200:
-            err_msg = ""
-            if isinstance(data, dict):
-                err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
-            return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
-        if isinstance(data, dict) and data.get("message"):
-            return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
-
-        items = data.get("opportunitiesData", []) or []
-        rows = []
-        for opp in items:
-            due_str = opp.get("responseDeadLine") or ""
-            d = _parse_sam_date(due_str)
-            d_dt = _coerce_dt(d)
-            min_dt = _coerce_dt(min_due_date)
-            if min_dt is None:
-                due_ok = True  # allow when min date unknown
-            else:
-                due_ok = (d_dt is None) or (d_dt >= min_dt)
-            if not due_ok: continue
-            docs = opp.get("documents", []) or []
-            rows.append({
-                "sam_notice_id": opp.get("noticeId"),
-                "title": opp.get("title"),
-                "agency": opp.get("organizationName"),
-                "naics": ",".join(opp.get("naicsCodes", [])),
-                "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
-                "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
-                "response_due": due_str,
-                "posted": opp.get("publishedDate",""),
-                "type": opp.get("type",""),
-                "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
-                "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
-            })
-        df = pd.DataFrame(rows)
-        info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
-                "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
-                            "postedFrom": posted_from, "postedTo": posted_to,
-                            "min_due_days": min_days, "noticeType": notice_types,
-                            "active": active, "limit": limit}}
-        if df.empty:
-            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
-        return df, info
-    except requests.RequestException as e:
-        return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
-
-
-
-
+# LEGACY_REMOVED :
+# LEGACY_REMOVED     if not SAM_API_KEY:
+# LEGACY_REMOVED         return pd.DataFrame(), {"ok": False, "reason": "missing_key", "detail": "SAM_API_KEY is empty."}
+# LEGACY_REMOVED     base = "https://api.sam.gov/opportunities/v2/search"
+# LEGACY_REMOVED     today = datetime.utcnow().date()
+# LEGACY_REMOVED     min_due_date = today + timedelta(days=min_days)
+# LEGACY_REMOVED     posted_from = _us_date(today - timedelta(days=posted_from_days))
+# LEGACY_REMOVED     posted_to   = _us_date(today)
+# LEGACY_REMOVED 
+# LEGACY_REMOVED     params = {
+# LEGACY_REMOVED         "api_key": SAM_API_KEY,
+# LEGACY_REMOVED         "limit": str(limit),
+# LEGACY_REMOVED         "response": "json",
+# LEGACY_REMOVED         "sort": "-publishedDate",
+# LEGACY_REMOVED         "active": active,
+# LEGACY_REMOVED         "postedFrom": posted_from,   # MM/dd/yyyy
+# LEGACY_REMOVED         "postedTo": posted_to,       # MM/dd/yyyy
+# LEGACY_REMOVED     }
+# LEGACY_REMOVED     # Enforce only Solicitation + Combined when notice_types is blank
+# LEGACY_REMOVED     if not notice_types:
+# LEGACY_REMOVED         notice_types = "Combined Synopsis/Solicitation,Solicitation"
+# LEGACY_REMOVED     params["noticeType"] = notice_types
+# LEGACY_REMOVED 
+# LEGACY_REMOVED     if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
+# LEGACY_REMOVED     if keyword:      params["keywords"] = keyword
+# LEGACY_REMOVED 
+# LEGACY_REMOVED     try:
+# LEGACY_REMOVED         headers = {"X-Api-Key": SAM_API_KEY}
+# LEGACY_REMOVED         r = requests.get(base, params=params, headers=headers, timeout=40)
+# LEGACY_REMOVED         status = r.status_code
+# LEGACY_REMOVED         raw_preview = (r.text or "")[:1000]
+# LEGACY_REMOVED         try:
+# LEGACY_REMOVED             data = r.json()
+# LEGACY_REMOVED         except Exception:
+# LEGACY_REMOVED             return pd.DataFrame(), {"ok": False, "reason": "bad_json", "status": status, "raw_preview": raw_preview, "detail": r.text[:800]}
+# LEGACY_REMOVED         if status != 200:
+# LEGACY_REMOVED             err_msg = ""
+# LEGACY_REMOVED             if isinstance(data, dict):
+# LEGACY_REMOVED                 err_msg = data.get("message") or (data.get("error") or {}).get("message") or ""
+# LEGACY_REMOVED             return pd.DataFrame(), {"ok": False, "reason": "http_error", "status": status, "message": err_msg, "detail": data, "raw_preview": raw_preview}
+# LEGACY_REMOVED         if isinstance(data, dict) and data.get("message"):
+# LEGACY_REMOVED             return pd.DataFrame(), {"ok": False, "reason": "api_message", "status": status, "detail": data.get("message"), "raw_preview": raw_preview}
+# LEGACY_REMOVED 
+# LEGACY_REMOVED         items = data.get("opportunitiesData", []) or []
+# LEGACY_REMOVED         rows = []
+# LEGACY_REMOVED         for opp in items:
+# LEGACY_REMOVED             due_str = opp.get("responseDeadLine") or ""
+# LEGACY_REMOVED             d = _parse_sam_date(due_str)
+# LEGACY_REMOVED             d_dt = _coerce_dt(d)
+# LEGACY_REMOVED             min_dt = _coerce_dt(min_due_date)
+# LEGACY_REMOVED             if min_dt is None:
+# LEGACY_REMOVED                 due_ok = True  # allow when min date unknown
+# LEGACY_REMOVED             else:
+# LEGACY_REMOVED                 due_ok = (d_dt is None) or (d_dt >= min_dt)
+# LEGACY_REMOVED             if not due_ok: continue
+# LEGACY_REMOVED             docs = opp.get("documents", []) or []
+# LEGACY_REMOVED             rows.append({
+# LEGACY_REMOVED                 "sam_notice_id": opp.get("noticeId"),
+# LEGACY_REMOVED                 "title": opp.get("title"),
+# LEGACY_REMOVED                 "agency": opp.get("organizationName"),
+# LEGACY_REMOVED                 "naics": ",".join(opp.get("naicsCodes", [])),
+# LEGACY_REMOVED                 "psc": ",".join(opp.get("productOrServiceCodes", [])) if opp.get("productOrServiceCodes") else "",
+# LEGACY_REMOVED                 "place_of_performance": (opp.get("placeOfPerformance") or {}).get("city",""),
+# LEGACY_REMOVED                 "response_due": due_str,
+# LEGACY_REMOVED                 "posted": opp.get("publishedDate",""),
+# LEGACY_REMOVED                 "type": opp.get("type",""),
+# LEGACY_REMOVED                 "url": f"https://sam.gov/opp/{opp.get('noticeId')}/view",
+# LEGACY_REMOVED                 "attachments_json": json.dumps([{"name":d.get("fileName"),"url":d.get("url")} for d in docs])
+# LEGACY_REMOVED             })
+# LEGACY_REMOVED         df = pd.DataFrame(rows)
+# LEGACY_REMOVED         info = {"ok": True, "status": status, "count": len(df), "raw_preview": raw_preview,
+# LEGACY_REMOVED                 "filters": {"naics": params.get("naics",""), "keyword": keyword or "",
+# LEGACY_REMOVED                             "postedFrom": posted_from, "postedTo": posted_to,
+# LEGACY_REMOVED                             "min_due_days": min_days, "noticeType": notice_types,
+# LEGACY_REMOVED                             "active": active, "limit": limit}}
+# LEGACY_REMOVED         if df.empty:
+# LEGACY_REMOVED             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+# LEGACY_REMOVED         return df, info
+# LEGACY_REMOVED     except requests.RequestException as e:
+# LEGACY_REMOVED         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
+# LEGACY_REMOVED 
+# LEGACY_REMOVED 
+# LEGACY_REMOVED 
+# LEGACY_REMOVED 
 def _ensure_opportunity_columns():
     conn = get_db(); cur = conn.cursor()
     # Add columns if missing
@@ -9361,4 +9366,3 @@ def _render_opportunity_workspace():
     elif active == "Submission":
         render_submission(opp_id)
 # ===== end Layout Phase 2 =====
-
