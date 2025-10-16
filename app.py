@@ -13668,3 +13668,900 @@ def render_sam():
         st.error(f"SAM UI error: {ex}")
 # === SAM WATCH MINIMAL FALLBACK END ===
 
+
+
+
+# === PHASE 4 SAVED SEARCHES START ===
+import datetime as _dt4
+import json as _json4
+import threading as _thr4
+
+def _ss_schema():
+    conn = get_db(); cur = conn.cursor()
+    ddls = [
+        """CREATE TABLE IF NOT EXISTS saved_searches(
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            query_json TEXT NOT NULL,
+            cadence TEXT NOT NULL CHECK(cadence IN('daily','weekly','monthly')),
+            recipients TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            last_run_at TEXT
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_saved_searches_user ON saved_searches(user_id);",
+
+        """CREATE TABLE IF NOT EXISTS search_runs(
+            id INTEGER PRIMARY KEY,
+            saved_search_id INTEGER NOT NULL REFERENCES saved_searches(id) ON DELETE CASCADE,
+            ran_at TEXT NOT NULL,
+            new_hits_count INTEGER NOT NULL,
+            log_json TEXT
+        );""",
+        """CREATE TABLE IF NOT EXISTS search_hits(
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER NOT NULL REFERENCES search_runs(id) ON DELETE CASCADE,
+            notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE
+        );""",
+        """CREATE TABLE IF NOT EXISTS email_queue(
+            id INTEGER PRIMARY KEY,
+            to_addr TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_email_status ON email_queue(status);",
+
+    ]
+    for ddl in ddls:
+        try:
+            cur.execute(ddl)
+        except Exception:
+            pass
+    conn.commit()
+
+def _ss_flag():
+    import streamlit as st
+    return st.session_state.get("feature_flags", {}).get("saved_search_alerts", False)
+
+def _ss_recipients_default():
+    import streamlit as st
+    email = st.session_state.get("user_email") or "me@example.com"
+    return email
+
+def _ss_due(ts: str, cadence: str) -> bool:
+    now = _dt4.datetime.utcnow()
+    if not ts:
+        return True
+    try:
+        last = _dt4.datetime.fromisoformat(ts.replace("Z","+00:00")) if ts.endswith("Z") else _dt4.datetime.fromisoformat(ts)
+    except Exception:
+        return True
+    delta = now - last
+    if cadence == "daily":
+        return delta.total_seconds() >= 24*3600
+    if cadence == "weekly":
+        return delta.total_seconds() >= 7*24*3600
+    if cadence == "monthly":
+        return delta.total_seconds() >= 30*24*3600
+    return True
+
+def _ss_filters_from_row(row: dict) -> dict:
+    try:
+        return _json4.loads(row.get("query_json") or "{}")
+    except Exception:
+        return {}
+
+def _ss_parse_recipients(recips: str):
+    raw = recips or ""
+    parts = [p.strip() for p in raw.replace(";",",").split(",") if p.strip()]
+    return [p for p in parts if "@" in p]
+
+def _ss_deeplink_for_notice(notice_id: int) -> str:
+    return f"?page=opportunity&opp={int(notice_id)}&tab=Analyzer"
+
+def _ss_body_for_hits(name: str, hits: list) -> str:
+    out = [f"Saved search: {name}", "", "New notices:"]
+    for h in hits[:50]:
+        line = f"- {h.get('title','')} ({h.get('agency','')})  |  App: {_ss_deeplink_for_notice(h.get('id'))}  |  SAM: {h.get('url','')}"
+        out.append(line)
+    return "\n".join(out)
+
+def _ss_run_one(row: dict, dry_run: bool=False) -> dict:
+    conn = get_db(); cur = conn.cursor()
+    filters = _ss_filters_from_row(row)
+    items = []
+    try:
+        import streamlit as st
+        me = st.session_state.get("user_id")
+        out = list_notices(filters, page=0, page_size=100, current_user_id=me, show_hidden=False)
+        items = out.get("items", [])
+    except Exception:
+        rows = cur.execute("SELECT id,title,agency,url,posted_at FROM notices ORDER BY posted_at DESC LIMIT 100").fetchall()
+        items = [{"id":r[0], "title":r[1], "agency":r[2], "url":r[3], "posted_at": r[4]} for r in rows]
+    last_run_at = row.get("last_run_at")
+    new_hits = []
+    for it in items:
+        ts = it.get("posted_at") or ""
+        try:
+            if not last_run_at:
+                new_hits.append(it)
+            else:
+                last = _dt4.datetime.fromisoformat(last_run_at.replace("Z","+00:00")) if last_run_at.endswith("Z") else _dt4.datetime.fromisoformat(last_run_at)
+                cur_ts = _dt4.datetime.fromisoformat(ts.replace("Z","+00:00")) if isinstance(ts, str) and ts.endswith("Z") else _dt4.datetime.fromisoformat(ts) if ts else None
+                if cur_ts and cur_ts > last:
+                    new_hits.append(it)
+        except Exception:
+            new_hits.append(it)
+    ran_at = _dt4.datetime.utcnow().isoformat()
+    cur.execute("INSERT INTO search_runs(saved_search_id, ran_at, new_hits_count, log_json) VALUES(?,?,?,?)", (row["id"], ran_at, len(new_hits), _json4.dumps({"filters":filters})))
+    run_id = cur.lastrowid
+    for it in new_hits[:200]:
+        try:
+            cur.execute("INSERT INTO search_hits(run_id, notice_id) VALUES(?,?)", (run_id, int(it.get("id"))))
+        except Exception:
+            pass
+    if not dry_run:
+        try:
+            cur.execute("UPDATE saved_searches SET last_run_at=? WHERE id= ?", (ran_at, row["id"]))
+        except Exception:
+            pass
+    conn.commit()
+    return {"ran_at": ran_at, "hits": new_hits, "count": len(new_hits), "run_id": int(run_id)}
+
+def run_saved_searches():
+    if not _ss_flag():
+        return {"ok": False, "error": "flag_disabled"}
+    _ss_schema()
+    conn = get_db(); cur = conn.cursor()
+    rows = cur.execute("SELECT id, user_id, name, query_json, cadence, recipients, active, last_run_at FROM saved_searches WHERE active=1").fetchall()
+    cols = ["id","user_id","name","query_json","cadence","recipients","active","last_run_at"]
+    due = [dict(zip(cols, r)) for r in rows if _ss_due(r[7], r[4])]
+    enq = 0
+    for r in due:
+        res = _ss_run_one(r, dry_run=False)
+        if res["count"] <= 0:
+            continue
+        recips = _ss_parse_recipients(r["recipients"])
+        body = _ss_body_for_hits(r["name"], res["hits"])
+        subj = f"[SAM] {r['name']} - {res['count']} new notices"
+        now = _dt4.datetime.utcnow().isoformat()
+        for to in recips:
+            try:
+                cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)", (to, subj, body, now))
+                enq += 1
+            except Exception:
+                pass
+    conn.commit()
+    return {"ok": True, "enqueued": enq, "due": len(due)}
+
+_ss_scheduler_thread = None
+def start_saved_search_scheduler():
+    global _ss_scheduler_thread
+    if _ss_scheduler_thread and _ss_scheduler_thread.is_alive():
+        return
+    def _loop():
+        import time
+        while True:
+            try:
+                run_saved_searches()
+            except Exception:
+                pass
+            time.sleep(60)
+    _ss_scheduler_thread = _thr4.Thread(target=_loop, daemon=True); _ss_scheduler_thread.start()
+
+try:
+    _orig_render_sam_watch_minimal_ui_p4 = render_sam_watch_minimal_ui
+except Exception:
+    _orig_render_sam_watch_minimal_ui_p4 = None
+
+def render_sam_watch_minimal_ui():
+    import streamlit as st
+    _ss_schema()
+    st.subheader("SAM Watch")
+    with st.container():
+        c1, c2, c3 = st.columns([1,1,2])
+        with c1:
+            if _ss_flag() and st.button("Manage Saved Searches"):
+                st.session_state["saved_search_modal_open"] = True
+        with c2:
+            if _ss_flag() and st.button("Run scheduler now"):
+                st.session_state["last_dry_run_result"] = run_saved_searches()
+    key_present = bool(_sam_api_key())
+    if not key_present:
+        st.warning("Missing SAM API key. Add st.secrets['sam']['key'] or SAM_API_KEY env.")
+    with st.form("sam_min_search", clear_on_submit=False):
+        kw = st.text_input("Keywords")
+        types = st.multiselect("Types", ["Solicitation","Sources Sought","Presolicitation","Combined Synopsis/Solicitation"])
+        size = st.selectbox("Page size", [25,50,100], index=1)
+        save_it = st.checkbox("Save these filters as a search", value=False) if _ss_flag() else False
+        submitted = st.form_submit_button("Search")
+    if submitted:
+        res = _sam_fetch({"keywords": kw, "types": types}, 0, size)
+        if not res.get("ok"):
+            st.error(f"Search failed: {res.get('error')}")
+            if res.get("body"): st.code(res["body"][:500])
+            return
+        data = res["data"]
+        try:
+            inserted = _sam_upsert_rows(data)
+        except Exception as ex:
+            st.error(f"Insert failed: {ex}")
+            inserted = 0
+        st.caption(f"Fetched and upserted {inserted} notices.")
+        me = st.session_state.get("user_id")
+        out = list_notices({"keywords": kw, "types": types}, page=0, page_size=size, current_user_id=me, show_hidden=False)
+        rows = out.get("items", [])
+        if not rows:
+            st.info("No results.")
+            return
+        if save_it and _ss_flag():
+            name = st.text_input("Name for this search", value=kw or "My SAM search", key="ss_name_inline")
+            cadence = st.selectbox("Cadence", ["daily","weekly","monthly"], index=0, key="ss_cadence_inline")
+            recips = st.text_input("Recipients (comma separated)", value=_ss_recipients_default(), key="ss_recips_inline")
+            if st.button("Save search"):
+                conn = get_db(); cur = conn.cursor()
+                try:
+                    uid = st.session_state.get("user_id") or "user"
+                    cur.execute("INSERT INTO saved_searches(user_id, name, query_json, cadence, recipients, active, last_run_at) VALUES(?,?,?,?,?,1,NULL)",
+                                (uid, name, _json4.dumps({"keywords": kw, "types": types}), cadence, recips))
+                    conn.commit()
+                    st.success("Saved search created.")
+                except Exception as ex:
+                    st.error(f"Save failed: {ex}")
+        for r in rows:
+            with st.container(border=True):
+                st.write(r.get("title")); st.caption(f"{r.get('agency','')} • {r.get('notice_type','')} • Due {r.get('due_at','')}")
+    if _ss_flag() and st.session_state.get("saved_search_modal_open"):
+        st.markdown("### Saved Searches")
+        conn = get_db(); cur = conn.cursor()
+        rows = cur.execute("SELECT id,name,cadence,recipients,active,last_run_at,query_json FROM saved_searches WHERE user_id=? ORDER BY id DESC",
+                           (st.session_state.get("user_id"),)).fetchall()
+        if not rows:
+            st.info("No saved searches yet.")
+        else:
+            for rid, name, cad, rec, active, last_run, qj in rows:
+                with st.expander(f"{name} • {cad} • {'active' if active else 'inactive'}", expanded=False):
+                    st.caption(f"Recipients: {rec}")
+                    c1,c2,c3,c4,c5 = st.columns(5)
+                    with c1:
+                        if st.button("Dry run", key=f"dry_{rid}"):
+                            res = _ss_run_one({"id":rid,"query_json": qj, "last_run_at": last_run}, dry_run=True)
+                            st.session_state["last_dry_run_result"] = res
+                    with c2:
+                        if st.button("Activate" if not active else "Deactivate", key=f"act_{rid}"):
+                            cur.execute("UPDATE saved_searches SET active=? WHERE id=?", (0 if active else 1, rid)); conn.commit()
+                    with c3:
+                        if st.button("Run now", key=f"run_{rid}"):
+                            _ = _ss_run_one({"id":rid,"query_json": qj, "last_run_at": last_run}, dry_run=False)
+                    with c4:
+                        new_cad = st.selectbox("Cadence", ["daily","weekly","monthly"], index=["daily","weekly","monthly"].index(cad), key=f"cad_{rid}")
+                        if st.button("Save cadence", key=f"savecad_{rid}"):
+                            cur.execute("UPDATE saved_searches SET cadence=? WHERE id=?", (new_cad, rid)); conn.commit()
+                    with c5:
+                        if st.button("Delete", key=f"del_{rid}"):
+                            cur.execute("DELETE FROM saved_searches WHERE id=?", (rid,)); conn.commit()
+        if st.button("Close"):
+            st.session_state["saved_search_modal_open"] = False
+
+try:
+    _ss_schema()
+except Exception:
+    pass
+# === PHASE 4 SAVED SEARCHES END ===
+
+
+
+
+# === PROPOSAL PHASE 5 START ===
+import datetime as _dtp5
+import json as _jsonp5
+
+def _p5_schema():
+    conn = get_db(); cur = conn.cursor()
+    ddls = [
+        """CREATE TABLE IF NOT EXISTS proposals(
+            id INTEGER PRIMARY KEY,
+            notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+            owner_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'Draft',
+            created_at TEXT NOT NULL
+        );""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_proposal_notice_owner ON proposals(notice_id, owner_id);""",
+        """CREATE TABLE IF NOT EXISTS proposal_sections(
+            id INTEGER PRIMARY KEY,
+            proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            page_limit INTEGER,
+            font_name TEXT,
+            font_size INTEGER,
+            writing_plan TEXT,
+            content_md TEXT
+        );""",
+        """CREATE TABLE IF NOT EXISTS proposal_files(
+            id INTEGER PRIMARY KEY,
+            proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+            file_name TEXT NOT NULL,
+            file_id TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL
+        );""",
+        """CREATE TABLE IF NOT EXISTS exports(
+            id INTEGER PRIMARY KEY,
+            proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            file_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            checklist_snapshot TEXT
+        );""",
+        """CREATE TABLE IF NOT EXISTS doc_templates(
+            key TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            docx_blob BLOB,
+            version TEXT
+        );"""
+    ]
+    for ddl in ddls:
+        try: cur.execute(ddl)
+        except Exception: pass
+    conn.commit()
+
+def _p5_latest_rfp_json(notice_id: int):
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
+    if not row: return None
+    try: return _jsonp5.loads(row[0])
+    except Exception: return None
+
+def _p5_create_or_get_proposal(notice_id: int, owner_id: str) -> int:
+    _p5_schema()
+    conn = get_db(); cur = conn.cursor()
+    n = cur.execute("SELECT title FROM notices WHERE id=?", (int(notice_id),)).fetchone()
+    title = n[0] if n and n[0] else f"Proposal for Notice {notice_id}"
+    cur.execute("INSERT OR IGNORE INTO proposals(notice_id, owner_id, title, status, created_at) VALUES(?,?,?,?,?)",
+                (int(notice_id), owner_id, title, "Draft", _dtp5.datetime.utcnow().isoformat()))
+    conn.commit()
+    pid = cur.execute("SELECT id FROM proposals WHERE notice_id=? AND owner_id=?", (int(notice_id), owner_id)).fetchone()[0]
+    return int(pid)
+
+def _p5_seed_sections_from_rfp(notice_id: int, proposal_id: int):
+    data = _p5_latest_rfp_json(int(notice_id)) or {}
+    conn = get_db(); cur = conn.cursor()
+    existing = cur.execute("SELECT COUNT(*) FROM proposal_sections WHERE proposal_id=?", (int(proposal_id),)).fetchone()[0]
+    if existing and existing > 0: return
+    sections = []
+    for s in (data.get("sections") or []):
+        key = s.get("key") or s.get("title") or "Section"
+        title = s.get("title") or key
+        pl = s.get("page_limit")
+        sections.append({"key": key, "title": title, "page_limit": pl})
+    if not sections:
+        for i, lm in enumerate(data.get("lm_requirements") or []):
+            title = lm.get("factor") or lm.get("subfactor") or (lm.get("text", "")[:60])
+            sections.append({"key": f"LM{i+1}", "title": title, "page_limit": None})
+    for s in sections[:30]:
+        try:
+            cur.execute("INSERT INTO proposal_sections(proposal_id, key, title, page_limit, font_name, font_size, writing_plan, content_md) VALUES(?,?,?,?,NULL,NULL,NULL,NULL)",
+                        (int(proposal_id), s["key"], s["title"], s.get("page_limit")))
+        except Exception:
+            pass
+    conn.commit()
+
+def _p5_placeholder_scan(proposal_id: int) -> list:
+    conn = get_db(); cur = conn.cursor()
+    bad = []
+    rows = cur.execute("SELECT id, title, content_md FROM proposal_sections WHERE proposal_id=?", (int(proposal_id),)).fetchall()
+    for sid, title, md in rows:
+        txt = (md or "").lower()
+        if any(tok in txt for tok in ["tbd", "xx", "lorem ipsum"]):
+            bad.append({"section_id": sid, "title": title})
+    return bad
+
+def render_proposal_wizard(notice_id: int):
+    import streamlit as st
+    _p5_schema()
+    st.session_state.setdefault("wizard_step", 1)
+    st.session_state.setdefault("current_proposal_id", None)
+    owner = st.session_state.get("user_id") or "user"
+    if not st.session_state["current_proposal_id"]:
+        pid = _p5_create_or_get_proposal(int(notice_id), owner)
+        _p5_seed_sections_from_rfp(int(notice_id), pid)
+        st.session_state["current_proposal_id"] = pid
+    pid = int(st.session_state["current_proposal_id"])
+    st.markdown("#### Proposal Wizard")
+    steps = ["1. Outline","2. Sections","3. Uploads","4. Package"]
+    scols = st.columns(4)
+    for i, c in enumerate(scols, start=1):
+        with c: st.button(steps[i-1], disabled=(st.session_state["wizard_step"]==i), key=f"p5tab{i}")
+    step = st.session_state["wizard_step"]
+    if step == 1:
+        st.subheader("Step 1 · Outline from Analyzer")
+        data = _p5_latest_rfp_json(int(notice_id)) or {}
+        st.write("Factors and requirements")
+        for it in (data.get("lm_requirements") or [])[:50]:
+            st.markdown(f"- {it.get('text','')}".strip())
+        if st.button("Next → Sections"):
+            st.session_state["wizard_step"] = 2
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+    if step == 2:
+        st.subheader("Step 2 · Section stubs")
+        conn = get_db(); cur = conn.cursor()
+        rows = cur.execute("SELECT id, key, title, page_limit, font_name, font_size, writing_plan FROM proposal_sections WHERE proposal_id=? ORDER BY id", (pid,)).fetchall()
+        for sid, key, title, pl, fname, fsize, plan in rows:
+            with st.container(border=True):
+                new_title = st.text_input("Title", value=title, key=f"t_{sid}")
+                new_pl = st.number_input("Page limit", value=int(pl) if pl is not None else 0, min_value=0, max_value=500, key=f"pl_{sid}")
+                fname = st.text_input("Font name", value=fname or "", key=f"fn_{sid}")
+                fsize = st.number_input("Font size", value=int(fsize) if fsize else 0, min_value=0, max_value=72, key=f"fs_{sid}")
+                plan = st.text_area("Writing plan", value=plan or "", key=f"wp_{sid}")
+                if st.button("Save section", key=f"sv_{sid}"):
+                    cur.execute("UPDATE proposal_sections SET title=?, page_limit=?, font_name=?, font_size=?, writing_plan=? WHERE id=?",
+                                (new_title, None if new_pl==0 else int(new_pl), fname or None, None if fsize==0 else int(fsize), plan or None, sid))
+                    conn.commit()
+                    st.success("Saved")
+        if st.button("Next → Uploads"):
+            st.session_state["wizard_step"] = 3
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+    if step == 3:
+        st.subheader("Step 3 · Supporting files")
+        up = st.file_uploader("Upload resumes, past performance, etc.", accept_multiple_files=True)
+        if up:
+            for f in up:
+                b = f.read()
+                meta = store_uploaded_file(b, f.name, "proposal", pid)
+                conn = get_db(); cur = conn.cursor()
+                cur.execute("INSERT INTO proposal_files(proposal_id, file_name, file_id, uploaded_at) VALUES(?,?,?,?)",
+                            (pid, f.name, meta.get("checksum"), _dtp5.datetime.utcnow().isoformat()))
+                conn.commit()
+        conn = get_db(); cur = conn.cursor()
+        rows = cur.execute("SELECT id, file_name, uploaded_at FROM proposal_files WHERE proposal_id=? ORDER BY id DESC", (pid,)).fetchall()
+        for fid, fname, ts in rows:
+            st.caption(f"{fname} • {ts}")
+        if st.button("Next → Package"):
+            st.session_state["wizard_step"] = 4
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+    if step == 4:
+        st.subheader("Step 4 · Package preview")
+        conn = get_db(); cur = conn.cursor()
+        cstate = cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(notice_id),)).fetchone()
+        cstate = cstate[0] if cstate else "Unreviewed"
+        bad = _p5_placeholder_scan(pid)
+        ok = (cstate == "Green" and not bad)
+        st.caption(f"Compliance: {cstate}")
+        if bad:
+            st.warning(f"Placeholder issues in {len(bad)} sections")
+        st.button("Export (disabled until compliance is Green)", disabled=not ok)
+        if ok and st.button("Export now"):
+            cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
+                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), _jsonp5.dumps({"placeholders": bad})))
+            conn.commit()
+            st.success("Export queued")
+    cols = st.columns(3)
+    with cols[0]:
+        if st.button("← Back") and st.session_state["wizard_step"] > 1:
+            st.session_state["wizard_step"] -= 1
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+    with cols[2]:
+        if st.button("Close wizard"):
+            st.session_state["current_proposal_id"] = None
+            st.session_state["wizard_step"] = 1
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
+
+try:
+    _orig_rfp_panel_ui_p5 = _rfp_panel_ui
+except Exception:
+    _orig_rfp_panel_ui_p5 = None
+
+def _rfp_panel_ui(notice_id: int):
+    import streamlit as st
+    if not feature_flags().get("rfp_analyzer_panel", False):
+        return
+    with st.sidebar:
+        st.markdown("## RFP Analyzer")
+        st.caption(f"Notice #{notice_id}")
+        if feature_flags().get("start_proposal_inline", False):
+            if st.button("Start proposal"):
+                st.session_state["wizard_step"] = 1
+                st.session_state["current_proposal_id"] = None
+        try:
+            if _orig_rfp_panel_ui_p5:
+                _orig_rfp_panel_ui_p5(notice_id)
+        except Exception as ex:
+            st.warning(f"Analyzer panel partial: {ex}")
+    if feature_flags().get("start_proposal_inline", False) and st.session_state.get("wizard_step") and st.session_state.get("wizard_step") >= 1:
+        render_proposal_wizard(int(notice_id))
+# === PROPOSAL PHASE 5 END ===
+
+
+
+
+# === RFP PHASE 6 START ===
+import datetime as _dt6
+import json as _json6
+import hashlib as _hash6
+
+def _rfp6_schema():
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS rfp_impacts(
+            id INTEGER PRIMARY KEY,
+            notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+            from_hash TEXT NOT NULL,
+            to_hash TEXT NOT NULL,
+            impact_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );""")
+    except Exception:
+        pass
+    conn.commit()
+
+def _rfp6_flag():
+    import streamlit as st
+    return st.session_state.get("feature_flags", {}).get("rfp_impact", False)
+
+def _rfp6_load_versions(notice_id: int):
+    conn = get_db(); cur = conn.cursor()
+    rows = cur.execute("SELECT version_hash, data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 2", (int(notice_id),)).fetchall()
+    if not rows or len(rows) < 2:
+        return None
+    to_hash, to_js = rows[0][0], rows[0][1]
+    from_hash, from_js = rows[1][0], rows[1][1]
+    try:
+        return (to_hash, _json6.loads(to_js or "{}"), from_hash, _json6.loads(from_js or "{}"))
+    except Exception:
+        return None
+
+def _set_needs_review(notice_id: int):
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(notice_id),))
+        conn.commit()
+    except Exception:
+        pass
+
+def _diff_list_by_key(prev_list, curr_list, key_fn, text_fn):
+    prev = {key_fn(x): text_fn(x) for x in (prev_list or []) if key_fn(x)}
+    curr = {key_fn(x): text_fn(x) for x in (curr_list or []) if key_fn(x)}
+    added = [k for k in curr.keys() if k not in prev]
+    removed = [k for k in prev.keys() if k not in curr]
+    changed = [k for k in curr.keys() if k in prev and (curr[k] or "") != (prev[k] or "") ]
+    return {"added": added, "removed": removed, "changed": changed}
+
+def _rfp6_compute_impact(prev: dict, curr: dict) -> dict:
+    sec = _diff_list_by_key(prev.get("sections"), curr.get("sections"),
+                            key_fn=lambda s: (s.get("key") or s.get("title")),
+                            text_fn=lambda s: f"{s.get('title','')}|pl={s.get('page_limit')}" )
+    frm = _diff_list_by_key(prev.get("deliverables_forms"), curr.get("deliverables_forms"),
+                            key_fn=lambda f: f.get("name"),
+                            text_fn=lambda f: f.get("name") )
+    cl_prev = ((prev.get("price_structure") or {}).get("clins") or [])
+    cl_curr = ((curr.get("price_structure") or {}).get("clins") or [])
+    clin = _diff_list_by_key(cl_prev, cl_curr,
+                             key_fn=lambda c: c.get("clin") or c.get("desc"),
+                             text_fn=lambda c: f"{c.get('clin','')}|{c.get('desc','')}|{c.get('qty_hint','')}|{c.get('uom','')}" )
+    dates = {"submission_changed": False, "milestones": {"added": [], "removed": [], "changed": []}}
+    try:
+        dates["submission_changed"] = (prev.get("submission",{}).get("due_datetime") != curr.get("submission",{}).get("due_datetime"))
+    except Exception:
+        pass
+    ms = _diff_list_by_key(prev.get("milestones"), curr.get("milestones"),
+                           key_fn=lambda m: m.get("name"),
+                           text_fn=lambda m: f"{m.get('name','')}|{m.get('due_datetime','')}" )
+    dates["milestones"] = ms
+    rtm = _diff_list_by_key(prev.get("lm_requirements"), curr.get("lm_requirements"),
+                            key_fn=lambda r: r.get("id") or (r.get("text","")[:60]),
+                            text_fn=lambda r: r.get("text") )
+    impact = {"sections": sec, "forms": frm, "clins": clin, "dates": dates, "rtm": rtm}
+    return impact
+
+def compute_and_store_rfp_impact(notice_id: int) -> dict:
+    _rfp6_schema()
+    v = _rfp6_load_versions(int(notice_id))
+    if not v:
+        return {"ok": False, "error": "versions_insufficient"}
+    to_hash, to_js, from_hash, from_js = v
+    if to_hash == from_hash:
+        return {"ok": True, "no_change": True}
+    impact = _rfp6_compute_impact(from_js, to_js)
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO rfp_impacts(notice_id, from_hash, to_hash, impact_json, created_at) VALUES(?,?,?,?,?)",
+                    (int(notice_id), from_hash, to_hash, _json6.dumps(impact, sort_keys=True), _dt6.datetime.utcnow().isoformat()))
+        conn.commit()
+    except Exception:
+        pass
+    _set_needs_review(int(notice_id))
+    return {"ok": True, "impact": impact, "from": from_hash, "to": to_hash}
+
+def latest_rfp_impact(notice_id: int):
+    _rfp6_schema()
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT impact_json, from_hash, to_hash, created_at FROM rfp_impacts WHERE notice_id=? ORDER BY id DESC LIMIT 1",
+                      (int(notice_id),)).fetchone()
+    if not row:
+        return None
+    try:
+        return {"impact": _json6.loads(row[0]), "from": row[1], "to": row[2], "created_at": row[3]}
+    except Exception:
+        return None
+
+try:
+    _orig_save_rfp_json_p6 = save_rfp_json
+except Exception:
+    _orig_save_rfp_json_p6 = None
+
+def save_rfp_json(notice_id: int, payload: dict, schema_name: str="RFPv1", schema_version: str="1.0"):
+    res = _orig_save_rfp_json_p6(notice_id, payload, schema_name, schema_version) if _orig_save_rfp_json_p6 else {"ok": False}
+    try:
+        import streamlit as st
+        if res.get("ok") and _rfp6_flag():
+            _ = compute_and_store_rfp_impact(int(notice_id))
+    except Exception:
+        pass
+    return res
+
+try:
+    _orig_rfp_panel_ui_p2_ref = _orig_rfp_panel_ui_p2
+except Exception:
+    _orig_rfp_panel_ui_p2_ref = None
+
+def _rfp_panel_ui_p2_with_impact(notice_id: int):
+    import streamlit as st
+    if _orig_rfp_panel_ui_p2_ref:
+        try: _orig_rfp_panel_ui_p2_ref(notice_id)
+        except Exception as ex: st.warning(f"Analyzer base failed: {ex}")
+    if not _rfp6_flag():
+        return
+    with st.sidebar:
+        st.markdown("### Impact")
+        data = latest_rfp_impact(int(notice_id))
+        if not data:
+            st.caption("No impact cached yet.")
+            if st.button("Compute impact"):
+                res = compute_and_store_rfp_impact(int(notice_id))
+                if res.get("ok"):
+                    st.success("Impact computed.")
+                else:
+                    st.warning(str(res))
+            return
+        imp = data.get("impact") or {}
+        def group_block(label, bucket):
+            added = bucket.get("added", []); removed = bucket.get("removed", []); changed = bucket.get("changed", [])
+            if not (added or removed or changed): return
+            st.write(f"**{label}**")
+            if added: st.caption("Added: " + ", ".join([str(x) for x in added][:10]))
+            if removed: st.caption("Removed: " + ", ".join([str(x) for x in removed][:10]))
+            if changed: st.caption("Changed: " + ", ".join([str(x) for x in changed][:10]))
+        group_block("Sections", imp.get("sections", {}))
+        group_block("Forms", imp.get("forms", {}))
+        group_block("CLINs", imp.get("clins", {}))
+        d = imp.get("dates", {})
+        if d.get("submission_changed"): st.caption("Due date changed.")
+        group_block("Milestones", d.get("milestones", {}))
+        group_block("RTM", imp.get("rtm", {}))
+
+try:
+    _orig_rfp_panel_ui_p2 = _rfp_panel_ui_p2_with_impact
+except Exception:
+    pass
+
+try:
+    _orig_render_proposal_wizard_p6 = render_proposal_wizard
+except Exception:
+    _orig_render_proposal_wizard_p6 = None
+
+def render_proposal_wizard(notice_id: int):
+    import streamlit as st
+    if _rfp6_flag():
+        data = latest_rfp_impact(int(notice_id))
+        if data and data.get("impact"):
+            imp = data["impact"]
+            with st.expander("Impact TODOs", expanded=True):
+                todo = []
+                for label in ["sections","forms","clins","rtm"]:
+                    b = imp.get(label,{})
+                    if any(b.get(k) for k in ["added","removed","changed"]):
+                        todo.append(f"{label}: " + ", ".join([f"{k}:{', '.join(map(str, b.get(k, [])[:5]))}" for k in ["added","removed","changed"] if b.get(k)]))
+                if imp.get("dates",{}).get("submission_changed"):
+                    todo.append("dates: submission due changed")
+                ms = imp.get("dates",{}).get("milestones",{})
+                if any(ms.get(k) for k in ["added","removed","changed"]):
+                    todo.append("dates: milestones updated")
+                if todo:
+                    for t in todo: st.caption(t)
+                else:
+                    st.caption("No pending impact items.")
+    if _orig_render_proposal_wizard_p6:
+        return _orig_render_proposal_wizard_p6(int(notice_id))
+# === RFP PHASE 6 END ===
+
+
+
+# === RFP PHASE 7 START ===
+import datetime as _dt7
+import json as _json7
+
+def _b7_flag():
+    import streamlit as st
+    return st.session_state.get('feature_flags', {}).get('builder_from_analyzer', False)
+
+def _b7_schema():
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS section_requirements( id INTEGER PRIMARY KEY, proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE, section_key TEXT NOT NULL, req_id TEXT NOT NULL, UNIQUE(proposal_id, section_key, req_id) )")
+    except Exception:
+        pass
+    conn.commit()
+
+def _b7_latest_json(notice_id: int):
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute('SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1', (int(notice_id),)).fetchone()
+    if not row: return None
+    try: return _json7.loads(row[0])
+    except Exception: return None
+
+def _b7_map_reqs_to_sections(an: dict, sections: list) -> dict:
+    out = { (s.get('key') or s.get('title') or 'Section'): [] for s in sections }
+    reqs = an.get('lm_requirements') or []
+    for r in reqs:
+        f = (r.get('factor') or '').lower()
+        sf = (r.get('subfactor') or '').lower()
+        target = None
+        for s in sections:
+            title = (s.get('title') or s.get('key') or '').lower()
+            if f and f in title:
+                target = (s.get('key') or s.get('title')); break
+            if sf and sf in title:
+                target = (s.get('key') or s.get('title')); break
+        if not target and sections:
+            target = (sections[0].get('key') or sections[0].get('title'))
+        if target:
+            out.setdefault(target, []).append(r)
+    return out
+
+def _b7_seed_sections_from_analyzer(notice_id: int, proposal_id: int):
+    if not _b7_flag():
+        return
+    _b7_schema()
+    an = _b7_latest_json(int(notice_id)) or {}
+    conn = get_db(); cur = conn.cursor()
+    existing = cur.execute('SELECT COUNT(*) FROM proposal_sections WHERE proposal_id=?', (int(proposal_id),)).fetchone()[0]
+    if not existing:
+        try:
+            _p5_seed_sections_from_rfp(int(notice_id), int(proposal_id))
+        except Exception:
+            pass
+    rows = cur.execute('SELECT id, key, title FROM proposal_sections WHERE proposal_id=?', (int(proposal_id),)).fetchall()
+    vol_fonts = {}
+    for v in (an.get('volumes') or []):
+        name = (v.get('name') or '').lower()
+        vol_fonts[name] = {'font_name': v.get('font'), 'font_size': None, 'spacing': v.get('spacing')}
+    sec_defs = { (s.get('key') or s.get('title')): s for s in (an.get('sections') or []) }
+    for sid, skey, stitle in rows:
+        ident = skey or stitle
+        sd = sec_defs.get(ident) or {}
+        page_limit = sd.get('page_limit')
+        vol = (sd.get('parent_volume') or '').lower()
+        font_name = vol_fonts.get(vol, {}).get('font_name')
+        try:
+            cur.execute('UPDATE proposal_sections SET page_limit=COALESCE(page_limit, ?), font_name=COALESCE(font_name, ?) WHERE id=?', (page_limit, font_name, sid))
+        except Exception:
+            pass
+    req_map = _b7_map_reqs_to_sections(an, an.get('sections') or [])
+    for sid, skey, stitle in rows:
+        sec_key = skey or stitle or 'Section'
+        reqs = req_map.get(sec_key, [])
+        if not reqs:
+            continue
+        bullets = []
+        for r in reqs:
+            items = r.get('must_address') or []
+            cite = r.get('cite') or {}
+            cite_str = ''
+            if cite.get('file') or (cite.get('page') is not None):
+                file = cite.get('file') or ''
+                page = cite.get('page')
+                cite_str = f' (source: {file} p.{page})' if (page is not None) else f' (source: {file})'
+            if items:
+                for it in items:
+                    bullets.append(f'- {it}{cite_str}')
+            else:
+                text = r.get('text') or ''
+                bullets.append(f'- {text}{cite_str}')
+            try:
+                cur.execute('INSERT OR IGNORE INTO section_requirements(proposal_id, section_key, req_id) VALUES(?,?,?)', (int(proposal_id), sec_key, r.get('id') or (r.get('text','')[:32])))
+            except Exception:
+                pass
+        if bullets:
+            row_wp = cur.execute('SELECT writing_plan FROM proposal_sections WHERE id=?', (sid,)).fetchone()
+            wp = (row_wp[0] or '') if row_wp else ''
+            sig = bullets[0].strip()
+            if sig not in (wp or ''):
+                new_wp = (wp + '\n\n' if wp else '') + '\n'.join(bullets)
+                try:
+                    cur.execute('UPDATE proposal_sections SET writing_plan=? WHERE id=?', (new_wp, sid))
+                except Exception:
+                    pass
+    conn.commit()
+
+def _b7_seed_clins(notice_id: int, proposal_id: int):
+    if not _b7_flag():
+        return
+    an = _b7_latest_json(int(notice_id)) or {}
+    clins = ((an.get('price_structure') or {}).get('clins') or [])
+    if not clins:
+        return
+    conn = get_db(); cur = conn.cursor()
+    cols = [r[1] for r in cur.execute('PRAGMA table_info(price_lines)').fetchall()] if cur else []
+    if not cols:
+        return
+    has_cols = set(cols)
+    for c in clins[:200]:
+        clin = c.get('clin') or ''
+        desc = c.get('desc') or ''
+        uom = c.get('uom') or ''
+        qty = c.get('qty_hint') or None
+        fields = {}
+        if 'proposal_id' in has_cols: fields['proposal_id'] = int(proposal_id)
+        if 'clin' in has_cols: fields['clin'] = clin
+        if 'description' in has_cols: fields['description'] = desc
+        if 'uom' in has_cols: fields['uom'] = uom
+        if 'qty' in has_cols: fields['qty'] = qty
+        if not fields:
+            continue
+        cols_sql = ','.join(fields.keys())
+        ph = ','.join(['?']*len(fields))
+        vals = list(fields.values())
+        try:
+            cur.execute(f'INSERT INTO price_lines({cols_sql}) VALUES({ph})', tuple(vals))
+        except Exception:
+            pass
+    conn.commit()
+
+def builder_prechecks(proposal_id: int) -> dict:
+    res = {'placeholders': [], 'a11y': [], 'style': []}
+    try:
+        res['placeholders'] = _p5_placeholder_scan(int(proposal_id))
+    except Exception:
+        res['placeholders'] = []
+    try:
+        cur = get_db().cursor()
+        nid = cur.execute('SELECT notice_id FROM proposals WHERE id=?', (int(proposal_id),)).fetchone()
+        nid = int(nid[0]) if nid else None
+        an = _b7_latest_json(nid) if nid else {}
+        a11y = (an or {}).get('accessibility_rules') or {}
+        if a11y.get('req_508'): res['a11y'].append('Section 508 applies; ensure PDF tagging and alt text.')
+        if a11y.get('pdf_tags'): res['a11y'].append('Final PDF must include tags and bookmarks.')
+        if a11y.get('bookmarks'): res['a11y'].append('Include document bookmarks matching section outline.')
+        if a11y.get('alt_text'): res['a11y'].append('All figures need alt text.')
+    except Exception:
+        pass
+    try:
+        rows = get_db().cursor().execute('SELECT title, page_limit, font_name FROM proposal_sections WHERE proposal_id=?', (int(proposal_id),)).fetchall()
+        for title, pl, font in rows:
+            if pl is None: res['style'].append(f"Set page limit for '{title}'.")
+            if not font: res['style'].append(f"Set font for '{title}'.")
+    except Exception:
+        pass
+    return res
+
+try:
+    _orig__p5_create_or_get_proposal_b7 = _p5_create_or_get_proposal
+except Exception:
+    _orig__p5_create_or_get_proposal_b7 = None
+
+def _p5_create_or_get_proposal(notice_id: int, owner_id: str) -> int:
+    pid = _orig__p5_create_or_get_proposal_b7(int(notice_id), owner_id) if _orig__p5_create_or_get_proposal_b7 else 0
+    try:
+        _b7_seed_sections_from_analyzer(int(notice_id), int(pid))
+        _b7_seed_clins(int(notice_id), int(pid))
+        import streamlit as st
+        st.session_state['builder_adapter_ready'] = True
+    except Exception:
+        pass
+    return int(pid)
+# === RFP PHASE 7 END ===
