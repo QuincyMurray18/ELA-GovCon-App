@@ -475,6 +475,9 @@ import streamlit as st
 
 
 
+
+# === EARLY DB BOOTSTRAP START ===\n# Ensure get_db exists before any import-time calls.\n# This early definition will be overridden by later phases if they redefine get_db.\nimport os as _os\n_os.makedirs("data", exist_ok=True)\n\nif "get_db" not in globals():\n    import streamlit as st\n    @st.cache_resource\n    def get_db():\n        import sqlite3\n        conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)\n        try:\n            conn.execute("PRAGMA journal_mode=WAL;")\n            conn.execute("PRAGMA synchronous=NORMAL;")\n            conn.execute("PRAGMA temp_store=MEMORY;")\n            conn.execute("PRAGMA foreign_keys=ON;")\n            conn.execute("""CREATE TABLE IF NOT EXISTS migrations(\n                id INTEGER PRIMARY KEY,\n                name TEXT NOT NULL,\n                applied_at TEXT NOT NULL\n            );""")\n        except Exception:\n            pass\n        return conn\n# === EARLY DB BOOTSTRAP END ===\n
+
 # === PHASE 0 CORE START ===
 # Bootstrap: feature flags, API client, SQLite PRAGMAs, secrets loader, structured logging.
 import time as _time
@@ -3815,6 +3818,8 @@ def current_user_role():
 def _assert_can_write():
     if current_user_role() == "Viewer":
         raise PermissionError("Viewer role cannot modify data")
+
+_ensure_tenancy_phase1()
 # ===== end Tenancy Phase 1 =====
 
 
@@ -3824,7 +3829,6 @@ def _assert_can_write():
 @st.cache_resource
 def get_db():
     import sqlite3, os
-    db_path = globals().get('DB_PATH', 'data/app.db')
     os.makedirs("data", exist_ok=True)
     os.makedirs("data/files", exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
@@ -3839,8 +3843,6 @@ def get_db():
 
 
 # ==== MIGRATION HELPER ====
-
-_ensure_tenancy_phase1()
 def apply_ddl(stmts, name=None):
     conn = get_db()
     cur = conn.cursor()
