@@ -8011,3 +8011,131 @@ try:
                 st.warning(f"[Deals save note: {_e_deals_save}]")
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
+
+# ===== Layout Phase 2: Opportunity workspace subtabs =====
+# Deep-link helpers
+def open_details(opp): route_to("opportunity", opp_id=opp, tab="Details")
+def open_analyzer(opp): route_to("opportunity", opp_id=opp, tab="Analyzer")
+def open_compliance(opp): route_to("opportunity", opp_id=opp, tab="Compliance")
+def open_proposal_tab(opp): route_to("opportunity", opp_id=opp, tab="Proposal")
+def open_pricing(opp): route_to("opportunity", opp_id=opp, tab="Pricing")
+def open_vendors(opp): route_to("opportunity", opp_id=opp, tab="VendorsRFQ")
+def open_submission(opp): route_to("opportunity", opp_id=opp, tab="Submission")
+
+# Header derivation helpers. Do not cache authoritative DB rows; only transform cached.
+def _opp_header_data(opp_id: int):
+    row = get_notice(int(opp_id)) if opp_id is not None else None
+    d = row["data"] if row and isinstance(row.get("data"), dict) else {}
+    title = d.get("title") or d.get("notice_title") or d.get("subject") or f"Opportunity {opp_id}"
+    agency = d.get("agency") or d.get("department") or d.get("org_name") or d.get("office") or ""
+    due = d.get("due_date") or d.get("response_due") or d.get("close_date") or d.get("responseDate") or ""
+    set_asides = []
+    for k in ["set_aside","setAside","naics_set_aside","solicitation_set_aside","type_of_set_aside"]:
+        v = d.get(k)
+        if v:
+            set_asides.append(str(v))
+    set_asides = list(dict.fromkeys(set_asides))[:4]
+    return {"title": title, "agency": agency, "due": due, "set_asides": set_asides}
+
+# Cached compute of badges only
+@st.cache_data(ttl=900, show_spinner=False)
+def _badge_pack(opp_id: int):
+    hdr = _opp_header_data(opp_id)
+    return {"agency": hdr["agency"], "due": hdr["due"], "set_asides": hdr["set_asides"]}
+
+def _workspace_header(opp_id: int):
+    import streamlit as st
+    hdr = _opp_header_data(opp_id)
+    st.header(hdr["title"])
+    badges = _badge_pack(opp_id)
+    cols = st.columns(3)
+    with cols[0]:
+        st.caption(f"Agency: **{badges['agency'] or 'n/a'}**")
+    with cols[1]:
+        st.caption(f"Due: **{badges['due'] or 'n/a'}**")
+    with cols[2]:
+        if badges["set_asides"]:
+            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"]))
+        else:
+            st.caption("Set-aside: **n/a**")
+
+# Subtab skeletons. Each receives opp_id and renders only when active.
+def render_details(opp_id: int):
+    import streamlit as st
+    st.write("Details panel placeholder.")
+
+def render_analyzer(opp_id: int):
+    import streamlit as st
+    # Example lazy pattern placeholder
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _heavy_analyzer_compute(opp):
+        # Placeholder transform. Real logic lives elsewhere.
+        return {"ok": True, "opp": opp}
+    res = _heavy_analyzer_compute(opp_id)
+    st.write("Analyzer ready.", res)
+
+def render_compliance(opp_id: int):
+    import streamlit as st
+    st.write("Compliance matrix placeholder.")
+
+def render_proposal(opp_id: int):
+    import streamlit as st
+    st.write("Proposal builder placeholder.")
+
+def render_pricing(opp_id: int):
+    import streamlit as st
+    st.write("Pricing worksheet placeholder.")
+
+def render_vendors_rfq(opp_id: int):
+    import streamlit as st
+    st.write("Vendors and RFQ placeholder.")
+
+def render_submission(opp_id: int):
+    import streamlit as st
+    st.write("Submission checklist placeholder.")
+
+def _subtab_bar(active: str, opp_id: int):
+    import streamlit as st
+    tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
+    # Persist in session
+    st.session_state["active_opportunity_tab"] = active
+    cols = st.columns(len(tabs))
+    for i, t in enumerate(tabs):
+        with cols[i]:
+            if st.button(t, type=("primary" if t == active else "secondary")):
+                route_to("opportunity", opp_id=opp_id, tab=t, rerun=True)
+
+def _render_opportunity_workspace():
+    import streamlit as st
+    if not feature_flags.get('workspace_enabled'):
+        return
+    r = get_route()
+    if r["page"] != "opportunity":
+        return
+    opp_id = r["opp"]
+    if opp_id is None:
+        st.warning("No opportunity selected.")
+        return
+    # Header
+    _workspace_header(opp_id)
+    # Subtabs
+    tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
+    active = r["tab"] if r["tab"] in tabs else (st.session_state.get("active_opportunity_tab") or tabs[0])
+    _subtab_bar(active, opp_id)
+    # Lazy render for active only
+    if active == "Details":
+        render_details(opp_id)
+    elif active == "Analyzer":
+        render_analyzer(opp_id)
+    elif active == "Compliance":
+        render_compliance(opp_id)
+    elif active == "Proposal":
+        render_proposal(opp_id)
+    elif active == "Pricing":
+        render_pricing(opp_id)
+    elif active == "VendorsRFQ":
+        render_vendors_rfq(opp_id)
+    elif active == "Submission":
+        render_submission(opp_id)
+# ===== end Layout Phase 2 =====
+
