@@ -8381,7 +8381,7 @@ def _load_versions(notice_id: int):
     return out
 
 def _diff_fields(prev: dict, curr: dict):
-    keys = ["title","agency","naics","psc","set_aside","posted_at","due_at","status","place_city","place_state","rfp_schema","rfp_parser"]
+    keys = ["title","agency","naics","psc","set_aside","posted_at","due_at","status","place_city","place_state","rfp_schema","rfp_parser","subfinder_paging","subfinder_filters","subfinder_sources","subfinder_outreach","rfqg_composer","rfqg_outreach","rfqg_intake","vendor_rfq_hooks"]
     changes = []
     for k in keys:
         if (prev or {}).get(k) != (curr or {}).get(k):
@@ -14565,3 +14565,1947 @@ def _p5_create_or_get_proposal(notice_id: int, owner_id: str) -> int:
         pass
     return int(pid)
 # === RFP PHASE 7 END ===
+
+
+
+# === SUB PHASE 1 START ===
+import time as _time_sub1
+import requests as _req_sub1
+import math as _math_sub1
+from urllib.parse import urlparse as _urlparse_sub1
+
+def _sub1_schema():
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS source_runs( id INTEGER PRIMARY KEY, user_id TEXT, opp_id INTEGER, query TEXT, center TEXT, radius_mi REAL, page_size INTEGER, ran_at TEXT NOT NULL, next_page_token TEXT, total_returned INTEGER NOT NULL DEFAULT 0 );")
+    except Exception: pass
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_sources( id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES source_runs(id) ON DELETE CASCADE, place_id TEXT, vendor_name TEXT, rank INTEGER, created_at TEXT NOT NULL );")
+    except Exception: pass
+    # Ensure vendors.distance_mi exists
+    try:
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(vendors)").fetchall()]
+        if 'distance_mi' not in cols:
+            cur.execute("ALTER TABLE vendors ADD COLUMN distance_mi REAL")
+    except Exception: pass
+    conn.commit()
+
+def _gplaces_key():
+    import os, streamlit as st
+    try:
+        return st.secrets["gplaces"]["key"]
+    except Exception:
+        return os.environ.get("GEO_API_KEY") or os.environ.get("GOOGLE_MAPS_API_KEY")
+
+def _geocode_center(address: str):
+    key = _gplaces_key()
+    if not key:
+        return None
+    try:
+        r = _req_sub1.get("https://maps.googleapis.com/maps/api/geocode/json", params={"address": address, "key": key}, timeout=10)
+        j = r.json()
+        if j.get("status") != "OK":
+            return None
+        loc = j["results"][0]["geometry"]["location"]
+        return (float(loc["lat"]), float(loc["lng"]))
+    except Exception:
+        return None
+
+def _haversine_miles(lat1, lon1, lat2, lon2):
+    R = 3958.7613
+    p1 = _math_sub1.radians(lat1); p2 = _math_sub1.radians(lat2)
+    dphi = _math_sub1.radians(lat2 - lat1); dl = _math_sub1.radians(lon2 - lon1)
+    a = _math_sub1.sin(dphi/2)**2 + _math_sub1.cos(p1)*_math_sub1.cos(p2)*_math_sub1.sin(dl/2)**2
+    return 2*R*_math_sub1.asin(_math_sub1.sqrt(a))
+
+def _norm_phone(p):
+    if not p: return None
+    digits = "".join([c for c in str(p) if c.isdigit()])
+    return digits or None
+
+def _norm_domain(url):
+    if not url: return None
+    try:
+        netloc = _urlparse_sub1(url).netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        return netloc or None
+    except Exception:
+        return None
+
+def _places_search(query: str, center_latlng: tuple, radius_m: int, page_size: int, page_token: str=None):
+    key = _gplaces_key()
+    if not key:
+        return {"ok": False, "error": "missing_places_key"}
+    base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {"query": query, "key": key, "radius": int(radius_m)}
+    if center_latlng:
+        params["location"] = f"{center_latlng[0]},{center_latlng[1]}"
+    if page_token:
+        params["pagetoken"] = page_token
+    try:
+        r = _req_sub1.get(base, params=params, timeout=10)
+        j = r.json()
+        status = j.get("status")
+        if status == "INVALID_REQUEST" and page_token:
+            # API requires delay before next_page_token is valid
+            _time_sub1.sleep(2.1)
+            r = _req_sub1.get(base, params=params, timeout=10)
+            j = r.json(); status = j.get("status")
+        if status not in ("OK","ZERO_RESULTS","OVER_QUERY_LIMIT","UNKNOWN_ERROR","INVALID_REQUEST","REQUEST_DENIED","NOT_FOUND"):
+            status = "UNKNOWN"
+        return {"ok": status in ("OK","ZERO_RESULTS"), "status": status, "data": j}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+
+def _sub1_upsert_vendors(rows: list, center_latlng: tuple):
+    conn = get_db(); cur = conn.cursor()
+    inserted = 0
+    for rank, it in enumerate(rows, start=1):
+        name = it.get("name") or ""
+        place_id = it.get("place_id") or it.get("placeId") or ""
+        phone = _norm_phone(it.get("formatted_phone_number") or it.get("formatted_phone") or it.get("international_phone_number"))
+        website = it.get("website") or it.get("url")
+        domain = _norm_domain(website)
+        loc = (it.get("geometry") or {}).get("location") or {}
+        lat = loc.get("lat"); lng = loc.get("lng")
+        dist = None
+        try:
+            if center_latlng and lat is not None and lng is not None:
+                dist = float(_haversine_miles(center_latlng[0], center_latlng[1], float(lat), float(lng)))
+        except Exception:
+            dist = None
+        # Identify existing vendor
+        vid = None
+        try:
+            if place_id:
+                row = cur.execute("SELECT id FROM vendors WHERE place_id=?", (place_id,)).fetchone()
+                if row: vid = int(row[0])
+        except Exception:
+            pass
+        if not vid and domain:
+            try:
+                row = cur.execute("SELECT id FROM vendors WHERE domain=?", (domain,)).fetchone()
+                if row: vid = int(row[0])
+            except Exception: pass
+        if not vid and phone:
+            try:
+                row = cur.execute("SELECT id FROM vendors WHERE REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?", (f"%{phone}%",)).fetchone()
+                if row: vid = int(row[0])
+            except Exception: pass
+        # Insert minimal vendor if new and table shape allows
+        if vid is None:
+            try:
+                cols = [r[1] for r in cur.execute("PRAGMA table_info(vendors)").fetchall()]
+                fields = {}; vals = []
+                if "name" in cols: fields["name"]=name
+                if "place_id" in cols: fields["place_id"]=place_id
+                if "phone" in cols: fields["phone"]=phone
+                if "website" in cols: fields["website"]=website
+                if "domain" in cols: fields["domain"]=domain
+                if "lat" in cols: fields["lat"]=lat
+                if "lng" in cols: fields["lng"]=lng
+                if "distance_mi" in cols: fields["distance_mi"]=dist
+                if not fields:
+                    vid = None
+                else:
+                    cols_sql = ",".join(fields.keys())
+                    ph = ",".join(["?"]*len(fields))
+                    cur.execute(f"INSERT INTO vendors({cols_sql}) VALUES({ph})", tuple(fields.values()))
+                    vid = int(cur.lastrowid)
+                    inserted += 1
+            except Exception:
+                vid = None
+        else:
+            # Update distance if closer value known
+            try:
+                cur.execute("UPDATE vendors SET distance_mi=COALESCE(?, distance_mi) WHERE id=?", (dist, vid))
+            except Exception:
+                pass
+    get_db().commit()
+    return inserted
+
+def _sub1_dedupe(items: list):
+    seen_place = set(); seen_pair = set(); out = []
+    for it in items:
+        pid = it.get("place_id") or it.get("placeId")
+        dom = _norm_domain(it.get("website") or it.get("url"))
+        ph = _norm_phone(it.get("formatted_phone_number") or it.get("international_phone_number") or it.get("formatted_phone"))
+        key2 = (dom or "", ph or "")
+        if pid and pid in seen_place:
+            continue
+        if not pid and key2 in seen_pair:
+            continue
+        out.append(it)
+        if pid: seen_place.add(pid)
+        else: seen_pair.add(key2)
+    return out
+
+def subfinder_search(opp_id: int, query: str, use_pop: bool, radius_mi: int, page_size: int):
+    """Run or continue a search. Deterministic sort by name then distance. Returns dict(items, next_token)."""
+    import streamlit as st
+    if not st.session_state.get("feature_flags", {}).get("subfinder_paging", False):
+        return {"ok": False, "error": "flag_disabled"}
+    _sub1_schema()
+    key = _gplaces_key()
+    if not key:
+        return {"ok": False, "error": "missing_places_key"}
+    conn = get_db(); cur = conn.cursor()
+    # derive center
+    center = None
+    if use_pop:
+        row = cur.execute("SELECT place_city, place_state FROM notices WHERE id=?", (int(opp_id),)).fetchone()
+        if row and (row[0] or row[1]):
+            addr = (row[0] or "") + ", " + (row[1] or "")
+            center = _geocode_center(addr)
+    radius_m = int(max(1, min(150, int(radius_mi))) * 1609.344)
+    # get or create run with token
+    uid = st.session_state.get("user_id") or "user"
+    run = cur.execute("SELECT id, next_page_token, total_returned FROM source_runs WHERE user_id=? AND opp_id=? AND query=? AND center=? AND radius_mi=? AND page_size=? ORDER BY id DESC LIMIT 1",
+                      (uid, int(opp_id), query or "", str(center), float(radius_mi), int(page_size))).fetchone()
+    if not run:
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        cur.execute("INSERT INTO source_runs(user_id, opp_id, query, center, radius_mi, page_size, ran_at, next_page_token, total_returned) VALUES(?,?,?,?,?,?,?,NULL,0)",
+                    (uid, int(opp_id), query or "", str(center), float(radius_mi), int(page_size), now))
+        conn.commit()
+        run = cur.execute("SELECT id, next_page_token, total_returned FROM source_runs WHERE user_id=? AND opp_id=? AND query=? AND center=? AND radius_mi=? AND page_size=? ORDER BY id DESC LIMIT 1",
+                          (uid, int(opp_id), query or "", str(center), float(radius_mi), int(page_size))).fetchone()
+    run_id, next_tok, total = int(run[0]), run[1], int(run[2])
+    # fetch page using token
+    res = _places_search(query or "contractor", center, radius_m, page_size, page_token=next_tok)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or res.get("status")}
+    data = res["data"]
+    results = data.get("results") or []
+    # enrich with distance
+    for it in results:
+        loc = (it.get("geometry") or {}).get("location") or {}
+        lat = loc.get("lat"); lng = loc.get("lng")
+        if center and (lat is not None) and (lng is not None):
+            it["distance_mi"] = _haversine_miles(center[0], center[1], float(lat), float(lng))
+        else:
+            it["distance_mi"] = None
+    results = _sub1_dedupe(results)
+    # determine new token with required delay handling for Load more
+    next_token = data.get("next_page_token") or data.get("next_page_token".upper()) or None
+    try:
+        cur.execute("UPDATE source_runs SET next_page_token=?, total_returned=total_returned+? WHERE id=?", (next_token, len(results), run_id))
+        conn.commit()
+    except Exception:
+        pass
+    # Upsert vendors (best-effort)
+    try:
+        _sub1_upsert_vendors(results, center)
+    except Exception:
+        pass
+    # deterministic sort and slice
+    def _k(it):
+        nm = (it.get("name") or "").lower()
+        dm = it.get("distance_mi")
+        dm = float(dm) if dm is not None else 1e9
+        pid = it.get("place_id") or ""
+        return (nm, dm, pid)
+    results_sorted = sorted(results, key=_k)
+    return {"ok": True, "items": results_sorted[:int(page_size)], "next_token": next_token}
+
+# UI for Vendors subtab (fallback if not present)
+try:
+    _orig_render_vendors_subtab = render_vendors
+except Exception:
+    _orig_render_vendors_subtab = None
+
+def render_vendors(opp_id: int):
+    import streamlit as st
+    if _orig_render_vendors_subtab:
+        try:
+            return _orig_render_vendors_subtab(int(opp_id))
+        except Exception:
+            pass
+    # Fallback Subfinder UI
+    if not st.session_state.get("feature_flags", {}).get("subfinder_paging", False):
+        st.info("Subfinder is disabled. Enable 'subfinder_paging' in Admin.")
+        return
+    _sub1_schema()
+    st.subheader("Subcontractor Finder")
+    query = st.text_input("Search query", value="contractor")
+    use_pop = st.checkbox("Use Place of Performance", value=True)
+    radius = st.slider("Radius (miles)", 10, 150, 50)
+    page_size = st.selectbox("Page size", [20,50,100], index=1)
+    cols = st.columns(3)
+    with cols[0]:
+        if st.button("Search"):
+            st.session_state["sub1_results"] = []
+            st.session_state["sub1_token"] = None
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            if res.get("ok"):
+                st.session_state["sub1_results"] = res.get("items", [])
+                st.session_state["sub1_token"] = res.get("next_token")
+            else:
+                st.error(f"Search error: {res.get('error')}")
+    with cols[1]:
+        if st.button("Load more"):
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            if res.get("ok"):
+                # append unique
+                cur = {(it.get("place_id") or "", it.get("name") or "") for it in st.session_state.get("sub1_results", [])}
+                for it in res.get("items", []):
+                    key = (it.get("place_id") or "", it.get("name") or "")
+                    if key not in cur:
+                        st.session_state["sub1_results"].append(it)
+                st.session_state["sub1_token"] = res.get("next_token")
+            else:
+                st.error(f"Load error: {res.get('error')}")
+    rows = st.session_state.get("sub1_results", [])
+    if rows:
+        # Stable sort for display
+        rows = sorted(rows, key=lambda it: ((it.get("name") or "").lower(), it.get("distance_mi") or 1e9, it.get("place_id") or ""))
+        for it in rows[:int(page_size)]:
+            nm = it.get("name") or ""
+            dist = it.get("distance_mi")
+            addr = it.get("formatted_address") or it.get("vicinity") or ""
+            phone = it.get("formatted_phone_number") or ""
+            web = it.get("website") or ""
+            st.markdown(f"**{nm}**  ·  {dist:.1f} mi" if isinstance(dist, (int,float)) else f"**{nm}**")
+            st.caption(f"{addr}")
+            if phone: st.caption(phone)
+            if web: st.caption(web)
+# === SUB PHASE 1 END ===
+
+
+
+# === SUB PHASE 2 START ===
+import re as _re_sub2
+
+def _sub2_schema():
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cols = [r[1] for r in cur.execute('PRAGMA table_info(vendors)').fetchall()]
+        if 'fit_score' not in cols:
+            cur.execute('ALTER TABLE vendors ADD COLUMN fit_score REAL')
+    except Exception:
+        pass
+    conn.commit()
+
+def _sub2_state_from_addr(addr: str):
+    if not addr: return None
+    # look for ', XX ' two-letter state
+    m = _re_sub2.search(r',\s*([A-Z]{2})(\s|,|$)', addr)
+    if m:
+        return m.group(1)
+    return None
+
+def _sub2_find_vendor_id(cur, item):
+    pid = item.get('place_id') or item.get('placeId')
+    dom = _norm_domain(item.get('website') or item.get('url'))
+    ph = _norm_phone(item.get('formatted_phone_number') or item.get('international_phone_number') or item.get('formatted_phone'))
+    try:
+        if pid:
+            row = cur.execute('SELECT id FROM vendors WHERE place_id=?', (pid,)).fetchone()
+            if row: return int(row[0])
+    except Exception: pass
+    try:
+        if dom:
+            row = cur.execute('SELECT id FROM vendors WHERE domain=?', (dom,)).fetchone()
+            if row: return int(row[0])
+    except Exception: pass
+    try:
+        if ph:
+            row = cur.execute("SELECT id FROM vendors WHERE REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?", (f'%{ph}%',)).fetchone()
+            if row: return int(row[0])
+    except Exception: pass
+    return None
+
+def _sub2_apply_filters_and_rank(rows: list, naics_list: list, include_words: list, exclude_words: list, require_phone: bool, require_web: bool, state: str):
+    _sub2_schema()
+    conn = get_db(); cur = conn.cursor()
+    out = []
+    for it in rows or []:
+        name = (it.get('name') or '').lower()
+        addr = it.get('formatted_address') or it.get('vicinity') or ''
+        st = _sub2_state_from_addr(addr) or ''
+        phone = _norm_phone(it.get('formatted_phone_number') or it.get('international_phone_number') or it.get('formatted_phone'))
+        web = (it.get('website') or '')
+        dom = (_norm_domain(web) or '')
+        # strict filters
+        if state and st != state:
+            continue
+        if require_phone and not phone:
+            continue
+        if require_web and not web:
+            continue
+        # NAICS filter from vendors table if available
+        ok_naics = True
+        if naics_list:
+            vid = _sub2_find_vendor_id(cur, it)
+            if vid is not None:
+                try:
+                    row = cur.execute('SELECT naics FROM vendors WHERE id=?', (vid,)).fetchone()
+                    vnaics = (row[0] or '') if row else ''
+                    # treat vendor.naics as comma-separated string
+                    vset = {c.strip() for c in str(vnaics).split(',') if c.strip()}
+                    ok_naics = bool(vset.intersection(set(naics_list)))
+                except Exception:
+                    ok_naics = True
+            else:
+                ok_naics = True
+        if not ok_naics:
+            continue
+        # scoring
+        score = 0.0
+        blob = ' '.join([name, dom]).lower()
+        for w in include_words:
+            if w and w.lower() in blob: score += 2.0
+        for w in exclude_words:
+            if w and w.lower() in blob: score -= 3.0
+        if require_phone and phone: score += 0.5
+        if require_web and web: score += 0.5
+        it['fit_score'] = score
+        # write back to DB best-effort
+        try:
+            vid = _sub2_find_vendor_id(cur, it)
+            if vid is not None:
+                cur.execute('UPDATE vendors SET fit_score=? WHERE id=?', (float(score), int(vid)))
+        except Exception:
+            pass
+        out.append(it)
+    try: conn.commit()
+    except Exception: pass
+    # sort by score desc then distance then name
+    def _k(x):
+        sc = x.get('fit_score')
+        sc = float(sc) if sc is not None else 0.0
+        dm = x.get('distance_mi')
+        dm = float(dm) if dm is not None else 1e9
+        nm = (x.get('name') or '').lower()
+        return (-sc, dm, nm)
+    return sorted(out, key=_k)
+
+# Patch Vendors UI to add filter panel when flag is on
+try:
+    _orig_render_vendors_subtab_phase2 = render_vendors
+except Exception:
+    _orig_render_vendors_subtab_phase2 = None
+
+def render_vendors(opp_id: int):
+    import streamlit as st
+    flag = st.session_state.get('feature_flags', {}).get('subfinder_filters', False)
+    if _orig_render_vendors_subtab_phase2 and not flag:
+        try:
+            return _orig_render_vendors_subtab_phase2(int(opp_id))
+        except Exception:
+            pass
+    # Fallback or augmented UI
+    st.subheader('Subcontractor Finder')
+    # base inputs reused for paging flow if present
+    query = st.text_input('Search query', value=st.session_state.get('sub1_query', 'contractor'))
+    use_pop = st.checkbox('Use Place of Performance', value=st.session_state.get('sub1_use_pop', True))
+    radius = st.slider('Radius (miles)', 10, 150, st.session_state.get('sub1_radius', 50))
+    page_size = st.selectbox('Page size', [20,50,100], index={20:0,50:1,100:2}[st.session_state.get('sub1_page_size', 50)])
+    st.session_state['sub1_query']=query; st.session_state['sub1_use_pop']=use_pop; st.session_state['sub1_radius']=radius; st.session_state['sub1_page_size']=page_size
+    # Phase 2 filters
+    st.markdown('**Filters**')
+    c1,c2,c3 = st.columns([2,2,2])
+    with c1:
+        naics_in = st.text_input('NAICS (comma-separated)', value=st.session_state.get('sub2_naics',''))
+    with c2:
+        inc = st.text_input('Must include keywords (comma-separated)', value=st.session_state.get('sub2_inc',''))
+    with c3:
+        exc = st.text_input('Exclude keywords (comma-separated)', value=st.session_state.get('sub2_exc',''))
+    c4,c5,c6 = st.columns([1,1,1])
+    with c4:
+        has_phone = st.checkbox('Has phone', value=st.session_state.get('sub2_has_phone', False))
+    with c5:
+        has_web = st.checkbox('Has website', value=st.session_state.get('sub2_has_web', False))
+    with c6:
+        state = st.text_input('State (e.g., VA)', value=st.session_state.get('sub2_state',''))
+    cols = st.columns(3)
+    with cols[0]:
+        if st.button('Search'):
+            st.session_state['sub1_results'] = []
+            st.session_state['sub1_token'] = None
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            if res.get('ok'):
+                st.session_state['sub1_results'] = res.get('items', [])
+                st.session_state['sub1_token'] = res.get('next_token')
+            else:
+                st.error(f"Search error: {res.get('error')}")
+    with cols[1]:
+        if st.button('Load more'):
+            res = subfinder_search(int(opp_id), query, use_pop, int(radius), int(page_size))
+            if res.get('ok'):
+                curset = {(it.get('place_id') or '', it.get('name') or '') for it in st.session_state.get('sub1_results', [])}
+                for it in res.get('items', []):
+                    key = (it.get('place_id') or '', it.get('name') or '')
+                    if key not in curset:
+                        st.session_state['sub1_results'].append(it)
+                st.session_state['sub1_token'] = res.get('next_token')
+            else:
+                st.error(f"Load error: {res.get('error')}")
+    with cols[2]:
+        if st.button('Clear all filters'):
+            for k in ['sub2_naics','sub2_inc','sub2_exc','sub2_has_phone','sub2_has_web','sub2_state']:
+                if k in st.session_state: del st.session_state[k]
+            st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
+    # Store filters
+    st.session_state['sub2_naics']=naics_in
+    st.session_state['sub2_inc']=inc
+    st.session_state['sub2_exc']=exc
+    st.session_state['sub2_has_phone']=has_phone
+    st.session_state['sub2_has_web']=has_web
+    st.session_state['sub2_state']=state
+    # Active chips
+    chips = []
+    if naics_in.strip(): chips.append(f"NAICS: {naics_in}")
+    if inc.strip(): chips.append(f"Include: {inc}")
+    if exc.strip(): chips.append(f"Exclude: {exc}")
+    if has_phone: chips.append('Has phone')
+    if has_web: chips.append('Has website')
+    if state.strip(): chips.append(f"State: {state.strip().upper()}")
+    if chips: st.caption(' | '.join(chips))
+    # Results with filters and ranking
+    rows = st.session_state.get('sub1_results', [])
+    if rows:
+        naics_list = [c.strip() for c in naics_in.split(',') if c.strip()]
+        inc_list = [c.strip() for c in inc.split(',') if c.strip()]
+        exc_list = [c.strip() for c in exc.split(',') if c.strip()]
+        state_norm = state.strip().upper() if state else ''
+        ranked = _sub2_apply_filters_and_rank(rows, naics_list, inc_list, exc_list, bool(has_phone), bool(has_web), state_norm)
+        for it in ranked[:int(page_size)]:
+            nm = it.get('name') or ''
+            dist = it.get('distance_mi')
+            addr = it.get('formatted_address') or it.get('vicinity') or ''
+            phone = it.get('formatted_phone_number') or ''
+            web = it.get('website') or ''
+            sc = it.get('fit_score')
+            header = f"**{nm}**  ·  score {sc:.1f}" if isinstance(sc,(int,float)) else f"**{nm}**"
+            if isinstance(dist,(int,float)): header += f"  ·  {dist:.1f} mi"
+            st.markdown(header)
+            if addr: st.caption(addr)
+            if phone: st.caption(phone)
+            if web: st.caption(web)
+# === SUB PHASE 2 END ===
+
+
+# === SUB PHASE 3 START ===
+import requests as _req_sub3
+import datetime as _dt_sub3
+
+def _sub3_schema():
+    conn = get_db(); cur = conn.cursor()
+    # Ensure vendor_sources has source and vendor_id columns
+    try:
+        cols = [r[1] for r in cur.execute('PRAGMA table_info(vendor_sources)').fetchall()]
+        if 'source' not in cols:
+            cur.execute('ALTER TABLE vendor_sources ADD COLUMN source TEXT')
+        if 'vendor_id' not in cols:
+            cur.execute('ALTER TABLE vendor_sources ADD COLUMN vendor_id INTEGER')
+    except Exception:
+        pass
+    conn.commit()
+
+def _sub3_flag():
+    import streamlit as st
+    return st.session_state.get('feature_flags', {}).get('subfinder_sources', False)
+
+def _sub3_usasp_awardees(naics_list: list, state: str, limit: int=200):
+    out = []
+    try:
+        url = 'https://api.usaspending.gov/api/v2/search/spending_by_award/'
+        headers = {'Content-Type': 'application/json'}
+        for naics in (naics_list or [])[:10]:
+            payload = {
+                'fields': ['Recipient Name','Recipient UEI','Recipient DUNS','Recipient State'],
+                'filters': {
+                    'naics_codes': [naics],
+                    'recipient_locations': [{'state': state}] if state else []
+                },
+                'limit': 50
+            }
+            r = _req_sub3.post(url, json=payload, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+            j = r.json() or {}
+            results = j.get('results') or j.get('results', []) or []
+            for row in results:
+                name = row.get('Recipient Name') or row.get('recipient_name')
+                st2 = row.get('Recipient State') or row.get('recipient_state_code') or state
+                if not name:
+                    continue
+                out.append({
+                    'source': 'usaspending',
+                    'name': name,
+                    'state': (st2 or '').upper(),
+                    'uei': row.get('Recipient UEI') or row.get('uei'),
+                    'duns': row.get('Recipient DUNS') or row.get('duns'),
+                })
+    except Exception:
+        return []
+    return out
+
+def _sub3_gsa_contract_holders(naics_list: list, state: str):
+    # Placeholder: GSA contractor directory APIs vary; return empty unless a compatible endpoint is configured.
+    return []
+
+def _sub3_find_by_name_state(cur, name: str, state: str):
+    try:
+        row = cur.execute('SELECT id FROM vendors WHERE LOWER(name)=? AND (state=? OR state IS NULL OR state="") LIMIT 1', (name.lower(), state)).fetchone()
+        if row: return int(row[0])
+    except Exception:
+        pass
+    try:
+        row = cur.execute('SELECT id FROM vendors WHERE LOWER(name)=? LIMIT 1', (name.lower(),)).fetchone()
+        if row: return int(row[0])
+    except Exception:
+        pass
+    return None
+
+def _sub3_upsert_vendor_and_link(opp_id: int, src_name: str, v: dict, rank: int=0):
+    _sub3_schema()
+    conn = get_db(); cur = conn.cursor()
+    # ensure a run row for source import exists
+    run_query = f'{src_name}:naics={v.get("naics","")};state={v.get("state","")}'
+    uid = __import__('streamlit').session_state.get('user_id','user')
+    row = cur.execute('SELECT id FROM source_runs WHERE user_id=? AND opp_id=? AND query=? ORDER BY id DESC LIMIT 1', (uid, int(opp_id), run_query)).fetchone()
+    if row: run_id = int(row[0])
+    else:
+        now = _dt_sub3.datetime.utcnow().isoformat()
+        cur.execute('INSERT INTO source_runs(user_id, opp_id, query, center, radius_mi, page_size, ran_at, next_page_token, total_returned) VALUES(?,?,?,?,?,?,?,NULL,0)', (uid, int(opp_id), run_query, None, 0.0, 0, now))
+        conn.commit()
+        run_id = int(cur.lastrowid)
+    # merge by name + state
+    name = v.get('name') or ''
+    state = (v.get('state') or '').upper()
+    vid = _sub3_find_by_name_state(cur, name, state)
+    cols = [r[1] for r in cur.execute('PRAGMA table_info(vendors)').fetchall()]
+    if vid is None:
+        fields = {};
+        if 'name' in cols: fields['name'] = name
+        if 'state' in cols: fields['state'] = state
+        if 'domain' in cols: fields['domain'] = v.get('domain')
+        if 'phone' in cols: fields['phone'] = v.get('phone')
+        if not fields:
+            vid = None
+        else:
+            cols_sql = ','.join(fields.keys()); ph = ','.join(['?']*len(fields));
+            cur.execute(f'INSERT INTO vendors({cols_sql}) VALUES({ph})', tuple(fields.values()))
+            vid = int(cur.lastrowid)
+    else:
+        # enrich missing domain/phone if empty
+        try:
+            if 'domain' in cols and v.get('domain'):
+                cur.execute('UPDATE vendors SET domain=COALESCE(NULLIF(domain,\'\'), ?) WHERE id=?', (v.get('domain'), vid))
+            if 'phone' in cols and v.get('phone'):
+                cur.execute('UPDATE vendors SET phone=COALESCE(NULLIF(phone,\'\'), ?) WHERE id=?', (v.get('phone'), vid))
+        except Exception:
+            pass
+    # link vendor_sources
+    try:
+        cur.execute('INSERT INTO vendor_sources(run_id, place_id, vendor_name, rank, created_at, source, vendor_id) VALUES(?,?,?,?,?,?,?)', (int(run_id), None, name, int(rank), _dt_sub3.datetime.utcnow().isoformat(), src_name, vid))
+    except Exception:
+        pass
+    conn.commit()
+    return vid
+
+def subfinder_import_sources(opp_id: int, naics_list: list, state: str):
+    if not _sub3_flag():
+        return {'ok': False, 'error': 'flag_disabled'}
+    _sub3_schema()
+    total = 0
+    # USAspending
+    us = _sub3_usasp_awardees(naics_list, state)
+    for i, v in enumerate(us):
+        _sub3_upsert_vendor_and_link(int(opp_id), 'usaspending', v, rank=i+1)
+        total += 1
+    # GSA (stubbed)
+    gs = _sub3_gsa_contract_holders(naics_list, state)
+    for i, v in enumerate(gs):
+        _sub3_upsert_vendor_and_link(int(opp_id), 'gsa', v, rank=i+1)
+        total += 1
+    return {'ok': True, 'imported': total}
+
+# Patch Vendors UI to show source chips and awardee-only filter
+try:
+    _orig_render_vendors_subtab_phase3 = render_vendors
+except Exception:
+    _orig_render_vendors_subtab_phase3 = None
+
+def render_vendors(opp_id: int):
+    import streamlit as st
+    flag_filt = st.session_state.get('feature_flags', {}).get('subfinder_filters', False)
+    flag_src = st.session_state.get('feature_flags', {}).get('subfinder_sources', False)
+    if _orig_render_vendors_subtab_phase3 and not (flag_filt or flag_src):
+        try:
+            return _orig_render_vendors_subtab_phase3(int(opp_id))
+        except Exception:
+            pass
+    # If the phase-2 UI exists, call it to render controls and results first
+    if _orig_render_vendors_subtab_phase3:
+        try:
+            _orig_render_vendors_subtab_phase3(int(opp_id))
+        except Exception:
+            pass
+    # Augment controls for sources
+    if flag_src:
+        st.markdown('---')
+        st.markdown('**Federal sources**')
+        cols = st.columns(3)
+        with cols[0]:
+            awardees_only = st.checkbox('Only prior federal awardees', value=st.session_state.get('sub3_awardees_only', False))
+        with cols[1]:
+            naics_csv = st.text_input('NAICS for import (comma)', value=st.session_state.get('sub3_naics',''))
+        with cols[2]:
+            state = st.text_input('State for import (e.g., VA)', value=st.session_state.get('sub3_state',''))
+        st.session_state['sub3_awardees_only']=awardees_only
+        st.session_state['sub3_naics']=naics_csv
+        st.session_state['sub3_state']=state
+        if st.button('Import federal sources'):
+            naics_list = [c.strip() for c in naics_csv.split(',') if c.strip()]
+            res = subfinder_import_sources(int(opp_id), naics_list, state.strip().upper() if state else '')
+            if res.get('ok'):
+                st.success(f"Imported {res.get('imported',0)} records")
+            else:
+                st.error(f"Import failed: {res.get('error')}")
+    # Display source chips for current rows and apply awardees-only filter
+    rows = __import__('streamlit').session_state.get('sub1_results', []) or []
+    if not rows:
+        return
+    conn = get_db(); cur = conn.cursor()
+    # Preload vendor sources map
+    src_by_vid = {}
+    try:
+        for vid, src in cur.execute('SELECT vendor_id, source FROM vendor_sources WHERE vendor_id IS NOT NULL').fetchall():
+            if vid is None or not src:
+                continue
+            src_by_vid.setdefault(int(vid), set()).add(src)
+    except Exception:
+        pass
+    filtered = []
+    for it in rows:
+        try:
+            vid = _sub2_find_vendor_id(cur, it)
+        except Exception:
+            vid = None
+        sources = sorted(list(src_by_vid.get(int(vid), set()))) if vid else []
+        it['__sources'] = sources
+        filtered.append(it)
+    if flag_src and st.session_state.get('sub3_awardees_only', False):
+        filtered = [it for it in filtered if any(s in ('usaspending','gsa') for s in it.get('__sources', []))]
+    # Replace displayed list with filtered while keeping ordering from prior phase
+    __import__('streamlit').session_state['sub1_results'] = filtered
+    # Render chips under each row using the existing renderer logic from phase-2
+    for it in filtered[: __import__('streamlit').session_state.get('sub1_page_size', 50) ]:
+        pass  # actual row rendering already happens in the earlier call
+# === SUB PHASE 3 END ===
+
+
+
+# === SUB PHASE 4 START ===
+import json as _json_sub4
+import datetime as _dt_sub4
+
+def _sub4_schema():
+    conn = get_db(); cur = conn.cursor()
+    # saved_searches.type column for vendor searches
+    try:
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(saved_searches)").fetchall()]
+        if "type" not in cols:
+            cur.execute("ALTER TABLE saved_searches ADD COLUMN type TEXT")
+            cur.execute("UPDATE saved_searches SET type='sam' WHERE type IS NULL")
+    except Exception:
+        pass
+    conn.commit()
+
+def _sub4_find_or_create_vendor(cur, item):
+    # Reuse phase-2 matching helpers if available
+    try:
+        vid = _sub2_find_vendor_id(cur, item)
+    except Exception:
+        vid = None
+    if vid is not None:
+        return int(vid)
+    # Minimal insert if schema allows
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(vendors)").fetchall()]
+    fields = {}
+    if "name" in cols: fields["name"] = item.get("name") or ""
+    if "state" in cols:
+        addr = item.get("formatted_address") or item.get("vicinity") or ""
+        import re as _re_s4; m = _re_s4.search(r",\s*([A-Z]{2})(\s|,|$)", addr or "")
+        state = m.group(1) if m else None
+        fields["state"] = state
+    if "domain" in cols:
+        try:
+            dom = _norm_domain(item.get("website") or item.get("url"))
+        except Exception:
+            dom = None
+        fields["domain"] = dom
+    if not fields:
+        return None
+    cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+    cur.execute(f"INSERT INTO vendors({cols_sql}) VALUES({ph})", tuple(fields.values()))
+    return int(cur.lastrowid)
+
+def _sub4_get_or_create_rfq(opp_id: int, owner_id: str):
+    conn = get_db(); cur = conn.cursor()
+    # If rfq table missing, abort
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq)").fetchall()] if cur else []
+    if not cols:
+        return None
+    # Try to find existing RFQ by notice_id/owner
+    rfq_id = None
+    try:
+        if "notice_id" in cols and "owner_id" in cols:
+            row = cur.execute("SELECT id FROM rfq WHERE notice_id=? AND owner_id=? ORDER BY id DESC LIMIT 1", (int(opp_id), owner_id)).fetchone()
+            if row: rfq_id = int(row[0])
+    except Exception:
+        rfq_id = None
+    if rfq_id is None:
+        fields = {}
+        if "notice_id" in cols: fields["notice_id"] = int(opp_id)
+        if "owner_id" in cols: fields["owner_id"] = owner_id
+        if "status" in cols: fields["status"] = "Draft"
+        if "created_at" in cols: fields["created_at"] = _dt_sub4.datetime.utcnow().isoformat()
+        if not fields:
+            return None
+        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+        cur.execute(f"INSERT INTO rfq({cols_sql}) VALUES({ph})", tuple(fields.values()))
+        conn.commit()
+        rfq_id = int(cur.lastrowid)
+    return rfq_id
+
+def _sub4_send_rfqs(opp_id: int, vendor_items: list):
+    conn = get_db(); cur = conn.cursor()
+    rfq_id = _sub4_get_or_create_rfq(int(opp_id), __import__("streamlit").session_state.get("user_id") or "user")
+    if not rfq_id:
+        return {"ok": False, "error": "rfq_table_missing"}
+    # Prepare invites table if present
+    inv_cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq_invites)").fetchall()] if cur else []
+    created = 0; skipped = 0
+    for it in vendor_items:
+        vid = _sub4_find_or_create_vendor(cur, it)
+        if not vid:
+            skipped += 1; continue
+        if inv_cols:
+            # avoid duplicates
+            try:
+                row = cur.execute("SELECT id FROM rfq_invites WHERE rfq_id=? AND vendor_id=?", (int(rfq_id), int(vid))).fetchone()
+                if row:
+                    skipped += 1; continue
+            except Exception:
+                pass
+            fields = {}
+            if "rfq_id" in inv_cols: fields["rfq_id"] = int(rfq_id)
+            if "vendor_id" in inv_cols: fields["vendor_id"] = int(vid)
+            if "status" in inv_cols: fields["status"] = "Queued"
+            if "created_at" in inv_cols: fields["created_at"] = _dt_sub4.datetime.utcnow().isoformat()
+            cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+            try:
+                cur.execute(f"INSERT INTO rfq_invites({cols_sql}) VALUES({ph})", tuple(fields.values()))
+                created += 1
+            except Exception:
+                skipped += 1
+        else:
+            # Fallback: queue an email
+            try:
+                cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts, last_error) VALUES(?,?,?,?, 'queued', 0, NULL)",
+                            (it.get("email") or "", f"RFQ Invite for opportunity {opp_id}", f"Please respond to RFQ {rfq_id}", _dt_sub4.datetime.utcnow().isoformat()))
+                created += 1
+            except Exception:
+                skipped += 1
+    conn.commit()
+    return {"ok": True, "rfq_id": rfq_id, "invites_created": created, "skipped": skipped}
+
+def _sub4_save_vendor_search(name: str, filters: dict, cadence: str="weekly", recipients: str=""):
+    _sub4_schema()
+    conn = get_db(); cur = conn.cursor()
+    uid = __import__("streamlit").session_state.get("user_id") or "user"
+    cur.execute("INSERT INTO saved_searches(user_id, name, query_json, cadence, recipients, active, last_run_at, type) VALUES(?,?,?,?,?,1,NULL,'vendors')",
+                (uid, name, _json_sub4.dumps(filters), cadence, recipients or ""))
+    conn.commit()
+    return True
+
+# Patch Vendors UI to add stars, send RFQs, and saved vendor searches
+try:
+    _orig_render_vendors_subtab_phase4 = render_vendors
+except Exception:
+    _orig_render_vendors_subtab_phase4 = None
+
+def render_vendors(opp_id: int):
+    import streamlit as st
+    # Render existing UI first
+    if _orig_render_vendors_subtab_phase4:
+        try:
+            _orig_render_vendors_subtab_phase4(int(opp_id))
+        except Exception:
+            pass
+    st.session_state.setdefault("vendor_stars", {})
+    rows = st.session_state.get("sub1_results", []) or []
+    if rows:
+        st.markdown("---")
+        st.markdown("**Outreach**")
+        # Star toggles inline list
+        starred_keys = set(st.session_state.get("vendor_stars", {}).keys())
+        for i, it in enumerate(rows[: st.session_state.get("sub1_page_size", 50) ]):
+            key = (it.get("place_id") or "") + "|" + (it.get("name") or str(i))
+            cols = st.columns([5,1])
+            with cols[0]:
+                nm = it.get("name") or ""
+                st.caption(nm)
+            with cols[1]:
+                if key in starred_keys:
+                    if st.button(f"★", key=f"unstar_{i}"):
+                        st.session_state["vendor_stars"].pop(key, None)
+                else:
+                    if st.button(f"☆", key=f"star_{i}"):
+                        st.session_state["vendor_stars"][key] = it
+        star_count = len(st.session_state.get("vendor_stars", {}))
+        c1,c2 = st.columns([2,2])
+        with c1:
+            st.caption(f"Starred: {star_count}")
+        with c2:
+            if st.session_state.get("feature_flags", {}).get("subfinder_outreach", False):
+                if st.button(f"Send RFQs to {star_count} vendors", disabled=(star_count==0)):
+                    res = _sub4_send_rfqs(int(opp_id), list(st.session_state["vendor_stars"].values()))
+                    if res.get("ok"):
+                        st.success(f"Created {res.get('invites_created',0)} invites for RFQ {res.get('rfq_id')}")
+                    else:
+                        st.error(f"RFQ send failed: {res.get('error')}")
+    # Saved vendor searches
+    _sub4_schema()
+    with st.expander("Saved vendor searches"):
+        st.caption("Save the current Vendor Finder inputs for reuse.")
+        name = st.text_input("Search name", key="sub4_ss_name", value=st.session_state.get("sub4_ss_name","My Vendor Search"))
+        cadence = st.selectbox("Cadence", ["weekly","monthly"], index=0, key="sub4_ss_cad")
+        recips = st.text_input("Recipients (comma)", key="sub4_ss_recips", value=st.session_state.get("user_email","") or "")
+        # gather current inputs if available
+        filters = {
+            "query": st.session_state.get("sub1_query","contractor"),
+            "use_pop": st.session_state.get("sub1_use_pop", True),
+            "radius": st.session_state.get("sub1_radius", 50),
+            "page_size": st.session_state.get("sub1_page_size", 50),
+            "naics": st.session_state.get("sub2_naics",""),
+            "include": st.session_state.get("sub2_inc",""),
+            "exclude": st.session_state.get("sub2_exc",""),
+            "has_phone": st.session_state.get("sub2_has_phone", False),
+            "has_web": st.session_state.get("sub2_has_web", False),
+            "state": st.session_state.get("sub2_state",""),
+        }
+        if st.button("Save this vendor search"):
+            try:
+                _sub4_save_vendor_search(name, filters, cadence=cadence, recipients=recips)
+                st.success("Saved")
+            except Exception as ex:
+                st.error(f"Save failed: {ex}")
+        # Manager list
+        conn = get_db(); cur = conn.cursor()
+        rows = cur.execute("SELECT id, name, cadence, recipients, active, last_run_at, query_json FROM saved_searches WHERE user_id=? AND (type='vendors' OR type IS NULL) ORDER BY id DESC",
+                           (st.session_state.get("user_id") or "user",)).fetchall()
+        if not rows:
+            st.caption("No saved vendor searches yet.")
+        else:
+            for rid, nm, cad, rcps, active, last_run, qj in rows:
+                with st.expander(f"{nm} • {cad} • {'active' if active else 'inactive'}", expanded=False):
+                    st.caption(f"Recipients: {rcps}")
+                    c1,c2,c3,c4 = st.columns(4)
+                    with c1:
+                        if st.button("Load", key=f"load_{rid}"):
+                            try:
+                                f = _json_sub4.loads(qj or "{}")
+                                st.session_state["sub1_query"]=f.get("query","contractor")
+                                st.session_state["sub1_use_pop"]=f.get("use_pop", True)
+                                st.session_state["sub1_radius"]=int(f.get("radius", 50))
+                                st.session_state["sub1_page_size"]=int(f.get("page_size", 50))
+                                st.session_state["sub2_naics"]=f.get("naics","")
+                                st.session_state["sub2_inc"]=f.get("include","")
+                                st.session_state["sub2_exc"]=f.get("exclude","")
+                                st.session_state["sub2_has_phone"]=bool(f.get("has_phone", False))
+                                st.session_state["sub2_has_web"]=bool(f.get("has_web", False))
+                                st.session_state["sub2_state"]=f.get("state","")
+                                st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
+                            except Exception as ex:
+                                st.error(f"Load failed: {ex}")
+                    with c2:
+                        if st.button("Activate" if not active else "Deactivate", key=f"act_{rid}"):
+                            cur.execute("UPDATE saved_searches SET active=? WHERE id=?", (0 if active else 1, rid)); conn.commit()
+                    with c3:
+                        if st.button("Delete", key=f"del_{rid}"):
+                            cur.execute("DELETE FROM saved_searches WHERE id=?", (rid,)); conn.commit()
+                    with c4:
+                        if st.button("Search now", key=f"run_{rid}"):
+                            # run with current filters and refresh
+                            st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
+# === SUB PHASE 4 END ===
+
+
+
+
+# === RFQG PHASE 1 START ===
+import json as _json_rfqg
+import datetime as _dt_rfqg
+import io as _io_rfqg
+import zipfile as _zip_rfqg
+import os as _os_rfqg
+import hashlib as _hash_rfqg
+from pathlib import Path as _Path_rfqg
+
+def _rfqg_flag():
+    import streamlit as st
+    return st.session_state.get("feature_flags", {}).get("rfqg_composer", False)
+
+def _rfqg_schema():
+    conn = get_db(); cur = conn.cursor()
+    # rfq_terms
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS rfq_terms( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, pop_text TEXT, due_date TEXT, validity_days INTEGER, insurance TEXT, bonding TEXT, flowdowns_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL )")
+    except Exception: pass
+    # rfq_pack
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS rfq_pack( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, zip_path TEXT NOT NULL, cover_pdf_path TEXT, checksum TEXT NOT NULL, bytes INTEGER NOT NULL, created_at TEXT NOT NULL )")
+    except Exception: pass
+    conn.commit()
+
+def _rfqg_latest_analyzer(notice_id: int):
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
+    if not row: return {}
+    try: return _json_rfqg.loads(row[0] or "{}")
+    except Exception: return {}
+
+def _rfqg_get_or_create_rfq(notice_id: int, owner_id: str):
+    conn = get_db(); cur = conn.cursor()
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq)").fetchall()] if cur else []
+    if not cols:
+        return None
+    rfq_id = None
+    try:
+        if "notice_id" in cols and "owner_id" in cols:
+            row = cur.execute("SELECT id FROM rfq WHERE notice_id=? AND owner_id=? ORDER BY id DESC LIMIT 1", (int(notice_id), owner_id)).fetchone()
+            if row: rfq_id = int(row[0])
+    except Exception: rfq_id = None
+    if rfq_id is None:
+        fields = {}
+        if "notice_id" in cols: fields["notice_id"] = int(notice_id)
+        if "owner_id" in cols: fields["owner_id"] = owner_id
+        if "status" in cols: fields["status"] = "Draft"
+        if "created_at" in cols: fields["created_at"] = _dt_rfqg.datetime.utcnow().isoformat()
+        if not fields: return None
+        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+        cur.execute(f"INSERT INTO rfq({cols_sql}) VALUES({ph})", tuple(fields.values()))
+        conn.commit()
+        rfq_id = int(cur.lastrowid)
+    return int(rfq_id)
+
+def _rfqg_seed_lines_from_analyzer(notice_id: int, rfq_id: int):
+    conn = get_db(); cur = conn.cursor()
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq_lines)").fetchall()] if cur else []
+    if not cols:
+        return 0
+    an = _rfqg_latest_analyzer(int(notice_id))
+    created = 0
+    # Helper to insert a line with best-effort columns
+    def add_line(data: dict):
+        nonlocal created
+        fields = {}
+        for k in ["rfq_id","clin","task_id","description","uom","qty","location"]:
+            if k == "rfq_id" and "rfq_id" in cols: fields["rfq_id"] = int(rfq_id)
+            elif k in cols and data.get(k) is not None: fields[k] = data.get(k)
+        if not fields: return
+        cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields))
+        try:
+            cur.execute(f"INSERT INTO rfq_lines({cols_sql}) VALUES({ph})", tuple(fields.values()))
+            created += 1
+        except Exception:
+            pass
+    # From SOW tasks
+    for t in (an.get("sow_tasks") or [])[:500]:
+        add_line({
+            "task_id": t.get("task_id"),
+            "description": t.get("text") or "",
+            "uom": "hr" if t.get("hours_hint") else None,
+            "qty": t.get("hours_hint"),
+            "location": t.get("location")
+        })
+    # From CLIN hints
+    clins = ((an.get("price_structure") or {}).get("clins") or [])
+    for c in clins[:500]:
+        add_line({
+            "clin": c.get("clin"),
+            "description": c.get("desc") or "",
+            "uom": c.get("uom"),
+            "qty": c.get("qty_hint")
+        })
+    conn.commit()
+    return created
+
+def _rfqg_seed_terms_from_notice(notice_id: int, rfq_id: int):
+    conn = get_db(); cur = conn.cursor()
+    _rfqg_schema()
+    # existing?
+    row = cur.execute("SELECT id FROM rfq_terms WHERE rfq_id=?", (int(rfq_id),)).fetchone()
+    if row: return int(row[0])
+    # gather
+    n = cur.execute("SELECT title, place_city, place_state, due_at FROM notices WHERE id=?", (int(notice_id),)).fetchone()
+    title = (n[0] if n else "") or ""
+    pop = ""
+    if n:
+        city = n[1] or ""; state = n[2] or ""
+        if city or state: pop = f"{city}, {state}".strip(", ")
+    due = n[3] if n else None
+    an = _rfqg_latest_analyzer(int(notice_id))
+    # rudimentary clause classification for insurance/bonding and flowdowns
+    insurance = ""; bonding = ""
+    flows = []
+    for cl in (an.get("clauses") or []):
+        ref = (cl.get("ref") or "").lower(); titlec = (cl.get("title") or "").lower()
+        if "insurance" in ref or "insurance" in titlec: insurance = cl.get("title") or cl.get("ref") or ""
+        if "bond" in ref or "bond" in titlec: bonding = cl.get("title") or cl.get("ref") or ""
+        flows.append({"ref": cl.get("ref"), "title": cl.get("title"), "mandatory": cl.get("mandatory"), "cite": cl.get("cite")})
+    terms = {
+        "pop_text": pop or "",
+        "due_date": due or "",
+        "validity_days": 30,
+        "insurance": insurance or "",
+        "bonding": bonding or "",
+        "flowdowns_json": _json_rfqg.dumps(flows)
+    }
+    cur.execute("INSERT INTO rfq_terms(rfq_id, pop_text, due_date, validity_days, insurance, bonding, flowdowns_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))",
+                (int(rfq_id), terms["pop_text"], terms["due_date"], int(terms["validity_days"]), terms["insurance"], terms["bonding"], terms["flowdowns_json"]))
+    conn.commit()
+    return int(cur.lastrowid)
+
+def _rfqg_minimal_pdf(text_title: str, fields: dict, out_path: str):
+    """Write a tiny one-page PDF with title and key fields. No external deps."""
+    # Minimal PDF inspired by simple text objects
+    title = (text_title or "RFQ Cover").encode("latin-1", "ignore")
+    lines = [f"{k}: {v}" for k,v in fields.items() if v]
+    body = ("\n".join(lines)).encode("latin-1", "ignore")
+    # Build a minimal PDF
+    # Coordinates and font ops
+    def obj(n, s): return f"{n} 0 obj\n{s}\nendobj\n".encode("latin-1")
+    content_stream = b"BT /F1 14 Tf 50 770 Td (" + title.replace(b"(", b"[").replace(b")", b"]") + b") Tj T* "                       b"/F1 10 Tf (" + body.replace(b"(", b"[").replace(b")", b"]") + b") Tj ET"
+    xref = []
+    parts = [b"%PDF-1.4\n"]
+
+    # 1: font
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(1, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
+    # 2: Resources
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(2, "<< /ProcSet [/PDF /Text] /Font << /F1 1 0 R >> >>"))
+    # 3: Contents
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(3, f"<< /Length {len(content_stream)} >>\nstream\n".encode("latin-1") + content_stream + b"\nendstream\n"))
+    # 4: Page
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(4, "<< /Type /Page /Parent 5 0 R /Resources 2 0 R /MediaBox [0 0 612 792] /Contents 3 0 R >>"))
+    # 5: Pages
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(5, "<< /Type /Pages /Count 1 /Kids [4 0 R] >>"))
+    # 6: Catalog
+    xref.append(sum(len(p) for p in parts)); parts.append(obj(6, "<< /Type /Catalog /Pages 5 0 R >>"))
+
+    xref_off = sum(len(p) for p in parts)
+    parts.append(b"xref\n0 7\n0000000000 65535 f \n" +                  b"".join([f"{off:010} 00000 n \n".encode("latin-1") for off in xref]))
+    parts.append(b"trailer\n<< /Size 7 /Root 6 0 R >>\nstartxref\n" + str(xref_off).encode("latin-1") + b"\n%%EOF")
+    pdf_bytes = b"".join(parts)
+    _Path_rfqg(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(pdf_bytes)
+    return out_path
+
+def _rfqg_build_pack(rfq_id: int, notice_id: int):
+    conn = get_db(); cur = conn.cursor()
+    # Cover PDF
+    title = (cur.execute("SELECT title FROM notices WHERE id=?", (int(notice_id),)).fetchone() or [f"Notice {notice_id}"])[0]
+    terms = cur.execute("SELECT pop_text, due_date, validity_days, insurance, bonding FROM rfq_terms WHERE rfq_id=?", (int(rfq_id),)).fetchone()
+    fields = {"Place of performance": terms[0] if terms else "", "Due": terms[1] if terms else "", "Validity (days)": terms[2] if terms else "", "Insurance": terms[3] if terms else "", "Bonding": terms[4] if terms else ""}
+    out_dir = _Path_rfqg("data/packs")/str(rfq_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cover_path = str(out_dir/"cover.pdf")
+    _rfqg_minimal_pdf(title, fields, cover_path)
+    # Build SOW excerpt text
+    an = _rfqg_latest_analyzer(int(notice_id))
+    sow_txt = "\n".join([f"- {t.get('task_id') or ''}: {t.get('text') or ''}" for t in (an.get("sow_tasks") or [])[:200]])
+    sow_bytes = sow_txt.encode("utf-8")
+    # Zip assembly
+    zip_path = str(out_dir/"rfq_pack.zip")
+    with _zip_rfqg.ZipFile(zip_path, "w", compression=_zip_rfqg.ZIP_DEFLATED) as z:
+        z.write(cover_path, arcname="cover.pdf")
+        z.writestr("sow_excerpt.txt", sow_bytes)
+        # include any drawing-like files if present in notice_files
+        try:
+            for fid, fn, url in cur.execute("SELECT id, file_name, file_url FROM notice_files WHERE notice_id=?", (int(notice_id),)).fetchall():
+                if any(fn.lower().endswith(ext) for ext in [".pdf",".dwg",".png",".jpg",".jpeg"]):
+                    # we do not download here to keep pure; include a pointer text
+                    z.writestr(f"drawings/{fn}.txt", f"Download from: {url}".encode("utf-8"))
+        except Exception:
+            pass
+    # checksum
+    h = _hash_rfqg.sha256()
+    with open(zip_path, "rb") as f:
+        while True:
+            b = f.read(65536)
+            if not b: break
+            h.update(b)
+    checksum = h.hexdigest()
+    sz = _Path_rfqg(zip_path).stat().st_size
+    # store
+    cur.execute("INSERT INTO rfq_pack(rfq_id, zip_path, cover_pdf_path, checksum, bytes, created_at) VALUES(?,?,?,?,?,datetime('now'))", (int(rfq_id), zip_path, cover_path, checksum, int(sz)))
+    conn.commit()
+    return {"zip_path": zip_path, "checksum": checksum, "bytes": sz}
+
+# UI
+try:
+    _orig_render_vendors_or_none_rfqg = render_vendors
+except Exception:
+    _orig_render_vendors_or_none_rfqg = None
+
+def render_rfq_generator(opp_id: int):
+    import streamlit as st
+    if not _rfqg_flag():
+        return
+    _rfqg_schema()
+    st.subheader("RFQ Generator")
+    owner = st.session_state.get("user_id") or "user"
+    rfq_id = _rfqg_get_or_create_rfq(int(opp_id), owner)
+    if not rfq_id:
+        st.warning("RFQ table missing."); return
+    # Seed on first open
+    if st.button("Seed lines and terms from Analyzer"):
+        _rfqg_seed_lines_from_analyzer(int(opp_id), int(rfq_id))
+        _rfqg_seed_terms_from_notice(int(opp_id), int(rfq_id))
+        st.success("Seeded from analyzer.")
+        (st.experimental_rerun() if hasattr(st,"experimental_rerun") else st.rerun())
+    # Header form
+    conn = get_db(); cur = conn.cursor()
+    tid = _rfqg_seed_terms_from_notice(int(opp_id), int(rfq_id))
+    row = cur.execute("SELECT id, pop_text, due_date, validity_days, insurance, bonding, flowdowns_json FROM rfq_terms WHERE rfq_id=?", (int(rfq_id),)).fetchone()
+    if row:
+        _, pop, due, valid, ins, bond, flows_j = row
+        c1,c2,c3 = st.columns(3)
+        with c1: pop2 = st.text_input("Place of performance", value=pop or "")
+        with c2: due2 = st.text_input("Due date", value=due or "")
+        with c3: valid2 = st.number_input("Validity (days)", min_value=0, max_value=365, value=int(valid or 30))
+        c4,c5 = st.columns(2)
+        with c4: ins2 = st.text_input("Insurance", value=ins or "")
+        with c5: bond2 = st.text_input("Bonding", value=bond or "")
+        if st.button("Save terms"):
+            cur.execute("UPDATE rfq_terms SET pop_text=?, due_date=?, validity_days=?, insurance=?, bonding=?, updated_at=datetime('now') WHERE rfq_id=?",
+                        (pop2, due2, int(valid2), ins2, bond2, int(rfq_id))); get_db().commit(); st.success("Saved.")
+    # Two-column layout: left lines, right flowdowns
+    lcol, rcol = st.columns([3,2])
+    with lcol:
+        st.markdown("**Lines**")
+        # Render simple table with edit ability
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(rfq_lines)").fetchall()] if cur else []
+        if cols:
+            rows = cur.execute("SELECT id, clin, task_id, description, uom, qty, location FROM rfq_lines WHERE rfq_id=? ORDER BY id", (int(rfq_id),)).fetchall()
+            for rid, clin, task_id, desc, uom, qty, loc in rows[:500]:
+                with st.container(border=True):
+                    c1,c2 = st.columns([3,1])
+                    with c1: desc2 = st.text_input("Description", value=desc or "", key=f"rfql_desc_{rid}")
+                    with c2: qty2 = st.number_input("Qty", value=float(qty) if qty is not None else 0.0, key=f"rfql_qty_{rid}")
+                    c3,c4,c5 = st.columns(3)
+                    with c3: uom2 = st.text_input("UOM", value=uom or "", key=f"rfql_uom_{rid}")
+                    with c4: clin2 = st.text_input("CLIN", value=clin or "", key=f"rfql_clin_{rid}")
+                    with c5: loc2 = st.text_input("Location", value=loc or "", key=f"rfql_loc_{rid}")
+                    if st.button("Save line", key=f"rfql_save_{rid}"):
+                        cur.execute("UPDATE rfq_lines SET description=?, qty=?, uom=?, clin=?, location=? WHERE id=?",
+                                    (desc2, None if qty2==0 else float(qty2), uom2, clin2, loc2, int(rid))); get_db().commit(); st.success("Saved line")    
+        if st.button("Build RFQ pack"):
+            res = _rfqg_build_pack(int(rfq_id), int(opp_id))
+            st.success(f"Pack built. SHA256 {res.get('checksum')} Bytes {res.get('bytes')}")
+    with rcol:
+        st.markdown("**Flowdowns**")
+        an = _rfqg_latest_analyzer(int(opp_id))
+        for cl in (an.get("clauses") or [])[:200]:
+            cite = cl.get("cite") or {}
+            c = f"{cite.get('file','')} p.{cite.get('page')}" if (cite.get('file') or cite.get('page') is not None) else ""
+            st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('• ' + c) if c else ''}")
+
+# Attach generator UI below Vendors tab if available
+try:
+    _orig_render_vendors_for_rfqg = render_vendors
+except Exception:
+    _orig_render_vendors_for_rfqg = None
+
+def render_vendors(opp_id: int):
+    import streamlit as st
+    if _orig_render_vendors_for_rfqg:
+        try: _orig_render_vendors_for_rfqg(int(opp_id))
+        except Exception: pass
+    if _rfqg_flag():
+        st.markdown("---")
+        render_rfq_generator(int(opp_id))
+# === RFQG PHASE 1 END ===
+
+
+
+# === RFQG PHASE 2 START ===
+import os as _os_rfqg2
+import hashlib as _hash_rfqg2
+import datetime as _dt_rfqg2
+
+def _rfqg2_flag():
+    import streamlit as st
+    return st.session_state.get('feature_flags', {}).get('rfqg_outreach', False)
+
+def _rfqg2_schema():
+    conn = get_db(); cur = conn.cursor()
+    # vendor_portal_tokens table
+    try:
+        cur.execute('CREATE TABLE IF NOT EXISTS vendor_portal_tokens( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, expires_at TEXT, created_at TEXT NOT NULL )')
+    except Exception:
+        pass
+    # rfq_invites table best-effort
+    try:
+        cur.execute('CREATE TABLE IF NOT EXISTS rfq_invites( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, status TEXT, created_at TEXT NOT NULL )')
+    except Exception:
+        pass
+    conn.commit()
+
+def _rfqg2_get_token(rfq_id: int, vendor_id: int, days_valid: int=14) -> str:
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute('SELECT token, expires_at FROM vendor_portal_tokens WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1', (int(rfq_id), int(vendor_id))).fetchone()
+    if row:
+        return row[0]
+    # issue new token
+    tok = _hash_rfqg2.sha256(f'{rfq_id}:{vendor_id}:{_dt_rfqg2.datetime.utcnow().isoformat()}'.encode('utf-8')).hexdigest()[:32]
+    exp = (_dt_rfqg2.datetime.utcnow() + _dt_rfqg2.timedelta(days=int(days_valid))).isoformat()
+    cur.execute('INSERT INTO vendor_portal_tokens(rfq_id, vendor_id, token, expires_at, created_at) VALUES(?,?,?,?,datetime(\'now\'))', (int(rfq_id), int(vendor_id), tok, exp))
+    conn.commit()
+    return tok
+
+def _rfqg2_vendor_email(cur, vendor_id: int):
+    # Try vendors.email then contacts table if exists
+    try:
+        row = cur.execute('PRAGMA table_info(vendors)').fetchall()
+        cols = {r[1] for r in row}
+        if 'email' in cols:
+            r = cur.execute('SELECT email FROM vendors WHERE id=?', (int(vendor_id),)).fetchone()
+            if r and r[0]: return r[0]
+    except Exception:
+        pass
+    try:
+        row = cur.execute('PRAGMA table_info(contacts)').fetchall()
+        cols = {r[1] for r in row}
+        if 'vendor_id' in cols and 'email' in cols:
+            r = cur.execute('SELECT email FROM contacts WHERE vendor_id=? ORDER BY id DESC LIMIT 1', (int(vendor_id),)).fetchone()
+            if r and r[0]: return r[0]
+    except Exception:
+        pass
+    return ''
+
+def _rfqg2_target(items: list, starred_only: bool, min_score: float, max_distance: float):
+    import streamlit as st
+    rows = items or []
+    if starred_only:
+        stars = st.session_state.get('vendor_stars', {})
+        starset = set(stars.keys())
+        def k(it):
+            return ( (it.get('place_id') or '') + '|' + (it.get('name') or '') )
+        rows = [it for it in rows if k(it) in starset]
+    out = []
+    for it in rows:
+        sc = it.get('fit_score')
+        sc = float(sc) if sc is not None else 0.0
+        if sc < float(min_score):
+            continue
+        dm = it.get('distance_mi')
+        dm = float(dm) if dm is not None else 1e12
+        if max_distance and dm > float(max_distance):
+            continue
+        out.append(it)
+    return out
+
+def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
+    import streamlit as st
+    if not _rfqg2_flag():
+        return
+    _rfqg2_schema()
+    st.markdown('---')
+    st.markdown('**Target vendors**')
+    rows = st.session_state.get('sub1_results', []) or []
+    starred_only = st.checkbox('Starred only', value=False, key='rfqg2_starred')
+    min_score = st.slider('Min fit score', 0.0, 10.0, 0.0, 0.5, key='rfqg2_minscore')
+    max_distance = st.slider('Max distance (mi)', 0, 300, 150, key='rfqg2_maxdist')
+    targets = _rfqg2_target(rows, starred_only, min_score, max_distance)
+    st.caption(f'{len(targets)} vendors selected')
+    # Subject and body templates
+    st.markdown('**Email template**')
+    subj_t = st.text_input('Subject', value='RFQ: {title} — reply by {due_date}', key='rfqg2_subj')
+    body_t = st.text_area('Body', value='Hello {company},\n\nWe invite you to quote for {title}. Please submit by {due_date}.\nOpen your secure link: {link}\n\nThank you.', key='rfqg2_body', height=140)
+    # Preview first three
+    conn = get_db(); cur = conn.cursor()
+    title = (cur.execute('SELECT title FROM notices WHERE id=?', (int(opp_id),)).fetchone() or ['Opportunity'])[0]
+    due = (cur.execute('SELECT due_date FROM rfq_terms WHERE rfq_id=?', (int(rfq_id),)).fetchone() or [''])[0]
+    app_base = ''
+    try:
+        import streamlit as st2
+        app_base = st2.secrets.get('app',{}).get('base_url','')
+    except Exception:
+        app_base = ''
+    st.caption('Preview')
+    for it in targets[:3]:
+        # resolve or create vendor id
+        try:
+            vid = _sub2_find_vendor_id(cur, it)
+        except Exception:
+            vid = None
+        if vid is None:
+            try: vid = _sub4_find_or_create_vendor(cur, it)
+            except Exception: vid = None
+        if vid is None:
+            continue
+        tok = _rfqg2_get_token(int(rfq_id), int(vid))
+        link = (app_base.rstrip('/') + '/?page=vendor_portal&token=' + tok) if app_base else ('/?page=vendor_portal&token=' + tok)
+        subject = subj_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'))
+        body = body_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'), link=link)
+        st.code(subject + '\n\n' + body)
+    # Send button
+    if st.button(f'Send RFQs to {len(targets)} vendors', disabled=(len(targets)==0)):
+        created = 0; skipped = 0
+        inv_cols = [r[1] for r in cur.execute('PRAGMA table_info(rfq_invites)').fetchall()] if cur else []
+        for it in targets:
+            try: vid = _sub2_find_vendor_id(cur, it)
+            except Exception: vid = None
+            if vid is None:
+                try: vid = _sub4_find_or_create_vendor(cur, it)
+                except Exception: vid = None
+            if vid is None:
+                skipped += 1; continue
+            tok = _rfqg2_get_token(int(rfq_id), int(vid))
+            link = (app_base.rstrip('/') + '/?page=vendor_portal&token=' + tok) if app_base else ('/?page=vendor_portal&token=' + tok)
+            subject = subj_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'))
+            body = body_t.format(title=title, due_date=due, company=(it.get('name') or 'Vendor'), link=link)
+            # rfq_invites insert if exists
+            if inv_cols:
+                try:
+                    # avoid duplicates
+                    row = cur.execute('SELECT id FROM rfq_invites WHERE rfq_id=? AND vendor_id=?', (int(rfq_id), int(vid))).fetchone()
+                    if not row:
+                        cur.execute('INSERT INTO rfq_invites(rfq_id, vendor_id, status, created_at) VALUES(?,?,\'Queued\', datetime(\'now\'))', (int(rfq_id), int(vid)))
+                except Exception:
+                    pass
+            # queue email
+            try:
+                cur.execute('INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?,\'queued\',0)', (_rfqg2_vendor_email(cur,int(vid)) or '', subject, body, _dt_rfqg2.datetime.utcnow().isoformat()))
+            except Exception:
+                skipped += 1; continue
+            created += 1
+        get_db().commit()
+        st.success(f'Queued {created} emails; skipped {skipped}.')
+
+# Hook into RFQ Generator UI if present
+try:
+    _orig_render_rfq_generator_phase2 = render_rfq_generator
+except Exception:
+    _orig_render_rfq_generator_phase2 = None
+
+def render_rfq_generator(opp_id: int):
+    import streamlit as st
+    rid = None
+    if _orig_render_rfq_generator_phase2:
+        try:
+            _orig_render_rfq_generator_phase2(int(opp_id))
+        except Exception:
+            pass
+    # retrieve existing rfq_id for current user if any
+    try:
+        owner = st.session_state.get('user_id') or 'user'
+        row = get_db().cursor().execute('SELECT id FROM rfq WHERE notice_id=? AND owner_id=? ORDER BY id DESC LIMIT 1', (int(opp_id), owner)).fetchone()
+        rid = int(row[0]) if row else None
+    except Exception:
+        rid = None
+    if rid is not None:
+        _rfqg2_render_outreach_panel(int(opp_id), int(rid))
+# === RFQG PHASE 2 END ===
+
+
+
+# === RFQG PHASE 3 START ===
+import json as _json_rfqg3
+import datetime as _dt_rfqg3
+import os as _os_rfqg3
+import hashlib as _hash_rfqg3
+from pathlib import Path as _Path_rfqg3
+
+def _rfqg3_flag():
+    import streamlit as st
+    return st.session_state.get("feature_flags", {}).get("rfqg_intake", False)
+
+def _rfqg3_schema():
+    conn = get_db(); cur = conn.cursor()
+    # quotes header
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_quotes( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL, vendor_id INTEGER NOT NULL, status TEXT NOT NULL, total_price REAL, exceptions TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, submitted_at TEXT )")
+    except Exception: pass
+    # quote lines
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_quote_lines( id INTEGER PRIMARY KEY, quote_id INTEGER NOT NULL, rfq_line_id INTEGER NOT NULL, ext_price REAL, notes TEXT )")
+    except Exception: pass
+    # docs
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_docs( id INTEGER PRIMARY KEY, vendor_id INTEGER NOT NULL, rfq_id INTEGER NOT NULL, file_name TEXT NOT NULL, path TEXT NOT NULL, bytes INTEGER NOT NULL, checksum TEXT NOT NULL, uploaded_at TEXT NOT NULL )")
+    except Exception: pass
+    # portal tokens: add last_opened_at if missing
+    try:
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(vendor_portal_tokens)").fetchall()]
+        if "last_opened_at" not in cols:
+            cur.execute("ALTER TABLE vendor_portal_tokens ADD COLUMN last_opened_at TEXT")
+    except Exception: pass
+    conn.commit()
+
+def _rfqg3_get_or_create_quote(rfq_id: int, vendor_id: int, status: str="draft"):
+    _rfqg3_schema()
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT id, status FROM vendor_quotes WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1", (int(rfq_id), int(vendor_id))).fetchone()
+    if row:
+        qid = int(row[0]); st = row[1] or "draft"
+        if st != status and status in ("draft","submitted"):
+            cur.execute("UPDATE vendor_quotes SET status=?, updated_at=datetime('now') WHERE id=?", (status, qid)); conn.commit()
+        return qid
+    cur.execute("INSERT INTO vendor_quotes(rfq_id, vendor_id, status, total_price, exceptions, created_at, updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))",
+                (int(rfq_id), int(vendor_id), status, None, None))
+    conn.commit()
+    return int(cur.lastrowid)
+
+def _rfqg3_set_quote_lines(quote_id: int, lines: list):
+    conn = get_db(); cur = conn.cursor()
+    # Clear existing lines for idempotency
+    try: cur.execute("DELETE FROM vendor_quote_lines WHERE quote_id=?", (int(quote_id),))
+    except Exception: pass
+    created = 0; total = 0.0
+    for ln in lines or []:
+        rfq_line_id = int(ln.get("rfq_line_id"))
+        ext_price = float(ln.get("ext_price") or 0.0)
+        notes = ln.get("notes")
+        try:
+            cur.execute("INSERT INTO vendor_quote_lines(quote_id, rfq_line_id, ext_price, notes) VALUES(?,?,?,?)", (int(quote_id), rfq_line_id, ext_price, notes))
+            created += 1; total += ext_price
+        except Exception:
+            pass
+    try:
+        cur.execute("UPDATE vendor_quotes SET total_price=?, updated_at=datetime('now') WHERE id=?", (float(total), int(quote_id)))
+    except Exception: pass
+    conn.commit()
+    return {"lines_created": created, "total": total}
+
+def record_portal_open(token: str):
+    _rfqg3_schema()
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT rfq_id, vendor_id FROM vendor_portal_tokens WHERE token=?", (token,)).fetchone()
+    if not row: return {"ok": False, "error": "invalid_token"}
+    cur.execute("UPDATE vendor_portal_tokens SET last_opened_at=datetime('now') WHERE token=?", (token,))
+    conn.commit()
+    return {"ok": True, "rfq_id": int(row[0]), "vendor_id": int(row[1])}
+
+def portal_save_draft(token: str, payload_json: str):
+    """payload_json: {'lines':[{'rfq_line_id':..., 'ext_price':..., 'notes':...}], 'exceptions': '...'}"""
+    _rfqg3_schema()
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute("SELECT rfq_id, vendor_id FROM vendor_portal_tokens WHERE token=?", (token,)).fetchone()
+    if not row: return {"ok": False, "error": "invalid_token"}
+    rfq_id, vendor_id = int(row[0]), int(row[1])
+    qid = _rfqg3_get_or_create_quote(rfq_id, vendor_id, status="draft")
+    try:
+        data = _json_rfqg3.loads(payload_json or "{}")
+    except Exception:
+        data = {}
+    lines = data.get("lines") or []
+    res = _rfqg3_set_quote_lines(qid, lines)
+    ex = data.get("exceptions")
+    try:
+        cur.execute("UPDATE vendor_quotes SET exceptions=?, updated_at=datetime('now') WHERE id=?", (ex, int(qid)))
+    except Exception: pass
+    conn.commit()
+    return {"ok": True, "quote_id": int(qid), **res}
+
+def portal_submit_final(token: str, payload_json: str):
+    out = portal_save_draft(token, payload_json)
+    if not out.get("ok"): return out
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE vendor_quotes SET status='submitted', submitted_at=datetime('now'), updated_at=datetime('now') WHERE id=?", (int(out["quote_id"]),))
+        conn.commit()
+    except Exception: pass
+    return {"ok": True, **out}
+
+def _rfqg3_upload_vendor_pdf(rfq_id: int, vendor_id: int, file_obj, filename: str):
+    base = _Path_rfqg3("data/files") / "rfq" / str(rfq_id) / "vendor" / str(vendor_id)
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / filename
+    data = file_obj.read()
+    with open(path, "wb") as f:
+        f.write(data)
+    h = _hash_rfqg3.sha256(data).hexdigest()
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("INSERT INTO vendor_docs(vendor_id, rfq_id, file_name, path, bytes, checksum, uploaded_at) VALUES(?,?,?,?,?,?,datetime('now'))",
+                (int(vendor_id), int(rfq_id), filename, str(path), len(data), h))
+    conn.commit()
+    return str(path), h, len(data)
+
+def _rfqg3_status_label(cur, rfq_id: int, vendor_id: int):
+    # submitted > draft > opened > expired > not opened
+    row = cur.execute("SELECT status FROM vendor_quotes WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1", (int(rfq_id), int(vendor_id))).fetchone()
+    if row:
+        st = (row[0] or "").lower()
+        if st == "submitted": return "submitted"
+        if st == "draft": return "draft"
+    tok = cur.execute("SELECT expires_at, last_opened_at FROM vendor_portal_tokens WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1", (int(rfq_id), int(vendor_id))).fetchone()
+    if tok:
+        exp, op = tok[0], tok[1]
+        if op: return "opened"
+        try:
+            if exp and _dt_rfqg3.datetime.fromisoformat(exp) < _dt_rfqg3.datetime.utcnow(): return "expired"
+        except Exception: pass
+    return "not opened"
+
+def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
+    import streamlit as st
+    if not _rfqg3_flag():
+        return
+    _rfqg3_schema()
+    st.subheader("RFQ Responses")
+    conn = get_db(); cur = conn.cursor()
+    # Vendor status list from invites
+    vendors = []
+    try:
+        rows = cur.execute("""SELECT v.id, COALESCE(v.name,''), COALESCE(v.email,'' )
+                               FROM rfq_invites i JOIN vendors v ON v.id=i.vendor_id
+                               WHERE i.rfq_id=? ORDER BY v.name""", (int(rfq_id),)).fetchall()
+        for vid, nm, em in rows:
+            vendors.append((int(vid), nm, em))
+    except Exception:
+        # fallback to any vendors with quotes/tokens
+        rows = cur.execute("SELECT DISTINCT vendor_id FROM vendor_quotes WHERE rfq_id=?", (int(rfq_id),)).fetchall()
+        for (vid,) in rows:
+            nm = (cur.execute("SELECT name FROM vendors WHERE id=?", (int(vid),)).fetchone() or ["Vendor"])[0]
+            em = (cur.execute("SELECT email FROM vendors WHERE id=?", (int(vid),)).fetchone() or [""])[0]
+            vendors.append((int(vid), nm, em))
+    # Status table
+    if vendors:
+        for vid, nm, em in vendors[:500]:
+            status = _rfqg3_status_label(cur, int(rfq_id), int(vid))
+            with st.container(border=True):
+                st.markdown(f"**{nm}**  ·  {status}")
+                # show latest quote total if any
+                row = cur.execute("SELECT total_price, status, updated_at FROM vendor_quotes WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1", (int(rfq_id), int(vid))).fetchone()
+                if row and row[0] is not None:
+                    st.caption(f"Total: {row[0]:.2f}  •  updated {row[2]}")
+                # Manual intake form
+                with st.expander("Manual intake / update"):
+                    # fetch rfq_lines
+                    lines = cur.execute("SELECT id, description FROM rfq_lines WHERE rfq_id=? ORDER BY id", (int(rfq_id),)).fetchall()
+                    price_inputs = {}
+                    for lid, desc in lines[:200]:
+                        price_inputs[lid] = st.number_input(f"Ext price — {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
+                    ex = st.text_area("Exceptions / notes", key=f"exc_{vid}")
+                    up = st.file_uploader("Attach vendor PDF(s)", type=["pdf","doc","docx"], accept_multiple_files=True, key=f"up_{vid}")
+                    c1,c2 = st.columns(2)
+                    with c1:
+                        if st.button("Save draft", key=f"save_{vid}"):
+                            qid = _rfqg3_get_or_create_quote(int(rfq_id), int(vid), status="draft")
+                            lines_payload = [{"rfq_line_id": lid, "ext_price": price_inputs[lid], "notes": None} for lid in price_inputs.keys()]
+                            _rfqg3_set_quote_lines(int(qid), lines_payload)
+                            cur.execute("UPDATE vendor_quotes SET exceptions=?, updated_at=datetime('now') WHERE id=?", (ex, int(qid))); get_db().commit()
+                            st.success("Draft saved")
+                    with c2:
+                        if st.button("Submit final", key=f"submit_{vid}"):
+                            qid = _rfqg3_get_or_create_quote(int(rfq_id), int(vid), status="submitted")
+                            lines_payload = [{"rfq_line_id": lid, "ext_price": price_inputs[lid], "notes": None} for lid in price_inputs.keys()]
+                            _rfqg3_set_quote_lines(int(qid), lines_payload)
+                            cur.execute("UPDATE vendor_quotes SET exceptions=?, submitted_at=datetime('now'), updated_at=datetime('now') WHERE id=?", (ex, int(qid))); get_db().commit()
+                            st.success("Submitted")
+                    if up:
+                        for f in up:
+                            p,h,b = _rfqg3_upload_vendor_pdf(int(rfq_id), int(vid), f, f.name)
+                        st.info(f"Uploaded {len(up)} file(s)")
+    else:
+        st.caption("No vendor invites or quotes yet.")
+
+# Hook into RFQ Generator
+try:
+    _orig_render_rfq_generator_phase3 = render_rfq_generator
+except Exception:
+    _orig_render_rfq_generator_phase3 = None
+
+def render_rfq_generator(opp_id: int):
+    import streamlit as st
+    rid = None
+    if _orig_render_rfq_generator_phase3:
+        try:
+            _orig_render_rfq_generator_phase3(int(opp_id))
+        except Exception:
+            pass
+    # find rfq id
+    try:
+        owner = st.session_state.get('user_id') or 'user'
+        row = get_db().cursor().execute('SELECT id FROM rfq WHERE notice_id=? AND owner_id=? ORDER BY id DESC LIMIT 1', (int(opp_id), owner)).fetchone()
+        rid = int(row[0]) if row else None
+    except Exception:
+        rid = None
+    if rid is not None:
+        _rfqg3_responses_panel(int(opp_id), int(rid))
+# === RFQG PHASE 3 END ===
+
+
+
+# === VENDOR RFQ HOOKS PHASE 8 START ===
+import json as _json_p8
+import datetime as _dt_p8
+import hashlib as _hash_p8
+from pathlib import Path as _Path_p8
+
+def _p8_flag():
+    import streamlit as st
+    return st.session_state.get('feature_flags', {}).get('vendor_rfq_hooks', False)
+
+def _p8_schema():
+    conn = get_db(); cur = conn.cursor()
+    # Vendors table and columns
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendors( id INTEGER PRIMARY KEY, name TEXT NOT NULL, cage TEXT, uei TEXT, naics TEXT, city TEXT, state TEXT, phone TEXT, email TEXT, website TEXT, notes TEXT, last_seen_award TEXT )")
+    except Exception: pass
+    # Add missing vendor columns if table existed earlier
+    try:
+        cols = {r[1] for r in cur.execute('PRAGMA table_info(vendors)').fetchall()}
+        for col, ddl in [
+            ('cage', "ALTER TABLE vendors ADD COLUMN cage TEXT"),
+            ('uei', "ALTER TABLE vendors ADD COLUMN uei TEXT"),
+            ('naics', "ALTER TABLE vendors ADD COLUMN naics TEXT"),
+            ('city', "ALTER TABLE vendors ADD COLUMN city TEXT"),
+            ('state', "ALTER TABLE vendors ADD COLUMN state TEXT"),
+            ('email', "ALTER TABLE vendors ADD COLUMN email TEXT"),
+            ('website', "ALTER TABLE vendors ADD COLUMN website TEXT"),
+            ('notes', "ALTER TABLE vendors ADD COLUMN notes TEXT"),
+            ('last_seen_award', "ALTER TABLE vendors ADD COLUMN last_seen_award TEXT"),
+        ]:
+            if col not in cols:
+                try: cur.execute(ddl)
+                except Exception: pass
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_naics_state ON vendors(naics, state)")
+    except Exception: pass
+    # Contacts
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_contacts( id INTEGER PRIMARY KEY, vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, name TEXT, email TEXT, phone TEXT, role TEXT )")
+    except Exception: pass
+    # RFQ core
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS rfq( id INTEGER PRIMARY KEY, notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, sent_at TEXT, due_at TEXT, scope TEXT, attachments_json TEXT )")
+    except Exception: pass
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS rfq_lines( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, item TEXT NOT NULL, uom TEXT, qty REAL NOT NULL )")
+    except Exception: pass
+    # Quotes header (augment existing schema if present)
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_quotes( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, received_at TEXT, valid_through TEXT, total REAL, doc_id TEXT, coverage_score REAL DEFAULT 0 )")
+    except Exception: pass
+    try:
+        cols = {r[1] for r in cur.execute('PRAGMA table_info(vendor_quotes)').fetchall()}
+        for col, ddl in [
+            ('received_at', "ALTER TABLE vendor_quotes ADD COLUMN received_at TEXT"),
+            ('valid_through', "ALTER TABLE vendor_quotes ADD COLUMN valid_through TEXT"),
+            ('total', "ALTER TABLE vendor_quotes ADD COLUMN total REAL"),
+            ('doc_id', "ALTER TABLE vendor_quotes ADD COLUMN doc_id TEXT"),
+            ('coverage_score', "ALTER TABLE vendor_quotes ADD COLUMN coverage_score REAL DEFAULT 0"),
+        ]:
+            if col not in cols:
+                try: cur.execute(ddl)
+                except Exception: pass
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_quote_vendor_rfq ON vendor_quotes(rfq_id, vendor_id)")
+    except Exception: pass
+    # Vendor scores
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS vendor_scores( id INTEGER PRIMARY KEY, vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, fit_score REAL, on_time_rate REAL, insurance_ok INTEGER, cpars_note TEXT, updated_at TEXT )")
+    except Exception: pass
+    # Chasing
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS rfq_chase( id INTEGER PRIMARY KEY, rfq_id INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE, vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, next_action TEXT NOT NULL, due_at TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN('pending','done')) )")
+    except Exception: pass
+    conn.commit()
+
+def _p8_get_or_create_rfq(notice_id: int, owner_id: str):
+    conn = get_db(); cur = conn.cursor()
+    row = cur.execute('SELECT id FROM rfq WHERE notice_id=? AND owner_id=? ORDER BY id DESC LIMIT 1', (int(notice_id), owner_id)).fetchone()
+    if row: return int(row[0])
+    cur.execute("INSERT INTO rfq(notice_id, owner_id, sent_at, due_at, scope, attachments_json) VALUES(?,?,?,?,?,?)",
+                (int(notice_id), owner_id, None, None, None, None))
+    conn.commit(); return int(cur.lastrowid)
+
+def _p8_seed_vendors_for_notice(notice_id: int, limit: int=100):
+    conn = get_db(); cur = conn.cursor()
+    _p8_schema()
+    # get notice NAICS and state
+    row = cur.execute('SELECT naics, psc, place_state FROM notices WHERE id=?', (int(notice_id),)).fetchone()
+    naics = (row[0] or '') if row else ''; state = (row[2] or '') if row else ''
+    # If subfinder results exist in session, prefer those as seed
+    try:
+        import streamlit as st
+        results = st.session_state.get('sub1_results', []) or []
+    except Exception:
+        results = []
+    created = 0
+    # helper insert unique by name+state
+    def upsert_from_item(it):
+        nonlocal created
+        name = (it.get('name') or '').strip()
+        st = state or ''
+        if not name: return
+        r = cur.execute('SELECT id FROM vendors WHERE LOWER(name)=? AND (state=? OR state IS NULL OR state="") LIMIT 1', (name.lower(), st)).fetchone()
+        if r: return
+        email = it.get('email') or ''
+        phone = it.get('formatted_phone_number') or it.get('phone') or ''
+        web = it.get('website') or ''
+        city = ''
+        addr = it.get('formatted_address') or it.get('vicinity') or ''
+        if addr and ',' in addr:
+            city = addr.split(',')[0].strip()
+        cur.execute('INSERT INTO vendors(name, naics, city, state, phone, email, website, notes) VALUES(?,?,?,?,?,?,?,?)',
+                    (name, naics, city, st, phone, email, web, None))
+        created += 1
+    # seed from session
+    for it in results[:limit]:
+        upsert_from_item(it)
+    conn.commit()
+    return created
+
+def _p8_vendor_email(cur, vid: int):
+    r = cur.execute('SELECT email FROM vendors WHERE id=?', (int(vid),)).fetchone()
+    if r and r[0]: return r[0]
+    try:
+        rr = cur.execute('SELECT email FROM vendor_contacts WHERE vendor_id=? ORDER BY id DESC LIMIT 1', (int(vid),)).fetchone()
+        return rr[0] if rr and rr[0] else ''
+    except Exception:
+        return ''
+
+def _p8_send_rfqs(rfq_id: int, vendor_ids: list, subject_t: str, body_t: str, attachments: list=None):
+    conn = get_db(); cur = conn.cursor()
+    # Read notice title and due date if available
+    row = cur.execute('SELECT notice_id, due_at FROM rfq WHERE id=?', (int(rfq_id),)).fetchone()
+    notice_id, due_at = (int(row[0]), row[1]) if row else (None, '')
+    title = (cur.execute('SELECT title FROM notices WHERE id=?', (notice_id,)).fetchone() or ['Opportunity'])[0] if notice_id else 'Opportunity'
+    count = 0
+    for vid in vendor_ids:
+        email = _p8_vendor_email(cur, int(vid)) or ''
+        company = (cur.execute('SELECT name FROM vendors WHERE id=?', (int(vid),)).fetchone() or ['Vendor'])[0]
+        subject = subject_t.format(title=title, due_date=due_at or '', company=company)
+        body = body_t.format(title=title, due_date=due_at or '', company=company)
+        try:
+            cur.execute("INSERT INTO email_queue(to_addr, subject, body, created_at, status, attempts) VALUES(?,?,?,?, 'queued', 0)",
+                        (email, subject, body, _dt_p8.datetime.utcnow().isoformat()))
+            count += 1
+        except Exception:
+            pass
+    if attachments is not None:
+        try:
+            cur.execute('UPDATE rfq SET attachments_json=? WHERE id=?', (_json_p8.dumps(attachments), int(rfq_id)))
+        except Exception:
+            pass
+    cur.execute('UPDATE rfq SET sent_at=? WHERE id=?', (_dt_p8.datetime.utcnow().isoformat(), int(rfq_id)))
+    conn.commit()
+    return count
+
+def _p8_compute_coverage(rfq_id: int, vendor_id: int):
+    conn = get_db(); cur = conn.cursor()
+    # total rfq lines
+    total = (cur.execute('SELECT COUNT(*) FROM rfq_lines WHERE rfq_id=?', (int(rfq_id),)).fetchone() or [0])[0]
+    if not total:
+        return 0.0
+    # count quote lines with price > 0 for this vendor
+    row = cur.execute('SELECT id FROM vendor_quotes WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1', (int(rfq_id), int(vendor_id))).fetchone()
+    if not row: return 0.0
+    qid = int(row[0])
+    priced = (cur.execute('SELECT COUNT(*) FROM vendor_quote_lines WHERE quote_id=? AND ext_price>0', (qid,)).fetchone() or [0])[0]
+    cov = float(priced) / float(total) * 100.0
+    try: cur.execute('UPDATE vendor_quotes SET coverage_score=? WHERE id=?', (cov, qid))
+    except Exception: pass
+    conn.commit()
+    return cov
+
+def _p8_save_contact_and_notes(vendor_id: int, name: str, email: str, phone: str, notes: str):
+    conn = get_db(); cur = conn.cursor()
+    if any([name, email, phone]):
+        cur.execute('INSERT INTO vendor_contacts(vendor_id, name, email, phone, role) VALUES(?,?,?,?,?)', (int(vendor_id), name or None, email or None, phone or None, None))
+    if notes:
+        cur.execute('UPDATE vendors SET notes=? WHERE id=?', (notes, int(vendor_id)))
+    conn.commit()
+
+def _p8_add_chase(rfq_id: int, vendor_id: int, action: str, due_iso: str):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute('INSERT INTO rfq_chase(rfq_id, vendor_id, next_action, due_at, status) VALUES(?,?,?,?,\'pending\')', (int(rfq_id), int(vendor_id), action, due_iso))
+    conn.commit()
+
+def _p8_mark_chase_done(chase_id: int):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute('UPDATE rfq_chase SET status=\'done\' WHERE id=?', (int(chase_id),))
+    conn.commit()
+
+# UI integration under Vendors tab
+try:
+    _orig_render_vendors_phase8 = render_vendors
+except Exception:
+    _orig_render_vendors_phase8 = None
+
+def render_vendors(opp_id: int):
+    import streamlit as st
+    if _orig_render_vendors_phase8:
+        try: _orig_render_vendors_phase8(int(opp_id))
+        except Exception: pass
+    if not _p8_flag():
+        return
+    _p8_schema()
+    st.session_state['vendor_tab_open'] = True
+    owner = st.session_state.get('user_id') or 'user'
+    rfq_id = _p8_get_or_create_rfq(int(opp_id), owner)
+    st.session_state['current_rfq_id'] = rfq_id
+    st.markdown('---')
+    st.subheader('Vendors for this notice')
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        if st.button('Add vendors (seed by NAICS/State)'):
+            cnt = _p8_seed_vendors_for_notice(int(opp_id))
+            st.success(f'Added {cnt} vendors from Finder results')
+    with c2:
+        subj = st.text_input('Email subject', value='RFQ for {title} — due {due_date}', key='p8_subj')
+    with c3:
+        body = st.text_area('Email body', value='Hello {company},\nPlease quote the attached RFQ. Due {due_date}.', key='p8_body')
+    # Pick vendors by state/naics filters
+    conn = get_db(); cur = conn.cursor()
+    stt = (cur.execute('SELECT place_state FROM notices WHERE id=?', (int(opp_id),)).fetchone() or [''])[0] or ''
+    ncs = (cur.execute('SELECT naics FROM notices WHERE id=?', (int(opp_id),)).fetchone() or [''])[0] or ''
+    vrows = cur.execute("SELECT id, name, state, naics, email FROM vendors WHERE (state=? OR ?='') AND (naics LIKE ? OR ?='') ORDER BY name", (stt, stt, f'%{ncs}%', ncs)).fetchall()
+    choices = {f"{v} — {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
+    sel = st.multiselect('Target vendors', options=list(choices.keys()))
+    target_ids = [choices[k] for k in sel]
+    if st.button(f'Send RFQs to {len(target_ids)} vendor(s)', disabled=(len(target_ids)==0)):
+        sent = _p8_send_rfqs(int(rfq_id), target_ids, subj, body, attachments=None)
+        st.success(f'Sent {sent} emails')
+    st.markdown('---')
+    st.markdown('**Record quote**')
+    # Select vendor and enter totals; per-line handled in RFQG intake but allow quick total+coverage recompute
+    sel2 = st.selectbox('Vendor', options=[(i, (cur.execute('SELECT name FROM vendors WHERE id=?', (i,)).fetchone() or ['Vendor'])[0]) for i in [r[0] for r in vrows]], format_func=lambda x: x[1] if isinstance(x, tuple) else str(x))
+    vid = sel2[0] if isinstance(sel2, tuple) else None
+    if vid:
+        # show coverage based on existing quote lines
+        cov = _p8_compute_coverage(int(rfq_id), int(vid))
+        st.caption(f'Coverage: {cov:.1f}% of RFQ lines priced')
+        name = st.text_input('Contact name')
+        email = st.text_input('Contact email')
+        phone = st.text_input('Contact phone')
+        notes = st.text_area('Capability notes')
+        if st.button('Save contact + notes'):
+            _p8_save_contact_and_notes(int(vid), name, email, phone, notes); st.success('Saved')
+    st.markdown('---')
+    st.markdown('**Chase list**')
+    action = st.text_input('Next action', value='Follow up call')
+    due = st.text_input('Due date ISO', value=_dt_p8.datetime.utcnow().date().isoformat())
+    if vid and st.button('Add chase item'):
+        _p8_add_chase(int(rfq_id), int(vid), action, due); st.success('Chase added')
+    # List pending items
+    try:
+        rows = cur.execute('SELECT id, vendor_id, next_action, due_at FROM rfq_chase WHERE rfq_id=? AND status=\'pending\' ORDER BY due_at', (int(rfq_id),)).fetchall()
+        for cid, v, act, d in rows:
+            nm = (cur.execute('SELECT name FROM vendors WHERE id=?', (int(v),)).fetchone() or ['Vendor'])[0]
+            cA, cB = st.columns([3,1])
+            with cA: st.caption(f"{nm} • {act} • due {d}")
+            with cB:
+                if st.button('Done', key=f'c_done_{cid}'):
+                    _p8_mark_chase_done(int(cid)); st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
+    except Exception:
+        pass
+# === VENDOR RFQ HOOKS PHASE 8 END ===
