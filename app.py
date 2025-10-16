@@ -627,7 +627,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 # ---- Feature flags ----
 _FEATURE_KEYS = [
     "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban", "deals_activities"]
+    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban"]
 def init_feature_flags():
 
 # Deals Phase 1: init refresh token
@@ -9659,42 +9659,6 @@ DEAL_STAGES = [
 ]
 
 def ensure_deals_table(conn):
-
-
-def ensure_deal_activities_table(conn):
-    """
-    Activities for each deal and a lightweight email queue for reminders.
-    """
-    cur = conn.cursor()
-    # Activities
-    cur.execute("""CREATE TABLE IF NOT EXISTS deal_activities(
-        id INTEGER PRIMARY KEY,
-        deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
-        type TEXT NOT NULL,            -- call, note, task
-        title TEXT,
-        note TEXT,
-        due_at TEXT,                   -- ISO date or datetime
-        status TEXT DEFAULT 'open',    -- open, done, canceled
-        created_by TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT
-    )""")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_deal_acts_deal ON deal_activities(deal_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_deal_acts_due ON deal_activities(due_at)")
-
-    # Email queue
-    cur.execute("""CREATE TABLE IF NOT EXISTS email_queue(
-        id INTEGER PRIMARY KEY,
-        to_email TEXT,
-        subject TEXT,
-        body TEXT,
-        send_at TEXT,                 -- when to send (UTC)
-        status TEXT DEFAULT 'queued', -- queued, sent, failed
-        ref_activity_id INTEGER REFERENCES deal_activities(id) ON DELETE SET NULL,
-        created_at TEXT DEFAULT (datetime('now'))
-    )""")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_email_queue_status ON email_queue(status, send_at)")
-    conn.commit()
     cur = conn.cursor()
     cur.execute("""
         create table if not exists deals (
@@ -9840,73 +9804,6 @@ def deal_badges(notice_id: int) -> dict:
     except Exception:
         pass
     return out
-
-
-# === DEALS PHASE 3 HELPERS START ===
-def create_deal_activity(deal_id:int, type_:str, title:str="", note:str="", due_at:str=None, status:str="open", created_by:str=None):
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("""INSERT INTO deal_activities(deal_id,type,title,note,due_at,status,created_by,updated_at)
-                   VALUES(?,?,?,?,?,?,?, datetime('now'))""",
-                (int(deal_id), str(type_), title or "", note or "", due_at, status, created_by))
-    conn.commit()
-    return cur.lastrowid
-
-def list_deal_activities(deal_id:int=None, type_filter:str=None, status:str=None, month:str=None):
-    conn = get_db(); cur = conn.cursor()
-    sql = "SELECT id,deal_id,type,title,note,due_at,status,created_by,created_at,updated_at FROM deal_activities WHERE 1=1"
-    params = []
-    if deal_id is not None:
-        sql += " AND deal_id=?"; params.append(int(deal_id))
-    if type_filter:
-        sql += " AND type=?"; params.append(type_filter)
-    if status:
-        sql += " AND status=?"; params.append(status)
-    if month:
-        # month format YYYY-MM; match first 7 chars of due_at
-        sql += " AND substr(coalesce(due_at,''),1,7)=?"; params.append(month)
-    sql += " ORDER BY coalesce(due_at,'9999-99-99'), id DESC"
-    import pandas as _pd
-    df = _pd.read_sql_query(sql, get_db(), params=params)
-    return df
-
-def update_deal_activity(id_:int, **fields):
-    if not fields:
-        return False
-    allowed = {"deal_id","type","title","note","due_at","status"}
-    set_clause = []
-    params = []
-    for k,v in fields.items():
-        if k in allowed:
-            set_clause.append(f"{k}=?"); params.append(v)
-    if not set_clause:
-        return False
-    params.append(int(id_))
-    conn = get_db(); cur = conn.cursor()
-    cur.execute(f"UPDATE deal_activities SET {', '.join(set_clause)}, updated_at=datetime('now') WHERE id=?", params)
-    conn.commit()
-    return cur.rowcount > 0
-
-def delete_deal_activity(id_:int):
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("DELETE FROM deal_activities WHERE id=?", (int(id_),))
-    conn.commit()
-    return cur.rowcount > 0
-
-def enqueue_task_due_email(activity_id:int, to_email:str=None):
-    # Create a queued email for a due task
-    conn = get_db(); cur = conn.cursor()
-    row = cur.execute("SELECT da.id, da.title, da.note, da.due_at, d.title, d.owner FROM deal_activities da JOIN deals d ON d.id=da.deal_id WHERE da.id=?", (int(activity_id),)).fetchone()
-    if not row:
-        return False
-    act_id, a_title, a_note, a_due, deal_title, owner = row
-    subject = f"Task due: {a_title or 'Deal task'} · {deal_title}"
-    body = f"Deal: {deal_title}\nTask: {a_title}\nDue: {a_due or 'n/a'}\nNote: {a_note or ''}\nOwner: {owner or ''}"
-    cur.execute("""INSERT INTO email_queue(to_email,subject,body,send_at,status,ref_activity_id)
-                   VALUES(?,?,?,?, 'queued', ?)""",
-                (to_email, subject, body, a_due, int(activity_id)))
-    conn.commit()
-    return True
-# === DEALS PHASE 3 HELPERS END ===
 # === DEALS PHASE 1 HELPERS END ===
 def list_deals(stage: str | None = None, q: str | None = None):
     conn = get_db()
@@ -10003,108 +9900,7 @@ def delete_deal(id_: int):
 
 # === Deals (CRM Pipeline) tab ===
 try:
-    with l
-
-# Quick activity
-if feature_flags().get("deals_activities"):
-    with st.expander("Quick activity", expanded=False):
-        try:
-            _df_all = _load_deals(None, "", int(st.session_state.get('deals_refresh', 0)))
-        except Exception:
-            _df_all = list_deals(None, "")
-        deal_opts = {f"{int(r['id'])} · {r['title']}": int(r["id"]) for _, r in _df_all.iterrows()} if len(_df_all) else {}
-        sel_deal = st.selectbox("Deal", options=list(deal_opts.keys()) if deal_opts else [], index=0 if deal_opts else None, key="qa_deal")
-        c1,c2,c3,c4 = st.columns([1,1,2,2])
-        with c1:
-            if st.button("Log call"):
-                if sel_deal:
-                    create_deal_activity(deal_opts[sel_deal], "call", title="Call logged", note="", created_by=st.session_state.get("active_user"))
-                    st.success("Call logged")
-        with c2:
-            if st.button("Add note"):
-                i
-
-if feature_flags().get("deals_activities"):
-    st.divider()
-    st.markdown("### Activities")
-
-if feature_flags().get("deals_activities"):
-    st.divider()
-    st.markdown("### Calendar")
-    month = st.text_input("Month YYYY-MM", key="cal_month")
-    import pandas as _pd
-    # Deals due
-    conn = get_db()
-    df_deals = _pd.read_sql_query("SELECT id, title, due_date FROM deals WHERE due_date IS NOT NULL", conn)
-    df_deals["kind"] = "deal_due"
-    df_deals = df_deals.rename(columns={"due_date":"date"})
-    # Tasks
-    df_tasks = list_deal_activities(type_filter="task", month=month or None)
-    if not df_tasks.empty:
-        df_tasks = df_tasks.rename(columns={"due_at":"date","title":"task_title"})
-        df_tasks["kind"] = "task"
-    else:
-        df_tasks = _pd.DataFrame(columns=["id","deal_id","type","task_title","note","date","status","created_by","created_at","updated_at","kind"])
-    # Combine
-    cal = _pd.concat([df_deals[["id","title","date","kind"]], df_tasks[["id","deal_id","task_title","date","status","kind"]]], axis=0, ignore_index=True)
-    if month:
-        cal = cal[cal["date"].fillna("").str.startswith(month)]
-    # Simple grouped agenda
-    for day, g in cal.sort_values("date").groupby(cal["date"].fillna("n/a")):
-        st.markdown(f"**{day}**")
-        for _, r in g.iterrows():
-            if r["kind"] == "deal_due":
-                st.caption(f"Deal due · #{int(r['id'])} · {r['title']}")
-            else:
-                st.caption(f"Task · #{int(r['id'])} · deal {int(r['deal_id']) if r.get('deal_id')==r.get('deal_id') else ''} · {r.get('task_title','')} · {r.get('status','')}")
-
-    c1,c2,c3 = st.columns([1,1,2])
-    with c1:
-        type_filter = st.selectbox("Type", ["", "call","note","task"], index=0, key="act_type")
-    with c2:
-        status_filter = st.selectbox("Status", ["", "open","done","canceled"], index=0, key="act_status")
-    with c3:
-        month_filter = st.text_input("Month YYYY-MM", key="act_month")
-    df_acts = list_deal_activities(type_filter=type_filter or None, status=status_filter or None, month=month_filter or None)
-    if len(df_acts):
-        st.dataframe(df_acts, use_container_width=True, hide_index=True)
-        with st.form("act_inline"):
-            aid = st.number_input("Activity ID", min_value=1, step=1)
-            new_status = st.selectbox("Set status", ["open","done","canceled"], index=0)
-            do_delete = st.checkbox("Delete")
-            submitted = st.form_submit_button("Apply")
-            if submitted:
-                ok = True
-                if do_delete:
-                    ok = delete_deal_activity(int(aid))
-                else:
-                    ok = update_deal_activity(int(aid), status=new_status)
-                if ok:
-                    st.success("Updated.")
-                else:
-                    st.error("No change.")
-    else:
-        st.caption("No activities yet.")
-f sel_deal:
-                    note_txt = st.text_input("Note", key="qa_note")
-                    if note_txt:
-                        create_deal_activity(deal_opts[sel_deal], "note", title="Note", note=note_txt, created_by=st.session_state.get("active_user"))
-                        st.success("Note added")
-        with c3:
-            task_title = st.text_input("Task title", key="qa_task_title")
-        with c4:
-            due = st.text_input("Due YYYY-MM-DD", key="qa_task_due")
-        r1,r2 = st.columns([1,2])
-        with r1:
-            email_rem = st.checkbox("Email reminder", value=True, key="qa_task_email")
-        with r2:
-            if st.button("Create task"):
-                if sel_deal and task_title:
-                    act_id = create_deal_activity(deal_opts[sel_deal], "task", title=task_title, due_at=due, created_by=st.session_state.get("active_user"))
-                    if email_rem:
-                        enqueue_task_due_email(act_id, to_email=None)
-                    st.success("Task created")
-egacy_tabs[13]:
+    with legacy_tabs[13]:
         st.subheader("Deals Pipeline")
         st.caption("Track opportunities by stage, assign owners, record amounts, and manage the pipeline.")
 
