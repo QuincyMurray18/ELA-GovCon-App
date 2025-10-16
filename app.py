@@ -1,5 +1,21 @@
 # ===== app.py =====
 
+
+@st.cache_resource
+def get_db():
+    import sqlite3, os
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect("data/app.db", check_same_thread=False, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("""CREATE TABLE IF NOT EXISTS migrations(
+        id INTEGER PRIMARY KEY,
+        name TEXT UNIQUE,
+        applied_at TEXT NOT NULL
+    )""")
+    return conn
+
 def _strip_markdown_to_plain(txt: str) -> str:
     """
     Remove common Markdown markers so exported DOCX shows clean text instead of 'coded' look.
@@ -35,47 +51,67 @@ from urllib.parse import quote_plus, urljoin, urlparse
 
 
 # ===== Proposal drafts utilities =====
-from datetime import datetime
-import os, io
+def save_proposal_draft(title: str, content_md: str) -> int:
+    """
+    Save a proposal draft as a row in the proposals table.
+    Returns the row id.
+    """
+    ensure_tables_phase2()
+    row = {
+        "title": title or "untitled",
+        "content_md": content_md,
+        "ext_id": "",
+        "data": {"title": title or "untitled", "content_md": content_md}
+    }
+    # q_insert handles stamping metadata
+    return q_insert("proposals", row)
 
-def _ensure_drafts_dir():
-    base = os.path.join(os.getcwd(), "drafts", "proposals")
-    os.makedirs(base, exist_ok=True)
-    return base
+def list_proposal_drafts(limit: int = 50):
+    """
+    Return a list of tuples (id, title, updated_at, version).
+    Newest first.
+    """
+    ensure_tables_phase2()
+    conn = get_db()
+    org_id, owner_id = _get_ids()
+    cur = conn.execute("""
+        SELECT id, COALESCE(title,''), COALESCE(updated_at,''), version
+        FROM proposals
+        WHERE org_id=? AND owner_id=?
+        ORDER BY updated_at DESC
+        LIMIT ?
+    """, (org_id, owner_id, limit))
+    return list(cur.fetchall())
 
-def save_proposal_draft(title: str, content_md: str) -> str:
-    base = _ensure_drafts_dir()
-    safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', title.strip() or "untitled")
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"{ts}__{safe}.md"
-    path = os.path.join(base, fname)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content_md or "")
-    return path
+def load_proposal_draft(draft_id: int) -> dict:
+    """
+    Load a proposal draft by id.
+    Returns dict with keys: id, title, content_md, version, updated_at.
+    """
+    row = get_row("proposals", draft_id)
+    if not row:
+        return {}
+    data = row["data"] if isinstance(row["data"], dict) else {}
+    return {
+        "id": row["id"],
+        "title": data.get("title") or "",
+        "content_md": data.get("content_md") or "",
+        "version": row["version"],
+        "updated_at": row["updated_at"],
+    }
 
-def list_proposal_drafts():
-    base = _ensure_drafts_dir()
-    items = []
-    for f in sorted(os.listdir(base)):
-        if f.lower().endswith(".md"):
-            full = os.path.join(base, f)
-            try:
-                size = os.path.getsize(full)
-            except Exception:
-                size = 0
-            items.append({"name": f, "path": full, "size": size})
-    return list(reversed(items))  # newest first
+def update_proposal_draft(draft_id: int, version: int, title: str, content_md: str):
+    """
+    Optimistic update a proposal draft. Returns dict with stale flag and version.
+    """
+    payload = {"title": title, "content_md": content_md}
+    return save_row("proposals", payload, draft_id, version)
 
-def load_proposal_draft(path: str) -> str:
+def delete_proposal_draft(draft_id: int) -> bool:
+    ensure_tables_phase2()
+    conn = get_db()
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception:
-        return ""
-
-def delete_proposal_draft(path: str) -> bool:
-    try:
-        os.remove(path)
+        conn.execute("DELETE FROM proposals WHERE id=?", (draft_id,))
         return True
     except Exception:
         return False
@@ -8012,98 +8048,847 @@ try:
 except Exception as _e_deals_tab:
     st.caption(f"[Deals tab init note: {_e_deals_tab}]")
 
-# ===== Layout Phase 2: Opportunity workspace subtabs =====
-# Deep-link helpers
-def open_details(opp): route_to("opportunity", opp_id=opp, tab="Details")
-def open_analyzer(opp): route_to("opportunity", opp_id=opp, tab="Analyzer")
-def open_compliance(opp): route_to("opportunity", opp_id=opp, tab="Compliance")
-def open_proposal_tab(opp): route_to("opportunity", opp_id=opp, tab="Proposal")
-def open_pricing(opp): route_to("opportunity", opp_id=opp, tab="Pricing")
-def open_vendors(opp): route_to("opportunity", opp_id=opp, tab="VendorsRFQ")
-def open_submission(opp): route_to("opportunity", opp_id=opp, tab="Submission")
+def apply_ddl(migrations):
 
-# Header derivation helpers. Do not cache authoritative DB rows; only transform cached.
-def _opp_header_data(opp_id: int):
-    row = get_notice(int(opp_id)) if opp_id is not None else None
-    d = row["data"] if row and isinstance(row.get("data"), dict) else {}
-    title = d.get("title") or d.get("notice_title") or d.get("subject") or f"Opportunity {opp_id}"
-    agency = d.get("agency") or d.get("department") or d.get("org_name") or d.get("office") or ""
-    due = d.get("due_date") or d.get("response_due") or d.get("close_date") or d.get("responseDate") or ""
-    set_asides = []
-    for k in ["set_aside","setAside","naics_set_aside","solicitation_set_aside","type_of_set_aside"]:
-        v = d.get(k)
-        if v:
-            set_asides.append(str(v))
-    set_asides = list(dict.fromkeys(set_asides))[:4]
-    return {"title": title, "agency": agency, "due": due, "set_asides": set_asides}
 
-# Cached compute of badges only
+# ===== Phase 2 persistence layer =====
+import json, hashlib, datetime
+
+def utc_now_iso():
+    return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+def _as_json(obj):
+    # Safe JSON dumps with fallback for DataFrames and sets
+    try:
+        import pandas as pd
+        if isinstance(obj, pd.DataFrame):
+            return json.dumps({"__type__":"dataframe","payload": obj.to_json(orient="split")})
+    except Exception:
+        pass
+    if isinstance(obj, set):
+        obj = sorted(list(obj))
+    try:
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    except TypeError:
+        # Fallback to string
+        return json.dumps(str(obj))
+
+def _from_json(s):
+    try:
+        data = json.loads(s)
+        if isinstance(data, dict) and data.get("__type__") == "dataframe":
+            import pandas as pd
+            return pd.read_json(data["payload"], orient="split")
+        return data
+    except Exception:
+        return s
+
+def _get_ids():
+    # Resolve org and owner from session
+    org_id = 0
+    owner_id = "anon"
+    try:
+        import streamlit as st
+        org_id = int(st.session_state.get("active_org_id", 0) or 0)
+        owner_id = str(st.session_state.get("active_user") or "anon")
+    except Exception:
+        pass
+    return org_id, owner_id
+
+def ensure_tables_phase2():
+    conn = get_db()
+    # Primary JSON store tables per entity
+    ddl = [
+        ("phase2_create_proposals",
+         """
+         CREATE TABLE IF NOT EXISTS proposals(
+            id INTEGER PRIMARY KEY,
+            org_id INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            ext_id TEXT NOT NULL DEFAULT '',
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+         );
+         """),
+        ("phase2_create_vendors",
+         """
+         CREATE TABLE IF NOT EXISTS vendors(
+            id INTEGER PRIMARY KEY,
+            org_id INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            name TEXT NOT NULL DEFAULT '',
+            ext_id TEXT NOT NULL DEFAULT '',
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+         );
+         """),
+        ("phase2_create_pricing",
+         """
+         CREATE TABLE IF NOT EXISTS pricing(
+            id INTEGER PRIMARY KEY,
+            org_id INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            label TEXT NOT NULL DEFAULT '',
+            ext_id TEXT NOT NULL DEFAULT '',
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+         );
+         """),
+        ("phase2_create_rfqs",
+         """
+         CREATE TABLE IF NOT EXISTS rfqs(
+            id INTEGER PRIMARY KEY,
+            org_id INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            ext_id TEXT NOT NULL DEFAULT '',
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+         );
+         """),
+        ("phase2_create_notices",
+         """
+         CREATE TABLE IF NOT EXISTS notices(
+            id INTEGER PRIMARY KEY,
+            org_id INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            notice_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+         );
+         """),
+        ("phase2_create_kv_store",
+         """
+         CREATE TABLE IF NOT EXISTS kv_store(
+            key TEXT NOT NULL,
+            org_id INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            data TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(key, org_id, owner_id)
+         );
+         """),
+    ]
+    try:
+        apply_ddl(ddl)
+    except Exception:
+        # If apply_ddl not available or fails, execute idempotently
+        conn = get_db()
+        for _, sql in ddl:
+            conn.executescript(sql)
+
+def ensure_audit_columns(table: str):
+    # Guarantee org_id, owner_id, version columns exist on a given table
+    conn = get_db()
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    to_add = []
+    if "org_id" not in cols:
+        to_add.append("ALTER TABLE %s ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0" % table)
+    if "owner_id" not in cols:
+        to_add.append("ALTER TABLE %s ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''" % table)
+    if "version" not in cols:
+        to_add.append("ALTER TABLE %s ADD COLUMN version INTEGER NOT NULL DEFAULT 0" % table)
+    for sql in to_add:
+        conn.execute(sql)
+
+def q_insert(table: str, data: dict):
+    """
+    Insert a row into a JSON store table.
+    Stamps org_id, owner_id, created_at, updated_at. version starts at 0.
+    Returns inserted row id.
+    """
+    ensure_audit_columns(table)
+    conn = get_db()
+    org_id, owner_id = _get_ids()
+    now = utc_now_iso()
+    # Split commonly named fields out of data for filtering
+    title = str(data.get("title",""))
+    name = str(data.get("name",""))
+    label = str(data.get("label",""))
+    ext_id = str(data.get("ext_id",""))
+    payload = _as_json(data)
+    # Choose best titleish
+    titleish = title or name or label
+    sql = f"INSERT INTO {table}(org_id, owner_id, version, title, name, label, ext_id, data, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)"
+    # Some tables may not have all of title name label columns. Build dynamically.
+    # Get actual columns
+    cols = [c[1] for c in conn.execute(f"PRAGMA table_info({table})")]
+    # Build column list and values
+    colvals = {}
+    colvals["org_id"]=org_id
+    colvals["owner_id"]=owner_id
+    colvals["version"]=0
+    if "title" in cols:
+        colvals["title"]=titleish if "title" in cols else ""
+    if "name" in cols:
+        colvals["name"]=name
+    if "label" in cols:
+        colvals["label"]=label
+    if "ext_id" in cols:
+        colvals["ext_id"]=ext_id
+    colvals["data"]=payload
+    if "created_at" in cols:
+        colvals["created_at"]=now
+    if "updated_at" in cols:
+        colvals["updated_at"]=now
+    # Build final SQL
+    cols_list = ",".join(colvals.keys())
+    placeholders = ",".join(["?"]*len(colvals))
+    sql = f"INSERT INTO {table}({cols_list}) VALUES({placeholders})"
+    cur = conn.execute(sql, tuple(colvals.values()))
+    return int(cur.lastrowid)
+
+def q_update(table: str, data: dict, where_id: int, where_version: int) -> int:
+    """
+    Optimistic update. Increments version and stamps updated_at.
+    Returns affected row count. Zero means stale.
+    """
+    ensure_audit_columns(table)
+    conn = get_db()
+    now = utc_now_iso()
+    # Prepare new version
+    new_version = int(where_version) + 1
+    # Merge payload
+    payload = _as_json(data)
+    # Build update based on actual columns
+    cols = [c[1] for c in conn.execute(f"PRAGMA table_info({table})")]
+    sets = []
+    vals = []
+    if "data" in cols:
+        sets.append("data=?"); vals.append(payload)
+    if "updated_at" in cols:
+        sets.append("updated_at=?"); vals.append(now)
+    sets.append("version=?"); vals.append(new_version)
+    sql = f"UPDATE {table} SET {', '.join(sets)} WHERE id=? AND version=?"
+    vals.extend([where_id, where_version])
+    cur = conn.execute(sql, tuple(vals))
+    return cur.rowcount
+
+def save_row(table: str, data: dict, where_id: int, where_version: int):
+    """
+    Convenience wrapper. Computes version = where_version + 1 and performs guarded update.
+    On stale edit, returns dict(stale=True, row=latest_row).
+    On success, returns dict(stale=False, id=where_id, version=new_version).
+    """
+    affected = q_update(table, data, where_id, where_version)
+    if affected == 0:
+        latest = get_row(table, where_id)
+        try:
+            import streamlit as st
+            st.warning("Stale edit detected. Your view was out of date. Reloaded the latest.")
+        except Exception:
+            pass
+        return {"stale": True, "row": latest}
+    return {"stale": False, "id": where_id, "version": where_version + 1}
+
+def get_row(table: str, pk: int):
+    conn = get_db()
+    cur = conn.execute(f"SELECT id, org_id, owner_id, version, data, updated_at FROM {table} WHERE id=?", (pk,))
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "org_id": row[1],
+        "owner_id": row[2],
+        "version": row[3],
+        "data": _from_json(row[4]),
+        "updated_at": row[5],
+    }
+
+def kv_get(key: str):
+    ensure_tables_phase2()
+    conn = get_db()
+    org_id, owner_id = _get_ids()
+    cur = conn.execute("SELECT version, data FROM kv_store WHERE key=? AND org_id=? AND owner_id=?", (key, org_id, owner_id))
+    r = cur.fetchone()
+    if not r:
+        return None, 0
+    return _from_json(r[1]), int(r[0])
+
+def kv_set(key: str, value, expect_version: int = None):
+    ensure_tables_phase2()
+    conn = get_db()
+    org_id, owner_id = _get_ids()
+    now = utc_now_iso()
+    data = _as_json(value)
+    # Upsert with optimistic control
+    if expect_version is None:
+        # Blind upsert
+        conn.execute(
+            "INSERT INTO kv_store(key,org_id,owner_id,version,data,updated_at) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(key,org_id,owner_id) DO UPDATE SET data=excluded.data, version=kv_store.version+1, updated_at=excluded.updated_at",
+            (key, org_id, owner_id, 0, data, now)
+        )
+        # Return new version
+        _, ver = kv_get(key)
+        return {"stale": False, "version": ver}
+    else:
+        cur = conn.execute(
+            "UPDATE kv_store SET data=?, version=version+1, updated_at=? WHERE key=? AND org_id=? AND owner_id=? AND version=?",
+            (data, now, key, org_id, owner_id, expect_version)
+        )
+        if cur.rowcount == 0:
+            # Insert if missing then mark stale to force reload next tick
+            conn.execute(
+                "INSERT OR IGNORE INTO kv_store(key,org_id,owner_id,version,data,updated_at) VALUES(?,?,?,?,?,?)",
+                (key, org_id, owner_id, 0, data, now)
+            )
+            val, ver = kv_get(key)
+            try:
+                import streamlit as st
+                st.warning(f"Stale edit on {key}. Reloaded latest from database.")
+            except Exception:
+                pass
+            return {"stale": True, "version": ver}
+        # Success
+        return {"stale": False, "version": expect_version + 1}
+
+_PERSIST_KEYS = [
+    "vendor_results",
+    "vendor_info",
+    "pricing_base_cost",
+    "capability_md",
+    "mail_bodies",
+    "whitepaper_md",
+    "sam_results_info",
+    "sam_results_df",
+    "sam_watch_loaded_rows",
+]
+
+def _serialize_for_key(key, value):
+    # Special handling per key if needed
+    return value
+
+def _deserialize_for_key(key, value):
+    return value
+
+def persist_session_keys():
+    # Load missing keys from DB, then save changed keys back
+    ensure_tables_phase2()
+    try:
+        import streamlit as st
+        if "_persist_prev" not in st.session_state:
+            st.session_state["_persist_prev"] = {}
+        prev = st.session_state["_persist_prev"]
+        # First load any missing keys
+        for key in _PERSIST_KEYS:
+            if key not in st.session_state:
+                val, ver = kv_get(key)
+                if val is not None:
+                    st.session_state[key] = _deserialize_for_key(key, val)
+                    prev[key] = {"hash": hashlib.sha256(_as_json(val).encode("utf-8")).hexdigest(), "version": ver}
+        # Then detect changes on present keys and save
+        for key in _PERSIST_KEYS:
+            if key in st.session_state:
+                val = _serialize_for_key(key, st.session_state[key])
+                h = hashlib.sha256(_as_json(val).encode("utf-8")).hexdigest()
+                meta = prev.get(key)
+                last_hash = meta["hash"] if meta else None
+                ver = meta["version"] if meta else None
+                if h != last_hash:
+                    res = kv_set(key, val, expect_version=ver)
+                    prev[key] = {"hash": h, "version": res["version"]}
+    except Exception:
+        # Silent in non-Streamlit contexts
+        pass
+
+# Run table ensures early
+ensure_tables_phase2()
+# ===== end Phase 2 persistence layer =====
+
+# ===== Phase 3 files persistence =====
+import os, re, hashlib
+
+def ensure_files_table():
+    ensure_tables_phase2()
+    ddl = [
+        ("phase3_create_files",
+         """
+         CREATE TABLE IF NOT EXISTS files(
+           id INTEGER PRIMARY KEY,
+           org_id TEXT NOT NULL,
+           owner_id TEXT NOT NULL,
+           entity TEXT NOT NULL,
+           entity_id INTEGER NOT NULL,
+           name TEXT NOT NULL,
+           path TEXT NOT NULL,
+           bytes INTEGER NOT NULL,
+           checksum TEXT NOT NULL,
+           created_at TEXT NOT NULL
+         );
+         """),
+        ("phase3_index_files_entity",
+         "CREATE INDEX IF NOT EXISTS idx_files_entity ON files(org_id, entity, entity_id);"),
+        ("phase3_index_files_checksum",
+         "CREATE INDEX IF NOT EXISTS idx_files_checksum ON files(org_id, owner_id, entity, entity_id, checksum);")
+    ]
+    try:
+        apply_ddl(ddl)
+    except Exception:
+        conn = get_db()
+        for _, sql in ddl:
+            conn.executescript(sql)
+
+def _safe_seg(s: str) -> str:
+    s = str(s or "").strip()
+    s = re.sub(r"[^A-Za-z0-9_.-]+", "_", s)
+    if not s:
+        return "x"
+    return s[:64]
+
+def _files_root():
+    base = os.path.join("data", "files")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+def _entity_dir(org_id: str, owner_id: str, entity: str, entity_id: int) -> str:
+    base = _files_root()
+    p = os.path.join(base, _safe_seg(org_id), _safe_seg(owner_id), _safe_seg(entity), _safe_seg(entity_id))
+    os.makedirs(p, exist_ok=True)
+    return p
+
+def _sha256_bytes(b: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(b)
+    return h.hexdigest()
+
+def list_files(entity: str, entity_id: int):
+    ensure_files_table()
+    conn = get_db()
+    org_id, owner_id = _get_ids()
+    cur = conn.execute("""
+        SELECT id, name, path, bytes, checksum, created_at
+        FROM files
+        WHERE org_id=? AND owner_id=? AND entity=? AND entity_id=?
+        ORDER BY created_at DESC, id DESC
+    """, (str(org_id), str(owner_id), str(entity), int(entity_id)))
+    rows = [{
+        "id": r[0], "name": r[1], "path": r[2], "bytes": r[3], "checksum": r[4], "created_at": r[5]
+    } for r in cur.fetchall()]
+    return rows
+
+def get_file_path(file_id: int) -> str | None:
+    ensure_files_table()
+    conn = get_db()
+    cur = conn.execute("SELECT path FROM files WHERE id=?", (int(file_id),))
+    r = cur.fetchone()
+    return r[0] if r else None
+
+def save_file(entity: str, entity_id: int, filename: str, data: bytes):
+    """
+    Persist a file under ./data/files/{org}/{user}/{entity}/{id}/{filename}
+    Record metadata in files table.
+    Dedupe by checksum per (org, owner, entity, entity_id).
+    Returns dict(id, checksum, path, deduped: bool)
+    """
+    ensure_files_table()
+    conn = get_db()
+    org_id, owner_id = _get_ids()
+    checksum = _sha256_bytes(data)
+    # Dedupe check
+    cur = conn.execute("""
+        SELECT id, path, bytes FROM files
+        WHERE org_id=? AND owner_id=? AND entity=? AND entity_id=? AND checksum=?
+        ORDER BY id DESC LIMIT 1
+    """, (str(org_id), str(owner_id), str(entity), int(entity_id), checksum))
+    r = cur.fetchone()
+    if r:
+        # Already stored. Return existing.
+        return {"id": int(r[0]), "checksum": checksum, "path": r[1], "deduped": True}
+
+    # Write to disk
+    dirp = _entity_dir(str(org_id), str(owner_id), str(entity), int(entity_id))
+    fname = _safe_seg(filename)
+    path = os.path.join(dirp, fname)
+    # If same name exists with different content, avoid overwrite by suffixing
+    if os.path.exists(path):
+        stem, dot, ext = fname.partition(".")
+        i = 1
+        newname = f"{stem}_{i}.{ext}" if ext else f"{stem}_{i}"
+        while os.path.exists(os.path.join(dirp, newname)):
+            i += 1
+            newname = f"{stem}_{i}.{ext}" if ext else f"{stem}_{i}"
+        fname = newname
+        path = os.path.join(dirp, fname)
+    with open(path, "wb") as f:
+        f.write(data)
+    size = len(data)
+    now = utc_now_iso()
+    conn.execute("""
+        INSERT INTO files(org_id, owner_id, entity, entity_id, name, path, bytes, checksum, created_at)
+        VALUES(?,?,?,?,?,?,?,?,?)
+    """, (str(org_id), str(owner_id), str(entity), int(entity_id), fname, path, int(size), checksum, now))
+    new_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    return {"id": new_id, "checksum": checksum, "path": path, "deduped": False}
+
+def save_uploaded_files(entity: str, entity_id: int, uploaded_files):
+    """
+    Convenience for Streamlit st.file_uploader(..., accept_multiple_files=True)
+    Returns list of result dicts for each file.
+    """
+    results = []
+    try:
+        import streamlit as st
+        for uf in uploaded_files or []:
+            b = uf.getbuffer().tobytes()
+            results.append(save_file(entity, entity_id, uf.name, b))
+        # Optionally refresh listing in UI
+    except Exception:
+        for uf in uploaded_files or []:
+            # Fallback path if not a Streamlit UploadedFile. Expect (name, bytes) tuples.
+            name, b = uf
+            results.append(save_file(entity, entity_id, name, b))
+    return results
+
+# Initialize table on import
+ensure_files_table()
+# ===== end Phase 3 files persistence =====
+
+# ===== Phase 4 cache discipline =====
+import json, time
+
 @st.cache_data(ttl=900, show_spinner=False)
-def _badge_pack(opp_id: int):
-    hdr = _opp_header_data(opp_id)
-    return {"agency": hdr["agency"], "due": hdr["due"], "set_asides": hdr["set_asides"]}
+def fetch_sam(endpoint: str, params: dict) -> dict:
+    """
+    Network call to SAM or proxy. Cached 15 minutes.
+    Never used for DB reads.
+    """
+    import requests
+    try:
+        r = requests.get(endpoint, params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except Exception as ex:
+        return {"error": str(ex), "endpoint": endpoint, "params": params}
 
-def _workspace_header(opp_id: int):
+def get_proposal(proposal_id: int):
+    """
+    Direct DB read. No cache.
+    """
+    conn = get_db()
+    org_id, _ = _get_ids()
+    cur = conn.execute("SELECT id, org_id, owner_id, version, data, updated_at FROM proposals WHERE id=? AND org_id=?", (int(proposal_id), int(org_id)))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "owner_id": r[2], "version": r[3], "data": _from_json(r[4]), "updated_at": r[5]}
+
+def get_vendor(vendor_id: int):
+    conn = get_db()
+    org_id, _ = _get_ids()
+    cur = conn.execute("SELECT id, org_id, owner_id, version, data, updated_at FROM vendors WHERE id=? AND org_id=?", (int(vendor_id), int(org_id)))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "owner_id": r[2], "version": r[3], "data": _from_json(r[4]), "updated_at": r[5]}
+
+def get_notice(notice_id: int):
+    conn = get_db()
+    org_id, _ = _get_ids()
+    cur = conn.execute("SELECT id, org_id, owner_id, version, data, updated_at FROM notices WHERE id=? AND org_id=?", (int(notice_id), int(org_id)))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "owner_id": r[2], "version": r[3], "data": _from_json(r[4]), "updated_at": r[5]}
+
+def get_rfq(rfq_id: int):
+    conn = get_db()
+    org_id, _ = _get_ids()
+    cur = conn.execute("SELECT id, org_id, owner_id, version, data, updated_at FROM rfqs WHERE id=? AND org_id=?", (int(rfq_id), int(org_id)))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "owner_id": r[2], "version": r[3], "data": _from_json(r[4]), "updated_at": r[5]}
+
+def get_pricing(pricing_id: int):
+    conn = get_db()
+    org_id, _ = _get_ids()
+    cur = conn.execute("SELECT id, org_id, owner_id, version, data, updated_at FROM pricing WHERE id=? AND org_id=?", (int(pricing_id), int(org_id)))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "owner_id": r[2], "version": r[3], "data": _from_json(r[4]), "updated_at": r[5]}
+
+def ui_mount_defaults():
+    """
+    UI-only state in session_state: filters, pagination, selection ids.
+    No authoritative rows stored here.
+    """
     import streamlit as st
-    hdr = _opp_header_data(opp_id)
-    st.header(hdr["title"])
-    badges = _badge_pack(opp_id)
-    cols = st.columns(3)
-    with cols[0]:
-        st.caption(f"Agency: **{badges['agency'] or 'n/a'}**")
-    with cols[1]:
-        st.caption(f"Due: **{badges['due'] or 'n/a'}**")
-    with cols[2]:
-        if badges["set_asides"]:
-            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"]))
+    defaults = {
+        "sam_filters": {},
+        "sam_page": 1,
+        "selected_notice_id": None,
+        "selected_proposal_id": None,
+        "selected_vendor_id": None,
+        "selected_pricing_id": None,
+        "selected_rfq_id": None,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+# Initialize UI defaults early
+ui_mount_defaults()
+# ===== end Phase 4 cache discipline =====
+
+# ===== Tenancy Phase 1 =====
+import datetime
+
+def ensure_tenancy_tables():
+    ddl = [
+        ("tenancy_create_orgs",
+         """
+         CREATE TABLE IF NOT EXISTS orgs(
+           id TEXT PRIMARY KEY,
+           name TEXT NOT NULL,
+           created_at TEXT NOT NULL
+         );
+         """),
+        ("tenancy_create_users",
+         """
+         CREATE TABLE IF NOT EXISTS users(
+           id TEXT PRIMARY KEY,
+           org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+           email TEXT NOT NULL UNIQUE,
+           display_name TEXT,
+           role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
+           created_at TEXT NOT NULL
+         );
+         """),
+        ("tenancy_index_users_org",
+         "CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);")
+    ]
+    try:
+        apply_ddl(ddl)
+    except Exception:
+        conn = get_db()
+        for _, sql in ddl:
+            conn.executescript(sql)
+
+def seed_tenancy():
+    conn = get_db()
+    now = utc_now_iso()
+    # One org with id '1' to align with earlier integer org_id usage
+    conn.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,?)", ("1", "ELA Management", now))
+    # Three users mapped to org '1'
+    users = [
+        ("charles", "1", "charles@ela.local", "Charles", "Admin", now),
+        ("quincy",  "1", "quincy@ela.local",  "Quincy",  "Member", now),
+        ("collin",  "1", "collin@ela.local",  "Collin",  "Member", now),
+    ]
+    for u in users:
+        conn.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,?)", u)
+
+def get_user_by_email(email: str):
+    conn = get_db()
+    cur = conn.execute("SELECT id, org_id, email, display_name, role FROM users WHERE email=?", (email.strip().lower(),))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "email": r[2], "display_name": r[3] or r[2], "role": r[4]}
+
+def get_user_by_id(uid: str):
+    conn = get_db()
+    cur = conn.execute("SELECT id, org_id, email, display_name, role FROM users WHERE id=?", (uid,))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "org_id": r[1], "email": r[2], "display_name": r[3] or r[2], "role": r[4]}
+
+def set_session_user(user: dict):
+    import streamlit as st
+    # Use active_user as stable owner_id across DB (email)
+    st.session_state["active_user"] = user["email"]
+    # Keep active_org_id numeric-compatible for existing tables
+    try:
+        st.session_state["active_org_id"] = int(user["org_id"])
+    except Exception:
+        # Fallback if org_id not numeric
+        st.session_state["active_org_id"] = 1
+    st.session_state["user_id"] = user["id"]
+    st.session_state["user_role"] = user["role"]
+    st.session_state["user_display_name"] = user["display_name"]
+
+def is_viewer() -> bool:
+    try:
+        import streamlit as st
+        return st.session_state.get("user_role") == "Viewer"
+    except Exception:
+        return False
+
+def require_login():
+    # Minimal login UI. If not logged in, show email picker for seeded users.
+    import streamlit as st
+    ensure_tenancy_tables()
+    seed_tenancy()
+    if not st.session_state.get("active_org_id") or not st.session_state.get("active_user"):
+        st.info("Sign in to continue.")
+        # Load emails from users table
+        conn = get_db()
+        emails = [r[0] for r in conn.execute("SELECT email FROM users ORDER BY email").fetchall()]
+        sel = st.selectbox("Choose user", options=emails, index=0 if emails else None, key="_login_email")
+        if st.button("Sign in"):
+            user = get_user_by_email(sel)
+            if user:
+                set_session_user(user)
+                st.experimental_rerun()
+        st.stop()
+
+def render_header_chip():
+    import streamlit as st
+    uid = st.session_state.get("user_id") or ""
+    role = st.session_state.get("user_role") or ""
+    disp = st.session_state.get("user_display_name") or st.session_state.get("active_user") or ""
+    org_id = st.session_state.get("active_org_id")
+    # Fetch org name
+    name = ""
+    try:
+        r = get_db().execute("SELECT name FROM orgs WHERE id=?", (str(org_id),)).fetchone()
+        name = r[0] if r else str(org_id)
+    except Exception:
+        name = str(org_id)
+    st.caption(f"Org: **{name}**   |   User: **{disp}**   |   Role: **{role}**")
+
+def apply_view_only_css():
+    # Soft read-only UI when Viewer
+    import streamlit as st
+    if is_viewer():
+        st.info("Read-only mode for Viewer role.")
+        st.markdown(
+            """
+            <style>
+            button[kind="primary"], button:not([title]), .stTextInput input, .stTextArea textarea,
+            .stNumberInput input, .stSelectbox, .stMultiSelect, .stFileUploader,
+            .stDownloadButton, .stDateInput, .stCheckbox, .stRadio {
+                pointer-events: none;
+                opacity: 0.6;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+# Initialize tenancy on import
+ensure_tenancy_tables()
+seed_tenancy()
+# ===== end Tenancy Phase 1 =====
+
+# ===== Layout Phase 1: Router, query params, shell, feature flags =====
+feature_flags = dict(feature_flags) if 'feature_flags' in globals() else {}
+feature_flags.setdefault('workspace_enabled', False)
+
+def _qp_get():
+    import streamlit as st
+    # Normalize query params into simple dict of strings
+    try:
+        qp = dict(st.query_params)
+        # st.query_params may be Mapping[str, str]
+        return {k: str(v) for k, v in qp.items()}
+    except Exception:
+        try:
+            qp = st.experimental_get_query_params()
+            return {k: (v[0] if isinstance(v, list) and v else v) for k, v in qp.items()}
+        except Exception:
+            return {}
+
+def _qp_set(new_params: dict):
+    import streamlit as st
+    # Remove keys with None. Upsert others as strings.
+    params = {k: str(v) for k, v in new_params.items() if v is not None and v != ""}
+    try:
+        # Best-effort update on modern API
+        # First delete removed keys
+        try:
+            existing = dict(st.query_params)
+            for k in list(existing.keys()):
+                if k not in params:
+                    try:
+                        del st.query_params[k]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Update others
+        for k, v in params.items():
+            try:
+                st.query_params[k] = v
+            except Exception:
+                pass
+        # Fallback
+        if not params:
+            st.experimental_set_query_params()
         else:
-            st.caption("Set-aside: **n/a**")
+            st.experimental_set_query_params(**params)
+    except Exception:
+        # Last resort
+        st.experimental_set_query_params(**params)
 
-# Subtab skeletons. Each receives opp_id and renders only when active.
-def render_details(opp_id: int):
+def get_route():
     import streamlit as st
-    st.write("Details panel placeholder.")
+    qp = _qp_get()
+    page = (qp.get("page") or "dashboard").lower()
+    opp = qp.get("opp")
+    tab = qp.get("tab")
+    # Mirror into session
+    st.session_state["route_page"] = page
+    st.session_state["route_opp_id"] = int(opp) if opp and str(opp).isdigit() else (opp or None)
+    st.session_state["route_tab"] = tab
+    return {"page": page, "opp": st.session_state["route_opp_id"], "tab": tab}
 
-def render_analyzer(opp_id: int):
+def route_to(page: str, opp_id=None, tab=None, rerun=True):
     import streamlit as st
-    # Example lazy pattern placeholder
-    @st.cache_data(ttl=900, show_spinner=False)
-    def _heavy_analyzer_compute(opp):
-        # Placeholder transform. Real logic lives elsewhere.
-        return {"ok": True, "opp": opp}
-    res = _heavy_analyzer_compute(opp_id)
-    st.write("Analyzer ready.", res)
+    # Normalize and update URL
+    page = (page or "dashboard").lower()
+    params = {"page": page}
+    if opp_id is not None:
+        params["opp"] = opp_id
+    else:
+        params["opp"] = None
+    if tab:
+        params["tab"] = tab
+    else:
+        params["tab"] = None
+    _qp_set(params)
+    # Update session mirrors
+    st.session_state["route_page"] = page
+    st.session_state["route_opp_id"] = opp_id
+    st.session_state["route_tab"] = tab
+    if rerun:
+        st.experimental_rerun()
 
-def render_compliance(opp_id: int):
+def _render_top_nav():
     import streamlit as st
-    st.write("Compliance matrix placeholder.")
-
-def render_proposal(opp_id: int):
-    import streamlit as st
-    st.write("Proposal builder placeholder.")
-
-def render_pricing(opp_id: int):
-    import streamlit as st
-    st.write("Pricing worksheet placeholder.")
-
-def render_vendors_rfq(opp_id: int):
-    import streamlit as st
-    st.write("Vendors and RFQ placeholder.")
-
-def render_submission(opp_id: int):
-    import streamlit as st
-    st.write("Submission checklist placeholder.")
-
-def _subtab_bar(active: str, opp_id: int):
-    import streamlit as st
-    tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
-    # Persist in session
-    st.session_state["active_opportunity_tab"] = active
-    cols = st.columns(len(tabs))
-    for i, t in enumerate(tabs):
+    if not feature_flags.get('workspace_enabled'):
+        return
+    pages = [
+        ("dashboard","Dashboard"),
+        ("sam","SAM Watch"),
+        ("pipeline","Pipeline"),
+        ("outreach","Outreach"),
+        ("library","Library"),
+        ("admin","Admin"),
+    ]
+    current = get_route()["page"]
+    cols = st.columns(len(pages))
+    for i, (slug, label) in enumerate(pages):
         with cols[i]:
-            if st.button(t, type=("primary" if t == active else "secondary")):
-                route_to("opportunity", opp_id=opp_id, tab=t, rerun=True)
+            if st.button(label, type=("primary" if slug == current else "secondary")):
+                route_to(slug, rerun=True)
 
 def _render_opportunity_workspace():
     import streamlit as st
@@ -8113,29 +8898,73 @@ def _render_opportunity_workspace():
     if r["page"] != "opportunity":
         return
     opp_id = r["opp"]
-    if opp_id is None:
-        st.warning("No opportunity selected.")
-        return
-    # Header
-    _workspace_header(opp_id)
-    # Subtabs
-    tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
-    active = r["tab"] if r["tab"] in tabs else (st.session_state.get("active_opportunity_tab") or tabs[0])
-    _subtab_bar(active, opp_id)
-    # Lazy render for active only
-    if active == "Details":
-        render_details(opp_id)
-    elif active == "Analyzer":
-        render_analyzer(opp_id)
-    elif active == "Compliance":
-        render_compliance(opp_id)
-    elif active == "Proposal":
-        render_proposal(opp_id)
-    elif active == "Pricing":
-        render_pricing(opp_id)
-    elif active == "VendorsRFQ":
-        render_vendors_rfq(opp_id)
-    elif active == "Submission":
-        render_submission(opp_id)
-# ===== end Layout Phase 2 =====
+    # Header with notice title
+    title = f"Opportunity {opp_id}"
+    try:
+        row = get_notice(int(opp_id)) if opp_id is not None else None
+        if row and isinstance(row.get("data"), dict):
+            d = row["data"]
+            title = d.get("title") or d.get("notice_title") or d.get("subject") or title
+    except Exception:
+        pass
+    st.header(title)
+    # Subtab bar via radio for reliability
+    tabs = ["Summary","Docs","Pricing","Team","Notes","History"]
+    current_tab = r["tab"] if r["tab"] in tabs else tabs[0]
+    idx = tabs.index(current_tab)
+    sel = st.radio("Workspace", tabs, index=idx, key="_op_ws_tab", horizontal=True if "horizontal" in st.radio.__code__.co_varnames else False)
+    if sel != current_tab:
+        route_to("opportunity", opp_id=opp_id, tab=sel, rerun=True)
+    # Empty workspace body for now
+    st.info(f"{sel} is empty.")
+
+def layout_shell():
+    # Call this near the top of the app to enable nav and workspace routing
+    _render_top_nav()
+    _render_opportunity_workspace()
+
+# Initialize route mirrors on import
+try:
+    get_route()
+except Exception:
+    pass
+# ===== end Layout Phase 1 =====
+
+
+
+
+
+
+
+
+
+    """
+    Apply a list of (name, sql) DDL migrations idempotently.
+    Each item must be a tuple: (name: str, sql: str).
+    Already-applied names are skipped.
+    """
+    import datetime
+    conn = get_db()
+    now = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    # Ensure migrations table exists in case get_db was overridden elsewhere
+    conn.execute("""CREATE TABLE IF NOT EXISTS migrations(
+        id INTEGER PRIMARY KEY,
+        name TEXT UNIQUE,
+        applied_at TEXT NOT NULL
+    )""")
+    for item in migrations:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError("Each migration must be (name, sql)")
+        name, sql = item
+        cur = conn.execute("SELECT 1 FROM migrations WHERE name = ?", (name,))
+        if cur.fetchone():
+            continue
+        # Use executescript for multi-statement DDL
+        conn.executescript(sql)
+        conn.execute("INSERT INTO migrations(name, applied_at) VALUES(?, ?)", (name, now))
+
+
+
+# Phase 4 guard: avoid storing authoritative DB rows in session_state
+_PROHIBITED_STATE_KEYS = {"proposals_rows","vendors_rows","pricing_rows","rfqs_rows","notices_rows"}
 
