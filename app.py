@@ -1,3 +1,22 @@
+# === RUN-ID & FEATURE-FLAGS DEBUG (injected) ===
+try:
+    import hashlib, pathlib, streamlit as st  # safe re-import
+    _p = pathlib.Path(__file__)
+    st.sidebar.caption(f"__file__: {_p}")
+    st.sidebar.caption(f"sha256: {hashlib.sha256(_p.read_bytes()).hexdigest()}")
+    st.session_state.setdefault("feature_flags", {})
+    st.session_state["feature_flags"].update({
+        "workspace_enabled": True,
+        "sam_ingest_core": True,
+        "sam_page_size": True,
+        "pipeline_star": True,
+        "rfp_analyzer_panel": True,
+        "amend_tracking": True,
+    })
+except Exception:
+    pass
+# === END RUN-ID & FEATURE-FLAGS DEBUG ===
+
 # ===== app.py =====
 
 def _strip_markdown_to_plain(txt: str) -> str:
