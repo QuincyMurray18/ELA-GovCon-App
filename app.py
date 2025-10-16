@@ -1124,11 +1124,6 @@ def render_analyzer(opp_id):
     st.subheader('Analyzer')
     data = _load_analyzer_data(opp_id)
     st.write(data)
-    try:
-        analyzer_lm_readonly(int(opp_id))
-    except Exception:
-        pass
-
 
 def render_compliance(opp_id):
     import streamlit as st
@@ -11720,13 +11715,6 @@ def _rfp_phase1_maybe_store(nid: int):
         return
     res = save_rfp_json(int(nid), doc)
     try:
-        if feature_flags().get('compliance_v2', False) and res.get('ok'):
-            doc = build_rfpv1_from_notice(int(nid))
-            if doc:
-                build_lm_checklist(int(nid), doc)
-    except Exception as _seed_ex:
-        log_event('warn','lm_seed_failed', notice_id=int(nid), err=str(_seed_ex))
-    try:
         if res.get('ok'):
             ensure_needs_review_if_green(int(nid))
     except Exception:
@@ -11908,49 +11896,13 @@ def render_compliance_panel():
     # Current state
     ok, unmet, stored = get_compliance_state(nid)
     st.caption(f"State: {stored}. {'All clear' if ok else 'Blocked'}")
-    # Gate box
-    try:
-        if feature_flags().get('compliance_gate_v2', False):
-            ok2, unmet2 = gate_status(nid)
-            counts = _gate_counts(nid)
-            st.markdown("#### Gate")
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Green", counts.get("Green",0))
-            c2.metric("Yellow", counts.get("Yellow",0))
-            c3.metric("Red", counts.get("Red",0))
-            c4.markdown("🔓 Unlocked" if ok2 else "🔒 Locked")
-            if not ok2 and unmet2:
-                st.info("Gate reasons: " + "; ".join(unmet2))
-    except Exception as _gx:
-        st.caption(f"[Gate box error: {_gx}]")
-
     if unmet:
         st.warning("Unmet: " + "; ".join(unmet))
     # Checklist editor
     st.markdown("#### L and M checklist")
     conn = get_db()
     import pandas as pd
-    
-    # Bulk assign by factor
-    try:
-        if feature_flags().get('compliance_gate_v2', False):
-            factors = pd.read_sql_query("select distinct factor from lm_checklist where notice_id=? order by factor", conn, params=(nid,))
-            if not factors.empty:
-                b1,b2,b3,b4 = st.columns([2,2,2,1])
-                with b1:
-                    sel_factor = st.selectbox("Factor", options=factors['factor'].dropna().tolist())
-                with b2:
-                    new_owner = st.text_input("Assign owner")
-                with b3:
-                    new_due = st.text_input("Assign due date")
-                with b4:
-                    if st.button("Apply", key="bulk_assign"):
-                        bulk_assign_by_factor(nid, sel_factor, new_owner or None, new_due or None)
-                        st.success("Bulk assignment applied.")
-                        st.rerun()
-    except Exception as _bu:
-        st.caption(f"[Bulk assign error: {_bu}]")
-df = pd.read_sql_query("select id, factor, subfactor, requirement, source_page, owner_id, due_date, status, notes from lm_checklist where notice_id=? order by id", conn, params=(nid,))
+    df = pd.read_sql_query("select id, factor, subfactor, requirement, source_page, owner_id, due_date, status, notes from lm_checklist where notice_id=? order by id", conn, params=(nid,))
     edited = st.data_editor(df, use_container_width=True, num_rows="dynamic",
                             column_config={
                                 "status": st.column_config.SelectboxColumn(options=["Red","Yellow","Green"]),
@@ -11965,20 +11917,7 @@ df = pd.read_sql_query("select id, factor, subfactor, requirement, source_page, 
             if pd.isna(data.get("id")):
                 data["id"] = None
             upsert_checklist_row(nid, data)
-        
-        # Enforce Green requires evidence and linked docs provided when v2 gate active
-        if feature_flags().get('compliance_gate_v2', False):
-            for _, row in edited.iterrows():
-                if str(row.get("status")) == "Green":
-                    okv, msg = before_set_status_green(nid, int(row.get("id")) if not pd.isna(row.get("id")) else -1)
-                    if not okv:
-                        st.warning(f"Row {int(row.get('id') or 0)} cannot be Green: {msg}")
-                        try:
-                            conn.execute("update lm_checklist set status='Yellow' where id=?", (int(row.get("id")),))
-                            conn.commit()
-                        except Exception:
-                            pass
-st.success("Checklist saved.")
+        st.success("Checklist saved.")
         st.session_state["compliance_tab_open"] = True
         st.rerun()
     # Required docs
@@ -12023,306 +11962,6 @@ st.success("Checklist saved.")
             st.rerun()
     qa = pd.read_sql_query("select id, question, asked_at, deadline, submitted_file_id from qa_log where notice_id=? order by id desc", conn, params=(nid,))
     st.dataframe(qa, use_container_width=True, hide_index=True)
-    # v2 controls and viewer
-    _compliance_v2_controls_in_panel(nid)
-    render_compliance_v2_evidence_viewer()
-
-
-
-
-# === COMPLIANCE PHASE 1 (v2) ===
-import hashlib as _hashlib
-
-def _safe_sha1(s: str) -> str:
-    try:
-        return _hashlib.sha1((s or '').encode('utf-8')).hexdigest()
-    except Exception:
-        return None
-
-def compliance_v2_schema_upgrade():
-    ensure_compliance_schema()  # base tables from Phase 9
-    conn = get_db()
-    cur = conn.cursor()
-    # Add new columns with guards
-    try:
-        cols = {r[1] for r in cur.execute("PRAGMA table_info(lm_checklist)").fetchall()}
-        if "req_id" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN req_id TEXT")
-        if "cite_file" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN cite_file TEXT")
-        if "cite_page" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN cite_page INTEGER")
-        if "evidence_file_id" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN evidence_file_id INTEGER REFERENCES notice_files(id)")
-        if "evidence_page" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN evidence_page INTEGER")
-        if "evidence_section_id" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN evidence_section_id INTEGER REFERENCES proposal_sections(id)")
-        if "weight" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN weight REAL DEFAULT 1")
-        if "last_updated_by" not in cols:
-            cur.execute("ALTER TABLE lm_checklist ADD COLUMN last_updated_by TEXT")
-    except Exception:
-        pass
-    try:
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_lm_req ON lm_checklist(notice_id, req_id)")
-    except Exception:
-        pass
-    conn.commit()
-
-def _norm_req_text(txt: str) -> str:
-    if not isinstance(txt, str):
-        return ""
-    t = txt.strip().lower()
-    t = re.sub(r"\s+", " ", t)
-    return t
-
-def build_lm_checklist(notice_id: int, rfp_json: dict):
-    """Seed checklist from Analyzer JSON.
-    Stable req_id = sha1(normalized requirement text plus factor).
-    Inserts only new rows. No duplicate on rerun due to unique index.
-    """
-    if not feature_flags().get('compliance_v2', False):
-        return {'ok': False, 'disabled': True}
-    compliance_v2_schema_upgrade()
-    conn = get_db()
-    cur = conn.cursor()
-    nid = int(notice_id)
-    # Heuristic extraction of L and M requirements from rfp_json
-    # Expect structure like data['sections']['Factors'] -> list of items with factor, subfactor, requirements[]
-    sections = (rfp_json or {}).get('sections') or {}
-    factors = sections.get('Factors') or sections.get('factors') or []
-    inserted = 0
-    for item in factors:
-        factor = item.get('factor') or item.get('name') or item.get('title') or ''
-        subitems = item.get('subfactors') or item.get('subs') or []
-        reqs = []
-        # Some schemas have requirements directly on factor
-        if item.get('requirements'):
-            for r in item['requirements']:
-                reqs.append( (factor, None, str(r.get('text') or r) , r.get('cite_file'), r.get('cite_page')) )
-        # Subfactors with requirements
-        for sub in subitems:
-            subf = sub.get('subfactor') or sub.get('name') or sub.get('title') or ''
-            for r in sub.get('requirements') or []:
-                reqs.append( (factor, subf, str(r.get('text') or r), r.get('cite_file'), r.get('cite_page')) )
-        # Fallback: if 'L' or 'M' string hints exist
-        if not reqs and item:
-            txt = str(item)
-            if 'section l' in txt.lower() or 'section m' in txt.lower():
-                reqs.append( (factor, None, _norm_req_text(txt)[:200], None, None) )
-        # Insert rows
-        for fac, subf, req_text, cfile, cpage in reqs:
-            norm = _norm_req_text(req_text) + '|' + (_norm_req_text(fac) or '')
-            rid = _safe_sha1(norm) or None
-            if not rid:
-                continue
-            try:
-                cur.execute("""INSERT OR IGNORE INTO lm_checklist(
-                    notice_id, req_id, factor, subfactor, requirement, cite_file, cite_page, status
-                ) VALUES(?,?,?,?,?,?,?,?)""",
-                (nid, rid, fac or None, subf or None, req_text.strip(), cfile, int(cpage) if cpage else None, 'Red'))
-                if cur.rowcount:
-                    inserted += 1
-            except Exception:
-                pass
-    conn.commit()
-    return {'ok': True, 'inserted': inserted}
-
-def render_compliance_v2_evidence_viewer():
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('compliance_v2', False):
-        return
-    if not st.session_state.get('evidence_panel_open'):
-        return
-    file_id = st.session_state.get('current_evidence_file_id')
-    page = st.session_state.get('current_evidence_page')
-    if not file_id:
-        return
-    st.markdown("### Evidence Viewer")
-    conn = get_db()
-    row = conn.execute("select id, file_name, url, content_type, local_path from notice_files where id=?", (int(file_id),)).fetchone()
-    if not row:
-        st.info("File not found.")
-        return
-    _, fname, url, ctype, local_path = row
-    st.caption(f"{fname} • page {page if page else '?'}")
-    # Simple preview: try to extract text of the page for quick context
-    try:
-        import PyPDF2
-        path = local_path or None
-        if path:
-            with open(path, 'rb') as f:
-                r = PyPDF2.PdfReader(f)
-                pg = int(page)-1 if page else 0
-                if 0 <= pg < len(r.pages):
-                    text = r.pages[pg].extract_text() or "(no text extractable)"
-                    st.text_area("Page text", value=text, height=240)
-        else:
-            st.info("File not cached locally. Open in system viewer.")
-    except Exception as ex:
-        st.caption(f"[PDF preview unavailable: {ex}]")
-    if url:
-        st.link_button("Open original", url)
-
-def _compliance_v2_controls_in_panel(nid: int):
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('compliance_v2', False):
-        return
-    compliance_v2_schema_upgrade()
-    conn = get_db()
-    st.markdown("#### L and M checklist (v2)")
-    df = pd.read_sql_query("select id, req_id, factor, subfactor, requirement, cite_file, cite_page, evidence_file_id, evidence_page, status, owner_id, due_date from lm_checklist where notice_id=? order by id", conn, params=(int(nid),))
-    # Show grid with no Analyzer editing. We allow status here in Compliance tab.
-    edited = st.data_editor(df, use_container_width=True, num_rows=0,
-                            column_config={
-                                "status": st.column_config.SelectboxColumn(options=["Red","Yellow","Green"]),
-                                "due_date": st.column_config.TextColumn(),
-                            },
-                            key=f"lm_v2_edit_{nid}")
-    # Evidence actions per selected row
-    sel = st.multiselect("Select row(s) to set evidence", options=df['id'].tolist(), key=f"lm_v2_sel_{nid}")
-    c1,c2 = st.columns(2)
-    with c1:
-        if st.button("Set evidence") and sel:
-            # simple picker: choose file and page
-            files = pd.read_sql_query("select id, file_name from notice_files where notice_id=? order by id desc", conn, params=(int(nid),))
-            file_id = st.selectbox("File", options=files['id'].tolist(), format_func=lambda x: files.set_index('id').loc[x,'file_name'] if not files.empty else str(x), key=f"ev_file_{nid}")
-            page = st.number_input("Page", min_value=1, step=1, value=1, key=f"ev_page_{nid}")
-            if st.button("Save evidence", key=f"ev_save_{nid}"):
-                for rid in sel:
-                    conn.execute("update lm_checklist set evidence_file_id=?, evidence_page=?, last_updated_by=? where id=?", (int(file_id), int(page), str(st.session_state.get('user_id') or 'unknown'), int(rid)))
-                conn.commit()
-                st.success("Evidence saved.")
-                st.session_state['compliance_tab_open'] = True
-                st.rerun()
-    with c2:
-        if st.button("View evidence") and sel:
-            # open viewer for first selected
-            rid = int(sel[0])
-            row = conn.execute("select evidence_file_id, evidence_page from lm_checklist where id=?", (rid,)).fetchone()
-            if row and row[0]:
-                st.session_state['evidence_panel_open'] = True
-                st.session_state['current_evidence_file_id'] = int(row[0])
-                st.session_state['current_evidence_page'] = int(row[1] or 1)
-                st.experimental_rerun()
-
-def analyzer_lm_readonly(nid: int):
-    """Read-only L and M in Analyzer with Open in Compliance button."""
-    if not feature_flags().get('compliance_v2', False):
-        return
-    import streamlit as st, pandas as pd
-    compliance_v2_schema_upgrade()
-    conn = get_db()
-    df = pd.read_sql_query("select factor, subfactor, requirement, cite_file, cite_page, status from lm_checklist where notice_id=? order by id", conn, params=(int(nid),))
-    st.markdown("#### Section L & M requirements (read-only)")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    if st.button("Open in Compliance"):
-        st.session_state['selected_notice_id'] = int(nid)
-        st.session_state['compliance_tab_open'] = True
-        st.experimental_rerun()
-
-
-
-# === COMPLIANCE PHASE 2 (Gate v2) ===
-def ensure_compliance_gate_v2_schema():
-    ensure_compliance_schema()
-    compliance_v2_schema_upgrade()
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute("""CREATE TABLE IF NOT EXISTS lm_doc_links(
-            id INTEGER PRIMARY KEY,
-            notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-            req_id TEXT NOT NULL,
-            required_doc_id INTEGER REFERENCES required_docs(id),
-            UNIQUE(notice_id, req_id, required_doc_id)
-        );""" )
-    except Exception:
-        pass
-    try:
-        cur.execute("""CREATE TABLE IF NOT EXISTS section_requirements(
-            id INTEGER PRIMARY KEY,
-            proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
-            section_key TEXT NOT NULL,
-            req_id TEXT NOT NULL,
-            UNIQUE(proposal_id, section_key, req_id)
-        );""" )
-    except Exception:
-        pass
-    conn.commit()
-
-def before_set_status_green(nid:int, row_id:int):
-    if not feature_flags().get('compliance_gate_v2', False):
-        return True, ''
-    ensure_compliance_gate_v2_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    r = cur.execute("select req_id, evidence_file_id, evidence_section_id from lm_checklist where id=? and notice_id=?", (int(row_id), int(nid))).fetchone()
-    if not r:
-        return False, "Checklist row missing"
-    req_id, ev_file, ev_sec = r
-    if not ev_file and not ev_sec:
-        return False, "Evidence required"
-    missing_docs = []
-    for rid, in cur.execute("select required_doc_id from lm_doc_links where notice_id=? and req_id=?", (int(nid), req_id)).fetchall():
-        d = cur.execute("select provided, name from required_docs where id=?", (int(rid),)).fetchone()
-        if d and int(d[0]) != 1:
-            missing_docs.append(d[1] or f"doc:{rid}")
-    if missing_docs:
-        return False, "Missing docs: " + ", ".join(missing_docs)
-    return True, ''
-
-def gate_status(nid:int):
-    ensure_compliance_gate_v2_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    unmet = []
-    signs = {r:s for r,s in cur.execute("select role, status from signoffs where notice_id=?", (int(nid),)).fetchall()}
-    if not all(signs.get(r) == 'Approved' for r in ['Tech','Price','Contracts']):
-        unmet.append("All signoffs must be Approved")
-    links = cur.execute("select distinct required_doc_id from lm_doc_links where notice_id=?", (int(nid),)).fetchall()
-    if links:
-        doc_ids = [int(x[0]) for x in links if x and x[0] is not None]
-        if doc_ids:
-            q = "select provided, name from required_docs where id in (" + ",".join(str(i) for i in doc_ids) + ")"
-            missing = [name for provided,name in cur.execute(q).fetchall() if int(provided)!=1]
-            if missing:
-                unmet.append("Required docs not provided: " + ", ".join(missing))
-    rows = cur.execute("select id, status, evidence_file_id, evidence_section_id from lm_checklist where notice_id=?", (int(nid),)).fetchall()
-    if not rows:
-        unmet.append("Checklist empty")
-    else:
-        if any(r[1] != 'Green' for r in rows):
-            unmet.append("All checklist rows must be Green")
-        evidence_missing = [str(r[0]) for r in rows if r[1]=='Green' and not (r[2] or r[3])]
-        if evidence_missing:
-            unmet.append("Green rows missing evidence: " + ", ".join(evidence_missing))
-    return (len(unmet)==0), unmet
-
-def _gate_counts(nid:int):
-    conn = get_db()
-    cur = conn.cursor()
-    rows = cur.execute("select status, count(*) from lm_checklist where notice_id=? group by status", (int(nid),)).fetchall()
-    d = {'Red':0,'Yellow':0,'Green':0}
-    for s,c in rows:
-        if s in d: d[s]=int(c)
-    return d
-
-def bulk_assign_by_factor(nid:int, factor:str, owner_id:str|None, due_date:str|None):
-    ensure_compliance_gate_v2_schema()
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("update lm_checklist set owner_id=?, due_date=?, last_updated_by=? where notice_id=? and factor=?",
-                (owner_id, due_date, str(owner_id or ''), int(nid), factor))
-    conn.commit()
-    return True
-# === END COMPLIANCE PHASE 2 ===
-
-
-# === END COMPLIANCE PHASE 1 ===
-
-
 # === END COMPLIANCE GATE PHASE 9 ===
 # ===== end RFP Phase 1 =====
 
@@ -17077,22 +16716,6 @@ def route_to(page, opp_id=None, tab=None):
 # Feature flags accessor
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
-
-# Compliance gate v2 flag default
-try:
-    ff = feature_flags()
-    ff.setdefault('compliance_gate_v2', False)
-except Exception:
-    pass
-
-
-# Compliance v2 flag default
-try:
-    ff = feature_flags()
-    ff.setdefault('compliance_v2', False)
-except Exception:
-    pass
-
 
 # Default feature flags for compliance gate
 try:
