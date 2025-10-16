@@ -7,10 +7,7 @@ def _strip_markdown_to_plain(txt: str) -> str:
     """
     if not txt:
         return ""
-    import time as _time
-import datetime as _dt
-import json
-import re as _re
+    import re as _re
     s = txt
     # Remove code fences but keep inner text
     s = _re.sub(r"```(.*?)```", r"\1", s, flags=_re.DOTALL)
@@ -1054,7 +1051,7 @@ def _get_notice_meta_from_db(opp_id):
                 for k in keys:
                     if k in present:
                         return k
-                metric_push('parser_time_ms', (_time.perf_counter()-_pt0)*1000.0, {'result':'none'}); return None
+                return None
             c_title = pick(cols['title'])
             c_agency = pick(cols['agency'])
             c_due = pick(cols['due'])
@@ -1131,30 +1128,6 @@ def render_analyzer(opp_id):
         analyzer_lm_readonly(int(opp_id))
     except Exception:
         pass
-    try:
-        if feature_flags().get('rtm', False):
-            st.markdown('---')
-            st.subheader('RTM')
-            render_rtm_tab(int(opp_id))
-    except Exception:
-        pass
-    try:
-        if feature_flags().get('submission_rules', False):
-            st.markdown('---')
-            st.subheader('Forms & Submission')
-            render_forms_and_submission_tabs(int(opp_id))
-    except Exception:
-        pass
-    try:
-        if feature_flags().get('sow_price_hints', False):
-            st.markdown('---')
-            st.subheader('SOW & Price hints')
-            render_sow_price_tabs(int(opp_id))
-    except Exception:
-        pass
-
-
-
 
 
 def render_compliance(opp_id):
@@ -1429,13 +1402,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
     all_rcpts = to_list + cc_list + bcc_list
 
-    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
-        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     # ACTIVE_USER provided by your sign-in block
@@ -1888,13 +1859,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     all_rcpts = to_list + cc_list + bcc_list
 
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
-    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
-        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 
 # --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
@@ -3579,19 +3548,6 @@ except NameError:
 
 st.title("GovCon Copilot Pro")
 
-# Data health card
-try:
-    render_data_health_card()
-    render_env_switcher()
-except Exception:
-    pass
-
-# Health card
-try:
-    render_health_card()
-except Exception:
-    pass
-
 def _render_identity_chip():
     try:
         conn = get_db()
@@ -5035,13 +4991,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
 
     all_rcpts = to_list + cc_list + bcc_list
 
-    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
-        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 def outreach_send_from_active_user(to, subject, body_html, cc=None, bcc=None, attachments=None):
     # ACTIVE_USER provided by your sign-in block
@@ -5494,13 +5448,11 @@ def send_outreach_email(user: str, to_addrs, subject: str, body_html: str, cc_ad
     all_rcpts = to_list + cc_list + bcc_list
 
     # Send via Gmail SMTP with STARTTLS (requires App Password on accounts with 2FA)
-    with metric_timer('email_send_ms', {'fn':'send_outreach_email'}):
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
         server.ehlo()
         server.starttls()
         server.login(cfg["username"], cfg["password"])
         server.send_message(msg, from_addr=cfg["from_addr"], to_addrs=all_rcpts)
-        metric_push('email_success', 1, {'to': str(len(all_rcpts))})
 
 
 # --- Outreach Tools UI (moved from sidebar to Outreach tab to prevent bleed-through) ---
@@ -11080,7 +11032,7 @@ def render_sam_watch_ingest():
         with c2:
             if st.form_submit_button("Dismiss"):
                 for nid in selected_ids:
-                    set_notice_state(user_id, nid, "dismissed"); audit('dismiss', user_id, 'notice', str(nid))
+                    set_notice_state(user_id, nid, "dismissed")
         with c3:
             if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
         with c4:
@@ -11090,7 +11042,7 @@ def render_sam_watch_ingest():
                     st.session_state["compliance_tab_open"] = True
     
                 for nid in selected_ids:
-                    toggle_pipeline_star(user_id, nid); audit('star_toggle', user_id, 'notice', str(nid))
+                    toggle_pipeline_star(user_id, nid)
         # Diff controls
         if st.session_state.get("feature_flags", {}).get("amend_tracking"):
             d1, d2 = st.columns([1,5])
@@ -11743,7 +11695,6 @@ def build_rfpv1_from_notice(notice_id: int) -> dict | None:
 
     # submission due datetime: only include if already ISO with tz
     if isinstance(due, str) and _is_iso_with_tz(due):
-    _pt0 = _time.perf_counter()
         # Try locate cite from rfp_chunks
         cite = None
         try:
@@ -11757,7 +11708,7 @@ def build_rfpv1_from_notice(notice_id: int) -> dict | None:
         data["submission"]["due_datetime"] = due
         if cite: data["submission"]["cite"] = cite
 
-    metric_push('parser_time_ms', (_time.perf_counter()-_pt0)*1000.0, {'result':'ok'}); return data
+    return data
 
 # Hook: after parse_rfp success, optionally build and store schema JSON
 def _rfp_phase1_maybe_store(nid: int):
@@ -11777,19 +11728,6 @@ def _rfp_phase1_maybe_store(nid: int):
         log_event('warn','lm_seed_failed', notice_id=int(nid), err=str(_seed_ex))
     try:
         if res.get('ok'):
-        try:
-            if feature_flags().get('rtm', False):
-                doc = build_rfpv1_from_notice(int(nid))
-                if doc:
-                    build_rtm(int(nid), doc)
-        except Exception:
-            pass
-        try:
-            cnt = relock_on_amendment(int(nid))
-            import streamlit as st
-            st.session_state['amend_impact_count'] = cnt
-        except Exception:
-            pass
             ensure_needs_review_if_green(int(nid))
     except Exception:
         pass
@@ -11967,14 +11905,6 @@ def render_compliance_panel():
     nid = int(st.session_state["selected_notice_id"])
     st.markdown("---")
     st.subheader("Compliance")
-    # Amendment impact banner
-    try:
-        cnt = int(st.session_state.get('amend_impact_count') or 0)
-        if cnt > 0:
-            st.warning(f"Amendment impacted {cnt} checklist row(s). Review required.")
-    except Exception:
-        pass
-
     # Current state
     ok, unmet, stored = get_compliance_state(nid)
     st.caption(f"State: {stored}. {'All clear' if ok else 'Blocked'}")
@@ -12093,9 +12023,6 @@ st.success("Checklist saved.")
             st.rerun()
     qa = pd.read_sql_query("select id, question, asked_at, deadline, submitted_file_id from qa_log where notice_id=? order by id desc", conn, params=(nid,))
     st.dataframe(qa, use_container_width=True, hide_index=True)
-    # Audit drawer
-    render_compliance_audit_drawer(nid)
-
     # v2 controls and viewer
     _compliance_v2_controls_in_panel(nid)
     render_compliance_v2_evidence_viewer()
@@ -12390,108 +12317,6 @@ def bulk_assign_by_factor(nid:int, factor:str, owner_id:str|None, due_date:str|N
                 (owner_id, due_date, str(owner_id or ''), int(nid), factor))
     conn.commit()
     return True
-
-
-
-# === COMPLIANCE PHASE 3: Relock, Audit, Reminders, Snapshot ===
-def ensure_compliance_audit_schema():
-    conn = get_db()
-    conn.execute("""CREATE TABLE IF NOT EXISTS compliance_audit(
-      id INTEGER PRIMARY KEY,
-      notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-      user_id TEXT,
-      ts TEXT NOT NULL,
-      action TEXT NOT NULL,
-      req_id TEXT,
-      before_json TEXT,
-      after_json TEXT
-    );""" )
-    conn.commit()
-
-def _audit_log(nid:int, action:str, user_id:str|None, req_id:str|None, before:dict|None, after:dict|None):
-    ensure_compliance_audit_schema()
-    conn = get_db()
-    b = json.dumps(before or {}, ensure_ascii=False)
-    a = json.dumps(after or {}, ensure_ascii=False)
-    conn.execute("INSERT INTO compliance_audit(notice_id, user_id, ts, action, req_id, before_json, after_json) VALUES(?,?,?,?,?,?,?)",
-                 (int(nid), user_id or '', utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat() + 'Z', action, req_id or '', b, a))
-    conn.commit()
-
-def relock_on_amendment(nid:int):
-    if not feature_flags().get('compliance_relock', False):
-        return 0
-    ensure_compliance_schema()
-    conn = get_db(); cur = conn.cursor()
-    try:
-        versions = _load_versions(int(nid))
-        if len(versions) < 2:
-            return 0
-        prev = versions[1]['payload']; curr = versions[0]['payload']
-        prev_files = (prev or {}).get('files') or []
-        curr_files = (curr or {}).get('files') or []
-        dif = _diff_files(prev_files, curr_files)
-        changed = set(dif.get('added',[]) + dif.get('removed',[]))
-    except Exception:
-        changed = set()
-    if not changed:
-        return 0
-    rows = cur.execute("SELECT id, req_id, status, cite_file, cite_page FROM lm_checklist WHERE notice_id=?", (int(nid),)).fetchall()
-    impacted = [r for r in rows if r[3] and r[3] in changed]
-    for rid, req_id, status, cfile, cpage in impacted:
-        before = {"status": status, "cite_file": cfile, "cite_page": cpage}
-        try:
-            cur.execute("UPDATE lm_checklist SET status='Yellow' WHERE id=?", (int(rid),))
-            _audit_log(int(nid), "relock", st.session_state.get("user_id") if 'st' in globals() else None, req_id, before, {"status":"Yellow","reason":"Amendment affected file"})
-        except Exception:
-            pass
-    if impacted:
-        try:
-            conn.execute("UPDATE notices SET compliance_state='Needs review' WHERE id=?", (int(nid),))
-            conn.commit()
-        except Exception:
-            pass
-    return len(impacted)
-
-def schedule_compliance_emails():
-    if not feature_flags().get('email_enabled', False):
-        return 0
-    ensure_compliance_schema()
-    conn = get_db(); cur = conn.cursor()
-    now = _dt.datetime.utcnow()
-    rows = cur.execute("SELECT lc.notice_id, lc.id, lc.owner_id, lc.due_date, lc.status, n.title FROM lm_checklist lc JOIN notices n ON n.id=lc.notice_id WHERE lc.due_date IS NOT NULL AND lc.status != 'Green'").fetchall()
-    enq = 0
-    for nid, rid, owner, due, status, title in rows:
-        try:
-            dd = _dt.datetime.fromisoformat(str(due).replace('Z',''))
-        except Exception:
-            dd = None
-        if dd and dd < now:
-            to_addr = USER_EMAILS.get(owner, '') if 'USER_EMAILS' in globals() else ''
-            if to_addr:
-                subj = f"Compliance due: {title} row {rid}"
-                link = f"/app?notice_id={nid}&tab=compliance"
-                body = f"Row {rid} is due and still {status}. Open: {link}"
-                try:
-                    conn.execute("INSERT INTO email_queue(to_addr, subject, body, created_at) VALUES(?,?,?,?)",
-                                 (to_addr, subj, body, now.isoformat()+ 'Z'))
-                    enq += 1
-                except Exception:
-                    pass
-    conn.commit()
-    return enq
-
-def render_compliance_audit_drawer(nid:int):
-    import streamlit as st, pandas as pd
-    ensure_compliance_audit_schema()
-    if not st.session_state.get('audit_drawer_open'):
-        return
-    st.markdown("#### Audit trail")
-    conn = get_db()
-    df = pd.read_sql_query("SELECT ts, action, user_id, req_id, before_json, after_json FROM compliance_audit WHERE notice_id=? ORDER BY id DESC LIMIT 200", conn, params=(int(nid),))
-    st.dataframe(df, use_container_width=True, hide_index=True)
-# === END COMPLIANCE PHASE 3 ===
-
-
 # === END COMPLIANCE PHASE 2 ===
 
 
@@ -13741,10 +13566,6 @@ def render_proposal_builder():
 
         # Export DOCX with guardrails
         if export_docx:
-        try:
-            audit('export', st.session_state.get('user_id'), 'notice', str(st.session_state.get('selected_notice_id')))
-        except Exception:
-            pass
             from docx import Document
             from docx.shared import Inches, Pt
             from docx.oxml.ns import qn
@@ -17257,47 +17078,6 @@ def route_to(page, opp_id=None, tab=None):
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
 
-# SOW/Price hints flag default
-try:
-    ff = feature_flags()
-    ff.setdefault('sow_price_hints', False)
-except Exception:
-    pass
-
-
-# Submission rules flag default
-try:
-    ff = feature_flags()
-    ff.setdefault('submission_rules', False)
-except Exception:
-    pass
-
-
-# RTM flag default
-try:
-    ff = feature_flags()
-    ff.setdefault('rtm', False)
-except Exception:
-    pass
-
-
-# Observability flag default
-try:
-    ff = feature_flags()
-    ff.setdefault('observability', False)
-except Exception:
-    pass
-
-
-# Compliance relock and email flags defaults
-try:
-    ff = feature_flags()
-    ff.setdefault('compliance_relock', False)
-    ff.setdefault('email_enabled', False)
-except Exception:
-    pass
-
-
 # Compliance gate v2 flag default
 try:
     ff = feature_flags()
@@ -18974,20 +18754,9 @@ def render_proposal_wizard(notice_id: int):
             st.warning(f"Placeholder issues in {len(bad)} sections")
         st.button("Export (disabled until compliance is Green)", disabled=not ok)
         if ok and st.button("Export now"):
-            _t0 = _time.perf_counter()
-            
-            # Build snapshot of checklist and signoffs
-            snap_rows = pd.read_sql_query("select req_id, factor, subfactor, requirement, status, owner_id, due_date, evidence_file_id, evidence_page from lm_checklist where notice_id=?", conn, params=(int(notice_id),))
-            snap_sigs = pd.read_sql_query("select role, status, user_id, ts from signoffs where notice_id=?", conn, params=(int(notice_id),))
-            snapshot = json.dumps({"checklist": snap_rows.to_dict(orient="records"), "signoffs": snap_sigs.to_dict(orient="records")}, ensure_ascii=False)
-cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
-                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), snapshot))
-            
-            try:
-                metric_push('export_duration_ms', (_time.perf_counter()-_t0)*1000.0, {'type': 'docx'})
-            except Exception:
-                pass
-conn.commit()
+            cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
+                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), _jsonp5.dumps({"placeholders": bad})))
+            conn.commit()
             st.success("Export queued")
     cols = st.columns(3)
     with cols[0]:
@@ -21502,779 +21271,3 @@ def compute_sla_blockers():
         pass
     return blockers
 # === END DEALS PHASE 4 ===
-
-
-
-# === PHASE 10: Observability ===
-def ensure_observability_schema():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS metrics(
-        id INTEGER PRIMARY KEY,
-        ts TEXT NOT NULL,
-        name TEXT NOT NULL,
-        value REAL NOT NULL,
-        labels_json TEXT
-    );""" )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);")
-    cur.execute("""CREATE TABLE IF NOT EXISTS audit_log(
-        id INTEGER PRIMARY KEY,
-        ts TEXT NOT NULL,
-        user_id TEXT,
-        action TEXT NOT NULL,
-        entity TEXT,
-        entity_id TEXT,
-        meta_json TEXT
-    );""" )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);")
-    cur.execute("""CREATE TABLE IF NOT EXISTS error_events(
-        id INTEGER PRIMARY KEY,
-        ts TEXT NOT NULL,
-        error_id TEXT NOT NULL,
-        message TEXT NOT NULL,
-        context_json TEXT
-    );""" )
-    conn.commit()
-
-def metric_push(name: str, value: float, labels: dict|None=None):
-    if not feature_flags().get('observability', False):
-        return
-    ensure_observability_schema()
-    conn = get_db()
-    conn.execute("INSERT INTO metrics(ts,name,value,labels_json) VALUES(?,?,?,?)",
-                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(name), float(value), json.dumps(labels or {})))
-    conn.commit()
-
-class metric_timer:
-    def __init__(self, name:str, labels:dict|None=None):
-        self.name = name; self.labels = labels or {}; self.start = None
-    def __enter__(self):
-        self.start = _time.perf_counter()
-        return self
-    def __exit__(self, exc_type, exc, tb):
-        dur_ms = (_time.perf_counter() - self.start) * 1000.0 if self.start else 0.0
-        metric_push(self.name, dur_ms, self.labels | {"unit":"ms"})
-        if exc:
-            error_event(self.name + ".error", str(exc), {"labels": self.labels})
-        return False
-
-def audit(action:str, user_id:str|None=None, entity:str|None=None, entity_id:str|None=None, meta:dict|None=None):
-    if not feature_flags().get('observability', False):
-        return
-    ensure_observability_schema()
-    conn = get_db()
-    conn.execute("INSERT INTO audit_log(ts,user_id,action,entity,entity_id,meta_json) VALUES(?,?,?,?,?,?)",
-                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z',
-                  str(user_id or ''), str(action), str(entity or ''), str(entity_id or ''), json.dumps(meta or {})))
-    conn.commit()
-
-def error_event(error_id:str, message:str, ctx:dict|None=None):
-    if not feature_flags().get('observability', False):
-        return
-    ensure_observability_schema()
-    conn = get_db()
-    conn.execute("INSERT INTO error_events(ts,error_id,message,context_json) VALUES(?,?,?,?)",
-                 (utc_now_iso() if 'utc_now_iso' in globals() else _dt.datetime.utcnow().isoformat()+'Z', str(error_id), str(message), json.dumps(ctx or {})))
-    conn.commit()
-
-def render_health_card():
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('observability', False):
-        return
-    ensure_observability_schema()
-    conn = get_db()
-    since = (_dt.datetime.utcnow() - _dt.timedelta(days=1)).isoformat()+'Z'
-    def _avg(name):
-        try:
-            return conn.execute("select avg(value) from metrics where name=? and ts>=?", (name, since)).fetchone()[0]
-        except Exception:
-            return None
-    def _last_time(name):
-        try:
-            return conn.execute("select max(ts) from metrics where name=?", (name,)).fetchone()[0]
-        except Exception:
-            return None
-    api_ms = _avg("api_latency_ms") or 0
-    cache_hits = conn.execute("select count(*) from metrics where name='cache_hit' and value=1 and ts>=?", (since,)).fetchone()[0]
-    cache_total = conn.execute("select count(*) from metrics where name='cache_hit' and ts>=?", (since,)).fetchone()[0]
-    cache_pct = (100.0*cache_hits/cache_total) if cache_total else 0.0
-    email_ok = conn.execute("select count(*) from metrics where name='email_success' and value=1 and ts>=?", (since,)).fetchone()[0]
-    email_total = conn.execute("select count(*) from metrics where name='email_success' and ts>=?", (since,)).fetchone()[0]
-    email_rate = (100.0*email_ok/email_total) if email_total else 0.0
-    last_export = _last_time("export_duration_ms") or "n/a"
-    last_parser_err = conn.execute("select max(ts) from error_events where error_id like 'parser%'" ).fetchone()[0] if True else None
-    st.markdown("### Health")
-    c1,c2,c3 = st.columns(3)
-    c1.metric("API avg latency", f"{api_ms:.0f} ms")
-    c2.metric("Cache hit", f"{cache_pct:.0f}%")
-    c3.metric("Email delivery", f"{email_rate:.0f}%")
-    c4,c5 = st.columns(2)
-    c4.metric("Last export", last_export)
-    c5.metric("Last parser error", last_parser_err or "none")
-
-def render_admin_observability():
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('observability', False):
-        return
-    ensure_observability_schema()
-    st.subheader("Admin • Logs and Metrics")
-    d1, d2 = st.columns(2)
-    with d1:
-        start = st.text_input("Start ISO", value=(_dt.datetime.utcnow() - _dt.timedelta(days=7)).isoformat()+'Z')
-    with d2:
-        end = st.text_input("End ISO", value=_dt.datetime.utcnow().isoformat()+'Z')
-    u = st.text_input("User filter")
-    conn = get_db()
-    st.markdown("#### Audit log")
-    q = "select ts,user_id,action,entity,entity_id,meta_json from audit_log where ts between ? and ?"
-    params = [start, end]
-    if u:
-        q += " and user_id like ?"; params.append(f"%{u}%")
-    try:
-        import pandas as pd
-        df = pd.read_sql_query(q + " order by id desc limit 1000", conn, params=params)
-    except Exception:
-        df = None
-    if df is not None:
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    st.markdown("#### Metrics")
-    mname = st.text_input("Metric name")
-    mq = "select ts,name,value,labels_json from metrics where ts between ? and ?"
-    mparams = [start, end]
-    if mname:
-        mq += " and name=?"; mparams.append(mname)
-    try:
-        dm = pd.read_sql_query(mq + " order by id desc limit 1000", conn, params=mparams)
-    except Exception:
-        dm = None
-    if dm is not None:
-        st.dataframe(dm, use_container_width=True, hide_index=True)
-# === END PHASE 10 ===
-
-
-# Admin view injection
-try:
-    import streamlit as st
-    if feature_flags().get('observability', False) and st.sidebar.checkbox("Open Admin Observability"):
-        render_admin_observability()
-except Exception:
-    pass
-
-
-
-# === PERSIST PHASE 6: Config + Backups ===
-def ensure_config_table():
-    conn = get_db()
-    conn.execute("CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-    conn.commit()
-
-def get_config(key:str, default:str=None):
-    ensure_config_table()
-    conn = get_db()
-    row = conn.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
-    return row[0] if row else default
-
-def set_config(key:str, value:str):
-    ensure_config_table()
-    conn = get_db()
-    conn.execute("INSERT INTO config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;", (key, value))
-    conn.commit()
-
-def _current_sqlite_path(conn=None):
-    import sqlite3
-    conn = conn or get_db()
-    try:
-        row = conn.execute("PRAGMA database_list").fetchone()
-        return row[2] if row else None
-    except Exception:
-        return None
-
-
-def ensure_backups_dir():
-    import os
-    bdir = os.path.join('.', 'backups')
-    os.makedirs(bdir, exist_ok=True)
-    return bdir
-
-def sqlite_backup_now():
-    import os, shutil, datetime as _dt
-    conn = get_db()
-    src = _current_sqlite_path(conn)
-    if not src or not os.path.exists(src):
-        return {'ok': False, 'reason': 'not_sqlite'}
-    bdir = ensure_backups_dir()
-    stamp = _dt.datetime.utcnow().strftime('%Y%m%d')
-    dst = os.path.join(bdir, f"app-{stamp}.db")
-    try:
-        # Use SQLite backup API for consistency
-        import sqlite3
-        with sqlite3.connect(dst) as bconn:
-            conn.backup(bconn)
-        return {'ok': True, 'path': dst}
-    except Exception as ex:
-        # Fallback to file copy if backup API fails
-        try:
-            shutil.copy2(src, dst)
-            return {'ok': True, 'path': dst, 'mode': 'copy2'}
-        except Exception as ex2:
-            return {'ok': False, 'reason': str(ex2)}
-
-def last_backup_info():
-    import os, glob, datetime as _dt
-    bdir = ensure_backups_dir()
-    files = sorted(glob.glob(os.path.join(bdir, 'app-*.db')), reverse=True)
-    if not files:
-        return None
-    latest = files[0]
-    ts = _dt.datetime.utcfromtimestamp(os.path.getmtime(latest)).isoformat()+'Z'
-    return {'path': latest, 'ts': ts}
-
-def pg_dump_now(db_url: str):
-    # Best-effort placeholder: requires pg_dump installed in runtime
-    import subprocess, shlex, os, datetime as _dt
-    bdir = ensure_backups_dir()
-    stamp = _dt.datetime.utcnow().strftime('%Y%m%d')
-    outfile = os.path.join(bdir, f"pg-{stamp}.sql")
-    cmd = f"pg_dump {shlex.quote(db_url)} -f {shlex.quote(outfile)}"
-    try:
-        subprocess.run(cmd, shell=True, check=True, capture_output=True)
-        return {'ok': True, 'path': outfile}
-    except Exception as ex:
-        return {'ok': False, 'reason': str(ex), 'cmd': cmd}
-
-
-def render_data_health_card():
-    import streamlit as st, shutil, os, datetime as _dt
-    ensure_config_table()
-    st.markdown("### Data health")
-    # Last backup
-    info = last_backup_info()
-    last_ts = info['ts'] if info else 'none'
-    # WAL mode
-    conn = get_db()
-    try:
-        jmode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-    except Exception:
-        jmode = 'unknown'
-    # Disk free
-    total, used, free = shutil.disk_usage('.')
-    pct_free = (free/total*100.0) if total else 0.0
-    # Job backlog: unsent emails as proxy
-    try:
-        backlog = conn.execute("SELECT COUNT(*) FROM email_queue").fetchone()[0]
-    except Exception:
-        backlog = 0
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Last backup", last_ts)
-    c2.metric("Journal mode", jmode)
-    c3.metric("Free disk", f"{pct_free:.0f}%")
-    c4.metric("Job backlog", int(backlog))
-    # Alerts
-    alerts = []
-    try:
-        if info:
-            dt_last = _dt.datetime.fromisoformat(info['ts'].replace('Z',''))
-            if (_dt.datetime.utcnow()-dt_last).total_seconds() > 24*3600:
-                alerts.append("Backup older than 24h")
-        else:
-            alerts.append("No backups found")
-    except Exception:
-        pass
-    if pct_free < 10.0:
-        alerts.append("Disk < 10% free")
-    if alerts:
-        st.warning("; ".join(alerts))
-    # Actions
-    st.caption("Backup ops")
-    colA, colB = st.columns(2)
-    with colA:
-        if st.button("Run SQLite backup now"):
-            res = sqlite_backup_now()
-            if res.get('ok'):
-                st.success(f"Backup created: {res.get('path')}")
-            else:
-                st.error(f"Backup failed: {res.get('reason')}")
-    with colB:
-        pg_url = get_config('db_url_postgres', None)
-        if pg_url and st.button("Run pg_dump now"):
-            res = pg_dump_now(pg_url)
-            if res.get('ok'):
-                st.success(f"pg_dump created: {res.get('path')}")
-            else:
-                st.error(f"pg_dump failed: {res.get('reason')}")
-
-
-def apply_env_db_settings():
-    """Read config/env and secrets to decide DB target. Writes advisory note; actual reconnect requires app restart."""
-    ensure_config_table()
-    env = get_config('env', 'dev')
-    # These keys are advisory; app retains current connection until restart
-    # Expected secrets: secrets['db_path_dev'], ['db_path_prod'] or ['db_url_dev'], ['db_url_prod']
-    try:
-        import streamlit as st
-        st.session_state['active_env'] = env
-        # Store advisory targets in session for visibility
-        st.session_state['db_target_path'] = None
-        st.session_state['db_target_url'] = None
-        sec = st.secrets if 'st' in globals() else {}
-        if 'db_url_prod' in sec or 'db_url_dev' in sec:
-            st.session_state['db_target_url'] = sec['db_url_prod'] if env=='prod' else sec.get('db_url_dev')
-        elif 'db_path_prod' in sec or 'db_path_dev' in sec:
-            st.session_state['db_target_path'] = sec['db_path_prod'] if env=='prod' else sec.get('db_path_dev')
-    except Exception:
-        pass
-
-def render_env_switcher():
-    import streamlit as st
-    ensure_config_table()
-    st.markdown("### Environment")
-    env = get_config('env', 'dev')
-    new_env = st.selectbox("Active env", options=['dev','prod'], index=0 if env!='prod' else 1)
-    if st.button("Set env"):
-        set_config('env', new_env)
-        apply_env_db_settings()
-        st.success(f"Env set to {new_env}. Restart app to take effect for DB connection.")
-
-# === END PERSIST PHASE 6 ===
-
-
-
-# === RFP PHASE 3: Requirements Traceability Matrix (RTM) ===
-def ensure_rtm_schema():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS rtm(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        req_id TEXT NOT NULL,
-        factor TEXT,
-        subfactor TEXT,
-        requirement TEXT NOT NULL,
-        target_section_key TEXT,
-        evidence_note TEXT,
-        status TEXT NOT NULL CHECK(status IN('Unmapped','Planned','Written','Reviewed')),
-        updated_at TEXT NOT NULL
-    );""" )
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_rtm_req ON rtm(notice_id, req_id);")
-    conn.commit()
-
-def build_rtm(notice_id: int, rfp_json: dict|None=None):
-    if not feature_flags().get('rtm', False):
-        return {'ok': False, 'disabled': True}
-    ensure_rtm_schema()
-    conn = get_db(); cur = conn.cursor()
-    nid = int(notice_id)
-    inserted = 0
-    # Primary source: lm_checklist rows as requirements with stable req_id
-    try:
-        rows = cur.execute("select req_id, factor, subfactor, requirement from lm_checklist where notice_id=?", (nid,)).fetchall()
-    except Exception:
-        rows = []
-    for req_id, factor, subfactor, requirement in rows:
-        if not req_id:
-            req_id = (str(requirement)[:64] or '').lower()
-        try:
-            cur.execute("""INSERT OR IGNORE INTO rtm(notice_id, req_id, factor, subfactor, requirement, status, updated_at)
-                        VALUES(?,?,?,?,?, 'Unmapped', datetime('now'))""", (nid, req_id, factor, subfactor, requirement))
-            if cur.rowcount:
-                inserted += 1
-        except Exception:
-            pass
-    conn.commit()
-    return {'ok': True, 'inserted': inserted}
-
-def rtm_update(nid:int, row_id:int, **fields):
-    ensure_rtm_schema()
-    conn = get_db(); cur = conn.cursor()
-    allowed = {"target_section_key","evidence_note","status"}
-    sets = []; vals = []
-    for k,v in fields.items():
-        if k in allowed:
-            sets.append(f"{k}=?"); vals.append(v)
-    if not sets:
-        return False
-    sets.append("updated_at=datetime('now')")
-    sql = "UPDATE rtm SET " + ", ".join(sets) + " WHERE id=? AND notice_id=?"
-    vals.extend([int(row_id), int(nid)])
-    cur.execute(sql, vals)
-    conn.commit()
-    return True
-
-def rtm_coverage(nid:int):
-    import pandas as pd
-    ensure_rtm_schema()
-    conn = get_db()
-    try:
-        df = pd.read_sql_query("select factor, status from rtm where notice_id=?", conn, params=(int(nid),))
-    except Exception:
-        return {}, 0.0
-    if df.empty:
-        return {}, 0.0
-    score_map = {"Unmapped":0.0, "Planned":0.25, "Written":0.75, "Reviewed":1.0}
-    df['score'] = df['status'].map(score_map).fillna(0.0)
-    by_factor = df.groupby('factor')['score'].mean().to_dict()
-    overall = float(df['score'].mean())
-    return by_factor, overall
-
-def render_rtm_tab(nid:int):
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('rtm', False):
-        return
-    ensure_rtm_schema()
-    conn = get_db()
-    st.markdown("#### Requirements Traceability Matrix")
-    # Seed if empty
-    cnt = conn.execute("select count(*) from rtm where notice_id=?", (int(nid),)).fetchone()[0]
-    if cnt == 0:
-        try:
-            doc = build_rfpv1_from_notice(int(nid))
-            build_rtm(int(nid), doc)
-        except Exception:
-            pass
-    # Filters
-    factors = pd.read_sql_query("select distinct factor from rtm where notice_id=? order by factor", conn, params=(int(nid),))
-    f1,f2 = st.columns([2,2])
-    with f1:
-        fac = st.selectbox("Filter: factor", options=["All"] + factors['factor'].dropna().tolist())
-    with f2:
-        st_opts = ["All","Unmapped","Planned","Written","Reviewed"]
-        stf = st.selectbox("Filter: status", options=st_opts, index=0)
-    q = "select id, req_id, factor, subfactor, requirement, target_section_key, evidence_note, status from rtm where notice_id=?"
-    params = [int(nid)]
-    if fac != "All":
-        q += " and factor=?"; params.append(fac)
-    if stf != "All":
-        q += " and status=?"; params.append(stf)
-    df = pd.read_sql_query(q + " order by factor, subfactor, id", conn, params=params)
-    edited = st.data_editor(df, use_container_width=True, num_rows=0,
-                            column_config={
-                                "status": st.column_config.SelectboxColumn(options=["Unmapped","Planned","Written","Reviewed"])
-                            },
-                            key=f"rtm_edit_{nid}")
-    if st.button("Save RTM"):
-        for _, row in edited.iterrows():
-            rid = int(row['id'])
-            rtm_update(nid, rid,
-                       target_section_key=row.get('target_section_key'),
-                       evidence_note=row.get('evidence_note'),
-                       status=row.get('status'))
-        st.success("RTM saved.")
-        st.experimental_rerun()
-    # Coverage
-    by_factor, overall = rtm_coverage(nid)
-    st.markdown("#### Coverage")
-    if by_factor:
-        c1,c2 = st.columns([2,1])
-        with c1:
-            pdf = (pd.DataFrame({'factor': list(by_factor.keys()), 'coverage': [round(v*100,1) for v in by_factor.values()] })
-                    .sort_values('coverage', ascending=False))
-            st.dataframe(pdf, use_container_width=True, hide_index=True)
-        with c2:
-            st.metric("Overall", f"{overall*100:.1f}%")
-    else:
-        st.info("No RTM rows.")
-# === END RFP PHASE 3 ===
-
-
-
-# === RFP PHASE 4: Forms & Submission Rules (read-only) ===
-import re as _re
-
-def _rfp_collect_text(rfp_json: dict) -> str:
-    """Flatten likely text fields from analyzer JSON for simple regex scanning."""
-    if not rfp_json:
-        return ""
-    parts = []
-    def walk(x):
-        if isinstance(x, dict):
-            for k,v in x.items():
-                if isinstance(v, (dict, list)):
-                    walk(v)
-                else:
-                    if isinstance(v, str):
-                        parts.append(v)
-        elif isinstance(x, list):
-            for i in x:
-                walk(i)
-        elif isinstance(x, str):
-            parts.append(x)
-    walk(rfp_json)
-    return "\n".join(parts)
-
-def detect_sf_forms(rfp_json: dict):
-    """Return detected SF forms with best-effort details. Uses text search only."""
-    text = _rfp_collect_text(rfp_json).lower()
-    forms = [
-        ("SF 1449", ["sf 1449", "standard form 1449"]),
-        ("SF 33",   ["sf 33", "standard form 33"]),
-        ("SF 18",   ["sf 18", "standard form 18"]),
-        ("SF 30",   ["sf 30", "standard form 30"]),
-        ("SF 1447", ["sf 1447", "standard form 1447"]),
-    ]
-    results = []
-    for name, keys in forms:
-        found = any(k in text for k in keys)
-        if found:
-            # crude fill state hints
-            fill = []
-            if "offeror" in text: fill.append("Offeror info")
-            if "duns" in text or "uei" in text: fill.append("UEI/DUNS")
-            if "cage" in text: fill.append("CAGE")
-            if "signature" in text: fill.append("Signature")
-            if "date" in text: fill.append("Date")
-            results.append({"form": name, "detected": True, "fill_hints": fill})
-    return results
-
-def extract_submission_rules(rfp_json: dict):
-    """Heuristic extraction for subject line rules, copies count, naming, and portal steps."""
-    text = _rfp_collect_text(rfp_json)
-    low = text.lower()
-    rules = {}
-    # Subject line
-    m = _re.search(r"subject\s*:?\s*(line\s*)?should\s*(?:read|include)[:\-]?\s*(.+)", low)
-    if m:
-        rules["subject_rule"] = m.group(2)[:200]
-    elif "subject:" in low:
-        frag = low.split("subject:")[1][:160]
-        rules["subject_rule"] = frag.strip()
-    # Copies
-    m2 = _re.search(r"(\d+)\s+(?:hard|paper)\s+cop(?:y|ies)", low)
-    if m2:
-        try: rules["hard_copies"] = int(m2.group(1))
-        except Exception: pass
-    m3 = _re.search(r"(\d+)\s+(?:electronic|soft)\s+cop(?:y|ies)", low)
-    if m3:
-        try: rules["soft_copies"] = int(m3.group(1))
-        except Exception: pass
-    # File naming
-    m4 = _re.search(r"file\s+name(?:s)?\s*(?:must|should)\s*(?:be|follow)\s*[:\-]?\s*([^\n\r]{1,160})", low)
-    if m4:
-        rules["file_naming"] = m4.group(1).strip()
-    # Portal steps
-    if "sam.gov" in low or "piee" in low or "procurement integrated enterprise environment" in low or "wawf" in low:
-        rules["portal"] = "SAM.gov / PIEE submission"
-    return rules
-
-def submission_checklist(nid:int, rules:dict, forms:list):
-    """Compute read-only warnings. No gating."""
-    conn = get_db()
-    warns = []
-    # forms coverage vs required_docs names
-    try:
-        req_docs = conn.execute("select name, provided from required_docs where notice_id=?", (int(nid),)).fetchall()
-    except Exception:
-        req_docs = []
-    have_names = [r[0].lower() for r in req_docs]
-    for f in forms:
-        fname = f.get("form")
-        if fname and not any(fname.lower() in n for n in have_names):
-            warns.append(f"Required form {fname} not listed in Required documents.")
-    # naming check: if a file naming pattern exists, compare against notice_files names
-    pat = rules.get("file_naming")
-    if pat:
-        try:
-            files = conn.execute("select file_name from notice_files where notice_id=?", (int(nid),)).fetchall()
-            bad = []
-            for (nm,) in files:
-                if nm and pat:
-                    # simple check: ensure all tokens in pattern appear in name if tokens are uppercase words or placeholders
-                    tokens = [t for t in _re.split(r"[^A-Za-z0-9]+", pat) if t]
-                    if tokens and not all(t.lower() in nm.lower() for t in tokens[:2]):  # minimal heuristic
-                        bad.append(nm)
-            if bad:
-                warns.append("Possible bad file names: " + ", ".join(bad[:6]))
-        except Exception:
-            pass
-    return warns
-
-def render_forms_and_submission_tabs(nid:int):
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('submission_rules', False):
-        return
-    try:
-        doc = build_rfpv1_from_notice(int(nid))
-    except Exception:
-        doc = None
-    forms = detect_sf_forms(doc or {})
-    rules = extract_submission_rules(doc or {})
-    tabs = st.tabs(["Forms", "Submission"])
-    with tabs[0]:
-        st.markdown("#### Standard Forms")
-        if forms:
-            st.dataframe(pd.DataFrame(forms), use_container_width=True, hide_index=True)
-        else:
-            st.info("No SF forms detected in analyzer text.")
-        # Show mapping to required docs if present
-        try:
-            conn = get_db()
-            mapdf = pd.read_sql_query("select id, name, template_key, provided from required_docs where notice_id=?", conn, params=(int(nid),))
-            st.markdown("#### Required docs mapping")
-            st.dataframe(mapdf, use_container_width=True, hide_index=True)
-        except Exception:
-            pass
-    with tabs[1]:
-        st.markdown("#### Submission rules")
-        if rules:
-            st.json(rules)
-        else:
-            st.info("No explicit submission rules parsed.")
-        warns = submission_checklist(nid, rules, forms)
-        st.markdown("#### Pre-export checklist (read-only)")
-        if warns:
-            for w in warns:
-                st.warning(w)
-        else:
-            st.success("No obvious issues detected.")
-# === END RFP PHASE 4 ===
-
-
-
-# === RFP PHASE 5: SOW tasks and Price hints ===
-import re as _re
-
-def ensure_sow_price_schema():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS sow_tasks(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        task_id TEXT NOT NULL,
-        text TEXT NOT NULL,
-        location TEXT,
-        hours_hint REAL,
-        labor_cats_hint TEXT,
-        cite_file TEXT,
-        cite_page INTEGER
-    );""" )
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_sow_task ON sow_tasks(notice_id, task_id);")
-    cur.execute("""CREATE TABLE IF NOT EXISTS clin_hints(
-        id INTEGER PRIMARY KEY,
-        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
-        clin TEXT,
-        desc TEXT,
-        uom TEXT,
-        qty_hint REAL,
-        cite_file TEXT,
-        cite_page INTEGER
-    );""" )
-    conn.commit()
-
-def _flatten_text_with_cites(doc: dict):
-    """Yield tuples (text, file, page) from analyzer JSON best-effort."""
-    if not doc:
-        return
-    def walk(x, file=None, page=None):
-        if isinstance(x, dict):
-            file = x.get('cite_file', file)
-            page = x.get('cite_page', page)
-            for k,v in x.items():
-                if isinstance(v, (dict,list)):
-                    yield from walk(v, file, page)
-                elif isinstance(v, str):
-                    yield v, file, page
-        elif isinstance(x, list):
-            for i in x:
-                yield from walk(i, file, page)
-    yield from walk(doc)
-
-def _stable_id(*parts):
-    import hashlib
-    base = "|".join([str(p or "") for p in parts]).lower().strip()
-    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
-
-def harvest_sow_tasks(nid: int, rfp_json: dict):
-    if not feature_flags().get('sow_price_hints', False):
-        return {'ok': False, 'disabled': True}
-    ensure_sow_price_schema()
-    conn = get_db(); cur = conn.cursor()
-    nid = int(nid)
-    inserted = 0
-    for text, cfile, cpage in _flatten_text_with_cites(rfp_json or {}):
-        t = text.strip()
-        low = t.lower()
-        if len(t) > 40 and any(k in low for k in ["shall", "will", "perform", "provide", "deliver"]):
-            loc = None
-            mloc = _re.search(r"(?:at|in)\s+([A-Z][A-Za-z\-\s]+)", t)
-            if mloc: loc = mloc.group(1)[:80]
-            hours = None
-            mh = _re.search(r"(\d{1,3}(?:\.\d+)?)\s*(?:hours?|hrs?)", low)
-            if mh:
-                try: hours = float(mh.group(1))
-                except Exception: hours = None
-            cats = None
-            mcat = _re.search(r"(?:labor|personnel)\s+(?:category|cat(?:egory)?)\s*[:\-]?\s*([^\.;\n]{1,80})", low)
-            if mcat: cats = mcat.group(1)
-            tid = _stable_id(t[:120], cfile or "", cpage or 0)
-            try:
-                cur.execute("""INSERT OR IGNORE INTO sow_tasks(notice_id, task_id, text, location, hours_hint, labor_cats_hint, cite_file, cite_page)
-                              VALUES(?,?,?,?,?,?,?,?)""", (nid, tid, t, loc, hours, cats, cfile, int(cpage) if cpage else None))
-                if cur.rowcount:
-                    inserted += 1
-            except Exception:
-                pass
-    conn.commit()
-    return {'ok': True, 'inserted': inserted}
-
-def harvest_clins(nid: int, rfp_json: dict):
-    if not feature_flags().get('sow_price_hints', False):
-        return {'ok': False, 'disabled': True}
-    ensure_sow_price_schema()
-    conn = get_db(); cur = conn.cursor()
-    nid = int(nid)
-    inserted = 0
-    for text, cfile, cpage in _flatten_text_with_cites(rfp_json or {}):
-        # Detect CLIN like "CLIN 0001"
-        m = _re.search(r"clin\s+([0-9A-Za-z]{3,6})", text, flags=_re.IGNORECASE)
-        if m:
-            clin = m.group(1)
-            uom = None; qty = None
-            mu = _re.search(r"(?:uom|unit(?: of)? measure)[:\s]+([A-Za-z/]{2,10})", text, flags=_re.IGNORECASE)
-            if mu: uom = mu.group(1).upper()
-            mq = _re.search(r"(?:qty|quantity)[:\s]+(\d+(?:\.\d+)?)", text, flags=_re.IGNORECASE)
-            if mq:
-                try: qty = float(mq.group(1))
-                except Exception: pass
-            desc = text.strip()[:300]
-            try:
-                cur.execute("""INSERT INTO clin_hints(notice_id, clin, desc, uom, qty_hint, cite_file, cite_page)
-                              VALUES(?,?,?,?,?,?,?)""", (nid, clin, desc, uom, qty, cfile, int(cpage) if cpage else None))
-                inserted += 1
-            except Exception:
-                pass
-    conn.commit()
-    return {'ok': True, 'inserted': inserted}
-
-def render_sow_price_tabs(nid:int):
-    import streamlit as st, pandas as pd
-    if not feature_flags().get('sow_price_hints', False):
-        return
-    ensure_sow_price_schema()
-    conn = get_db()
-    try:
-        doc = build_rfpv1_from_notice(int(nid))
-    except Exception:
-        doc = None
-    if conn.execute("select count(*) from sow_tasks where notice_id=?", (int(nid),)).fetchone()[0] == 0:
-        try: harvest_sow_tasks(nid, doc or {})
-        except Exception: pass
-    if conn.execute("select count(*) from clin_hints where notice_id=?", (int(nid),)).fetchone()[0] == 0:
-        try: harvest_clins(nid, doc or {})
-        except Exception: pass
-    tabs = st.tabs(["SOW", "Price"])
-    with tabs[0]:
-        st.markdown("#### SOW tasks")
-        df = pd.read_sql_query("select task_id, text, location, hours_hint, labor_cats_hint, cite_file, cite_page from sow_tasks where notice_id=? order by id", conn, params=(int(nid),))
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    with tabs[1]:
-        st.markdown("#### CLINs and hints")
-        df2 = pd.read_sql_query("select clin, desc, uom, qty_hint, cite_file, cite_page from clin_hints where notice_id=? order by id", conn, params=(int(nid),))
-        st.dataframe(df2, use_container_width=True, hide_index=True)
-        # Wage determination presence hint
-        try:
-            txt = "\n".join([t for t,_,_ in _flatten_text_with_cites(doc or {})])
-        except Exception:
-            txt = ""
-        wd = "SCA" if "service contract act" in txt.lower() or "wd " in txt.lower() else None
-        if wd:
-            st.caption("Wage determination references detected (e.g., SCA). Map to labor categories in next phase.")
-# === END RFP PHASE 5 ===
