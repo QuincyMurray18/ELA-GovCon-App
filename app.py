@@ -2004,20 +2004,20 @@ def _get_notice_meta_from_db(opp_id):
 
         cur = conn.cursor()
 
-        table_candidates = [
-
+#         table_candidates = [
+# 
 #             ('notices', {
-
-                'title': ['title','notice_title','name','subject'],
-
-                'agency': ['agency','agency_name','buyer','office'],
-
-                'due':   ['due_date','response_due','close_date','offer_due'],
-
-                'set':   ['set_aside','setaside','set_asides','naics_set_aside']
-
-            }),
-
+# 
+#                 'title': ['title','notice_title','name','subject'],
+# 
+#                 'agency': ['agency','agency_name','buyer','office'],
+# 
+#                 'due':   ['due_date','response_due','close_date','offer_due'],
+# 
+#                 'set':   ['set_aside','setaside','set_asides','naics_set_aside']
+# 
+#             }),
+# 
 #             ('opportunities', {
 
                 'title': ['title','name','subject'],
