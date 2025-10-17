@@ -2803,6 +2803,30 @@ def run_crm(conn: sqlite3.Connection) -> None:
 
 
 
+
+def _ensure_files_table(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS files(
+                    id INTEGER PRIMARY KEY,
+                    owner_type TEXT,
+                    owner_id INTEGER,
+                    filename TEXT,
+                    path TEXT,
+                    size INTEGER,
+                    mime TEXT,
+                    tags TEXT,
+                    notes TEXT,
+                    uploaded_at TEXT
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_type, owner_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_files_tags ON files(tags);")
+            conn.commit()
+    except Exception:
+        pass
+
 # ---------- Phase J: File Manager & Submission Kit ----------
 def _detect_mime(name: str) -> str:
     name = (name or "").lower()
@@ -2817,6 +2841,7 @@ def _detect_mime(name: str) -> str:
 
 
 def run_file_manager(conn: sqlite3.Connection) -> None:
+    _ensure_files_table(conn)
     st.header("File Manager")
     st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
 
@@ -2893,7 +2918,15 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         if f_kw:
             q += " AND filename LIKE ?"; params.append(f"%{f_kw}%")
         q += " ORDER BY uploaded_at DESC"
-        df_files = pd.read_sql_query(q, conn, params=params)
+        try:
+            df_files = pd.read_sql_query(q, conn, params=params)
+        except Exception as e:
+            _ensure_files_table(conn)
+            try:
+                df_files = pd.read_sql_query(q, conn, params=params)
+            except Exception as e2:
+                st.error(f"Failed to load files: {e2}")
+                df_files = pd.DataFrame()
         if df_files.empty:
             st.write("No files yet.")
         else:
@@ -2940,8 +2973,11 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                            key="fm_kit_rfp")
 
     # Load files for this RFP
-    df_kit = pd.read_sql_query("SELECT id, filename, path, tags FROM files WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;",
-                               conn, params=(int(kit_rfp),))
+    try:
+        df_kit = pd.read_sql_query("SELECT id, filename, path, tags FROM files WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(kit_rfp),))
+    except Exception:
+        _ensure_files_table(conn)
+        df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
     st.caption("Select attachments to include")
     selected = []
     if df_kit.empty:
