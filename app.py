@@ -461,7 +461,29 @@ def get_db() -> sqlite3.Connection:
                 pass
         for t in core_tables:
             _create_view(t)
+
+        # Phase N (Persist): Pragmas
+        try:
+            cur.execute("PRAGMA journal_mode=WAL;")
+            cur.execute("PRAGMA synchronous=NORMAL;")
+            cur.execute("PRAGMA foreign_keys=ON;")
+            cur.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
+
+        # Schema version for migrations
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version(
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                ver INTEGER
+            );
+        """)
+        cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
         conn.commit()
+    try:
+        migrate(conn)
+    except Exception:
+        pass
     return conn
 
 
@@ -3480,6 +3502,243 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
                 df.to_csv(path, index=False)
                 st.success("Exported"); st.markdown(f"[Download CSV]({path})")
 
+
+def _db_path_from_conn(conn: sqlite3.Connection) -> str:
+    try:
+        df = pd.read_sql_query("PRAGMA database_list;", conn)
+        p = df[df["name"]=="main"]["file"].values[0]
+        return p or str(Path(DATA_DIR) / "app.db")
+    except Exception:
+        return str(Path(DATA_DIR) / "app.db")
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight idempotent migrations and indices."""
+    with closing(conn.cursor()) as cur:
+        # read current version
+        try:
+            ver = int(pd.read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn).iloc[0]["ver"])
+        except Exception:
+            ver = 0
+
+        # v1: add common indexes
+        if ver < 1:
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_lm_items_rfp ON lm_items(rfp_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_files_owner2 ON files(owner_type, owner_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);")
+            except Exception:
+                pass
+            cur.execute("UPDATE schema_version SET ver=1 WHERE id=1;")
+            conn.commit()
+
+        # v2: ensure NOT NULL defaults where safe (no schema changes if exists)
+        if ver < 2:
+            try:
+                cur.execute("PRAGMA foreign_keys=ON;")
+            except Exception:
+                pass
+            cur.execute("UPDATE schema_version SET ver=2 WHERE id=1;")
+            conn.commit()
+
+        # v3: WAL checkpoint to ensure clean state
+        if ver < 3:
+            try:
+                cur.execute("PRAGMA wal_checkpoint(FULL);")
+            except Exception:
+                pass
+            cur.execute("UPDATE schema_version SET ver=3 WHERE id=1;")
+            conn.commit()
+
+
+
+# ---------- Phase N: Backup & Data ----------
+def _current_tenant(conn: sqlite3.Connection) -> int:
+    try:
+        return int(pd.read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn).iloc[0]["ctid"])
+    except Exception:
+        return 1
+
+def _safe_name(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", s or "")
+
+def _backup_db(conn: sqlite3.Connection) -> str | None:
+    # Prefer VACUUM INTO; fallback to file copy using sqlite3 backup API
+    db_path = _db_path_from_conn(conn)
+    ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    out = Path(DATA_DIR) / f"backup_{ts}.db"
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute(f"VACUUM INTO '{str(out)}';")
+        return str(out)
+    except Exception:
+        # fallback: use backup API
+        try:
+            import sqlite3 as _sq
+            src = _sq.connect(db_path)
+            dst = _sq.connect(str(out))
+            with dst:
+                src.backup(dst)
+            src.close(); dst.close()
+            return str(out)
+        except Exception as e:
+            st.error(f"Backup failed: {e}")
+            return None
+
+def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
+    # Use backup API to copy uploaded DB into main DB file
+    db_path = _db_path_from_conn(conn)
+    tmp = Path(DATA_DIR) / ("restore_" + _safe_name(upload.name))
+    try:
+        tmp.write_bytes(upload.getbuffer())
+    except Exception as e:
+        st.error(f"Could not write uploaded file: {e}")
+        return False
+    try:
+        import sqlite3 as _sq
+        src = _sq.connect(str(tmp))
+        dst = _sq.connect(db_path)
+        with dst:
+            src.backup(dst)  # replaces content
+        src.close(); dst.close()
+        return True
+    except Exception as e:
+        st.error(f"Restore failed: {e}")
+        return False
+
+def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool = True) -> str | None:
+    name = table_or_view
+    if scoped and not name.endswith("_t"):
+        # if a view exists, prefer it
+        name_t = name + "_t"
+        try:
+            pd.read_sql_query(f"SELECT 1 FROM {name_t} LIMIT 1;", conn)
+            name = name_t
+        except Exception:
+            pass
+    try:
+        df = pd.read_sql_query(f"SELECT * FROM {name};", conn)
+        if df.empty:
+            st.info("No rows to export.")
+        path = Path(DATA_DIR) / f"export_{name}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        df.to_csv(path, index=False)
+        return str(path)
+    except Exception as e:
+        st.error(f"Export failed: {e}")
+        return None
+
+def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scoped_to_current: bool=True) -> int:
+    # Read CSV and insert rows. If tenant_id missing and scoped, stamp with current tenant.
+    import io
+    try:
+        df = pd.read_csv(io.BytesIO(csv_file.getbuffer()))
+    except Exception as e:
+        st.error(f"CSV read failed: {e}")
+        return 0
+    if scoped_to_current and "tenant_id" not in df.columns:
+        df["tenant_id"] = _current_tenant(conn)
+    # Align columns with destination
+    try:
+        cols = pd.read_sql_query(f"PRAGMA table_info({table});", conn)["name"].tolist()
+    except Exception as e:
+        st.error(f"Table info failed: {e}")
+        return 0
+    present = [c for c in df.columns if c in cols]
+    if not present:
+        st.error("No matching columns in CSV.")
+        return 0
+    df2 = df[present].copy()
+    # Drop ID if autoincrement
+    if "id" in df2.columns:
+        try: df2 = df2.drop(columns=["id"])
+        except Exception: pass
+    # Insert
+    try:
+        placeholders = ",".join(["?"]*len(df2.columns))
+        sql = f"INSERT INTO {table}({','.join(df2.columns)}) VALUES({placeholders});"
+        with closing(conn.cursor()) as cur:
+            cur.executemany(sql, df2.itertuples(index=False, name=None))
+            conn.commit()
+        return len(df2)
+    except Exception as e:
+        st.error(f"Import failed: {e}")
+        return 0
+
+def run_backup_and_data(conn: sqlite3.Connection) -> None:
+    st.header("Backup & Data")
+    st.caption("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
+
+    st.subheader("Database Info")
+    dbp = _db_path_from_conn(conn)
+    st.write(f"Path: `{dbp}`")
+    try:
+        ver = pd.read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn).iloc[0]["ver"]
+    except Exception:
+        ver = "n/a"
+    st.write(f"Schema version: **{ver}**")
+
+    c1, c2, c3 = st.columns([2,2,2])
+    with c1:
+        if st.button("Run Migrations"):
+            try:
+                migrate(conn); st.success("Migrations done")
+            except Exception as e:
+                st.error(f"Migrations failed: {e}")
+    with c2:
+        if st.button("WAL Checkpoint (FULL)"):
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("PRAGMA wal_checkpoint(FULL);")
+                st.success("Checkpoint complete")
+            except Exception as e:
+                st.error(f"Checkpoint failed: {e}")
+    with c3:
+        if st.button("Analyze DB"):
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("ANALYZE;")
+                st.success("ANALYZE done")
+            except Exception as e:
+                st.error(f"ANALYZE failed: {e}")
+
+    st.divider()
+    st.subheader("Backup & Restore")
+    b1, b2 = st.columns([2,2])
+    with b1:
+        if st.button("Create Backup (.db)"):
+            p = _backup_db(conn)
+            if p: st.success("Backup created"); st.markdown(f"[Download backup]({p})")
+    with b2:
+        up = st.file_uploader("Restore from .db file", type=["db","sqlite","sqlite3"])
+        if up and st.button("Restore Now"):
+            ok = _restore_db_from_upload(conn, up)
+            if ok:
+                st.success("Restore completed. Please rerun the app.")
+                st.experimental_rerun()
+
+    st.divider()
+    st.subheader("Export / Import CSV")
+    tables = ["rfps","lm_items","lm_meta","deals","activities","tasks","deal_stage_log",
+              "vendors","files","rfq_packs","rfq_lines","rfq_vendors","rfq_attach","contacts"]
+    tsel = st.selectbox("Table", options=tables, key="persist_tbl")
+    e1, e2 = st.columns([2,2])
+    with e1:
+        if st.button("Export CSV (current workspace)"):
+            p = _export_table_csv(conn, tsel, scoped=True)
+            if p: st.success("Exported"); st.markdown(f"[Download CSV]({p})")
+    with e2:
+        if st.button("Export CSV (all rows)"):
+            p = _export_table_csv(conn, tsel, scoped=False)
+            if p: st.success("Exported"); st.markdown(f"[Download CSV]({p})")
+
+    upcsv = st.file_uploader("Import into selected table from CSV", type=["csv"], key="persist_upcsv")
+    if upcsv and st.button("Import CSV"):
+        n = _import_csv_into_table(conn, upcsv, tsel, scoped_to_current=True)
+        if n:
+            st.success(f"Imported {n} row(s) into {tsel}")
+            st.experimental_rerun()
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -3503,6 +3762,7 @@ def nav() -> str:
             "Subcontractor Finder",
             "Outreach",
             "RFQ Pack",
+            "Backup & Data",
             "Quote Comparison",
             "Pricing Calculator",
             "Win Probability",
@@ -3570,6 +3830,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_outreach(conn)
     elif page == "RFQ Pack":
         run_rfq_pack(conn)
+    elif page == "Backup & Data":
+        run_backup_and_data(conn)
     elif page == "Quote Comparison":
         run_quote_comparison(conn)
     elif page == "Pricing Calculator":
