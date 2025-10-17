@@ -1560,7 +1560,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         st.write("No obvious flags detected.")
     else:
         st.dataframe(flags, use_container_width=True, hide_index=True)
-    
+
 
 
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
@@ -2774,7 +2774,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
                 bullets = []
                 for line in blk.split("\n"):
                     line = line.strip()
-                    if not line: 
+                    if not line:
                         continue
                     if not line.startswith("**"):
                         bullets.append(f"- {line}")
@@ -3276,7 +3276,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                 saved = 0
                 for f in ups:
                     pth = save_uploaded_file(f, subdir="attachments")
-                    if not pth: 
+                    if not pth:
                         continue
                     try:
                         with closing(conn.cursor()) as cur:
@@ -3465,7 +3465,7 @@ def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
 def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> str | None:
     from zipfile import ZipFile, ZIP_DEFLATED
     pack = _rfq_pack_by_id(conn, pack_id)
-    if not pack: 
+    if not pack:
         st.error("Pack not found"); return None
     title = pack.get("title") or f"RFQ_{pack_id}"
     # Files to include
