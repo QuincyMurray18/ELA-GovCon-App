@@ -10,12 +10,6 @@ import pandas as pd
 import io
 import streamlit as st
 
-import inspect, hashlib
-def ns(scope: str, name: str, suffix: str | int | None = None) -> str:
-    frame = inspect.currentframe().f_back
-    seed = f"{scope}:{frame.f_code.co_filename}:{frame.f_lineno}:{name}:{suffix or ''}"
-    return "k_" + hashlib.md5(seed.encode()).hexdigest()[:12]
-
 # External
 import requests
 import smtplib
@@ -1152,13 +1146,13 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_parse:
         colA, colB = st.columns([3,2])
         with colA:
-            ups = st.file_uploader("Upload RFP(s, key=ns("ra","uploader")) (PDF/DOCX/TXT)", type=["pdf","docx","txt"], accept_multiple_files=True)
+            ups = st.file_uploader("Upload RFP(s) (PDF/DOCX/TXT)", type=["pdf","docx","txt"], accept_multiple_files=True, key=ns("ra","uploader"))
             with st.expander("Manual Text Paste (optional)", expanded=False):
                 pasted = st.text_area("Paste any text to include in parsing", height=150, key="ra_paste")
             title = st.text_input("RFP Title (used if combining)", key="ra_title")
             solnum = st.text_input("Solicitation # (used if combining)", key="ra_solnum")
             sam_url = st.text_input("SAM URL (used if combining)", placeholder="https://sam.gov/...")
-            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True, key=ns("ra","mode"))
+            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
         with colB:
             st.markdown("**Parse Controls**")
             run = st.button("Parse & Save", type="primary", key="ra_parse_btn")
@@ -1413,7 +1407,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             title = st.text_input("RFP Title (used if combining)", key="ra_title")
             solnum = st.text_input("Solicitation # (used if combining)", key="ra_solnum")
             sam_url = st.text_input("SAM URL (used if combining)", key="ra_sam_url", placeholder="https://sam.gov/...")
-            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True, key=ns("ra","radio_2") )
+            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
         with colB:
             st.markdown("**Parse Controls**")
             run = st.button("Parse & Save", type="primary", key="ra_parse_btn")
