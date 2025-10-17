@@ -1545,7 +1545,7 @@ def _estimate_pages(total_words: int, spacing: str) -> float:
         wpp = 275
     return round(max(1.0, total_words / wpp), 2)
 
-def _render_outline_docx(out_path: str, title: str, sections: dict[str, str], checklist: "pd.DataFrame" | None, metadata: dict | None, font_name: str = "Times New Roman", font_size_pt: int = 11, spacing: str = "1.15") -> str:
+def _render_outline_docx(out_path: str, title: str, sections: dict[str, str], checklist: Optional[pd.DataFrame] = None, metadata: Optional[dict] = None, font_name: str = "Times New Roman", font_size_pt: int = 11, spacing: str = "1.15") -> str:
     try:
         import docx  # python-docx
         from docx.shared import Pt
