@@ -1088,17 +1088,16 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             try:
                 tbl = df_p.fillna("").astype(str)
                 lines = [f"{r.get('name','')} ({r.get('role','')}), {r.get('email','')}" for r in tbl.to_dict(orient="records")]
-                parts.append("**Government POCs**\n- " + "\n- ".join(lines[:10]))
+                parts.append("**Government POCs**\\n- " + "\\n- ".join(lines[:10]))
             except Exception:
                 pass
         # Attributes
         if meta:
             attribs = [f"{k}: {v}" for k,v in meta.items() if v]
             if attribs:
-                parts.append("**Attributes**\n- " + "\n- ".join(attribs[:12]))
-        return "\n\n".join(parts).strip()
+                parts.append("**Attributes**\\n- " + "\\n- ".join(attribs[:12]))
+        return "\\n\\n".join(parts).strip()
 
-".join(parts).strip()
 
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
