@@ -4729,3 +4729,16 @@ def render_rfp_analyzer_phase_r_v2():
 
 # Replace old renderer with v2
 render_rfp_analyzer_phase_r = render_rfp_analyzer_phase_r_v2
+
+
+
+# === Phase R authoritative entrypoint override ===
+def run_rfp_analyzer(*args, **kwargs):
+    try:
+        return render_rfp_analyzer_phase_r_v2()  # type: ignore[name-defined]
+    except Exception:
+        try:
+            return render_rfp_analyzer_phase_r()  # fallback if v2 alias not present
+        except Exception:
+            return None
+# === End override ===
