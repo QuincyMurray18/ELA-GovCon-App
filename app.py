@@ -10,6 +10,12 @@ import pandas as pd
 import io
 import streamlit as st
 
+import inspect, hashlib
+def ns(scope: str, name: str, suffix: str | int | None = None) -> str:
+    frame = inspect.currentframe().f_back
+    seed = f"{scope}:{frame.f_code.co_filename}:{frame.f_lineno}:{name}:{suffix or ''}"
+    return "k_" + hashlib.md5(seed.encode()).hexdigest()[:12]
+
 # External
 import requests
 import smtplib
