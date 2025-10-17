@@ -1038,101 +1038,204 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
+    
 
-    # ---------------- PARSE & SAVE ----------------
+    # --- heuristics to auto-fill Title and Solicitation # ---
+    def _guess_title(text: str, fallback: str) -> str:
+        for line in (text or "").splitlines():
+            s = line.strip()
+            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
+                return s[:200]
+        return fallback
+
+    def _guess_solnum(text: str) -> str:
+        if not text:
+            return ""
+    # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
+    def _extract_naics(text: str) -> str:
+        if not text: return ""
+        m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
+        if m: return m.group(1)[:6]
+        m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
+        if m: return m.group(1)
+        m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
+        return m.group(1) if m else ""
+
+    def _extract_set_aside(text: str) -> str:
+        if not text: return ""
+        tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
+        for t in tags:
+            if re.search(rf'(?i)\b{re.escape(t)}\b', text):
+                norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
+                if norm == "8(A)": norm = "8A"
+                return norm
+        m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
+        if m:
+            v = m.group(1).strip()
+            v = re.sub(r'\s+', ' ', v)
+            return v[:80]
+        return ""
+
+    def _extract_place(text: str) -> str:
+        if not text: return ""
+        m = re.search(r'(?i)Place\s+of\s+Performance\s*[:\-]?\s*([^\n]{3,80})', text)
+        if m: return m.group(1).strip()
+        m = re.search(r'\b([A-Z][a-zA-Z]+,\s*(?:[A-Z]{2}|[A-Za-z\. ]{3,}))\b', text)
+        return m.group(1).strip() if m else ""
+
+    # ensure rfp_meta exists
+    try:
+        with closing(conn.cursor()) as _c:
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_meta(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
+                    key TEXT,
+                    value TEXT
+                );
+            """)
+            conn.commit()
+    except Exception:
+        pass
+
+        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
+        if m:
+            return m.group(2)[:60]
+        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
+        if m:
+            return m.group(1)[:60]
+        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
+        if m:
+            return (m.group(1).upper() + "-" + m.group(2))[:60]
+        return ""
+# ---------------- PARSE & SAVE ----------------
     with tab_parse:
         colA, colB = st.columns([3,2])
         with colA:
-            up = st.file_uploader("Upload RFP (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"], key="rfp_up")
+            ups = st.file_uploader(
+                "Upload RFP(s) (PDF/DOCX/TXT)",
+                type=["pdf","docx","txt"],
+                accept_multiple_files=True,
+                key="rfp_ups"
+            )
             with st.expander("Manual Text Paste (optional)", expanded=False):
                 pasted = st.text_area("Paste any text to include in parsing", height=150, key="rfp_paste")
-            title = st.text_input("RFP Title", key="rfp_title")
-            solnum = st.text_input("Solicitation #", key="rfp_solnum")
-            sam_url = st.text_input("SAM URL", key="rfp_sam_url", placeholder="https://sam.gov/...")
+            title = st.text_input("RFP Title (used if combining)", key="rfp_title")
+            solnum = st.text_input("Solicitation # (used if combining)", key="rfp_solnum")
+            sam_url = st.text_input("SAM URL (used if combining)", key="rfp_sam_url", placeholder="https://sam.gov/...")
+            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
         with colB:
             st.markdown("**Parse Controls**")
             run = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
-            st.caption("We'll auto-extract Section L/M checklist items, CLINs, key dates, and POCs.")
+            st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
+
+        def _read_file(file):
+            name = file.name.lower()
+            data = file.read()
+            if name.endswith(".txt"):
+                try:
+                    return data.decode("utf-8")
+                except Exception:
+                    return data.decode("latin-1", errors="ignore")
+            if name.endswith(".pdf"):
+                try:
+                    import PyPDF2  # type: ignore
+                    reader = PyPDF2.PdfReader(io.BytesIO(data))
+                    pages = [(p.extract_text() or "") for p in reader.pages]
+                    return "\\n".join(pages)
+                except Exception as e:
+                    st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
+                    return data.decode("latin-1", errors="ignore")
+            if name.endswith(".docx"):
+                try:
+                    import docx  # python-docx
+                    f = io.BytesIO(data)
+                    doc = docx.Document(f)
+                    return "\\n".join([p.text for p in doc.paragraphs])
+                except Exception as e:
+                    st.warning(f"DOCX parse failed for {file.name}: {e}.")
+                    return ""
+            st.error(f"Unsupported file type: {file.name}")
+            return ""
 
         if run:
-            
-            # ---- load text ----
-            text_parts = []
-            if up is not None:
-                name = up.name.lower()
-                data = up.read()
-                if name.endswith(".txt"):
-                    try:
-                        text_parts.append(data.decode("utf-8"))
-                    except Exception:
-                        text_parts.append(data.decode("latin-1", errors="ignore"))
-                elif name.endswith(".pdf"):
-                    try:
-                        import io, PyPDF2  # type: ignore
-                        reader = PyPDF2.PdfReader(io.BytesIO(data))
-                        pages = [(p.extract_text() or "") for p in reader.pages]
-                        text_parts.append("\n".join(pages))
-                    except Exception as e:
-                        st.warning(f"PDF text extraction failed: {e}. Falling back to binary decode.")
-                        text_parts.append(data.decode("latin-1", errors="ignore"))
-                elif name.endswith(".docx"):
-                    try:
-                        import io, docx  # python-docx
-                        f = io.BytesIO(data)
-                        doc = docx.Document(f)
-                        text_parts.append("\n".join([p.text for p in doc.paragraphs]))
-                    except Exception as e:
-                        st.warning(f"DOCX parse failed: {e}. Try uploading a TXT or PDF.")
+            if (not ups) and (not pasted):
+                st.error("No input. Upload at least one file or paste text.")
+            else:
+                if mode == "Combine all into one RFP":
+                    text_parts = []
+                    for f in ups or []:
+                        text_parts.append(_read_file(f))
+                    if pasted:
+                        text_parts.append(pasted)
+                    full_text = "\\n\\n".join([t for t in text_parts if t]).strip()
+                    if not full_text:
+                        st.error("Nothing readable found.")
+                    else:
+                        secs = extract_sections_L_M(full_text)
+                        l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
+                        clins = extract_clins(full_text); dates = extract_dates(full_text); pocs = extract_pocs(full_text)
+                        meta = {
+                            'naics': _extract_naics(full_text),
+                            'set_aside': _extract_set_aside(full_text),
+                            'place_of_performance': _extract_place(full_text),
+                        }
+                        with closing(conn.cursor()) as cur:
+                            cur.execute(
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",)
+                            )
+                            rfp_id = cur.lastrowid
+                            for it in l_items:
+                                cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
+                                            (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
+                            for r in clins:
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                            (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
+                            for d in dates:
+                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                            (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
+                            for pc in pocs:
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                            (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
+                            conn.commit()
+                        st.success(f"Combined and saved RFP #{rfp_id} (items: {len(l_items)}, CLINs: {len(clins)}, dates: {len(dates)}, POCs: {len(pocs)}).")
                 else:
-                    st.error("Unsupported file type")
+                    saved = 0
+                    for f in ups or []:
+                        text = _read_file(f)
+                        if not text.strip():
+                            continue
+                        secs = extract_sections_L_M(text)
+                        l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
+                        clins = extract_clins(text); dates = extract_dates(text); pocs = extract_pocs(text)
+                        meta = {
+                            'naics': _extract_naics(text),
+                            'set_aside': _extract_set_aside(text),
+                            'place_of_performance': _extract_place(text),
+                        }
+                        with closing(conn.cursor()) as cur:
+                            cur.execute(
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                (_guess_title(text, f.name), _guess_solnum(text), "", "", "",)
+                            )
+                            rfp_id = cur.lastrowid
+                            for it in l_items:
+                                cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
+                                            (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
+                            for r in clins:
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                            (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
+                            for d in dates:
+                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                            (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
+                            for pc in pocs:
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                            (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
+                            conn.commit()
+                        saved += 1
+                    st.success(f"Saved {saved} RFP record(s).")
 
-            if pasted:
-                text_parts.append(pasted)
-
-            full_text = "\n\n".join([t for t in text_parts if t]).strip()
-
-            # ---- derive artifacts ----
-            secs = extract_sections_L_M(full_text)
-            l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
-            clins = extract_clins(full_text)
-            dates = extract_dates(full_text)
-            pocs = extract_pocs(full_text)
-
-            # ---- persist ----
-            with closing(conn.cursor()) as cur:
-                cur.execute(
-                    "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                    (title.strip() or "Untitled", solnum.strip() or "", "", sam_url.strip() or "", "",),
-                )
-                rfp_id = cur.lastrowid
-                for it in l_items:
-                    cur.execute(
-                        "INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
-                        (rfp_id, it, 1 if re.search(r'\b(shall|must|required|mandatory|no later than|shall not|will)\b', it, re.IGNORECASE) else 0, "Open"),
-                    )
-                for r in clins:
-                    cur.execute(
-                        "INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
-                        (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')),
-                    )
-                for d in dates:
-                    cur.execute(
-                        "INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
-                        (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')),
-                    )
-                for pc in pocs:
-                    cur.execute(
-                        "INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
-                        (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')),
-                    )
-                conn.commit()
-            st.success(f"Parsed and saved RFP #{rfp_id} with {len(l_items)} checklist items, {len(clins)} CLIN rows, {len(dates)} dates, {len(pocs)} POCs.")
-
-            # Previews
-            with st.expander("Section L (preview)", expanded=bool(secs.get('L'))):
-                st.write(secs.get('L','')[:4000] or "Not found")
-            with st.expander("Section M (preview)", expanded=bool(secs.get('M'))):
-                st.write(secs.get('M','')[:4000] or "Not found")
 
     # ---------------- CHECKLIST ----------------
     with tab_checklist:
@@ -1184,6 +1287,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         with col3:
             df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),))
             st.subheader("POCs"); st.dataframe(df_p, use_container_width=True, hide_index=True)
+        st.subheader("Attributes")
+        df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+        st.dataframe(df_meta, use_container_width=True, hide_index=True)
 
 def _compliance_progress(df_items: pd.DataFrame) -> int:
     if df_items is None or df_items.empty:
