@@ -7293,7 +7293,7 @@ def _us_date(d: datetime.date) -> str:
     return d.strftime("%m/%d/%Y")
 
 def _parse_sam_date(s: str):
-    if not s: return None:
+    if not s: return None
     s=s.replace("Z", "").strip()
     for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y"):
         try:
@@ -8957,7 +8957,7 @@ def _load_latest_rfp_json(nid: int) -> dict | None:
     conn=get_db()
     r=conn.execute(
         "SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(nid),)).fetchone()
-    if not r: return None:
+    if not r: return None
     try: return json.loads(r[0])
     except Exception: return None
 # ===== end RFP Parser Phase 2 =====
@@ -14416,7 +14416,7 @@ def _rfp_p2_notice_row(nid: int):
     conn=get_db()
     row=conn.execute(
         "SELECT id,sam_notice_id,notice_type,title,agency,set_aside,place_city,place_state FROM notices WHERE id=?", (int(nid),)).fetchone()
-    if not row: return None:
+    if not row: return None
     cols=["id", "sam_notice_id", "notice_type", "title",
         "agency", "set_aside", "place_city", "place_state"]
     return dict(zip(cols, row)
@@ -15792,7 +15792,7 @@ def _p5_latest_rfp_json(notice_id: int):
     conn=get_db(); cur=conn.cursor()
     row=cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(
         notice_id),)).fetchone()
-    if not row: return None:
+    if not row: return None
     try: return _jsonp5.loads(row[0])
     except Exception: return None
 
@@ -16002,7 +16002,10 @@ def _rfp6_flag():
 
 def _rfp6_load_versions(notice_id: int):
     conn=get_db(); cur=conn.cursor()
-    rows=cur.execute("SELECT version_hash, data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 2", (int(notice_id),)).fetchall()
+rows = cur.execute(
+    "SELECT version_hash, data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 2",
+    (int(notice_id),)
+).fetchall()
     if not rows or len(rows) < 2:
         return None
     to_hash, to_js = rows[0][0], rows[0][1]
@@ -16196,7 +16199,7 @@ def _b7_schema():
 def _b7_latest_json(notice_id: int):
     conn = get_db(); cur = conn.cursor()
     row = cur.execute('SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1', (int(notice_id),)).fetchone()
-    if not row: return None:
+    if not row: return None
     try: return _json7.loads(row[0])
     except Exception: return None
 
@@ -16414,12 +16417,12 @@ def _haversine_miles(lat1, lon1, lat2, lon2):
     a = _math_sub1.sin(dphi/2)**2 + _math_sub1.cos(p1)*_math_sub1.cos(p2)*_math_sub1.sin(dl/2)**2
     return 2*R*_math_sub1.asin(_math_sub1.sqrt(a)
 def _norm_phone(p):
-    if not p: return None:
+    if not p: return None
     digits = "".join([c for c in str(p) if c.isdigit()])
     return digits or None
 
 def _norm_domain(url):
-    if not url: return None:
+    if not url: return None
     try:
         netloc = _urlparse_sub1(url).netloc.lower()
         if netloc.startswith("www."):
@@ -16682,7 +16685,7 @@ def _sub2_schema():
     conn.commit()
 
 def _sub2_state_from_addr(addr: str):
-    if not addr: return None:
+    if not addr: return None
     # look for ', XX ' two-letter state
     m = _re_sub2.search(r',\s*([A-Z]{2})(\s|,|$)', addr)
     if m:
@@ -17382,7 +17385,7 @@ def _rfqg_get_or_create_rfq(notice_id: int, owner_id: str):
         if "owner_id" in cols: fields["owner_id"] = owner_id:
         if "status" in cols: fields["status"] = "Draft":
         if "created_at" in cols: fields["created_at"] = _dt_rfqg.datetime.utcnow().isoformat()
-        if not fields: return None:
+        if not fields: return None
         cols_sql = ",".join(fields.keys()); ph = ",".join(["?"]*len(fields)
         cur.execute(f"INSERT INTO rfq({cols_sql}) VALUES({ph})", tuple(fields.values()))
         conn.commit()
