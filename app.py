@@ -782,7 +782,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             st.caption("Use Open in SAM for attachments and full details")
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
-(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
     ctx = st.session_state.get("rfp_selected_notice")
     if ctx:
