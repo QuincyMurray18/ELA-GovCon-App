@@ -258,6 +258,45 @@ def get_db() -> sqlite3.Connection:
                 notes TEXT
             );
         """)
+
+        # Phase H (White Paper Builder)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS white_templates(
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS white_template_sections(
+                id INTEGER PRIMARY KEY,
+                template_id INTEGER NOT NULL REFERENCES white_templates(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                title TEXT,
+                body TEXT
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS white_papers(
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                subtitle TEXT,
+                rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS white_paper_sections(
+                id INTEGER PRIMARY KEY,
+                paper_id INTEGER NOT NULL REFERENCES white_papers(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                title TEXT,
+                body TEXT,
+                image_path TEXT
+            );
+        """)
         conn.commit()
     return conn
 
@@ -2310,6 +2349,228 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
             st.markdown(f"[Download DOCX]({exp})")
 
 
+
+
+# ---------- Phase H: White Paper Builder ----------
+def _wp_load_template(conn: sqlite3.Connection, template_id: int) -> pd.DataFrame:
+    return pd.read_sql_query(
+        "SELECT id, position, title, body FROM white_template_sections WHERE template_id=? ORDER BY position ASC;",
+        conn, params=(template_id,)
+    )
+
+def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
+    return pd.read_sql_query(
+        "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
+        conn, params=(paper_id,)
+    )
+
+def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> str | None:
+    try:
+        from docx import Document  # type: ignore
+        from docx.shared import Inches  # type: ignore
+    except Exception:
+        st.error("python-docx is required. pip install python-docx")
+        return None
+    doc = Document()
+    doc.add_heading(title or "White Paper", level=1)
+    if subtitle:
+        p = doc.add_paragraph(subtitle); p.runs[0].italic = True
+    for _, r in sections.sort_values("position").iterrows():
+        doc.add_heading(r.get("title") or "Section", level=2)
+        body = r.get("body") or ""
+        for para in str(body).split("\n\n"):
+            if para.strip():
+                doc.add_paragraph(para.strip())
+        img = r.get("image_path")
+        if img and Path(img).exists():
+            try:
+                doc.add_picture(img, width=Inches(5.5))
+            except Exception:
+                pass
+    doc.save(path)
+    return path
+
+def run_white_paper_builder(conn: sqlite3.Connection) -> None:
+    st.header("White Paper Builder")
+    st.caption("Templates → Drafts → DOCX export. Can include images per section.")
+
+    # --- Templates ---
+    with st.expander("Templates", expanded=False):
+        df_t = pd.read_sql_query("SELECT id, name, description, created_at FROM white_templates ORDER BY id DESC;", conn)
+        t_col1, t_col2 = st.columns([2,2])
+        with t_col1:
+            st.subheader("Create Template")
+            t_name = st.text_input("Template name", key="wp_t_name")
+            t_desc = st.text_area("Description", key="wp_t_desc", height=70)
+            if st.button("Save Template", key="wp_t_save"):
+                if not t_name.strip():
+                    st.error("Name required")
+                else:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("INSERT INTO white_templates(name, description, created_at) VALUES(?,?,datetime('now'));", (t_name.strip(), t_desc.strip()))
+                        conn.commit()
+                    st.success("Template saved"); st.experimental_rerun()
+        with t_col2:
+            if df_t.empty:
+                st.info("No templates yet.")
+            else:
+                st.subheader("Edit Template Sections")
+                t_sel = st.selectbox("Choose template", options=df_t["id"].tolist(), format_func=lambda tid: df_t.loc[df_t["id"]==tid, "name"].values[0], key="wp_t_sel")
+                df_ts = _wp_load_template(conn, int(t_sel))
+                st.dataframe(df_ts, use_container_width=True, hide_index=True)
+                st.markdown("**Add section**")
+                ts_title = st.text_input("Section title", key="wp_ts_title")
+                ts_body = st.text_area("Default body", key="wp_ts_body", height=120)
+                if st.button("Add section to template", key="wp_ts_add"):
+                    pos = int((df_ts["position"].max() if not df_ts.empty else 0) + 1)
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("INSERT INTO white_template_sections(template_id, position, title, body) VALUES(?,?,?,?);",
+                                    (int(t_sel), pos, ts_title.strip(), ts_body.strip()))
+                        conn.commit()
+                    st.success("Section added"); st.experimental_rerun()
+                # Reorder / delete (simple)
+                if not df_ts.empty:
+                    st.markdown("**Reorder / Delete**")
+                    for _, r in df_ts.iterrows():
+                        c1, c2, c3 = st.columns([2,1,1])
+                        with c1:
+                            new_pos = st.number_input(f"#{int(r['id'])} pos", min_value=1, value=int(r['position']), step=1, key=f"wp_ts_pos_{int(r['id'])}")
+                        with c2:
+                            if st.button("Apply", key=f"wp_ts_pos_apply_{int(r['id'])}"):
+                                with closing(conn.cursor()) as cur:
+                                    cur.execute("UPDATE white_template_sections SET position=? WHERE id=?;", (int(new_pos), int(r["id"])))
+                                    conn.commit()
+                                st.success("Updated position"); st.experimental_rerun()
+                        with c3:
+                            if st.button("Delete", key=f"wp_ts_del_{int(r['id'])}"):
+                                with closing(conn.cursor()) as cur:
+                                    cur.execute("DELETE FROM white_template_sections WHERE id=?;", (int(r["id"]),))
+                                    conn.commit()
+                                st.success("Deleted"); st.experimental_rerun()
+
+    st.divider()
+
+    # --- Drafts ---
+    st.subheader("Drafts")
+    df_p = pd.read_sql_query("SELECT id, title, subtitle, created_at, updated_at FROM white_papers ORDER BY id DESC;", conn)
+    c1, c2 = st.columns([2,2])
+    with c1:
+        st.markdown("**Create draft from template**")
+        df_t = pd.read_sql_query("SELECT id, name FROM white_templates ORDER BY id DESC;", conn)
+        d_title = st.text_input("Draft title", key="wp_d_title")
+        d_sub = st.text_input("Subtitle (optional)", key="wp_d_sub")
+        if df_t.empty:
+            st.caption("No templates available")
+            t_sel2 = None
+        else:
+            t_sel2 = st.selectbox("Template", options=[None] + df_t["id"].tolist(),
+                                  format_func=lambda x: "Blank" if x is None else df_t.loc[df_t["id"]==x, "name"].values[0],
+                                  key="wp_d_template")
+        if st.button("Create draft", key="wp_d_create"):
+            if not d_title.strip():
+                st.error("Title required")
+            else:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("INSERT INTO white_papers(title, subtitle, rfp_id, created_at, updated_at) VALUES(?,?,?,?,datetime('now'));",
+                                (d_title.strip(), d_sub.strip(), None, datetime.utcnow().isoformat()))
+                    pid = cur.lastrowid
+                    if t_sel2:
+                        df_ts2 = _wp_load_template(conn, int(t_sel2))
+                        for _, r in df_ts2.sort_values("position").iterrows():
+                            cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body) VALUES(?,?,?,?);",
+                                        (int(pid), int(r["position"]), r.get("title"), r.get("body")))
+                    conn.commit()
+                st.success("Draft created"); st.experimental_rerun()
+    with c2:
+        if df_p.empty:
+            st.info("No drafts yet.")
+        else:
+            st.markdown("**Open a draft**")
+            p_sel = st.selectbox("Draft", options=df_p["id"].tolist(), format_func=lambda pid: df_p.loc[df_p["id"]==pid, "title"].values[0], key="wp_d_sel")
+
+    # Editing panel
+    if 'p_sel' in locals() and p_sel:
+        st.subheader(f"Editing draft #{int(p_sel)}")
+        df_sec = _wp_load_paper(conn, int(p_sel))
+        # Add section
+        st.markdown("**Add section**")
+        ns_title = st.text_input("Section title", key="wp_ns_title")
+        ns_body = st.text_area("Body", key="wp_ns_body", height=140)
+        ns_img = st.file_uploader("Optional image", type=["png","jpg","jpeg"], key="wp_ns_img")
+        if st.button("Add section", key="wp_ns_add"):
+            img_path = None
+            if ns_img is not None:
+                img_path = save_uploaded_file(ns_img, subdir="whitepapers")
+            pos = int((df_sec["position"].max() if not df_sec.empty else 0) + 1)
+            with closing(conn.cursor()) as cur:
+                cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body, image_path) VALUES(?,?,?,?,?);",
+                            (int(p_sel), pos, ns_title.strip(), ns_body.strip(), img_path))
+                cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
+                conn.commit()
+            st.success("Section added"); st.experimental_rerun()
+
+        # Section list
+        if df_sec.empty:
+            st.info("No sections yet.")
+        else:
+            for _, r in df_sec.iterrows():
+                st.markdown(f"**Section #{int(r['position'])}: {r.get('title') or 'Untitled'}**")
+                e1, e2, e3, e4 = st.columns([2,1,1,1])
+                with e1:
+                    new_title = st.text_input("Title", value=r.get("title") or "", key=f"wp_sec_title_{int(r['id'])}")
+                    new_body = st.text_area("Body", value=r.get("body") or "", key=f"wp_sec_body_{int(r['id'])}", height=140)
+                with e2:
+                    new_pos = st.number_input("Pos", value=int(r["position"]), min_value=1, step=1, key=f"wp_sec_pos_{int(r['id'])}")
+                    if st.button("Apply", key=f"wp_sec_apply_{int(r['id'])}"):
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("UPDATE white_paper_sections SET title=?, body=?, position=? WHERE id=?;",
+                                        (new_title.strip(), new_body.strip(), int(new_pos), int(r["id"])))
+                            cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
+                            conn.commit()
+                        st.success("Updated"); st.experimental_rerun()
+                with e3:
+                    up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
+                    if st.button("Save image", key=f"wp_sec_img_save_{int(r['id'])}"):
+                        if up_img is None:
+                            st.warning("Choose an image first")
+                        else:
+                            img_path = save_uploaded_file(up_img, subdir="whitepapers")
+                            with closing(conn.cursor()) as cur:
+                                cur.execute("UPDATE white_paper_sections SET image_path=? WHERE id=?;", (img_path, int(r["id"])))
+                                cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
+                                conn.commit()
+                            st.success("Image saved"); st.experimental_rerun()
+                with e4:
+                    if st.button("Delete", key=f"wp_sec_del_{int(r['id'])}"):
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("DELETE FROM white_paper_sections WHERE id=?;", (int(r["id"]),))
+                            cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
+                            conn.commit()
+                        st.success("Deleted"); st.experimental_rerun()
+                st.divider()
+
+            # Export & Push
+            x1, x2 = st.columns([2,2])
+            with x1:
+                if st.button("Export DOCX", key="wp_export"):
+                    out_path = str(Path(DATA_DIR) / f"White_Paper_{int(p_sel)}.docx")
+                    exp = _wp_export_docx(out_path,
+                                          df_p.loc[df_p["id"]==p_sel, "title"].values[0],
+                                          df_p.loc[df_p["id"]==p_sel, "subtitle"].values[0] if "subtitle" in df_p.columns else "",
+                                          _wp_load_paper(conn, int(p_sel)))
+                    if exp:
+                        st.success("Exported"); st.markdown(f"[Download DOCX]({exp})")
+            with x2:
+                if st.button("Push narrative to Proposal Builder", key="wp_push"):
+                    # Concatenate sections to markdown
+                    secs = _wp_load_paper(conn, int(p_sel))
+                    lines = []
+                    for _, rr in secs.sort_values("position").iterrows():
+                        lines.append(f"## {rr.get('title') or 'Section'}\n\n{rr.get('body') or ''}")
+                    md = "\n\n".join(lines)
+                    st.session_state["pb_section_White Paper"] = md
+                    st.success("Pushed to Proposal Builder → 'White Paper' section")
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -2328,6 +2589,7 @@ def nav() -> str:
             "L and M Checklist",
             "Proposal Builder",
             "Past Performance",
+            "White Paper Builder",
             "Subcontractor Finder",
             "Outreach",
             "Quote Comparison",
@@ -2352,6 +2614,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_proposal_builder(conn)
     elif page == "Past Performance":
         run_past_performance(conn)
+    elif page == "White Paper Builder":
+        run_white_paper_builder(conn)
     elif page == "Subcontractor Finder":
         run_subcontractor_finder(conn)
     elif page == "Outreach":
