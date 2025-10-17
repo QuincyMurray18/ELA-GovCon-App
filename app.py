@@ -9002,7 +9002,7 @@ def render_rfp_analyzer():
             for up in uploads:
                 text = read_doc(up)[:800_000]
                 conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
-                                values(?,?,?,?)""", (session_id, up.name, getattr(up, "type", ""), text)
+                                values(?,?,?,?)", (session_id, up.name, getattr(up, "type", ""), text))
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
@@ -9053,7 +9053,7 @@ def render_rfp_analyzer():
             for _, r in rows.iterrows():
                 cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
                 chunks.extend(cs)
-                labels.extend([r["filename"]]*len(cs)
+                labels.extend([r["filename"]]*len(cs))
             vec, X = embed_texts(chunks)
             top = search_chunks(question_text, vec, X, chunks, k=min(8, len(chunks)))
             parts, used = [], set()
@@ -9093,7 +9093,7 @@ def render_rfp_analyzer():
         if pending_prompt:
             # Save user turn
             conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "user", pending_prompt)
+                         (session_id, "user", pending_prompt))
             conn.commit()
 
             # Build system and context using company snapshot and RFP snippets
@@ -9125,12 +9125,12 @@ def render_rfp_analyzer():
                         pruned.append(m)
                         user_turns += 1
                     continue
-            msgs_window = list(reversed(pruned)
+            msgs_window = list(reversed(pruned))
             messages = [{"role": "system", "content": sys_text}] + msgs_window
 
             assistant_out = llm_messages(messages, temp=0.2, max_tokens=1200)
             conn.execute("insert into rfp_messages(session_id, role, content) values(?,?,?)",
-                         (session_id, "assistant", assistant_out)
+                         (session_id, "assistant", assistant_out))
             conn.commit()
 
             st.chat_message("user").markdown(pending_prompt)
@@ -9278,7 +9278,7 @@ def render_proposal_builder():
                 chunks, labels = [], []
                 for _, r in rows.iterrows():
                     cs = chunk_text(r["content_text"], max_chars=1200, overlap=200)
-                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs)
+                    chunks.extend(cs); labels.extend([r["filename"]]*len(cs))
                 vec, X = embed_texts(chunks)
                 top = search_chunks(question_text, vec, X, chunks, k=min(10, len(chunks)))
                 parts, used = [], set()
@@ -9296,11 +9296,11 @@ def render_proposal_builder():
             # Pull past performance selections text if any
             pp_text = ""
             if selected_pp_ids:
-                qmarks = ",".join(["?"]*len(selected_pp_ids)
-                df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids)
+                qmarks = ",".join(["?"]*len(selected_pp_ids))
+                df_sel = pd.read_sql_query(f"select title, agency, performance_period, value, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
                 lines = []
                 for _, r in df_sel.iterrows():
-                    lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                    lines.append(f"- {r['title']} — {r['agency']} ({r['performance_period']}) — ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
                 pp_text = "\n".join(lines)
 
             # Build common system context
@@ -9415,7 +9415,7 @@ def render_proposal_builder():
             for sec, txt in parts:
                 doc.add_heading(sec, level=1)
                 for para in txt.split("\n\n"):
-                    doc.add_paragraph(_strip_markdown_to_plain(para)
+                    doc.add_paragraph(_strip_markdown_to_plain(para))
             bio = io.BytesIO()
             doc.save(bio)
             bio.seek(0)
@@ -9623,7 +9623,7 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
 
         if _re.match(r"^\d+\.\s+", line):
             flush_bullets()
-            num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)
+            num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1))
             continue
 
         flush_bullets(); flush_numbers()
@@ -9780,13 +9780,13 @@ def upsert_deal_from_notice(user_id: str, notice_id: int, default_stage: str = "
         # Upsert by notice_id
         cur.execute(
             """INSERT INTO deals(title, stage, owner, amount, notes, agency, due_date, notice_id, updated_at)
-               VALUES(?,?,?,?,?,?,?, ?, datetime('now')
+               VALUES(?,?,?,?,?,?,?,?, datetime('now'))
                ON CONFLICT(notice_id) DO UPDATE SET
                    title=excluded.title,
                    agency=excluded.agency,
                    due_date=excluded.due_date,
                    updated_at=datetime('now')""",
-            (title, default_stage, user_id, None, "Auto-added from SAM", agency, due_date, int(notice_id)
+            (title, default_stage, user_id, None, "Auto-added from SAM", agency, due_date, int(notice_id))
         )
         conn.commit()
         _bump_deals_refresh()
@@ -9856,7 +9856,7 @@ def create_deal_activity(deal_id:int, type_:str, title:str="", note:str="", due_
     conn = get_db(); cur = conn.cursor()
     cur.execute("""INSERT INTO deal_activities(deal_id,type,title,note,due_at,status,created_by,updated_at)
                    VALUES(?,?,?,?,?,?,?, datetime('now'))""",
-                (int(deal_id), str(type_), title or "", note or "", due_at, status, created_by)
+                (int(deal_id), str(type_), title or "", note or "", due_at, status, created_by))
     conn.commit()
     return cur.lastrowid
 
@@ -9865,7 +9865,7 @@ def list_deal_activities(deal_id:int=None, type_filter:str=None, status:str=None
     sql = "SELECT id,deal_id,type,title,note,due_at,status,created_by,created_at,updated_at FROM deal_activities WHERE 1=1"
     params = []
     if deal_id is not None:
-        sql += " AND deal_id=?"; params.append(int(deal_id)
+        sql += " AND deal_id=?"; params.append(int(deal_id))
     if type_filter:
         sql += " AND type=?"; params.append(type_filter)
     if status:
@@ -9889,7 +9889,7 @@ def update_deal_activity(id_:int, **fields):
             set_clause.append(f"{k}=?"); params.append(v)
     if not set_clause:
         return False
-    params.append(int(id_)
+    params.append(int(id_))
     conn = get_db(); cur = conn.cursor()
     cur.execute(f"UPDATE deal_activities SET {', '.join(set_clause)}, updated_at=datetime('now') WHERE id=?", params)
     conn.commit()
@@ -9913,7 +9913,7 @@ def enqueue_task_due_email(activity_id:int, to_email:str=None):
     cur.execute("""INSERT INTO email_queue(to_email,subject,body,send_at,status,ref_activity_id)
                    VALUES(?,?,?,?, 'queued', ?)""",
                 (to_email, subject, body, a_due, int(activity_id))
-    conn.commit()
+    )
     return True
 
 
@@ -9940,9 +9940,9 @@ def forecast_by_period(mode: str = "month", owner: str = None):
         return _pd.DataFrame(columns=["period","count","amount","weighted"])
     df["amount"] = _pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
     df["win_prob"] = _pd.to_numeric(df["win_prob"], errors="coerce").fillna(0.2)
-    df["period"] = df["due_date"].apply(lambda x: _period_key(x, mode)
+    df["period"] = df["due_date"].apply(lambda x: _period_key(x, mode))
     df["weighted"] = df["amount"] * df["win_prob"]
-    agg = df.groupby("period", as_index=False).agg(count=("id","count"), amount=("amount","sum"), weighted=("weighted","sum"))
+    agg = df.groupby("period", as_index=False).agg(count=("amount","size"), amount=("amount","sum"), weighted=("weighted","sum"))
     agg = agg.sort_values("period").reset_index(drop=True)
     totals = {"period":"Total", "count":int(agg["count"].sum() if not agg.empty else 0),
               "amount":float(agg["amount"].sum() if not agg.empty else 0.0),
@@ -10002,11 +10002,11 @@ def compute_win_prob_from_signals(deal_id: int) -> float:
                     cov_delta = (avg/100.0 - 0.5) * 0.3  # -0.15 to +0.15
         except Exception:
             cov_delta = 0.0
-    p = max(0.01, min(0.95, base + comp_delta + cov_delta)
+    p = max(0.01, min(0.95, base + comp_delta + cov_delta))
     return p
 
 def update_win_prob_from_signals(deal_id: int) -> float:
-    p = compute_win_prob_from_signals(int(deal_id)
+    p = compute_win_prob_from_signals(int(deal_id))
     conn = get_db(); cur = conn.cursor()
     cur.execute("UPDATE deals SET win_prob=?, updated_at=datetime('now') WHERE id=?", (float(p), int(deal_id)))
     conn.commit()
@@ -10038,7 +10038,7 @@ def list_sla_blockers(stale_days: int = 7, soon_days: int = 7):
         try:
             items = _json.loads(js or "[]")
             if items:
-                last_ts = max(int(x.get("ts", 0)) for x in items if isinstance(x, dict)
+            last_ts = max(int(x.get("ts", 0)) for x in items if isinstance(x, dict))
                 last_change[did] = last_ts
         except Exception:
             pass
@@ -10108,12 +10108,14 @@ def create_deal(title: str, stage: str, owner: str | None, amount: float | None,
     conn = get_db()
     ensure_deals_table(conn)
     cur = conn.cursor()
-    cur.execute("""
-        insert into deals (title, stage, owner, amount, notes, agency, due_date, stage_history)
-        values (?,?,?,?,?,?,?, json('[{"ts":'||strftime('%s','now')||',"from":null,"to":'||quote(?)||',"who":quote(coalesce(?,'system'))||'}]'))
-    """, (title, stage, owner, amount, notes, agency, due_date)
-    
-try:
+    stage_hist = json.dumps([{"ts": datetime.datetime.utcnow().isoformat(), "from": None, "to": stage, "who": (owner or "system")}])
+    cur.execute(
+        "insert into deals (title, stage, owner, amount, notes, agency, due_date, stage_history) values (?,?,?,?,?,?,?,?)",
+        (title, stage, owner, amount, notes, agency, due_date, stage_hist),
+    )
+    conn.commit()
+    return cur.lastrowid
+
     cur.execute("UPDATE deals SET stage_history=json_insert(coalesce(stage_history,'[]'),'$[#]', json_object('ts', strftime('%s','now'), 'from', NULL, 'to', stage, 'who', coalesce(owner,'system'))) WHERE id=(SELECT max(id) FROM deals)")
 except Exception:
     pass
@@ -10193,11 +10195,13 @@ if feature_flags().get("deals_activities"):
         with c1:
             if st.button("Log call"):
                 if sel_deal:
-                    create_deal_activity(deal_opts[sel_deal], "call", title="Call logged", note="", created_by=st.session_state.get("active_user")
+                    create_deal_activity(deal_opts[sel_deal], kind="call", status="logged", note="", created_by=st.session_state.get("active_user"))
                     st.success("Call logged")
         with c2:
             if st.button("Add note"):
-                i
+                if sel_deal:
+                    create_deal_activity(deal_opts[sel_deal], kind="note", status="added", note="", created_by=st.session_state.get("active_user"))
+                    st.success("Note added")
 
 if feature_flags().get("deals_activities"):
     st.divider()
@@ -10289,7 +10293,7 @@ if feature_flags().get("deals_forecast"):
             if submitted:
                 ok = True
                 if do_delete:
-                    ok = delete_deal_activity(int(aid)
+                    ok = delete_deal_activity(int(aid))
                 else:
                     ok = update_deal_activity(int(aid), status=new_status)
                 if ok:
@@ -10342,7 +10346,7 @@ egacy_tabs[13]:
         _stage_amounts = _pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         _stage_totals = _stage_amounts.groupby(df["stage"]).sum() if not df.empty else _pd.Series(dtype=float)
         _stage_totals = _stage_totals.reindex(DEAL_STAGES).fillna(0)
-        _cols = st.columns(len(DEAL_STAGES)
+        _cols = st.columns(len(DEAL_STAGES))
         for _i, _stage in enumerate(DEAL_STAGES):
             with _cols[_i]:
                 st.metric(_stage, f"${float(_stage_totals.get(_stage, 0.0)):,.2f}")
@@ -10436,7 +10440,7 @@ egacy_tabs[13]:
                     grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
                     st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
 
-                    cols = st.columns(len(DEAL_STAGES)
+                    cols = st.columns(len(DEAL_STAGES))
                     for i, stage_name in enumerate(DEAL_STAGES):
                         with cols[i]:
                             st.markdown(f"#### {stage_name}")
@@ -10570,7 +10574,7 @@ def extract_keywords_and_sections(src: str) -> Dict[str, List[str]]:
         if len(ln) <= 2:
             continue
         if re.match(r'^\s*(\d+(\.\d+)*)?\s*[A-Z][A-Za-z0-9 \-\/&]{3,}$', ln.strip()):
-            heads.append(ln.strip()
+            heads.append(ln.strip())
     hints = [h for h in SECTION_HINTS if h.lower() in src.lower()]
     return {
         "keywords": cap_keywords[:300],
@@ -10787,7 +10791,7 @@ def _clean_placeholders(text: str) -> str:
     t = _re_clean.sub(r"\.{4,}", "", t)
     t = _re_clean.sub(r"<<[^>]*>>", "", t)
     t = _re_clean.sub(r"\n{3,}", "\n\n", t)
-    t = "\n".join(line.rstrip() for line in t.splitlines()
+    t = "\n".join(line.rstrip() for line in t.splitlines())
     return t
 
 
@@ -10901,7 +10905,7 @@ def _sam_get_saved_filters():
 
 def _sam_set_saved_filters(filters_list):
     try:
-        set_setting("sam_saved_filters", _json.dumps(filters_list)
+        set_setting("sam_saved_filters", _json.dumps(filters_list))
     except Exception:
         pass
 
@@ -10947,7 +10951,7 @@ except NameError:
                 return {}
             info = conn.execute("PRAGMA table_info(opportunities)").fetchall()
             colnames = [c[1] for c in info]
-            return dict(zip(colnames, row)
+            return dict(zip(colnames, row))
         except Exception:
             return {}
 
@@ -10986,7 +10990,7 @@ INSERT
         try:
             conn = get_db()
             conn.execute("insert into tasks(opp_id,title,assignee,status) values(?,?,?,?)",
-                         (int(opp_id), "Proposal Started", "", "Open")
+                         (int(opp_id), "Proposal Started", "", "Open"))
             conn.execute("update opportunities set status=? where id=?", ("Proposal Started", int(opp_id)))
             conn.commit()
             try:
@@ -11125,7 +11129,7 @@ try:
                                     nid = str(r.get("sam_notice_id") or "")
                                     rid = int(hashlib.sha1(nid.encode("utf-8")).hexdigest(), 16) % 1000000000
                                 except Exception:
-                                    rid = int(_rand_id()
+                                    rid = int(_rand_id())
                                 loaded_rows.append((
                                     rid,
                                     r.get("title"),
@@ -11142,11 +11146,11 @@ try:
             opp_id = _st.number_input("Opp ID", min_value=0, value=0, step=1)
         with colC:
             if _st.button("Generate quote", use_container_width=True) and opp_id:
-                p = proposal_quick_quote(int(opp_id)
+                p = proposal_quick_quote(int(opp_id))
                 _st.success("Draft created" if p else "Draft failed")
         with colD:
             if _st.button("Submit package", use_container_width=True) and opp_id:
-                ok = proposal_submit_package(int(opp_id)
+                ok = proposal_submit_package(int(opp_id))
                 _st.success("Submitted") if ok else _st.error("Update failed")
                 _st.subheader("Select opportunities to add to Pipeline")
 
@@ -11256,7 +11260,7 @@ try:
         import re as _re_deals
         def _extract_url_deals(_s):
             try:
-                m = _re_deals.search(r"(https?://\S+)", str(_s)
+                m = _re_deals.search(r"(https?://\S+)", str(_s))
                 return m.group(1).rstrip("),.;]") if m else ""
             except Exception:
                 return ""
@@ -11301,7 +11305,7 @@ try:
                         try:
                             cur.execute(
                                 "update opportunities set assignee=?, status=?, notes=? where id=?",
-                                (str(r.get("assignee","")), str(r.get("status","New")), str(r.get("notes","")), int(r["id"])
+                                (str(r.get("assignee","") or ""), str(r.get("status","New") or "New"), str(r.get("notes","") or ""), int(r["id"]))
                             )
                         except Exception:
                             continue
@@ -11335,7 +11339,7 @@ def _opp_header_data(opp_id: int):
     for k in ["set_aside","setAside","naics_set_aside","solicitation_set_aside","type_of_set_aside"]:
         v = d.get(k)
         if v:
-            set_asides.append(str(v)
+            set_asides.append(str(v))
     set_asides = list(dict.fromkeys(set_asides))[:4]
     return {"title": title, "agency": agency, "due": due, "set_asides": set_asides}
 
@@ -11356,7 +11360,7 @@ def _workspace_header(opp_id: int):
         st.caption(f"Due: **{badges['due'] or 'n/a'}**")
     with cols[2]:
         if badges["set_asides"]:
-            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"])
+            st.caption("Set-aside: " + " | ".join(f"**{s}**" for s in badges["set_asides"]))
         else:
             st.caption("Set-aside: **n/a**")
 
@@ -11400,7 +11404,7 @@ def _subtab_bar(active: str, opp_id: int):
     tabs = ["Details","Analyzer","Compliance","Proposal","Pricing","VendorsRFQ","Submission"]
     # Persist in session
     st.session_state["active_opportunity_tab"] = active
-    cols = st.columns(len(tabs)
+    cols = st.columns(len(tabs))
     for i, t in enumerate(tabs):
         with cols[i]:
             if st.button(t, type=("primary" if t == active else "secondary")):
@@ -11565,7 +11569,7 @@ def save_row(table, data, where_id, where_version):
     cur = conn.cursor()
     data = dict(data or {})
     data["version"] = int(where_version) + 1
-    cols = list(data.keys()
+    cols = list(data.keys())
     set_clause = ", ".join([f"{c}=?" for c in cols])
     args = [data[c] for c in cols] + [int(where_id), int(where_version)]
     sql = f"UPDATE {table} SET {set_clause} WHERE id=? AND version=?"
@@ -11893,7 +11897,7 @@ def list_notices(filters: Dict[str, Any], page: int, page_size: int, current_use
         kw = f"%{filters['keywords']}%"
         params.extend([kw, kw])
     if filters.get("types"):
-        qs = ",".join(["?"] * len(filters["types"])
+        qs = ",".join(["?"] * len(filters["types"]))
         where.append(f"notice_type IN ({qs})")
         params.extend(filters["types"])
     if filters.get("naics"):
@@ -12003,7 +12007,7 @@ def set_user_page_size(user_id: str, size: int):
     cur = conn.cursor()
     cur.execute("""INSERT INTO user_prefs(user_id, sam_page_size)
                    VALUES(?,?)
-                   ON CONFLICT(user_id) DO UPDATE SET sam_page_size=excluded.sam_page_size""", (user_id, int(size))
+                   ON CONFLICT(user_id) DO UPDATE SET sam_page_size=excluded.sam_page_size""", (user_id, int(size)))
     conn.commit()
 
 def _sam_phase1_filters_panel():
@@ -12322,7 +12326,61 @@ def _rfp_validate_summary(payload: dict) -> bool:
         return False
 
 def _extract_summary_from_pages(pages: list, file_name: str) -> dict:
-    text_all = "\n".join([p.get("text", "") or "" for p in pages])[:200000]
+    text_all = "\n".join([(p.get("text") or "") for p in pages])[:200000]
+
+    def find_lines(keyword: str):
+        hits = []
+        for p in pages:
+            t = p.get("text") or ""
+            if not t:
+                continue
+            for line in t.splitlines():
+                if keyword.lower() in line.lower():
+                    hits.append({"file_name": file_name, "page": p.get("page"), "text": line.strip()})
+        return hits[:20]
+
+    sources = []
+    factors = [s["text"] for s in find_lines("Section M")] + [s["text"] for s in find_lines("Evaluation")]
+    clauses = [s["text"] for s in find_lines("Section L")] + [s["text"] for s in find_lines("Clause")]
+    forms = [s["text"] for s in find_lines("SF 1449")] + [s["text"] for s in find_lines("SF 1442")] + [s["text"] for s in find_lines("SF1442")]
+
+    dates = {}
+    for kw in ["proposal due","offers due","due date","closing date","response date"]:
+        hits = find_lines(kw)
+        if hits:
+            dates.setdefault("due", hits[0]["text"])
+            sources.extend(hits[:3])
+            break
+
+    milestones = [s["text"] for s in find_lines("site visit")] + [s["text"] for s in find_lines("questions due")]
+
+    # include first page snippet as a source if present
+    if pages:
+        p0 = pages[0]
+        s_text = (p0.get("text") or "")[:120]
+        sources.append({"file_name": file_name, "page": p0.get("page"), "text": s_text})
+
+    brief = (text_all[:500].strip() or "Summary not available.")
+    payload = {
+        "brief": brief,
+        "factors": factors[:10],
+        "clauses": clauses[:10],
+        "dates": dates,
+        "forms": forms[:10],
+        "milestones": milestones[:10],
+        "sources": sources[:20],
+    }
+    if not _rfp_validate_summary(payload):
+        payload = {"brief": brief, "factors": [], "clauses": [], "dates": {}, "forms": [], "milestones": [], "sources": []}
+    return payload
+        "dates": dates,
+        "forms": forms[:10],
+        "milestones": milestones[:10],
+        "sources": sources[:20],
+    }
+    if not _rfp_validate_summary(payload):
+        payload = {"brief": brief, "factors": [], "clauses": [], "dates": {}, "forms": [], "milestones": [], "sources": []}
+    return payload
     def find_lines(keyword):
         hits = []
         for p in pages:
@@ -16763,8 +16821,7 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
     # Vendor status list from invites
     vendors = []
     try:
-        rows = cur.execute("""SELECT v.id, COALESCE(v.name,''), COALESCE(v.email,'' )
-                               FROM rfq_invites i JOIN vendors v ON v.id=i.vendor_id
+        rows = cur.execute("SELECT v.id, COALESCE(v.name,''), COALESCE(v.email,'') FROM rfq_invites i JOIN vendors v ON v.id=i.vendor_id WHERE i.rfq_id=? ORDER BY v.name", (int(rfq_id),)).fetchall()
                                WHERE i.rfq_id=? ORDER BY v.name""", (int(rfq_id),)).fetchall()
         for vid, nm, em in rows:
             vendors.append((int(vid), nm, em))
