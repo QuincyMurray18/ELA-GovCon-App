@@ -608,66 +608,48 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 
 # ---------- SAM Watch (Phase A) ----------
+
 def run_sam_watch(conn: sqlite3.Connection) -> None:
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
-    with st.expander("API Key", expanded=False):
-        st.text_input("Override SAM API Key (optional)", key="temp_sam_key")
-        if st.session_state.get("temp_sam_key"):
-            st.success("Using inline override key for this session")
     api_key = get_sam_api_key()
-    if not api_key:
-        st.error("No SAM API key found. Add it to st.secrets or use inline override.")
 
-    with st.expander("Diagnostics", expanded=False):
-        st.write("**API key loaded:**", bool(api_key))
-        if st.button("Run API Test (last 14 days)") and api_key:
-            test_params = {
-                "api_key": api_key,
-                "postedFrom": (datetime.now().date() - timedelta(days=14)).strftime("%m/%d/%Y"),
-                "postedTo": datetime.now().date().strftime("%m/%d/%Y"),
-                "limit": 1,
-                "offset": 0,
-                "ptype": "o,k,r",
-            }
-            try:
-                r = requests.get(SAM_ENDPOINT, params=test_params, headers={"X-Api-Key": api_key}, timeout=30)
-                st.write("HTTP status:", r.status_code)
-                try:
-                    j = r.json()
-                except Exception as je:
-                    j = {"json_error": str(je), "text": r.text[:1000]}
-                st.write("Response sample keys:", list(j.keys())[:8])
-            except Exception as ex:
-                st.error(f"Test request error: {ex}")
-
+    # Search filters (dates optional)
     with st.expander("Search Filters", expanded=True):
         today = datetime.now().date()
         default_from = today - timedelta(days=30)
+
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
-            posted_from = st.date_input("Posted From", value=default_from)
+            use_dates = st.checkbox("Filter by posted date", value=False)
         with c2:
-            posted_to = st.date_input("Posted To", value=today)
-        with c3:
             active_only = st.checkbox("Active only", value=True)
+        with c3:
+            org_name = st.text_input("Organization/Agency contains")
 
-        c4, c5, c6 = st.columns([2, 2, 2])
-        with c4:
+        if use_dates:
+            d1, d2 = st.columns([2, 2])
+            with d1:
+                posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
+            with d2:
+                posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
+
+        e1, e2, e3 = st.columns([2, 2, 2])
+        with e1:
             keywords = st.text_input("Keywords (Title contains)")
-        with c5:
+        with e2:
             naics = st.text_input("NAICS (6-digit)")
-        with c6:
+        with e3:
             psc = st.text_input("PSC")
 
-        c7, c8, c9 = st.columns([2, 2, 2])
-        with c7:
+        e4, e5, e6 = st.columns([2, 2, 2])
+        with e4:
             state = st.text_input("Place of Performance State (e.g., TX)")
-        with c8:
+        with e5:
             set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
-        with c9:
-            org_name = st.text_input("Organization/Agency contains")
+        with e6:
+            pass
 
         ptype_map = {
             "Pre-solicitation": "p",
@@ -686,27 +668,32 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             default=["Solicitation", "Combined Synopsis/Solicitation", "Sources Sought"],
         )
 
-        c10, c11 = st.columns([2, 2])
-        with c10:
+        g1, g2 = st.columns([2, 2])
+        with g1:
             limit = st.number_input("Results per page", min_value=1, max_value=1000, value=100, step=50)
-        with c11:
+        with g2:
             max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3)
 
         run = st.button("Run Search", type="primary")
 
     results_df = st.session_state.get("sam_results_df", pd.DataFrame())
 
-    if run and api_key:
+    if run:
+        if not api_key:
+            st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
+            return
+
         params: Dict[str, Any] = {
             "api_key": api_key,
-            "postedFrom": posted_from.strftime("%m/%d/%Y"),
-            "postedTo": posted_to.strftime("%m/%d/%Y"),
             "limit": int(limit),
             "offset": 0,
             "_max_pages": int(max_pages),
         }
         if active_only:
             params["status"] = "active"
+        if "use_dates" in locals() and use_dates:
+            params["postedFrom"] = posted_from.strftime("%m/%d/%Y")
+            params["postedTo"] = posted_to.strftime("%m/%d/%Y")
         if keywords:
             params["title"] = keywords
         if naics:
@@ -734,7 +721,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         st.session_state["sam_results_df"] = results_df
         st.success(f"Fetched {len(results_df)} notices")
 
-    if api_key and (results_df is None or results_df.empty) and not run:
+    if (results_df is None or results_df.empty) and not run:
         st.info("Set filters and click Run Search")
 
     if results_df is not None and not results_df.empty:
@@ -794,9 +781,8 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
 
-
-# ---------- RFP Analyzer (Phase B) ----------
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
+(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
     ctx = st.session_state.get("rfp_selected_notice")
     if ctx:
