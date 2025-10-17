@@ -352,6 +352,52 @@ def get_db() -> sqlite3.Connection:
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_type, owner_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_tags ON files(tags);")
+
+        # Phase L (RFQ Pack)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rfq_packs(
+                id INTEGER PRIMARY KEY,
+                rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
+                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+                title TEXT NOT NULL,
+                instructions TEXT,
+                due_date TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_packs_ctx ON rfq_packs(rfp_id, deal_id);");
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rfq_lines(
+                id INTEGER PRIMARY KEY,
+                pack_id INTEGER NOT NULL REFERENCES rfq_packs(id) ON DELETE CASCADE,
+                clin_code TEXT,
+                description TEXT,
+                qty REAL,
+                unit TEXT,
+                naics TEXT,
+                psc TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_lines_pack ON rfq_lines(pack_id);");
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rfq_vendors(
+                id INTEGER PRIMARY KEY,
+                pack_id INTEGER NOT NULL REFERENCES rfq_packs(id) ON DELETE CASCADE,
+                vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rfq_vendors_unique ON rfq_vendors(pack_id, vendor_id);");
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rfq_attach(
+                id INTEGER PRIMARY KEY,
+                pack_id INTEGER NOT NULL REFERENCES rfq_packs(id) ON DELETE CASCADE,
+                file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+                name TEXT,
+                path TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_attach_pack ON rfq_attach(pack_id);");
         conn.commit()
     return conn
 
@@ -3085,6 +3131,292 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             except Exception as e:
                 st.error(f"ZIP failed: {e}")
 
+
+
+# ---------- Phase L: RFQ Pack ----------
+def _rfq_pack_by_id(conn: sqlite3.Connection, pid: int) -> dict | None:
+    df = pd.read_sql_query("SELECT * FROM rfq_packs WHERE id=?;", conn, params=(pid,))
+    return None if df.empty else df.iloc[0].to_dict()
+
+def _rfq_lines(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+
+def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
+    q = """
+        SELECT rv.id, rv.vendor_id, v.name, v.email, v.phone
+        FROM rfq_vendors rv
+        JOIN vendors v ON v.id = rv.vendor_id
+        WHERE rv.pack_id=?
+        ORDER BY v.name;
+    """
+    try:
+        return pd.read_sql_query(q, conn, params=(pid,))
+    except Exception:
+        return pd.DataFrame(columns=["id","vendor_id","name","email","phone"])
+
+def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+
+def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> str | None:
+    from zipfile import ZipFile, ZIP_DEFLATED
+    pack = _rfq_pack_by_id(conn, pack_id)
+    if not pack: 
+        st.error("Pack not found"); return None
+    title = pack.get("title") or f"RFQ_{pack_id}"
+    # Files to include
+    df_att = _rfq_attachments(conn, pack_id)
+    files = []
+    for _, r in df_att.iterrows():
+        if r.get("path"):
+            files.append((r["name"] or Path(r["path"]).name, r["path"]))
+        elif r.get("file_id"):
+            # fallback to files table
+            try:
+                df = pd.read_sql_query("SELECT filename, path FROM files WHERE id=?;", conn, params=(int(r["file_id"]),))
+                if not df.empty:
+                    files.append((df.iloc[0]["filename"], df.iloc[0]["path"]))
+            except Exception:
+                pass
+    # CLINs CSV
+    df_lines = _rfq_lines(conn, pack_id)
+    clin_csv_path = str(Path(DATA_DIR) / f"rfq_{pack_id}_CLINs.csv")
+    df_lines.to_csv(clin_csv_path, index=False)
+    files.append((Path(clin_csv_path).name, clin_csv_path))
+
+    # Mail-merge CSV for vendors
+    df_v = _rfq_vendors(conn, pack_id)
+    mail_csv_path = str(Path(DATA_DIR) / f"rfq_{pack_id}_vendors_mailmerge.csv")
+    mm = df_v.rename(columns={"name":"VendorName", "email":"VendorEmail", "phone":"VendorPhone"})[["VendorName","VendorEmail","VendorPhone"]]
+    mm["Subject"] = f"Request for Quote – {title}"
+    due = pack.get("due_date") or ""
+    mm["Body"] = (
+        f"Hello {{VendorName}},\n\n"
+        f"Please review the attached RFQ package for '{title}'. "
+        f"Reply with pricing and availability no later than {due}.\n\n"
+        f"Thank you,"
+    )
+    mm.to_csv(mail_csv_path, index=False)
+    files.append((Path(mail_csv_path).name, mail_csv_path))
+
+    # Build zip
+    ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    zip_path = str(Path(DATA_DIR) / f"RFQ_Pack_{pack_id}_{ts}.zip")
+    try:
+        with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as z:
+            for fname, pth in files:
+                try: z.write(pth, arcname=fname)
+                except Exception: pass
+            # manifest
+            manifest = "RFQ Pack Manifest\n"
+            manifest += f"Title: {title}\n"
+            manifest += f"Due: {pack.get('due_date') or ''}\n"
+            manifest += f"Lines: {len(df_lines)}\n"
+            manifest += f"Vendors: {len(df_v)}\n"
+            z.writestr("MANIFEST.txt", manifest)
+        return zip_path
+    except Exception as e:
+        st.error(f"ZIP failed: {e}")
+        return None
+
+def run_rfq_pack(conn: sqlite3.Connection) -> None:
+    st.header("RFQ Pack")
+    st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
+
+    # -- Create / open
+    left, right = st.columns([2,2])
+    with left:
+        st.subheader("Create")
+        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+        rf_opt = st.selectbox("RFP (optional)", options=[None] + df_rf["id"].tolist(),
+                              format_func=lambda x: "None" if x is None else f"#{x} — {df_rf.loc[df_rf['id']==x,'title'].values[0]}",
+                              key="rfq_rfp_sel")
+        title = st.text_input("Pack title", key="rfq_title")
+        due = st.date_input("Quote due date", key="rfq_due")
+        instr = st.text_area("Instructions to vendors (email body)", height=100, key="rfq_instr")
+        if st.button("Create RFQ Pack", key="rfq_create"):
+            if not title.strip():
+                st.error("Title required")
+            else:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO rfq_packs(rfp_id, deal_id, title, instructions, due_date, created_at, updated_at)
+                        VALUES(?,?,?,?,?,datetime('now'),datetime('now'));
+                    """, (rf_opt if rf_opt else None, None, title.strip(), instr.strip(), str(due)))
+                    conn.commit()
+                st.success("Created"); st.rerun()
+    with right:
+        st.subheader("Open")
+        df_pk = pd.read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs ORDER BY id DESC;", conn)
+        if df_pk.empty:
+            st.info("No RFQ packs yet")
+            return
+        pk_sel = st.selectbox("RFQ Pack", options=df_pk["id"].tolist(),
+                              format_func=lambda pid: f"#{pid} — {df_pk.loc[df_pk['id']==pid,'title'].values[0]} (due {df_pk.loc[df_pk['id']==pid,'due_date'].values[0] or '—'})",
+                              key="rfq_open_sel")
+
+    st.divider()
+    st.subheader(f"Editing pack #{int(pk_sel)}")
+
+    # ---- CLINs / Lines ----
+    st.markdown("### CLINs / Lines")
+    df_lines = _rfq_lines(conn, int(pk_sel))
+    st.dataframe(df_lines, use_container_width=True, hide_index=True)
+    c1, c2, c3, c4, c5, c6 = st.columns([1.2,3,1,1,1,1])
+    with c1:
+        l_code = st.text_input("CLIN", key="rfq_line_code")
+    with c2:
+        l_desc = st.text_input("Description", key="rfq_line_desc")
+    with c3:
+        l_qty = st.number_input("Qty", min_value=0.0, value=1.0, step=1.0, key="rfq_line_qty")
+    with c4:
+        l_unit = st.text_input("Unit", value="EA", key="rfq_line_unit")
+    with c5:
+        l_naics = st.text_input("NAICS", key="rfq_line_naics")
+    with c6:
+        l_psc = st.text_input("PSC", key="rfq_line_psc")
+    if st.button("Add Line", key="rfq_line_add"):
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                INSERT INTO rfq_lines(pack_id, clin_code, description, qty, unit, naics, psc)
+                VALUES(?,?,?,?,?,?,?);
+            """, (int(pk_sel), l_code.strip(), l_desc.strip(), float(l_qty or 0), l_unit.strip(), l_naics.strip(), l_psc.strip()))
+            conn.commit()
+        st.success("Line added"); st.rerun()
+
+    if not df_lines.empty:
+        st.markdown("**Edit existing lines**")
+        for _, r in df_lines.iterrows():
+            ec1, ec2, ec3, ec4 = st.columns([3,1,1,1])
+            with ec1:
+                nd = st.text_input("Desc", value=r["description"] or "", key=f"rfq_line_e_desc_{int(r['id'])}")
+            with ec2:
+                nq = st.number_input("Qty", value=float(r["qty"] or 0), step=1.0, key=f"rfq_line_e_qty_{int(r['id'])}")
+            with ec3:
+                nu = st.text_input("Unit", value=r["unit"] or "EA", key=f"rfq_line_e_unit_{int(r['id'])}")
+            with ec4:
+                if st.button("Save", key=f"rfq_line_e_save_{int(r['id'])}"):
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("UPDATE rfq_lines SET description=?, qty=?, unit=? WHERE id=?;",
+                                    (nd.strip(), float(nq or 0), nu.strip(), int(r["id"])))
+                        conn.commit()
+                    st.success("Updated"); st.rerun()
+
+    st.divider()
+
+    # ---- Attachments ----
+    st.markdown("### Attachments")
+    pack = _rfq_pack_by_id(conn, int(pk_sel))
+    rfp_id = pack.get("rfp_id")
+    if rfp_id:
+        df_rfp_files = pd.read_sql_query("SELECT id, filename, path, tags FROM files WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(rfp_id),))
+    else:
+        df_rfp_files = pd.DataFrame(columns=["id","filename","path","tags"])
+    df_att = _rfq_attachments(conn, int(pk_sel))
+    st.dataframe(df_att.drop(columns=[]), use_container_width=True, hide_index=True)
+
+    st.markdown("**Add from File Manager**")
+    # allow selecting from all files
+    df_all_files = pd.read_sql_query("SELECT id, filename FROM files ORDER BY uploaded_at DESC;", conn)
+    add_file = st.selectbox("File", options=[None] + df_all_files["id"].astype(int).tolist(),
+                            format_func=lambda i: "Choose…" if i is None else f"#{i} — {df_all_files.loc[df_all_files['id']==i,'filename'].values[0]}",
+                            key="rfq_att_file")
+    if st.button("Add Attachment", key="rfq_att_add"):
+        if add_file is None:
+            st.warning("Pick a file")
+        else:
+            df_one = pd.read_sql_query("SELECT filename, path FROM files WHERE id=?;", conn, params=(int(add_file),))
+            if df_one.empty:
+                st.error("File not found")
+            else:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("INSERT INTO rfq_attach(pack_id, file_id, name, path) VALUES(?,?,?,?);",
+                                (int(pk_sel), int(add_file), df_one.iloc[0]["filename"], df_one.iloc[0]["path"]))
+                    conn.commit()
+                st.success("Added"); st.rerun()
+
+    if not df_att.empty:
+        for _, r in df_att.iterrows():
+            dc1, dc2 = st.columns([3,1])
+            with dc1:
+                st.caption(f"#{int(r['id'])} — {r['name'] or Path(r['path']).name}")
+            with dc2:
+                if st.button("Remove", key=f"rfq_att_del_{int(r['id'])}"):
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM rfq_attach WHERE id=?;", (int(r["id"]),))
+                        conn.commit()
+                    st.success("Removed"); st.rerun()
+
+    st.divider()
+
+    # ---- Vendors ----
+    st.markdown("### Vendors")
+    try:
+        df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors ORDER BY name;", conn)
+    except Exception as e:
+        st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
+        df_vendors = pd.DataFrame(columns=["id","name","email"])
+    df_rv = _rfq_vendors(conn, int(pk_sel))
+    st.dataframe(df_rv[["name","email","phone"]] if not df_rv.empty else pd.DataFrame(), use_container_width=True, hide_index=True)
+
+    add_vs = st.multiselect("Add vendors", options=df_vendors["id"].astype(int).tolist(),
+                            format_func=lambda vid: df_vendors.loc[df_vendors["id"]==vid, "name"].values[0],
+                            key="rfq_vendor_add")
+    if st.button("Add Selected Vendors", key="rfq_vendor_add_btn"):
+        with closing(conn.cursor()) as cur:
+            for vid in add_vs:
+                try:
+                    cur.execute("INSERT OR IGNORE INTO rfq_vendors(pack_id, vendor_id) VALUES(?,?);", (int(pk_sel), int(vid)))
+                except Exception:
+                    pass
+            conn.commit()
+        st.success("Vendors added"); st.rerun()
+
+    if not df_rv.empty:
+        for _, r in df_rv.iterrows():
+            vc1, vc2 = st.columns([3,1])
+            with vc1:
+                st.caption(f"{r['name']} — {r.get('email') or ''}")
+            with vc2:
+                if st.button("Remove", key=f"rfq_vendor_del_{int(r['id'])}"):
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM rfq_vendors WHERE id=?;", (int(r["id"]),))
+                        conn.commit()
+                    st.success("Removed"); st.rerun()
+
+    st.divider()
+
+    # ---- Build + Exports ----
+    st.markdown("### Build & Export")
+    czip, cmcsv, cclin = st.columns([2,2,2])
+    with czip:
+        if st.button("Build RFQ ZIP", type="primary", key="rfq_build_zip"):
+            z = _rfq_build_zip(conn, int(pk_sel))
+            if z:
+                st.success("ZIP ready"); st.markdown(f"[Download ZIP]({z})")
+
+    with cmcsv:
+        if st.button("Export Vendors Mail-Merge CSV", key="rfq_mail_csv"):
+            df_v = _rfq_vendors(conn, int(pk_sel))
+            if df_v.empty:
+                st.warning("No vendors selected")
+            else:
+                out = df_v.rename(columns={"name":"VendorName","email":"VendorEmail","phone":"VendorPhone"})[["VendorName","VendorEmail","VendorPhone"]]
+                out["Subject"] = f"Request for Quote – {_rfq_pack_by_id(conn, int(pk_sel)).get('title')}"
+                out["Body"] = _rfq_pack_by_id(conn, int(pk_sel)).get("instructions") or ""
+                path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_mailmerge.csv")
+                out.to_csv(path, index=False)
+                st.success("Exported"); st.markdown(f"[Download CSV]({path})")
+
+    with cclin:
+        if st.button("Export CLINs CSV", key="rfq_clins_csv"):
+            df = _rfq_lines(conn, int(pk_sel))
+            if df.empty:
+                st.warning("No CLINs yet")
+            else:
+                path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_CLINs.csv")
+                df.to_csv(path, index=False)
+                st.success("Exported"); st.markdown(f"[Download CSV]({path})")
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -3107,6 +3439,7 @@ def nav() -> str:
             "White Paper Builder",
             "Subcontractor Finder",
             "Outreach",
+            "RFQ Pack",
             "Quote Comparison",
             "Pricing Calculator",
             "Win Probability",
@@ -3138,6 +3471,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_subcontractor_finder(conn)
     elif page == "Outreach":
         run_outreach(conn)
+    elif page == "RFQ Pack":
+        run_rfq_pack(conn)
     elif page == "Quote Comparison":
         run_quote_comparison(conn)
     elif page == "Pricing Calculator":
