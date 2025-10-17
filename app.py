@@ -12248,7 +12248,7 @@ def _parse_pdf_bytes(b: bytes) -> list:
     pages = []
     try:
         import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(b)
+        reader = PyPDF2.PdfReader(io.BytesIO(b))
         for i, p in enumerate(reader.pages, start=1):
             try:
                 t = p.extract_text() or ""
@@ -12263,7 +12263,7 @@ def _parse_docx_bytes(b: bytes) -> list:
     pages = []
     try:
         import docx
-        doc = docx.Document(io.BytesIO(b)
+        doc = docx.Document(io.BytesIO(b))
         buff = []
         page_num = 1
         for para in doc.paragraphs:
@@ -12303,20 +12303,16 @@ def _rfp_summary_schema() -> dict:
             "dates": {"type":"object"},
             "forms": {"type":"array","items":{"type":"string"}},
             "milestones": {"type":"array","items":{"type":"string"}},
-            "sources": {"type":"array","items":{"type":"object","properties":{
-                "file_name":{"type":"string"},
-                "page":{"type":["integer","null"]},
-                "text":{"type":"string"}
-            }}},
-        }
+            "sources": {"type":"array","items":{"type":"object"}},
+        },
     }
 
 def _rfp_validate_summary(payload: dict) -> bool:
     try:
-        if not isinstance(payload, dict): return False:
+        if not isinstance(payload, dict): return False
         for k in ["brief","factors","clauses","dates","forms","milestones","sources"]:
-            if k not in payload: return False:
-        if not isinstance(payload["brief"], str): return False:
+            if k not in payload: return False
+        if not isinstance(payload["brief"], str): return False
         for k in ["factors","clauses","forms","milestones","sources"]:
             if not isinstance(payload[k], list): return False:
         if not isinstance(payload["dates"], dict): return False:
@@ -12338,7 +12334,7 @@ def _extract_summary_from_pages(pages: list, file_name: str) -> dict:
     sources = []
     factors = [s["text"] for s in find_lines("Section M")] + [s["text"] for s in find_lines("Evaluation")]
     clauses = [s["text"] for s in find_lines("Section L")] + [s["text"] for s in find_lines("Clause")]
-    forms = [s["text"] for s in find_lines("SF 1449")] + [s["text"] for s in find_lines("SF1449")] + [s["text"] for s in find_lines("SF 1442")] + [s["text"] for s in find_lines("SF1442")]
+    forms = [s["text"] for s in find_lines("SF 1449")] + [s["text"] for s in find_lines("SF 1442")] + [s["text"] for s in find_lines("SF1442")]
     dates = {}
     for kw in ["proposal due","offers due","due date","closing date","response date"]:
         hits = find_lines(kw)
