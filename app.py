@@ -299,7 +299,6 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        -- Phase I (CRM Boost)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS activities(
                 id INTEGER PRIMARY KEY,
