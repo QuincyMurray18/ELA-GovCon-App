@@ -1258,7 +1258,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(rid)) for iid in ids])
                         conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
-                    st.experimental_rerun()
+                    st.rerun()
             # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
@@ -3946,7 +3946,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
             ok = _restore_db_from_upload(conn, up)
             if ok:
                 st.success("Restore completed. Please rerun the app.")
-                st.experimental_rerun()
+                st.rerun()
 
     st.divider()
     st.subheader("Export / Import CSV")
@@ -3968,7 +3968,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
         n = _import_csv_into_table(conn, upcsv, tsel, scoped_to_current=True)
         if n:
             st.success(f"Imported {n} row(s) into {tsel}")
-            st.experimental_rerun()
+            st.rerun()
 
 
 
