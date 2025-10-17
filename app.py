@@ -237,7 +237,6 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        -- Phase G (Past Performance)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS past_perf(
                 id INTEGER PRIMARY KEY,
