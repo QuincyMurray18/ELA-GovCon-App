@@ -398,6 +398,69 @@ def get_db() -> sqlite3.Connection:
             );
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_attach_pack ON rfq_attach(pack_id);");
+
+        # Phase M (Tenancy 1)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tenants(
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                created_at TEXT
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS current_tenant(
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                ctid INTEGER
+            );
+        """)
+        cur.execute("INSERT OR IGNORE INTO tenants(id, name, created_at) VALUES(1, 'Default', datetime('now'));")
+        cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
+
+        def _add_tenant_id(table: str):
+            try:
+                cols = pd.read_sql_query(f"PRAGMA table_info({table});", conn)
+                if "tenant_id" not in cols["name"].tolist():
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER;")
+                    conn.commit()
+            except Exception:
+                pass
+            try:
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_tenant ON {table}(tenant_id);")
+            except Exception:
+                pass
+
+        core_tables = ["rfps","lm_items","lm_meta","deals","activities","tasks","deal_stage_log",
+                       "vendors","files","rfq_packs","rfq_lines","rfq_vendors","rfq_attach","contacts"]
+        for t in core_tables:
+            _add_tenant_id(t)
+
+        # AFTER INSERT triggers: always stamp tenant_id to current_tenant
+        def _ensure_trigger(table: str):
+            trg = f"{table}_ai_tenant"
+            try:
+                cur.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS {trg}
+                    AFTER INSERT ON {table}
+                    BEGIN
+                        UPDATE {table}
+                        SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1)
+                        WHERE rowid=NEW.rowid;
+                    END;
+                """)
+            except Exception:
+                pass
+        for t in core_tables:
+            _ensure_trigger(t)
+
+        # Scoped views
+        def _create_view(table: str):
+            v = f"{table}_t"
+            try:
+                cur.execute(f"CREATE VIEW IF NOT EXISTS {v} AS SELECT * FROM {table} WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);")
+            except Exception:
+                pass
+        for t in core_tables:
+            _create_view(t)
         conn.commit()
     return conn
 
@@ -716,7 +779,7 @@ def run_contacts(conn: sqlite3.Connection) -> None:
 
     try:
         df = pd.read_sql_query(
-            "SELECT name, email, org FROM contacts ORDER BY name;", conn
+            "SELECT name, email, org FROM contacts_t ORDER BY name;", conn
         )
         st.subheader("Contact List")
         if df.empty:
@@ -757,7 +820,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
     try:
         df = pd.read_sql_query(
-            "SELECT title, agency, status, value, sam_url FROM deals ORDER BY id DESC;",
+            "SELECT title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
             conn,
         )
         st.subheader("Pipeline")
@@ -1076,8 +1139,8 @@ def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFra
                COALESCE(m.evidence,'') AS evidence,
                COALESCE(m.risk,'Green') AS risk,
                COALESCE(m.notes,'') AS notes
-        FROM lm_items i
-        LEFT JOIN lm_meta m ON m.lm_id = i.id
+        FROM lm_items_t i
+        LEFT JOIN lm_meta_t m ON m.lm_id = i.id
         WHERE i.rfp_id = ?
         ORDER BY i.id ASC;
     """
@@ -1123,7 +1186,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     rfp_id = st.session_state.get('current_rfp_id')
     if not rfp_id:
         try:
-            df_rf = pd.read_sql_query("SELECT id, title, solnum, created_at FROM rfps ORDER BY id DESC;", conn)
+            df_rf = pd.read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn)
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
             return
@@ -1260,7 +1323,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
-    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps ORDER BY id DESC;", conn)
+    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn)
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
@@ -1422,7 +1485,7 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
-    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors WHERE 1=1"
+    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors_t WHERE 1=1"
     params: List[Any] = []
     if f_naics:
         q += " AND (naics LIKE ? )"
@@ -1543,7 +1606,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     if vendor_ids:
         ph = ",".join(["?"] * len(vendor_ids))
         df_sel = pd.read_sql_query(
-            f"SELECT id, name, email, phone, city, state, naics FROM vendors WHERE id IN ({ph});",
+            f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});",
             conn,
             params=vendor_ids,
         )
@@ -1551,7 +1614,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         st.info("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
         f_naics = st.text_input("NAICS filter")
         f_state = st.text_input("State filter")
-        q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
+        q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
         params: List[Any] = []
         if f_naics:
             q += " AND naics LIKE ?"
@@ -1646,7 +1709,7 @@ def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optiona
 
 def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.header("Quote Comparison")
-    df = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn)
+    df = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn)
     if df.empty:
         st.info("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
         return
@@ -1795,7 +1858,7 @@ def _scenario_summary(conn: sqlite3.Connection, scenario_id: int) -> Dict[str, f
 
 def run_pricing_calculator(conn: sqlite3.Connection) -> None:
     st.header("Pricing Calculator")
-    df = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer (parse & save) first.")
         return
@@ -1915,7 +1978,7 @@ def _price_competitiveness(conn: sqlite3.Connection, rfp_id: int, our_total: Opt
 
 def run_win_probability(conn: sqlite3.Connection) -> None:
     st.header("Win Probability")
-    df = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer first.")
         return
@@ -2067,7 +2130,7 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
     st.header("Chat Assistant (DB-aware)")
     st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
-    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
     rfp_opt = None
     if not df_rf.empty:
         rfp_opt = st.selectbox("Context (optional)", options=[None] + df_rf["id"].tolist(),
@@ -2431,7 +2494,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
     selected_ids = st.multiselect("Select projects for writeup", options=df["id"].tolist(), format_func=lambda i: f"#{i} — {df.loc[df['id']==i, 'project_title'].values[0]}")
 
     # Relevance scoring vs RFP
-    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
     rfp_id = None
     if not df_rf.empty:
         rfp_id = st.selectbox("RFP context for relevance scoring (optional)", options=[None] + df_rf["id"].tolist(),
@@ -2731,8 +2794,8 @@ def run_crm(conn: sqlite3.Connection) -> None:
     # --- Activities
     with tabs[0]:
         st.subheader("Log Activity")
-        df_deals = pd.read_sql_query("SELECT id, title FROM deals ORDER BY id DESC;", conn)
-        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts ORDER BY name;", conn)
+        df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn)
+        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn)
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
@@ -2766,7 +2829,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
             f_contact = st.selectbox("Contact filter", options=[None] + df_contacts["id"].tolist(),
                                      format_func=lambda x: "All" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
                                      key="act_f_contact")
-        q = "SELECT ts, type, subject, notes, deal_id, contact_id FROM activities WHERE 1=1"
+        q = "SELECT ts, type, subject, notes, deal_id, contact_id FROM activities_t WHERE 1=1"
         params = []
         if f_type:
             q += " AND type IN (%s)" % ",".join(["?"]*len(f_type))
@@ -2789,8 +2852,8 @@ def run_crm(conn: sqlite3.Connection) -> None:
     # --- Tasks
     with tabs[1]:
         st.subheader("New Task")
-        df_deals = pd.read_sql_query("SELECT id, title FROM deals ORDER BY id DESC;", conn)
-        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts ORDER BY name;", conn)
+        df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn)
+        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn)
         t1, t2, t3 = st.columns([2,2,2])
         with t1:
             t_title = st.text_input("Task title", key="task_title")
@@ -2820,7 +2883,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
             tf_status = st.multiselect("Status", ["Open","In Progress","Done"], default=["Open","In Progress"])
         with f2:
             tf_priority = st.multiselect("Priority", ["Low","Normal","High"], default=[])
-        q = "SELECT id, title, due_date, status, priority, deal_id, contact_id FROM tasks WHERE 1=1"
+        q = "SELECT id, title, due_date, status, priority, deal_id, contact_id FROM tasks_t WHERE 1=1"
         params = []
         if tf_status:
             q += " AND status IN (%s)" % ",".join(["?"]*len(tf_status)); params.extend(tf_status)
@@ -2859,14 +2922,14 @@ def run_crm(conn: sqlite3.Connection) -> None:
     # --- Pipeline
     with tabs[2]:
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals ORDER BY id DESC;", conn)
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn)
         if df.empty:
             st.info("No deals")
         else:
             df["prob_%"] = df["status"].apply(_stage_probability)
             df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
             # Stage age: days since last stage change
-            df_log = pd.read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log GROUP BY deal_id, stage;", conn)
+            df_log = pd.read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;", conn)
             def stage_age(row):
                 try:
                     last = df_log[(df_log["deal_id"]==row["id"]) & (df_log["stage"]==row["status"])]["last_change"]
@@ -2941,19 +3004,19 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             owner_type = st.selectbox("Attach to", ["RFP", "Deal", "Vendor", "Other"], key="fm_owner_type")
             owner_id = None
             if owner_type == "RFP":
-                df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+                df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
                 if not df_rf.empty:
                     owner_id = st.selectbox("RFP", options=df_rf["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
                                             key="fm_owner_rfp")
             elif owner_type == "Deal":
-                df_deal = pd.read_sql_query("SELECT id, title FROM deals ORDER BY id DESC;", conn)
+                df_deal = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn)
                 if not df_deal.empty:
                     owner_id = st.selectbox("Deal", options=df_deal["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_deal.loc[df_deal['id']==i, 'title'].values[0]}",
                                             key="fm_owner_deal")
             elif owner_type == "Vendor":
-                df_v = pd.read_sql_query("SELECT id, name FROM vendors ORDER BY name;", conn)
+                df_v = pd.read_sql_query("SELECT id, name FROM vendors_t ORDER BY name;", conn)
                 if not df_v.empty:
                     owner_id = st.selectbox("Vendor", options=df_v["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_v.loc[df_v['id']==i, 'name'].values[0]}",
@@ -2998,7 +3061,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         with l3:
             f_kw = st.text_input("Filename contains", key="fm_f_kw")
 
-        q = "SELECT id, owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at FROM files WHERE 1=1"
+        q = "SELECT id, owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at FROM files_t WHERE 1=1"
         params = []
         if f_owner and f_owner != "All":
             q += " AND owner_type=?"; params.append(f_owner)
@@ -3040,7 +3103,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                     with b2:
                         if st.button("Delete", key=f"fm_row_del_{int(r['id'])}"):
                             with closing(conn.cursor()) as cur:
-                                cur.execute("DELETE FROM files WHERE id=?;", (int(r["id"]),))
+                                cur.execute("DELETE FROM files_t WHERE id=?;", (int(r["id"]),))
                                 conn.commit()
                             try:
                                 import os
@@ -3052,7 +3115,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
     # --- Submission Kit (ZIP) ---
     st.subheader("Submission Kit (ZIP)")
-    df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
     if df_rf_all.empty:
         st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
         return
@@ -3063,7 +3126,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
     # Load files for this RFP
     try:
-        df_kit = pd.read_sql_query("SELECT id, filename, path, tags FROM files WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(kit_rfp),))
+        df_kit = pd.read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(kit_rfp),))
     except Exception:
         _ensure_files_table(conn)
         df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
@@ -3104,7 +3167,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             rows = []
             if selected:
                 ph = ",".join(["?"]*len(selected))
-                df_sel = pd.read_sql_query(f"SELECT filename, path FROM files WHERE id IN ({ph});", conn, params=selected)
+                df_sel = pd.read_sql_query(f"SELECT filename, path FROM files_t WHERE id IN ({ph});", conn, params=selected)
                 for _, r in df_sel.iterrows():
                     rows.append((r["filename"], r["path"]))
             for p in gen_paths:
@@ -3135,16 +3198,16 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
 # ---------- Phase L: RFQ Pack ----------
 def _rfq_pack_by_id(conn: sqlite3.Connection, pid: int) -> dict | None:
-    df = pd.read_sql_query("SELECT * FROM rfq_packs WHERE id=?;", conn, params=(pid,))
+    df = pd.read_sql_query("SELECT * FROM rfq_packs_t WHERE id=?;", conn, params=(pid,))
     return None if df.empty else df.iloc[0].to_dict()
 
 def _rfq_lines(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
-    return pd.read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+    return pd.read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     q = """
         SELECT rv.id, rv.vendor_id, v.name, v.email, v.phone
-        FROM rfq_vendors rv
+        FROM rfq_vendors_t rv
         JOIN vendors v ON v.id = rv.vendor_id
         WHERE rv.pack_id=?
         ORDER BY v.name;
@@ -3155,7 +3218,7 @@ def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["id","vendor_id","name","email","phone"])
 
 def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
-    return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+    return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> str | None:
     from zipfile import ZipFile, ZIP_DEFLATED
@@ -3172,7 +3235,7 @@ def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> str | None:
         elif r.get("file_id"):
             # fallback to files table
             try:
-                df = pd.read_sql_query("SELECT filename, path FROM files WHERE id=?;", conn, params=(int(r["file_id"]),))
+                df = pd.read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(r["file_id"]),))
                 if not df.empty:
                     files.append((df.iloc[0]["filename"], df.iloc[0]["path"]))
             except Exception:
@@ -3226,7 +3289,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     left, right = st.columns([2,2])
     with left:
         st.subheader("Create")
-        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+        df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
         rf_opt = st.selectbox("RFP (optional)", options=[None] + df_rf["id"].tolist(),
                               format_func=lambda x: "None" if x is None else f"#{x} — {df_rf.loc[df_rf['id']==x,'title'].values[0]}",
                               key="rfq_rfp_sel")
@@ -3246,7 +3309,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
                 st.success("Created"); st.rerun()
     with right:
         st.subheader("Open")
-        df_pk = pd.read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs ORDER BY id DESC;", conn)
+        df_pk = pd.read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs_t ORDER BY id DESC;", conn)
         if df_pk.empty:
             st.info("No RFQ packs yet")
             return
@@ -3308,7 +3371,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     pack = _rfq_pack_by_id(conn, int(pk_sel))
     rfp_id = pack.get("rfp_id")
     if rfp_id:
-        df_rfp_files = pd.read_sql_query("SELECT id, filename, path, tags FROM files WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(rfp_id),))
+        df_rfp_files = pd.read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(rfp_id),))
     else:
         df_rfp_files = pd.DataFrame(columns=["id","filename","path","tags"])
     df_att = _rfq_attachments(conn, int(pk_sel))
@@ -3316,7 +3379,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
 
     st.markdown("**Add from File Manager**")
     # allow selecting from all files
-    df_all_files = pd.read_sql_query("SELECT id, filename FROM files ORDER BY uploaded_at DESC;", conn)
+    df_all_files = pd.read_sql_query("SELECT id, filename FROM files_t ORDER BY uploaded_at DESC;", conn)
     add_file = st.selectbox("File", options=[None] + df_all_files["id"].astype(int).tolist(),
                             format_func=lambda i: "Choose…" if i is None else f"#{i} — {df_all_files.loc[df_all_files['id']==i,'filename'].values[0]}",
                             key="rfq_att_file")
@@ -3324,7 +3387,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if add_file is None:
             st.warning("Pick a file")
         else:
-            df_one = pd.read_sql_query("SELECT filename, path FROM files WHERE id=?;", conn, params=(int(add_file),))
+            df_one = pd.read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(add_file),))
             if df_one.empty:
                 st.error("File not found")
             else:
@@ -3342,7 +3405,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
             with dc2:
                 if st.button("Remove", key=f"rfq_att_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM rfq_attach WHERE id=?;", (int(r["id"]),))
+                        cur.execute("DELETE FROM rfq_attach_t WHERE id=?;", (int(r["id"]),))
                         conn.commit()
                     st.success("Removed"); st.rerun()
 
@@ -3351,7 +3414,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     # ---- Vendors ----
     st.markdown("### Vendors")
     try:
-        df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors ORDER BY name;", conn)
+        df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors_t ORDER BY name;", conn)
     except Exception as e:
         st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
@@ -3379,7 +3442,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
             with vc2:
                 if st.button("Remove", key=f"rfq_vendor_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM rfq_vendors WHERE id=?;", (int(r["id"]),))
+                        cur.execute("DELETE FROM rfq_vendors_t WHERE id=?;", (int(r["id"]),))
                         conn.commit()
                     st.success("Removed"); st.rerun()
 
@@ -3450,6 +3513,40 @@ def nav() -> str:
             "Deals",
         ],
     )
+
+
+
+
+def render_workspace_switcher(conn: sqlite3.Connection) -> None:
+    with st.sidebar.expander("Workspace", expanded=True):
+        try:
+            df_tenants = pd.read_sql_query("SELECT id, name FROM tenants ORDER BY id;", conn)
+        except Exception:
+            df_tenants = pd.DataFrame(columns=["id","name"])
+        try:
+            cur_tid = int(pd.read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn).iloc[0]["ctid"])
+        except Exception:
+            cur_tid = 1
+        opt = st.selectbox("Organization", options=(df_tenants["id"].astype(int).tolist() if not df_tenants.empty else [1]),
+                           format_func=lambda i: (df_tenants.loc[df_tenants["id"]==i,"name"].values[0] if not df_tenants.empty else "Default"),
+                           key="tenant_sel")
+        if st.button("Switch", key="tenant_switch"):
+            with closing(conn.cursor()) as cur:
+                cur.execute("UPDATE current_tenant SET ctid=? WHERE id=1;", (int(opt),))
+                conn.commit()
+            st.session_state['tenant_id'] = int(opt)
+            st.success("Workspace switched"); st.rerun()
+
+        st.divider()
+        new_name = st.text_input("New workspace name", key="tenant_new_name")
+        if st.button("Create workspace", key="tenant_create"):
+            if new_name.strip():
+                with closing(conn.cursor()) as cur:
+                    cur.execute("INSERT OR IGNORE INTO tenants(name, created_at) VALUES(?, datetime('now'));", (new_name.strip(),))
+                    conn.commit()
+                st.success("Workspace created"); st.rerun()
+            else:
+                st.warning("Enter a name")
 
 
 def router(page: str, conn: sqlite3.Connection) -> None:
