@@ -1064,20 +1064,17 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             musts = df_lm[df_lm.get("is_must", 0) == 1]["item_text"].astype(str).tolist() if "is_must" in df_lm.columns else []
             others = df_lm["item_text"].astype(str).tolist()
             if musts:
-                parts.append("**Mandatory Compliance Focus**
-- " + "
+                parts.append("**Mandatory Compliance Focus**\n- " + "
 - ".join(musts[:12]))
             elif others:
-                parts.append("**Compliance Focus**
-- " + "
+                parts.append("**Compliance Focus**\n- " + "
 - ".join(others[:12]))
         # CLINs summary
         if df_c is not None and not df_c.empty:
             try:
                 tbl = df_c.fillna("").astype(str)
                 lines = [f"{r.get('clin','')}: {r.get('description','')}" for r in tbl.to_dict(orient="records")]
-                parts.append("**Contract Line Items (CLINs)**
-- " + "
+                parts.append("**Contract Line Items (CLINs)**\n- " + "
 - ".join(lines[:15]))
             except Exception:
                 pass
@@ -1086,8 +1083,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             try:
                 tbl = df_d.fillna("").astype(str)
                 lines = [f"{r.get('label','')}: {r.get('date_text') or r.get('date_iso','')}" for r in tbl.to_dict(orient="records")]
-                parts.append("**Key Dates**
-- " + "
+                parts.append("**Key Dates**\n- " + "
 - ".join(lines[:12]))
             except Exception:
                 pass
@@ -1096,8 +1092,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             try:
                 tbl = df_p.fillna("").astype(str)
                 lines = [f"{r.get('name','')} ({r.get('role','')}), {r.get('email','')}" for r in tbl.to_dict(orient="records")]
-                parts.append("**Government POCs**
-- " + "
+                parts.append("**Government POCs**\n- " + "
 - ".join(lines[:10]))
             except Exception:
                 pass
@@ -1105,8 +1100,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if meta:
             attribs = [f"{k}: {v}" for k,v in meta.items() if v]
             if attribs:
-                parts.append("**Attributes**
-- " + "
+                parts.append("**Attributes**\n- " + "
 - ".join(attribs[:12]))
         return "
 
