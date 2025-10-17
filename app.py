@@ -3168,15 +3168,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-        # Phase K (Compliance)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS lm_meta(
-                lm_id INTEGER PRIMARY KEY REFERENCES lm_items(id) ON DELETE CASCADE,
-                owner TEXT,
-                ref_page TEXT,
-                ref_para TEXT,
-                evidence TEXT,
-                risk TEXT DEFAULT 'Green',
-                notes TEXT
-            );
-        """)
