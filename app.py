@@ -1,12 +1,3 @@
-# === Phase R early stub: run_rfp_analyzer ===
-def run_rfp_analyzer(*args, **kwargs):
-    try:
-        return render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
-    except Exception:
-        # Safe no-op if Phase R not loaded yet
-        return None
-# === End Phase R early stub ===
-
 
 import os
 import sqlite3
@@ -18,6 +9,12 @@ from datetime import datetime, timedelta
 import pandas as pd
 import io
 import streamlit as st
+
+import inspect, hashlib
+def ns(scope: str, name: str, suffix: str | int | None = None) -> str:
+    frame = inspect.currentframe().f_back
+    seed = f"{scope}:{frame.f_code.co_filename}:{frame.f_lineno}:{name}:{suffix or ''}"
+    return "k_" + hashlib.md5(seed.encode()).hexdigest()[:12]
 
 # External
 import requests
@@ -1044,12 +1041,14 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
 
-def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
+
+def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
+    import io, re
+    from contextlib import closing
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
-    
 
-    # --- heuristics to auto-fill Title and Solicitation # ---
+    # ---------- helpers ----------
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
@@ -1060,7 +1059,32 @@ def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_solnum(text: str) -> str:
         if not text:
             return ""
-    # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
+        m = re.search(r'(?i)Solicitation\s*(Number|No\.? )\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
+        if m:
+            return m.group(2)[:60]
+        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
+        if m:
+            return m.group(1)[:60]
+        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
+        if m:
+            return (m.group(1).upper() + "-" + m.group(2))[:60]
+        return ""
+
+    # ensure meta table
+    try:
+        with closing(conn.cursor()) as _c:
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_meta(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
+                    key TEXT,
+                    value TEXT
+                );
+            """)
+            conn.commit()
+    except Exception:
+        pass
+
     def _extract_naics(text: str) -> str:
         if not text: return ""
         m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
@@ -1092,31 +1116,367 @@ def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         m = re.search(r'\b([A-Z][a-zA-Z]+,\s*(?:[A-Z]{2}|[A-Za-z\. ]{3,}))\b', text)
         return m.group(1).strip() if m else ""
 
-    # ensure rfp_meta exists
-    try:
-        with closing(conn.cursor()) as _c:
-            _c.execute("""
-                CREATE TABLE IF NOT EXISTS rfp_meta(
-                    id INTEGER PRIMARY KEY,
-                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
-                    key TEXT,
-                    value TEXT
-                );
-            """)
-            conn.commit()
-    except Exception:
-        pass
+    def _draft_from_data(prompt: str, df_lm: "pd.DataFrame|None", df_c: "pd.DataFrame|None", df_d: "pd.DataFrame|None", df_p: "pd.DataFrame|None", meta: dict) -> str:
+        parts = []
+        if prompt:
+            parts.append(prompt.strip())
+        if df_lm is not None and hasattr(df_lm, "empty") and not df_lm.empty:
+            try:
+                musts = df_lm[df_lm.get("is_must", 0) == 1]["item_text"].astype(str).tolist()
+            except Exception:
+                musts = []
+            others = df_lm["item_text"].astype(str).tolist() if "item_text" in df_lm.columns else []
+            if musts:
+                parts.append("**Mandatory Compliance Focus**\n- " + "\n- ".join(musts[:12]))
+            elif others:
+                parts.append("**Compliance Focus**\n- " + "\n- ".join(others[:12]))
+        if df_c is not None and hasattr(df_c, "empty") and not df_c.empty:
+            tbl = df_c.fillna("").astype(str)
+            lines = [f"{r.get('clin','')}: {r.get('description','')}" for r in tbl.to_dict(orient="records")]
+            parts.append("**Contract Line Items (CLINs)**\n- " + "\n- ".join(lines[:15]))
+        if df_d is not None and hasattr(df_d, "empty") and not df_d.empty:
+            tbl = df_d.fillna("").astype(str)
+            lines = [f"{r.get('label','')}: {r.get('date_text') or r.get('date_iso','')}" for r in tbl.to_dict(orient="records")]
+            parts.append("**Key Dates**\n- " + "\n- ".join(lines[:12]))
+        if df_p is not None and hasattr(df_p, "empty") and not df_p.empty:
+            tbl = df_p.fillna("").astype(str)
+            lines = [f"{r.get('name','')} ({r.get('role','')}), {r.get('email','')}" for r in tbl.to_dict(orient="records")]
+            parts.append("**Government POCs**\n- " + "\n- ".join(lines[:10]))
+        if meta:
+            attribs = [f"{k}: {v}" for k, v in meta.items() if v]
+            if attribs:
+                parts.append("**Attributes**\n- " + "\n- ".join(attribs[:12]))
+        return "\n\n".join(parts).strip()
 
-        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
-        if m:
-            return m.group(2)[:60]
-        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
-        if m:
-            return m.group(1)[:60]
-        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
-        if m:
-            return (m.group(1).upper() + "-" + m.group(2))[:60]
-        return ""
+    # ---------------- PARSE & SAVE ----------------
+    with tab_parse:
+        colA, colB = st.columns([3,2])
+        with colA:
+            ups = st.file_uploader("Upload RFP(s) (PDF/DOCX/TXT)", type=["pdf","docx","txt"], accept_multiple_files=True, key=ns("ra","uploader"))
+            with st.expander("Manual Text Paste (optional)", expanded=False):
+                pasted = st.text_area("Paste any text to include in parsing", height=150, key="ra_paste")
+            title = st.text_input("RFP Title (used if combining)", key="ra_title")
+            solnum = st.text_input("Solicitation # (used if combining)", key="ra_solnum")
+            sam_url = st.text_input("SAM URL (used if combining)", placeholder="https://sam.gov/...")
+            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
+        with colB:
+            st.markdown("**Parse Controls**")
+            run = st.button("Parse & Save", type="primary", key="ra_parse_btn")
+            st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
+
+        def _read_file(file):
+            name = file.name.lower()
+            data = file.read()
+            if name.endswith(".txt"):
+                try:
+                    return data.decode("utf-8")
+                except Exception:
+                    return data.decode("latin-1", errors="ignore")
+            if name.endswith(".pdf"):
+                try:
+                    import PyPDF2  # type: ignore
+                    reader = PyPDF2.PdfReader(io.BytesIO(data))
+                    pages = [(p.extract_text() or "") for p in reader.pages]
+                    return "\n".join(pages)
+                except Exception as e:
+                    st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
+                    return data.decode("latin-1", errors="ignore")
+            if name.endswith(".docx"):
+                try:
+                    import docx  # python-docx
+                    f = io.BytesIO(data)
+                    doc = docx.Document(f)
+                    return "\n".join([p.text for p in doc.paragraphs])
+                except Exception as e:
+                    st.warning(f"DOCX parse failed for {file.name}: {e}.")
+                    return ""
+            st.error(f"Unsupported file type: {file.name}")
+            return ""
+
+        if run:
+            if (not ups) and (not pasted):
+                st.error("No input. Upload at least one file or paste text.")
+            else:
+                if mode == "Combine all into one RFP":
+                    text_parts = []
+                    for f in ups or []:
+                        text_parts.append(_read_file(f))
+                    if pasted:
+                        text_parts.append(pasted)
+                    full_text = "\n\n".join([t for t in text_parts if t]).strip()
+                    if not full_text:
+                        st.error("Nothing readable found.")
+                    else:
+                        secs = extract_sections_L_M(full_text)
+                        l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
+                        clins = extract_clins(full_text); dates = extract_dates(full_text); pocs = extract_pocs(full_text)
+                        meta = {'naics': _extract_naics(full_text), 'set_aside': _extract_set_aside(full_text), 'place_of_performance': _extract_place(full_text)}
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                        (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",))
+                            rfp_id = cur.lastrowid
+                            for it in l_items:
+                                cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
+                                            (rfp_id, it, 1 if re.search(r'\b(shall|must|required|mandatory|no later than|shall not|will)\b', it, re.IGNORECASE) else 0, "Open"))
+                            for r in clins:
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                            (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
+                            for d in dates:
+                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                            (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
+                            for pc in pocs:
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                            (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
+                            for k,v in meta.items():
+                                if v:
+                                    cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (rfp_id, k, v))
+                            conn.commit()
+                        st.success(f"Combined and saved RFP #{rfp_id}.")
+                else:
+                    saved = 0
+                    for f in ups or []:
+                        text = _read_file(f)
+                        if not text.strip():
+                            continue
+                        secs = extract_sections_L_M(text)
+                        l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
+                        clins = extract_clins(text); dates = extract_dates(text); pocs = extract_pocs(text)
+                        meta = {'naics': _extract_naics(text), 'set_aside': _extract_set_aside(text), 'place_of_performance': _extract_place(text)}
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                        (_guess_title(text, f.name), _guess_solnum(text), "", "", "",))
+                            rfp_id = cur.lastrowid
+                            for it in l_items:
+                                cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
+                                            (rfp_id, it, 1 if re.search(r'\b(shall|must|required|mandatory|no later than|shall not|will)\b', it, re.IGNORECASE) else 0, "Open"))
+                            for r in clins:
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                            (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
+                            for d in dates:
+                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                            (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
+                            for pc in pocs:
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                            (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
+                            for k,v in meta.items():
+                                if v:
+                                    cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (rfp_id, k, v))
+                            conn.commit()
+                        saved += 1
+                    st.success(f"Saved {saved} RFP record(s).")
+
+    # ---------------- CHECKLIST ----------------
+    with tab_checklist:
+        df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn)
+        if df_rf.empty:
+            st.info("No RFPs yet. Parse one on the first tab.")
+        else:
+            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="ra_rfp_sel")
+            df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+            st.caption(f"{len(df_lm)} checklist items")
+            st.dataframe(df_lm, use_container_width=True, hide_index=True)
+            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="ra_lm_set_status")
+            sel_ids = st.text_input("IDs to update (comma-separated)", key="ra_lm_ids")
+            if st.button("Update Status", key="ra_lm_status_btn"):
+                ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
+                if ids:
+                    with closing(conn.cursor()) as cur:
+                        cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(rid)) for iid in ids])
+                        conn.commit()
+                    st.success(f"Updated {len(ids)} item(s).")
+                    st.rerun()
+            if st.button("Export Compliance Matrix (CSV)", key="ra_lm_export_csv"):
+                out = df_lm.copy()
+                out.insert(0, "rfp_id", int(rid))
+                csv_bytes = out.to_csv(index=False).encode("utf-8")
+                st.download_button("Download CSV", data=csv_bytes, file_name=f"rfp_{rid}_compliance.csv", mime="text/csv", key="lm_dl")
+
+    # ---------------- CLINs / Dates / POCs ----------------
+    with tab_data:
+        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+        if df_rf.empty:
+            st.info("No RFPs yet.")
+        else:
+            rid = st.selectbox("RFP for data views", options=df_rf["id"].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="ra_data_sel")
+        # === Phase R: Utilities (Export / Import / Delete) ===
+        import json
+        from contextlib import closing as _closing_r
+        try:
+            _rid_utils = rid
+        except NameError:
+            _rid_utils = None
+        with st.expander("Utilities (Export / Import / Delete)", expanded=False, key=ns("ra","utils")):
+            st.caption("Export the selected RFP's structured data (LM, CLINs, Dates, POCs, Meta), import to overwrite, or delete the RFP and its related rows.")
+            if _rid_utils is None:
+                st.info("Select an RFP above to enable utilities.")
+            else:
+                try:
+                    df_meta_u = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(_rid_utils),))
+                except Exception:
+                    df_meta_u = pd.DataFrame(columns=["key","value"])
+                try:
+                    df_lm_u = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(_rid_utils),))
+                except Exception:
+                    df_lm_u = pd.DataFrame(columns=["id","item_text","is_must","status"])
+                try:
+                    df_c_u = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(_rid_utils),))
+                except Exception:
+                    df_c_u = pd.DataFrame(columns=["clin","description","qty","unit","unit_price","extended_price"])
+                try:
+                    df_d_u = pd.read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(_rid_utils),))
+                except Exception:
+                    df_d_u = pd.DataFrame(columns=["label","date_text","date_iso"])
+                try:
+                    df_p_u = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(_rid_utils),))
+                except Exception:
+                    df_p_u = pd.DataFrame(columns=["name","role","email","phone"])
+                data_pkg = {
+                    "rfp_id": int(_rid_utils),
+                    "meta": ({r["key"]: r["value"] for _, r in df_meta_u.iterrows()} if 'df_meta_u' in locals() and not df_meta_u.empty else {}),
+                    "lm_items": (df_lm_u.fillna("").to_dict(orient="records") if 'df_lm_u' in locals() else []),
+                    "clins": (df_c_u.fillna("").to_dict(orient="records") if 'df_c_u' in locals() else []),
+                    "key_dates": (df_d_u.fillna("").to_dict(orient="records") if 'df_d_u' in locals() else []),
+                    "pocs": (df_p_u.fillna("").to_dict(orient="records") if 'df_p_u' in locals() else []),
+                }
+                st.download_button("Export JSON", data=json.dumps(data_pkg, indent=2).encode("utf-8"), file_name=f"rfp_{_rid_utils}_export.json", mime="application/json", key=ns("ra","export_json", _rid_utils))
+                upj = st.file_uploader("Import JSON to overwrite", type=["json"], key=ns("ra","import_json", _rid_utils))
+                if upj is not None:
+                    try:
+                        pkg = json.loads(upj.read().decode("utf-8"))
+                        rid_val = int(pkg.get("rfp_id") or _rid_utils)
+                        with _closing_r(conn.cursor()) as cur:
+                            cur.execute("DELETE FROM lm_items WHERE rfp_id=?;", (rid_val,))
+                            for r in pkg.get("lm_items", []):
+                                cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);", (rid_val, r.get("item_text",""), int(r.get("is_must",0)), r.get("status","Open")))
+                            cur.execute("DELETE FROM clin_lines WHERE rfp_id=?;", (rid_val,))
+                            for r in pkg.get("clins", []):
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);", (rid_val, r.get("clin",""), r.get("description",""), r.get("qty",""), r.get("unit",""), r.get("unit_price",""), r.get("extended_price","")))
+                            cur.execute("DELETE FROM key_dates WHERE rfp_id=?;", (rid_val,))
+                            for r in pkg.get("key_dates", []):
+                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);", (rid_val, r.get("label",""), r.get("date_text",""), r.get("date_iso","")))
+                            cur.execute("DELETE FROM pocs WHERE rfp_id=?;", (rid_val,))
+                            for r in pkg.get("pocs", []):
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);", (rid_val, r.get("name",""), r.get("role",""), r.get("email",""), r.get("phone","")))
+                            cur.execute("DELETE FROM rfp_meta WHERE rfp_id=?;", (rid_val,))
+                            for k,v in (pkg.get("meta") or {}).items():
+                                cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (rid_val, str(k), str(v)))
+                            conn.commit()
+                        st.success("Import applied. Reloading…")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Import failed: {e}")
+                st.warning("Danger zone: deletes this RFP and all associated rows (LM, CLINs, Dates, POCs, Meta).")
+                if st.button("Delete this RFP", key=ns("ra","delete_rfp", _rid_utils)):
+                    with _closing_r(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM lm_items WHERE rfp_id=?;", (int(_rid_utils),))
+                        cur.execute("DELETE FROM clin_lines WHERE rfp_id=?;", (int(_rid_utils),))
+                        cur.execute("DELETE FROM key_dates WHERE rfp_id=?;", (int(_rid_utils),))
+                        cur.execute("DELETE FROM pocs WHERE rfp_id=?;", (int(_rid_utils),))
+                        cur.execute("DELETE FROM rfp_meta WHERE rfp_id=?;", (int(_rid_utils),))
+                        cur.execute("DELETE FROM rfps WHERE id=?;", (int(_rid_utils),))
+                        conn.commit()
+                    st.success(f"Deleted RFP #{_rid_utils}.")
+                    st.rerun()
+            c1, c2 = st.columns([3,1])
+            with c1:
+                st.subheader("CLINs (editable)")
+                df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),),)
+                edit_c = st.data_editor(df_c, num_rows="dynamic", use_container_width=True, key=f"clin_edit_{rid}")
+                if st.button("Save CLINs", key=f"save_clin_{rid}"):
+                    rows = edit_c.fillna("").to_dict(orient="records")
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM clin_lines WHERE rfp_id=?;", (int(rid),))
+                        for r in rows:
+                            if any(str(r.get(k,"")).strip() for k in ["clin","description","qty","unit","unit_price","extended_price"]):
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                            (int(rid), r.get("clin"), r.get("description"), r.get("qty"), r.get("unit"), r.get("unit_price"), r.get("extended_price")),)
+                        conn.commit()
+                    st.success("CLINs saved.")
+                st.subheader("Key Dates (editable)")
+                df_d = pd.read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(rid),),)
+                edit_d = st.data_editor(df_d, num_rows="dynamic", use_container_width=True, key=f"dates_edit_{rid}")
+                if st.button("Save Key Dates", key=f"save_dates_{rid}"):
+                    rows = edit_d.fillna("").to_dict(orient="records")
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM key_dates WHERE rfp_id=?;", (int(rid),))
+                        for r in rows:
+                            if any(str(r.get(k,"")).strip() for k in ["label","date_text","date_iso"]):
+                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                            (int(rid), r.get("label"), r.get("date_text"), r.get("date_iso")),)
+                        conn.commit()
+                    st.success("Key Dates saved.")
+                st.subheader("POCs (editable)")
+                df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),),)
+                edit_p = st.data_editor(df_p, num_rows="dynamic", use_container_width=True, key=f"pocs_edit_{rid}")
+                if st.button("Save POCs", key=f"save_pocs_{rid}"):
+                    rows = edit_p.fillna("").to_dict(orient="records")
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM pocs WHERE rfp_id=?;", (int(rid),))
+                        for r in rows:
+                            if any(str(r.get(k,"")).strip() for k in ["name","role","email","phone"]):
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                            (int(rid), r.get("name"), r.get("role"), r.get("email"), r.get("phone")),)
+                        conn.commit()
+                    st.success("POCs saved.")
+            with c2:
+                st.subheader("Attributes")
+                df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),),)
+                st.dataframe(df_meta, use_container_width=True, hide_index=True)
+                with st.form(key=f"meta_add_{rid}"):
+                    mk = st.text_input("Key", placeholder="naics / set_aside / place_of_performance")
+                    mv = st.text_input("Value")
+                    submitted = st.form_submit_button("Add/Update")
+                    if submitted and mk.strip():
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("DELETE FROM rfp_meta WHERE rfp_id=? AND key=?;", (int(rid), mk.strip()))
+                            cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (int(rid), mk.strip(), mv.strip()))
+                            conn.commit()
+                        st.success("Attribute saved."); st.rerun()
+
+            st.divider()
+            st.subheader("Send to Proposal Builder")
+            colx, coly = st.columns([3,2])
+            with colx:
+                use_lm = st.checkbox("Include L/M Checklist as a section outline", value=True, key=f"use_lm_{rid}")
+                use_clin = st.checkbox("Include CLINs section", value=True, key=f"use_clin_{rid}")
+                use_dates = st.checkbox("Include Key Dates section", value=True, key=f"use_dates_{rid}")
+                use_pocs = st.checkbox("Include POCs section", value=False, key=f"use_pocs_{rid}")
+            with coly:
+                pb_title = st.text_input("Proposal title", value=df_rf.loc[df_rf['id']==rid,'title'].values[0], key=f"pb_title_{rid}")
+                spacing = st.selectbox("Default spacing", ["Single","1.15","Double"], index=1, key=f"pb_sp_{rid}")
+                if st.button("Copy to Proposal Builder", type="primary", key=f"copy_to_pb_{rid}"):
+                    sections = []
+                    if use_lm:
+                        try:
+                            df_lm = pd.read_sql_query("SELECT item_text, is_must FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+                            body = "\n".join(["• " + t for t in df_lm["item_text"].astype(str).tolist()])
+                        except Exception:
+                            body = ""
+                        sections.append({"title": "Compliance Outline", "body": body})
+                    if use_clin:
+                        body = _df_to_md(edit_c) if 'edit_c' in locals() else ""
+                        sections.append({"title": "CLINs", "body": body})
+                    if use_dates:
+                        body = _df_to_md(edit_d) if 'edit_d' in locals() else ""
+                        sections.append({"title": "Key Dates", "body": body})
+                    if use_pocs:
+                        body = _df_to_md(edit_p) if 'edit_p' in locals() else ""
+                        sections.append({"title": "Points of Contact", "body": body})
+                    meta = {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {}
+                    st.session_state["pb_prefill"] = {"title": pb_title, "sections": sections, "metadata": meta, "spacing": spacing}
+                    st.success("Copied. Open the Proposal Builder tab and click 'Import from RFP Analyzer'.")
+
+            with st.expander("Analyze & Draft", expanded=False):
+                user_prompt = st.text_area("Guidance (optional)", placeholder="Emphasize past performance; highlight 541519 expertise; focus on cybersecurity posture.", key=f"draft_prompt_{rid}")
+                if st.button("Generate Draft", key=f"gen_draft_{rid}"):
+                    try:
+                        df_lm = pd.read_sql_query("SELECT item_text, is_must FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+                    except Exception:
+                        df_lm = pd.DataFrame(columns=["item_text","is_must"])
+                    draft = _draft_from_data(user_prompt, df_lm, edit_c if 'edit_c' in locals() else None, edit_d if 'edit_d' in locals() else None, edit_p if 'edit_p' in locals() else None, {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {})
+                    st.session_state["pb_prefill_draft"] = {"title": pb_title, "sections": [{"title":"Draft Narrative","body": draft}], "metadata": {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {}, "spacing": spacing}
+                    st.success("Draft generated and staged. Click Import in Proposal Builder to bring it in.")
+
 # ---------------- PARSE & SAVE ----------------
     with tab_parse:
         colA, colB = st.columns([3,2])
@@ -1128,14 +1488,14 @@ def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 key="rfp_ups"
             )
             with st.expander("Manual Text Paste (optional)", expanded=False):
-                pasted = st.text_area("Paste any text to include in parsing", height=150, key="rfp_paste")
-            title = st.text_input("RFP Title (used if combining)", key="rfp_title")
-            solnum = st.text_input("Solicitation # (used if combining)", key="rfp_solnum")
-            sam_url = st.text_input("SAM URL (used if combining)", key="rfp_sam_url", placeholder="https://sam.gov/...")
+                pasted = st.text_area("Paste any text to include in parsing", height=150, key="ra_paste")
+            title = st.text_input("RFP Title (used if combining)", key="ra_title")
+            solnum = st.text_input("Solicitation # (used if combining)", key="ra_solnum")
+            sam_url = st.text_input("SAM URL (used if combining)", key="ra_sam_url", placeholder="https://sam.gov/...")
             mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
         with colB:
             st.markdown("**Parse Controls**")
-            run = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
+            run = st.button("Parse & Save", type="primary", key="ra_parse_btn")
             st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
@@ -1252,14 +1612,14 @@ def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No RFPs yet. Parse one on the first tab.")
         else:
-            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
+            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="ra_rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
             st.caption(f"{len(df_lm)} checklist items")
             # Inline status editor
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
-            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
-            sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
-            if st.button("Update Status", key="lm_status_btn"):
+            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="ra_lm_set_status")
+            sel_ids = st.text_input("IDs to update (comma-separated)", key="ra_lm_ids")
+            if st.button("Update Status", key="ra_lm_status_btn"):
                 ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
                 if ids:
                     with closing(conn.cursor()) as cur:
@@ -1268,7 +1628,7 @@ def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
             # Export
-            if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
+            if st.button("Export Compliance Matrix (CSV)", key="ra_lm_export_csv"):
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(rid))
                 csv_bytes = out.to_csv(index=False).encode("utf-8")
@@ -1284,7 +1644,7 @@ def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             "RFP for data views",
             options=df_rf["id"].tolist(),
             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
-            key="rfp_data_sel"
+            key="ra_data_sel"
         )
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1590,11 +1950,11 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         return
     rfp_id = st.selectbox(
         "RFP context",
-        options=df_rf["id"].tolist(),
+        options=df_rf['id'].tolist(),
         format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}",
         index=0,
     )
-    st.session_state["current_rfp_id"] = rfp_id
+    st.session_state['current_rfp_id'] = rfp_id
     ctx = _load_rfp_context(conn, rfp_id)
 
     left, right = st.columns([3, 2])
@@ -1605,10 +1965,10 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             "Staffing and Key Personnel","Quality Assurance","Past Performance Summary","Pricing and CLINs","Certifications and Reps","Appendices",
         ]
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
-        content_map: Dict[str, str] = {}
         for sec in selected:
-            default_val = st.session_state.get(f"pb_section_{sec}", "")
-            content_map[sec] = st.text_area(sec, value=default_val, height=140)
+            key = f"pb_section_{sec}"
+            st.session_state.setdefault(key, st.session_state.get(key, ""))
+            st.session_state[key] = st.text_area(sec, value=st.session_state[key], height=140)
 
     with right:
         st.subheader("Guidance and limits")
@@ -1618,13 +1978,16 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
 
         st.markdown("**Must address items from L and M**")
-        items = ctx["items"] if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
+        items = ctx['items'] if isinstance(ctx.get('items'), pd.DataFrame) else pd.DataFrame()
         if not items.empty:
             st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
             st.caption("No checklist items found for this RFP")
 
-        total_words = sum(len((content_map.get(k) or "").split()) for k in selected)
+        total_words = 0
+        for sec in selected:
+            key = f"pb_section_{sec}"
+            total_words += len((st.session_state.get(key) or "").split())
         est_pages = _estimate_pages(total_words, spacing)
         st.info(f"Current word count {total_words}  Estimated pages {est_pages}")
         if est_pages > page_limit:
@@ -1633,17 +1996,14 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
         out_path = os.path.join(DATA_DIR, out_name)
         if st.button("Export DOCX", type="primary"):
-            sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
+            sections = [{"title": sec, "body": st.session_state.get(f"pb_section_{sec}", "")} for sec in selected]
             exported = _export_docx(
                 out_path,
-                doc_title=ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "Proposal",
+                doc_title=(ctx['rfp']['title'] if isinstance(ctx.get('rfp'), pd.DataFrame) and not ctx['rfp'].empty else "Proposal"),
                 sections=sections,
-                clins=ctx["clins"],
-                checklist=ctx["items"],
-                metadata={
-                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                },
+                clins=pd.DataFrame(),
+                checklist=ctx['items'] if isinstance(ctx.get('items'), pd.DataFrame) else None,
+                metadata=(ctx['rfp'].iloc[0].to_dict() if isinstance(ctx.get('rfp'), pd.DataFrame) and not ctx['rfp'].empty else {}),
                 font_name=font_name,
                 font_size_pt=int(font_size),
                 spacing=spacing,
@@ -1652,7 +2012,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
 
-
+# ---------- Subcontractor Finder (Phase D) ----------
 # ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
@@ -4136,771 +4496,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-
-
-
-# ===============================
-# PHASE R — RFP Analyzer upgrades
-# Scope: Extraction, Scoring, UI tabs, Sync hooks, Prechecks
-# Feature flag: rfp_phase_r
-# Safe, self-contained, no breaking changes to existing flows
-# ===============================
-
-import sqlite3
-from contextlib import closing
-from typing import List, Dict, Any, Tuple
-
-try:
-    import streamlit as st
-except Exception:
-    # If running in non-Streamlit context, define shims
-    class _Shim:
-        def __getattr__(self, k): 
-            def _f(*a, **kw): return None
-            return _f
-    st = _Shim()
-
-# ---------- DB helpers ----------
-
-def _get_db_conn_phase_r() -> sqlite3.Connection:
-    try:
-        # Reuse app-level get_db if present
-        return get_db()  # type: ignore[name-defined]
-    except Exception:
-        # Fallback to local SQLite path used elsewhere in app
-        db_path = Path("data/app.db")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(str(db_path))
-
-def _phase_r_init_db():
-    ddl = [
-        """
-        CREATE TABLE IF NOT EXISTS rfp_artifacts(
-            id INTEGER PRIMARY KEY,
-            notice_id INTEGER NOT NULL,
-            filename TEXT NOT NULL,
-            kind TEXT,
-            pages INTEGER,
-            sha256 TEXT,
-            extracted_at TEXT
-        );
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_artifacts_notice_id ON rfp_artifacts(notice_id);",
-        """
-        CREATE TABLE IF NOT EXISTS rfp_requirements(
-            id INTEGER PRIMARY KEY,
-            notice_id INTEGER NOT NULL,
-            ref TEXT,
-            text TEXT,
-            section_hint TEXT,
-            source_file TEXT,
-            page_from INTEGER,
-            page_to INTEGER,
-            priority INTEGER DEFAULT 0
-        );
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_requirements_notice_id_ref ON rfp_requirements(notice_id, ref);",
-        """
-        CREATE TABLE IF NOT EXISTS rfp_scores(
-            id INTEGER PRIMARY KEY,
-            notice_id INTEGER NOT NULL,
-            section_key TEXT,
-            compliance_score REAL,
-            keyword_score REAL,
-            findings_json TEXT
-        );
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_scores_notice_section ON rfp_scores(notice_id, section_key);",
-    ]
-    with closing(_get_db_conn_phase_r()) as conn, conn:
-        cur = conn.cursor()
-        for stmt in ddl:
-            cur.execute(stmt)
-
-# ---------- Extraction ----------
-
-def _rfp_parse_attachments_phase_r(notice_id:int) -> List[Dict[str, Any]]:
-    """Placeholder attachment scan. Tries to read from existing rfp_json table if present.
-    Returns list of artifacts with minimal metadata. Safe no-op if none found.
-    """
-    artifacts: List[Dict[str,Any]] = []
-    with closing(_get_db_conn_phase_r()) as conn:
-        cur = conn.cursor()
-        # Try to read attachments list from prior ingestion if available
-        try:
-            cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),))
-            row = cur.fetchone()
-        except Exception:
-            row = None
-        if row and row[0]:
-            try:
-                import json
-                data = json.loads(row[0])
-                atts = data.get("attachments") or data.get("files") or []
-                for a in atts:
-                    artifacts.append({
-                        "filename": a.get("name") or a.get("filename") or "attachment",
-                        "kind": a.get("kind") or a.get("type") or "unknown",
-                        "pages": None,
-                        "sha256": None,
-                        "extracted_at": datetime.utcnow().isoformat(timespec="seconds")+"Z",
-                    })
-            except Exception:
-                pass
-    return artifacts
-
-_REQ_ANCHOR = re.compile(r"\\b(MUST|SHALL|WILL)\\b.*", re.I)
-_SEC_HINT = re.compile(r"\\bSECTION\\s+([A-Z])\\b|\\b(L|M|C|K)\\b\\s*[-:]?", re.I)
-
-def _rfp_extract_from_text_phase_r(text: str) -> list[dict]:
-    """Extract MUST/SHALL lines from pasted text. Returns requirement dicts compatible with upsert."""
-    reqs = []
-    if not text:
-        return reqs
-    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
-    idx = 0
-    for ln in lines:
-        if _REQ_ANCHOR.search(ln):
-            idx += 1
-            m = _SEC_HINT.search(ln)
-            sec_hint = None
-            if m:
-                sec_hint = (m.group(1) or m.group(2) or "").upper()
-            reqs.append({
-                "ref": f"R{idx:04d}",
-                "text": ln,
-                "section_hint": sec_hint or "",
-                "source_file": "(pasted)",
-                "page_from": None,
-                "page_to": None,
-                "priority": 1 if "MUST" in ln.upper() or "SHALL" in ln.upper() else 0,
-            })
-    return reqs
-
-
-def _rfp_extract_requirements_phase_r(notice_id:int) -> List[Dict[str,Any]]:
-    """Lightweight text-based requirement extraction from rfp_json description and notes.
-    This avoids heavy PDF dependencies for now.
-    """
-    reqs: List[Dict[str,Any]] = []
-    with closing(_get_db_conn_phase_r()) as conn:
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),))
-            row = cur.fetchone()
-        except Exception:
-            row = None
-        if not row or not row[0]:
-            return reqs
-        try:
-            import json
-            data = json.loads(row[0])
-            text_blobs = []
-            for k in ("description", "summary", "notes"):
-                v = data.get(k)
-                if isinstance(v, str):
-                    text_blobs.append(v)
-            for sec in ("sections","requirements"):
-                v = data.get(sec)
-                if isinstance(v, list):
-                    text_blobs.extend([str(x) for x in v])
-            large_text = "\\n".join(text_blobs)
-            lines = [ln.strip() for ln in large_text.splitlines() if ln.strip()]
-            idx = 0
-            for ln in lines:
-                if _REQ_ANCHOR.search(ln):
-                    idx += 1
-                    m = _SEC_HINT.search(ln)
-                    sec_hint = None
-                    if m:
-                        sec_hint = (m.group(1) or m.group(2) or "").upper()
-                    reqs.append({
-                        "ref": f"R{idx:04d}",
-                        "text": ln,
-                        "section_hint": sec_hint or "",
-                        "source_file": "(rfp_json)",
-                        "page_from": None,
-                        "page_to": None,
-                        "priority": 1 if "MUST" in ln.upper() or "SHALL" in ln.upper() else 0,
-                    })
-        except Exception:
-            pass
-    return reqs
-
-# ---------- Scoring ----------
-
-def _rfp_score_requirements_phase_r(requirements: List[Dict[str,Any]], user_keywords: List[str]) -> Tuple[float, List[float]]:
-    """Simple keyword coverage score: exact term presence weighted by MUST/SHALL priority."""
-    if not requirements:
-        return 0.0, []
-    keys = [k.strip().lower() for k in user_keywords if k and isinstance(k, str)]
-    section_scores = []
-    hit_total = 0.0
-    max_total = 0.0
-    for r in requirements:
-        text = (r.get("text") or "").lower()
-        weight = 2.0 if r.get("priority",0) else 1.0
-        max_total += weight
-        hit = 0.0
-        for k in keys:
-            if k and k in text:
-                hit = 1.0
-                break
-        hit_total += hit * weight
-        section_scores.append(hit * 100.0)
-    global_score = 100.0 * (hit_total / max_total) if max_total else 0.0
-    return global_score, section_scores
-
-# ---------- Persistence ----------
-
-def _rfp_upsert_artifacts_phase_r(notice_id:int, artifacts: List[Dict[str,Any]]):
-    with closing(_get_db_conn_phase_r()) as conn, conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM rfp_artifacts WHERE notice_id=?", (int(notice_id),))
-        for a in artifacts:
-            cur.execute("""
-                INSERT INTO rfp_artifacts(notice_id, filename, kind, pages, sha256, extracted_at)
-                VALUES(?,?,?,?,?,?)
-            """, (int(notice_id), a.get("filename"), a.get("kind"), a.get("pages"),
-                  a.get("sha256"), a.get("extracted_at")))
-
-def _rfp_upsert_requirements_phase_r(notice_id:int, reqs: List[Dict[str,Any]]):
-    with closing(_get_db_conn_phase_r()) as conn, conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM rfp_requirements WHERE notice_id=?", (int(notice_id),))
-        for r in reqs:
-            cur.execute("""
-                INSERT INTO rfp_requirements(notice_id, ref, text, section_hint, source_file, page_from, page_to, priority)
-                VALUES(?,?,?,?,?,?,?,?)
-            """, (int(notice_id), r.get("ref"), r.get("text"), r.get("section_hint"),
-                  r.get("source_file"), r.get("page_from"), r.get("page_to"), r.get("priority")))
-
-def _rfp_upsert_scores_phase_r(notice_id:int, global_score: float, per_req_scores: List[float]):
-    import json
-    findings = {"per_req_scores": per_req_scores}
-    with closing(_get_db_conn_phase_r()) as conn, conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM rfp_scores WHERE notice_id=?", (int(notice_id),))
-        cur.execute("""
-            INSERT INTO rfp_scores(notice_id, section_key, compliance_score, keyword_score, findings_json)
-            VALUES(?,?,?,?,?)
-        """, (int(notice_id), "global", float(global_score), float(global_score), json.dumps(findings)))
-
-# ---------- Prechecks ----------
-
-def _rfp_run_prechecks_phase_r(notice_id:int) -> List[str]:
-    issues = []
-    with closing(_get_db_conn_phase_r()) as conn:
-        cur = conn.cursor()
-        # Missing artifacts
-        cur.execute("SELECT COUNT(1) FROM rfp_artifacts WHERE notice_id=?", (int(notice_id),))
-        n = cur.fetchone()[0]
-        if n == 0:
-            issues.append("No attachments recorded for this notice.")
-        # No MUST or SHALL found
-        cur.execute("SELECT COUNT(1) FROM rfp_requirements WHERE notice_id=? AND priority=1", (int(notice_id),))
-        musts = cur.fetchone()[0]
-        if musts == 0:
-            issues.append("No MUST or SHALL requirements detected.")
-        # Score missing
-        cur.execute("SELECT COUNT(1) FROM rfp_scores WHERE notice_id=?", (int(notice_id),))
-        s = cur.fetchone()[0]
-        if s == 0:
-            issues.append("No compliance score computed yet.")
-    return issues
-
-# ---------- Sync hook stubs ----------
-
-def _rfp_push_to_builder_phase_r(notice_id:int, section_map: Dict[str,str], opts: Dict[str,Any]) -> int:
-    """Return a pseudo proposal_id so UI can continue. Implementation can be wired later."""
-    # Try to use existing proposal creation if available
-    try:
-        return create_proposal_from_requirements(notice_id, section_map, opts)  # type: ignore[name-defined]
-    except Exception:
-        # Fallback stub id based on notice
-        return int(notice_id) * 1000 + 7
-
-# ---------- UI ----------
-
-def render_rfp_analyzer_phase_r():
-    _phase_r_init_db()
-    st.sidebar.subheader("Phase R Analyzer")
-    # Phase R always enabled
-    # Pick notice id from rfp_json if possible
-    notice_id = None
-    with closing(_get_db_conn_phase_r()) as conn:
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT DISTINCT notice_id FROM rfp_json ORDER BY notice_id DESC LIMIT 100")
-            rows = [r[0] for r in cur.fetchall()]
-        except Exception:
-            rows = []
-    if rows:
-        notice_id = st.sidebar.selectbox("Notice", rows, format_func=lambda x: f"Notice {x}")
-    else:
-        notice_id = st.sidebar.number_input("Notice ID", min_value=0, step=1, value=0)
-    if not notice_id:
-        st.info("Select a notice to analyze.")
-        return
-
-    st.header("RFP Analyzer — Phase R")
-    col1, col2, col3, col4 = st.columns(4)
-    if col1.button("Reparse"):
-        atts = _rfp_parse_attachments_phase_r(int(notice_id))
-        _rfp_upsert_artifacts_phase_r(int(notice_id), atts)
-        reqs = _rfp_extract_requirements_phase_r(int(notice_id))
-        _rfp_upsert_requirements_phase_r(int(notice_id), reqs)
-        st.success(f"Parsed {len(atts)} attachments and {len(reqs)} requirements.")
-    kw_default = st.session_state.get("rfp_phase_r_keywords", "price schedule, past performance, key personnel")
-    keywords = col2.text_input("Keywords", value=kw_default, key="rfp_phase_r_keywords")
-    if col3.button("Score"):
-        with closing(_get_db_conn_phase_r()) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT ref, text, priority FROM rfp_requirements WHERE notice_id=? ORDER BY id", (int(notice_id),))
-            reqs = [{"ref": r[0], "text": r[1], "priority": r[2]} for r in cur.fetchall()]
-        glob, per = _rfp_score_requirements_phase_r(reqs, [k.strip() for k in keywords.split(",") if k.strip()])
-        _rfp_upsert_scores_phase_r(int(notice_id), glob, per)
-        st.success(f"Compliance score {glob:.1f}.")
-    if col4.button("Prechecks"):
-        issues = _rfp_run_prechecks_phase_r(int(notice_id))
-        if issues:
-            st.warning("\\n".join(f"• {x}" for x in issues))
-        else:
-            st.success("No precheck issues.")
-
-    tabs = st.tabs(["Overview", "Requirements", "Attachments", "Compliance"])
-
-    with tabs[0]:
-        st.subheader("Overview")
-        with closing(_get_db_conn_phase_r()) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(1) FROM rfp_artifacts WHERE notice_id=?", (int(notice_id),))
-            n_art = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(1) FROM rfp_requirements WHERE notice_id=?", (int(notice_id),))
-            n_req = cur.fetchone()[0]
-            cur.execute("SELECT compliance_score FROM rfp_scores WHERE notice_id=? AND section_key='global' LIMIT 1", (int(notice_id),))
-            row = cur.fetchone()
-            score = row[0] if row else None
-        st.metric("Attachments", n_art)
-        st.metric("Requirements", n_req)
-        st.metric("Compliance score", 0.0 if score is None else float(score))
-        if st.button("Push to Proposal Builder"):
-            pid = _rfp_push_to_builder_phase_r(int(notice_id), section_map={}, opts={})
-            st.success(f"Pushed to Proposal Builder. Proposal ID {pid}")
-
-    with tabs[1]:
-        st.subheader("Requirements")
-        with closing(_get_db_conn_phase_r()) as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT ref, COALESCE(section_hint,''), COALESCE(source_file,''), COALESCE(page_from,''), COALESCE(page_to,''), COALESCE(priority,0), COALESCE(text,'')
-                FROM rfp_requirements WHERE notice_id=? ORDER BY id
-            """, (int(notice_id),))
-            rows = cur.fetchall()
-        if rows:
-            import pandas as pd
-            df = pd.DataFrame(rows, columns=["Ref","Section","Source","PageFrom","PageTo","Priority","Text"])
-            st.dataframe(df, use_container_width=True, height=360)
-        else:
-            st.info("No requirements yet. Click Reparse.")
-
-    with tabs[2]:
-        st.subheader("Attachments")
-        with closing(_get_db_conn_phase_r()) as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT filename, COALESCE(kind,''), COALESCE(pages,''), COALESCE(sha256,''), COALESCE(extracted_at,'')
-                FROM rfp_artifacts WHERE notice_id=? ORDER BY id
-            """, (int(notice_id),))
-            rows = cur.fetchall()
-        if rows:
-            import pandas as pd
-            df = pd.DataFrame(rows, columns=["Filename","Kind","Pages","SHA256","ExtractedAt"])
-            st.dataframe(df, use_container_width=True, height=260)
-        else:
-            st.info("No attachments recorded.")
-
-    with tabs[3]:
-        st.subheader("Compliance")
-        with closing(_get_db_conn_phase_r()) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT compliance_score, keyword_score, findings_json FROM rfp_scores WHERE notice_id=? AND section_key='global' LIMIT 1", (int(notice_id),))
-            row = cur.fetchone()
-        if row:
-            st.metric("Global compliance score", float(row[0]))
-            st.caption(row[2] or "")
-        else:
-            st.info("No score yet. Click Score.")
-
-# Hook into app body if Streamlit context is active
-try:
-    render_rfp_analyzer_phase_r()
-except Exception as _e:
-    # Keep app resilient
-    pass
-
-
-# ----- Phase R safety wrapper for legacy analyzer -----
-try:
-    _orig_run_rfp_analyzer = run_rfp_analyzer  # type: ignore[name-defined]
-    def run_rfp_analyzer(*args, **kwargs):  # noqa: F811
-        try:
-            return _orig_run_rfp_analyzer(*args, **kwargs)
-        except Exception as _e:
-            try:
-                import streamlit as st  # type: ignore
-                st.warning("Legacy RFP Analyzer failed. Falling back to Phase R Analyzer.")
-            except Exception:
-                pass
-            try:
-                render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
-            except Exception:
-                pass
-            return None
-except Exception:
-    # If legacy function is absent, define to Phase R directly
-    def run_rfp_analyzer(*args, **kwargs):  # noqa: F811
-        try:
-            render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
-        except Exception:
-            pass
-        return None
-# ----- End safety wrapper -----
-
-
-def render_rfp_analyzer_phase_r_v2():
-    _phase_r_init_db()
-    st.sidebar.subheader("Phase R Analyzer")
-    st.info('Phase R UI active')
-    # Phase R UI is always enabled
-
-
-    # Select or enter Notice ID
-    with closing(_get_db_conn_phase_r()) as conn:
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT DISTINCT notice_id FROM rfp_json ORDER BY notice_id DESC LIMIT 200")
-            rows = [r[0] for r in cur.fetchall()]
-        except Exception:
-            rows = []
-
-    notice_id = None
-    if rows:
-        notice_id = st.sidebar.selectbox("Notice", rows, format_func=lambda x: f"Notice {x}")
-    else:
-        notice_str = st.sidebar.text_input("Notice ID", value=st.session_state.get("rfp_phase_r_notice",""))
-        st.session_state["rfp_phase_r_notice"] = notice_str
-        if notice_str.strip().isdigit():
-            notice_id = int(notice_str.strip())
-
-    st.header("RFP Analyzer — Phase R")
-    col1, col2, col3, col4 = st.columns(4)
-
-    # Keywords
-    kw_default = st.session_state.get("rfp_phase_r_keywords", "price schedule, past performance, key personnel")
-    keywords = col2.text_input("Keywords", value=kw_default, key="rfp_phase_r_keywords")
-
-    # Optional pasted text input for environments without rfp_json
-    with st.expander("Pasted RFP text (optional)", expanded=not bool(rows)):
-        pasted = st.text_area("Paste any solicitation text here for quick parsing",
-                              value=st.session_state.get("rfp_phase_r_pasted",""),
-                              height=160, key="rfp_phase_r_pasted")
-
-    # Handlers
-    if col1.button("Reparse"):
-        if notice_id is not None:
-            atts = _rfp_parse_attachments_phase_r(int(notice_id))
-            _rfp_upsert_artifacts_phase_r(int(notice_id), atts)
-            reqs = _rfp_extract_requirements_phase_r(int(notice_id))
-            _rfp_upsert_requirements_phase_r(int(notice_id), reqs)
-            st.success(f"Parsed {len(atts)} attachments and {len(reqs)} requirements for Notice {notice_id}.")
-        elif pasted.strip():
-            # Derive a deterministic pseudo notice id from paste content
-            h = int(hashlib.sha256(pasted.encode('utf-8')).hexdigest(), 16) % 899999 + 100001
-            notice_id = h
-            reqs = _rfp_extract_from_text_phase_r(pasted)
-            _rfp_upsert_artifacts_phase_r(int(notice_id), [])
-            _rfp_upsert_requirements_phase_r(int(notice_id), reqs)
-            st.success(f"Parsed {len(reqs)} requirements from pasted text. Assigned Notice {notice_id}.")
-            st.experimental_rerun()
-        else:
-            st.warning("Provide a Notice ID or paste text to parse.")
-
-    if col3.button("Score"):
-        if notice_id is None:
-            st.warning("Set a Notice ID first or parse pasted text.")
-        else:
-            with closing(_get_db_conn_phase_r()) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT ref, text, priority FROM rfp_requirements WHERE notice_id=? ORDER BY id", (int(notice_id),))
-                reqs = [{"ref": r[0], "text": r[1], "priority": r[2]} for r in cur.fetchall()]
-            glob, per = _rfp_score_requirements_phase_r(reqs, [k.strip() for k in keywords.split(",") if k.strip()])
-            _rfp_upsert_scores_phase_r(int(notice_id), glob, per)
-            st.success(f"Compliance score {glob:.1f} for Notice {notice_id}.")
-
-    if col4.button("Prechecks"):
-        if notice_id is None:
-            st.warning("Set a Notice ID first or parse pasted text.")
-        else:
-            issues = _rfp_run_prechecks_phase_r(int(notice_id))
-            if issues:
-                st.warning("\\n".join(f"• {x}" for x in issues))
-            else:
-                st.success("No precheck issues.")
-
-    tabs = st.tabs(["Overview", "Requirements", "Attachments", "Compliance"])
-
-    with tabs[0]:
-        st.subheader("Overview")
-        if notice_id is None:
-            st.info("Enter a Notice ID or paste text then click Reparse.")
-        else:
-            with closing(_get_db_conn_phase_r()) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT COUNT(1) FROM rfp_artifacts WHERE notice_id=?", (int(notice_id),))
-                n_art = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(1) FROM rfp_requirements WHERE notice_id=?", (int(notice_id),))
-                n_req = cur.fetchone()[0]
-                cur.execute("SELECT compliance_score FROM rfp_scores WHERE notice_id=? AND section_key='global' LIMIT 1", (int(notice_id),))
-                row = cur.fetchone()
-                score = row[0] if row else None
-            st.metric("Attachments", n_art)
-            st.metric("Requirements", n_req)
-            st.metric("Compliance score", 0.0 if score is None else float(score))
-            if st.button("Push to Proposal Builder"):
-                pid = _rfp_push_to_builder_phase_r(int(notice_id), section_map={}, opts={})
-                st.success(f"Pushed to Proposal Builder. Proposal ID {pid}")
-
-    with tabs[1]:
-        st.subheader("Requirements")
-        if notice_id is None:
-            st.info("No Notice selected.")
-        else:
-            with closing(_get_db_conn_phase_r()) as conn:
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT ref, COALESCE(section_hint,''), COALESCE(source_file,''), COALESCE(page_from,''), COALESCE(page_to,''), COALESCE(priority,0), COALESCE(text,'')
-                    FROM rfp_requirements WHERE notice_id=? ORDER BY id
-                """, (int(notice_id),))
-                rows = cur.fetchall()
-            if rows:
-                import pandas as pd
-                df = pd.DataFrame(rows, columns=["Ref","Section","Source","PageFrom","PageTo","Priority","Text"])
-                st.dataframe(df, use_container_width=True, height=360)
-            else:
-                st.info("No requirements yet. Click Reparse.")
-
-    with tabs[2]:
-        st.subheader("Attachments")
-        if notice_id is None:
-            st.info("No Notice selected.")
-        else:
-            with closing(_get_db_conn_phase_r()) as conn:
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT filename, COALESCE(kind,''), COALESCE(pages,''), COALESCE(sha256,''), COALESCE(extracted_at,'')
-                    FROM rfp_artifacts WHERE notice_id=? ORDER BY id
-                """, (int(notice_id),))
-                rows = cur.fetchall()
-            if rows:
-                import pandas as pd
-                df = pd.DataFrame(rows, columns=["Filename","Kind","Pages","SHA256","ExtractedAt"])
-                st.dataframe(df, use_container_width=True, height=260)
-            else:
-                st.info("No attachments recorded.")
-
-    with tabs[3]:
-        st.subheader("Compliance")
-        if notice_id is None:
-            st.info("No Notice selected.")
-        else:
-            with closing(_get_db_conn_phase_r()) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT compliance_score, keyword_score, findings_json FROM rfp_scores WHERE notice_id=? AND section_key='global' LIMIT 1", (int(notice_id),))
-                row = cur.fetchone()
-            if row:
-                st.metric("Global compliance score", float(row[0]))
-                st.caption(row[2] or "")
-            else:
-                st.info("No score yet. Click Score.")
-    return None
-
-# Replace old renderer with v2
-render_rfp_analyzer_phase_r = render_rfp_analyzer_phase_r_v2
-
-
-
-# === Phase R authoritative entrypoint override ===
-def run_rfp_analyzer(*args, **kwargs):
-    try:
-        return render_rfp_analyzer_phase_r_v2()  # type: ignore[name-defined]
-    except Exception:
-        try:
-            return render_rfp_analyzer_phase_r()  # fallback if v2 alias not present
-        except Exception:
-            return None
-# === End override ===
-
-
-# === Phase R authoritative RFP Analyzer entrypoint (final) ===
-def run_rfp_analyzer(*args, **kwargs):
-    try:
-        import streamlit as st  # ensure st in scope
-        st.markdown("### RFP Analyzer — Phase R")
-    except Exception:
-        pass
-    try:
-        return render_rfp_analyzer_phase_r_v2()  # type: ignore[name-defined]
-    except Exception:
-        try:
-            return render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
-        except Exception:
-            return None
-# === End Phase R authoritative entrypoint ===
-
-
-
-# === Restore: use legacy RFP Analyzer UI ===
-def run_rfp_analyzer(*args, **kwargs):  # final binding
-    try:
-        # Preferred: renamed legacy if present
-        return _legacy_run_rfp_analyzer(*args, **kwargs)  # type: ignore[name-defined]
-    except NameError:
-        # Fallback: original legacy name if it still exists
-        try:
-            return _orig_run_rfp_analyzer(*args, **kwargs)  # type: ignore[name-defined]
-        except Exception:
-            pass
-    except Exception as _e:
-        try:
-            import streamlit as st
-            st.error("RFP Analyzer encountered an error in legacy UI. Check logs. Showing no-op to keep app running.")
-        except Exception:
-            pass
-        return None
-# === End restore ===
-
-
-# === RFP Analyzer Minimal Renderer (failsafe) ===
-def run_rfp_analyzer(conn=None):
-    import sqlite3
-    try:
-        import streamlit as st
-    except Exception:
-        # Not in Streamlit context; nothing to render
-        return None
-
-    # Header
-    st.header("RFP Analyzer")
-    st.caption("Failsafe view. This will always render.")
-
-    # DB connection
-    def _conn():
-        try:
-            return get_db()  # type: ignore[name-defined]
-        except Exception:
-            try:
-                return conn if isinstance(conn, sqlite3.Connection) else None
-            except Exception:
-                return None
-    c = _conn()
-    if c is None:
-        # Try default local path
-        try:
-            import sqlite3, os
-            os.makedirs("data", exist_ok=True)
-            c = sqlite3.connect("data/app.db")
-        except Exception:
-            c = None
-
-    # Notices list
-    notices = []
-    if c is not None:
-        try:
-            cur = c.cursor()
-            cur.execute("SELECT DISTINCT notice_id FROM rfp_json ORDER BY notice_id DESC LIMIT 200")
-            notices = [r[0] for r in cur.fetchall() if r and r[0] is not None]
-        except Exception:
-            notices = []
-
-    colA, colB = st.columns([2,1])
-    if notices:
-        sel = colA.selectbox("Notice", notices, format_func=lambda x: f"Notice {x}")
-        colB.metric("Notices found", len(notices))
-        # Show basic info from rfp_json to prove render
-        try:
-            cur = c.cursor()
-            cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(sel),))
-            row = cur.fetchone()
-            if row and row[0]:
-                import json, pandas as pd
-                data = json.loads(row[0])
-                meta = {k: data.get(k) for k in ("title","posted_date","due_date","naics","psc","agency","type")}
-                st.subheader(meta.get("title") or "Selected Notice")
-                st.json({k:v for k,v in meta.items() if v})
-                # Show a small table of attachments if present
-                atts = data.get("attachments") or data.get("files") or []
-                if atts:
-                    df = pd.DataFrame([{ "name": a.get("name") or a.get("filename"),
-                                         "type": a.get("type") or a.get("kind"),
-                                         "url": a.get("url") } for a in atts])
-                    st.dataframe(df, use_container_width=True, height=220)
-                else:
-                    st.info("No attachments listed in rfp_json.")
-            else:
-                st.warning("No rfp_json row found for the selected notice.")
-        except Exception as e:
-            st.error(f"Read error: {e}")
-    else:
-        st.warning("No notices in database. Use the text box below to test rendering.")
-        sample = st.text_area("Paste any solicitation paragraph to verify UI renders", height=120)
-        if sample.strip():
-            st.success("Text received. UI is working.")
-            st.code(sample[:500])
-    return None
-# === End failsafe renderer ===
-
-
-# === Safe DB connection helper and File Manager wrapper ===
-def _ela_get_conn(candidate=None):
-    import sqlite3, os
-    # If a valid sqlite3.Connection is passed, use it
-    try:
-        if isinstance(candidate, sqlite3.Connection):
-            return candidate
-    except Exception:
-        pass
-    # Try app-level get_db()
-    try:
-        return get_db()  # type: ignore[name-defined]
-    except Exception:
-        pass
-    # Fallback local path
-    try:
-        os.makedirs("data", exist_ok=True)
-        return sqlite3.connect("data/app.db")
-    except Exception:
-        return None
-
-try:
-    _legacy_run_file_manager = run_file_manager  # type: ignore[name-defined]
-    def run_file_manager(conn=None):  # noqa: F811
-        c = _ela_get_conn(conn)
-        if c is None:
-            try:
-                import streamlit as st
-                st.error("Database connection unavailable for File Manager.")
-            except Exception:
-                pass
-            return None
-        return _legacy_run_file_manager(c)
-except Exception:
-    # If original isn't present, define a no-op
-    def run_file_manager(conn=None):  # noqa: F811
-        try:
-            import streamlit as st
-            st.warning("File Manager module not available.")
-        except Exception:
-            pass
-        return None
-# === End wrapper ===
