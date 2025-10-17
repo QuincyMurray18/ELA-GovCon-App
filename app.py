@@ -1096,9 +1096,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             attribs = [f"{k}: {v}" for k,v in meta.items() if v]
             if attribs:
                 parts.append("**Attributes**\n- " + "\n- ".join(attribs[:12]))
-        return "
-
-".join(parts).strip()
+        return "\n\n".join(parts).strip()
 
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
