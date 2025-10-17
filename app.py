@@ -1035,8 +1035,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
 
-
-def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
+def _legacy_run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
     
