@@ -298,6 +298,43 @@ def get_db() -> sqlite3.Connection:
                 image_path TEXT
             );
         """)
+
+        -- Phase I (CRM Boost)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS activities(
+                id INTEGER PRIMARY KEY,
+                ts TEXT,
+                type TEXT,
+                subject TEXT,
+                notes TEXT,
+                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(ts);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_rel ON activities(deal_id, contact_id);")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks(
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                due_date TEXT,
+                status TEXT DEFAULT 'Open',
+                priority TEXT DEFAULT 'Normal',
+                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+                created_at TEXT,
+                completed_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date, status);")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS deal_stage_log(
+                id INTEGER PRIMARY KEY,
+                deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+                stage TEXT NOT NULL,
+                changed_at TEXT
+            );
+        """)
         conn.commit()
     return conn
 
@@ -2572,6 +2609,181 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     st.session_state["pb_section_White Paper"] = md
                     st.success("Pushed to Proposal Builder → 'White Paper' section")
 
+
+
+# ---------- Phase I: CRM (Activities • Tasks • Pipeline) ----------
+def _stage_probability(stage: str) -> int:
+    mapping = {
+        "New": 10, "Qualifying": 30, "Bidding": 50, "Submitted": 60, "Awarded": 100, "Lost": 0
+    }
+    return mapping.get(stage or "", 10)
+
+def run_crm(conn: sqlite3.Connection) -> None:
+    st.header("CRM")
+    tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
+
+    # --- Activities
+    with tabs[0]:
+        st.subheader("Log Activity")
+        df_deals = pd.read_sql_query("SELECT id, title FROM deals ORDER BY id DESC;", conn)
+        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts ORDER BY name;", conn)
+        a_col1, a_col2, a_col3 = st.columns([2,2,2])
+        with a_col1:
+            a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
+            a_subject = st.text_input("Subject", key="act_subject")
+        with a_col2:
+            a_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
+                                  format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
+                                  key="act_deal")
+            a_contact = st.selectbox("Related Contact (optional)", options=[None] + df_contacts["id"].tolist(),
+                                     format_func=lambda x: "None" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
+                                     key="act_contact")
+        with a_col3:
+            a_notes = st.text_area("Notes", height=100, key="act_notes")
+            if st.button("Save Activity", key="act_save"):
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO activities(ts, type, subject, notes, deal_id, contact_id) VALUES(datetime('now'),?,?,?,?,?);
+                    """, (a_type, a_subject.strip(), a_notes.strip(), a_deal if a_deal else None, a_contact if a_contact else None))
+                    conn.commit()
+                st.success("Saved")
+
+        st.subheader("Activity Log")
+        f1, f2, f3 = st.columns([2,2,2])
+        with f1:
+            f_type = st.multiselect("Type filter", ["Call","Email","Meeting","Note"])
+        with f2:
+            f_deal = st.selectbox("Deal filter", options=[None] + df_deals["id"].tolist(),
+                                  format_func=lambda x: "All" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
+                                  key="act_f_deal")
+        with f3:
+            f_contact = st.selectbox("Contact filter", options=[None] + df_contacts["id"].tolist(),
+                                     format_func=lambda x: "All" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
+                                     key="act_f_contact")
+        q = "SELECT ts, type, subject, notes, deal_id, contact_id FROM activities WHERE 1=1"
+        params = []
+        if f_type:
+            q += " AND type IN (%s)" % ",".join(["?"]*len(f_type))
+            params.extend(f_type)
+        if f_deal:
+            q += " AND deal_id=?"; params.append(f_deal)
+        if f_contact:
+            q += " AND contact_id=?"; params.append(f_contact)
+        q += " ORDER BY ts DESC"
+        df_a = pd.read_sql_query(q, conn, params=params)
+        if df_a.empty:
+            st.write("No activities")
+        else:
+            st.dataframe(df_a, use_container_width=True, hide_index=True)
+            if st.button("Export CSV", key="act_export"):
+                path = str(Path(DATA_DIR) / "activities.csv")
+                df_a.to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
+
+    # --- Tasks
+    with tabs[1]:
+        st.subheader("New Task")
+        df_deals = pd.read_sql_query("SELECT id, title FROM deals ORDER BY id DESC;", conn)
+        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts ORDER BY name;", conn)
+        t1, t2, t3 = st.columns([2,2,2])
+        with t1:
+            t_title = st.text_input("Task title", key="task_title")
+            t_due = st.date_input("Due date", key="task_due")
+        with t2:
+            t_priority = st.selectbox("Priority", ["Low","Normal","High"], index=1, key="task_priority")
+            t_status = st.selectbox("Status", ["Open","In Progress","Done"], index=0, key="task_status")
+        with t3:
+            t_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
+                                  format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
+                                  key="task_deal")
+            t_contact = st.selectbox("Related Contact (optional)", options=[None] + df_contacts["id"].tolist(),
+                                     format_func=lambda x: "None" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
+                                     key="task_contact")
+        if st.button("Add Task", key="task_add"):
+            with closing(conn.cursor()) as cur:
+                cur.execute("""
+                    INSERT INTO tasks(title, due_date, status, priority, deal_id, contact_id, created_at)
+                    VALUES(?,?,?,?,?,?,datetime('now'));
+                """, (t_title.strip(), t_due.isoformat() if t_due else None, t_status, t_priority, t_deal if t_deal else None, t_contact if t_contact else None))
+                conn.commit()
+            st.success("Task added")
+
+        st.subheader("My Tasks")
+        f1, f2 = st.columns([2,2])
+        with f1:
+            tf_status = st.multiselect("Status", ["Open","In Progress","Done"], default=["Open","In Progress"])
+        with f2:
+            tf_priority = st.multiselect("Priority", ["Low","Normal","High"], default=[])
+        q = "SELECT id, title, due_date, status, priority, deal_id, contact_id FROM tasks WHERE 1=1"
+        params = []
+        if tf_status:
+            q += " AND status IN (%s)" % ",".join(["?"]*len(tf_status)); params.extend(tf_status)
+        if tf_priority:
+            q += " AND priority IN (%s)" % ",".join(["?"]*len(tf_priority)); params.extend(tf_priority)
+        q += " ORDER BY COALESCE(due_date,'9999-12-31') ASC"
+        df_t = pd.read_sql_query(q, conn, params=params)
+        if df_t.empty:
+            st.write("No tasks")
+        else:
+            for _, r in df_t.iterrows():
+                c1, c2, c3, c4 = st.columns([3,2,2,2])
+                with c1:
+                    st.write(f"**{r['title']}**  — due {r['due_date'] or '—'}")
+                with c2:
+                    new_status = st.selectbox("Status", ["Open","In Progress","Done"],
+                                              index=["Open","In Progress","Done"].index(r["status"] if r["status"] in ["Open","In Progress","Done"] else "Open"),
+                                              key=f"task_status_{int(r['id'])}")
+                with c3:
+                    new_pri = st.selectbox("Priority", ["Low","Normal","High"],
+                                            index=["Low","Normal","High"].index(r["priority"] if r["priority"] in ["Low","Normal","High"] else "Normal"),
+                                            key=f"task_pri_{int(r['id'])}")
+                with c4:
+                    if st.button("Apply", key=f"task_apply_{int(r['id'])}"):
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("UPDATE tasks SET status=?, priority=?, completed_at=CASE WHEN ?='Done' THEN datetime('now') ELSE completed_at END WHERE id=?;",
+                                        (new_status, new_pri, new_status, int(r["id"])))
+                            conn.commit()
+                        st.success("Updated")
+
+            if st.button("Export CSV", key="task_export"):
+                path = str(Path(DATA_DIR) / "tasks.csv")
+                df_t.to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
+
+    # --- Pipeline
+    with tabs[2]:
+        st.subheader("Weighted Pipeline")
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals ORDER BY id DESC;", conn)
+        if df.empty:
+            st.info("No deals")
+        else:
+            df["prob_%"] = df["status"].apply(_stage_probability)
+            df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
+            # Stage age: days since last stage change
+            df_log = pd.read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log GROUP BY deal_id, stage;", conn)
+            def stage_age(row):
+                try:
+                    last = df_log[(df_log["deal_id"]==row["id"]) & (df_log["stage"]==row["status"])]["last_change"]
+                    if last.empty: return None
+                    dt = pd.to_datetime(last.values[0])
+                    return (pd.Timestamp.utcnow() - dt).days
+                except Exception:
+                    return None
+            df["stage_age_days"] = df.apply(stage_age, axis=1)
+            st.dataframe(df[["title","agency","status","value","prob_%","expected_value","stage_age_days"]], use_container_width=True, hide_index=True)
+
+            st.subheader("Summary by Stage")
+            summary = df.groupby("status").agg(
+                deals=("id","count"),
+                value=("value","sum"),
+                expected=("expected_value","sum")
+            ).reset_index().sort_values("expected", ascending=False)
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+            if st.button("Export Pipeline CSV", key="pipe_export"):
+                path = str(Path(DATA_DIR) / "pipeline.csv")
+                df.to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -2598,6 +2810,7 @@ def nav() -> str:
             "Win Probability",
             "Chat Assistant",
             "Capability Statement",
+            "CRM",
             "Contacts",
             "Deals",
         ],
@@ -2631,6 +2844,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_chat_assistant(conn)
     elif page == "Capability Statement":
         run_capability_statement(conn)
+    elif page == "CRM":
+        run_crm(conn)
     elif page == "Contacts":
         run_contacts(conn)
     elif page == "Deals":
