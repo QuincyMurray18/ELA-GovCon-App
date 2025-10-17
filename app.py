@@ -1040,26 +1040,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 run_search = st.button("Run Search", type="primary", key="sam_run")
             with c_save:
                 if st.button("Save Search", key="sam_save_btn"):
-                                        params = _sam_build_params({
-                        "limit": limit,
-                        "posted_from": (posted_from if use_dates else default_from),
-                        "posted_to": (posted_to if use_dates else today),
-                        "active_only": active_only,
-                        "keywords": keywords,
-                        "naics": naics,
-                        "set_aside": set_aside,
-                        "state": state,
-                        "org_name": org_name,
-                        "types": types,
-                    })
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("INSERT INTO sam_searches(name, params_json, auto_push, created_at, updated_at) VALUES(?,?,?,?,datetime('now'));",
-                                    (sname.strip() or "Saved Search", json.dumps(params), 1 if auto_push else 0, datetime.utcnow().isoformat()))
-                        conn.commit()
-                    st.success("Saved search")
-
-        if run_search:
-                        params = _sam_build_params({
+            params = _sam_build_params({
                 "limit": limit,
                 "posted_from": (posted_from if use_dates else default_from),
                 "posted_to": (posted_to if use_dates else today),
@@ -1071,6 +1052,32 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 "org_name": org_name,
                 "types": types,
             })
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sam_searches(name, params_json, auto_push, created_at, updated_at)
+                    VALUES(?,?,?,?,datetime('now'));
+                    """,
+                    (sname.strip() or "Saved Search", json.dumps(params), 1 if auto_push else 0, datetime.utcnow().isoformat()),
+                )
+                conn.commit()
+
+                    st.success("Saved search")
+
+        if run_search:
+                            params = _sam_build_params({
+        "limit": limit,
+        "posted_from": (posted_from if use_dates else default_from),
+        "posted_to": (posted_to if use_dates else today),
+        "active_only": active_only,
+        "keywords": keywords,
+        "naics": naics,
+        "set_aside": set_aside,
+        "state": state,
+        "org_name": org_name,
+        "types": types,
+    })
+
 
             with st.spinner("Searching SAM.gov..."):
                 out = sam_search_cached(params)
