@@ -1168,7 +1168,12 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No RFPs yet.")
             return
-        rid = st.selectbox("RFP for data views", options=df_rf['id'].tolist(), format_func=lambda i: f\"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}\", key="rfp_data_sel")
+        rid = st.selectbox(
+            "RFP for data views",
+            options=df_rf["id"].tolist(),
+            format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
+            key="rfp_data_sel"
+        )
         col1, col2, col3 = st.columns(3)
         with col1:
             df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
