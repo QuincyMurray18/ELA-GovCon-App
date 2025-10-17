@@ -1098,6 +1098,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 parts.append("**Attributes**\n- " + "\n- ".join(attribs[:12]))
         return "\n\n".join(parts).strip()
 
+".join(parts).strip()
+
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
         if not text: return ""
@@ -4312,4 +4314,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
