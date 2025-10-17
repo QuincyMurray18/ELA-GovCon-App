@@ -236,6 +236,29 @@ def get_db() -> sqlite3.Connection:
                 cost REAL
             );
         """)
+
+        -- Phase G (Past Performance)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS past_perf(
+                id INTEGER PRIMARY KEY,
+                project_title TEXT NOT NULL,
+                customer TEXT,
+                contract_no TEXT,
+                naics TEXT,
+                role TEXT,
+                pop_start TEXT,
+                pop_end TEXT,
+                value NUMERIC,
+                scope TEXT,
+                results TEXT,
+                cpars_rating TEXT,
+                contact_name TEXT,
+                contact_email TEXT,
+                contact_phone TEXT,
+                keywords TEXT,
+                notes TEXT
+            );
+        """)
         conn.commit()
     return conn
 
@@ -1078,7 +1101,8 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
         content_map: Dict[str, str] = {}
         for sec in selected:
-            content_map[sec] = st.text_area(sec, value="", height=140)
+            default_val = st.session_state.get(f"pb_section_{sec}", "")
+            content_map[sec] = st.text_area(sec, value=default_val, height=140)
 
     with right:
         st.subheader("Guidance and limits")
@@ -2029,6 +2053,264 @@ def run_capability_statement(conn: sqlite3.Connection) -> None:
                 st.markdown(f"[Download DOCX]({out})")
 
 
+
+
+# ---------- Phase G: Past Performance Library + Generator ----------
+def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
+    title = (rfp_title or "").lower()
+    hay = (title + " " + " ".join((rfp_sections["content"].tolist() if isinstance(rfp_sections, pd.DataFrame) and not rfp_sections.empty else []))).lower()
+    score = 0
+    # NAICS bonus
+    if rec.get("naics") and rec["naics"] in hay:
+        score += 40
+    # Keywords
+    kws = (rec.get("keywords") or "").lower().replace(";", ",").split(",")
+    kws = [k.strip() for k in kws if k.strip()]
+    for k in kws[:10]:
+        if k in hay:
+            score += 6
+    # Recency via POP end
+    try:
+        from datetime import datetime
+        if rec.get("pop_end"):
+            y = int(str(rec["pop_end"]).split("-")[0])
+            age = max(0, datetime.now().year - y)
+            score += max(0, 20 - (age * 4))  # up to +20, decays 4/yr
+    except Exception:
+        pass
+    # CPARS bonus
+    if (rec.get("cpars_rating") or "").strip():
+        score += 8
+    # Value signal
+    try:
+        val = float(rec.get("value") or 0)
+        if val >= 1000000: score += 6
+        elif val >= 250000: score += 3
+    except Exception:
+        pass
+    return min(score, 100)
+
+
+def _pp_writeup_block(rec: dict) -> str:
+    parts = []
+    title = rec.get("project_title") or "Project"
+    cust = rec.get("customer") or ""
+    cn = rec.get("contract_no") or ""
+    role = rec.get("role") or ""
+    pop = " – ".join([x for x in [rec.get("pop_start") or "", rec.get("pop_end") or ""] if x])
+    val = rec.get("value") or ""
+    parts.append(f"**{title}** — {cust} {('(' + cn + ')') if cn else ''}")
+    meta_bits = [b for b in [f"Role: {role}" if role else "", f"POP: {pop}" if pop else "", f"Value: ${val:,.0f}" if isinstance(val,(int,float)) else (f"Value: {val}" if val else ""), f"NAICS: {rec.get('naics','')}"] if b]
+    if meta_bits:
+        parts.append("  \n" + " | ".join(meta_bits))
+    if rec.get("scope"):
+        parts.append(f"**Scope/Work:** {rec['scope']}")
+    if rec.get("results"):
+        parts.append(f"**Results/Outcome:** {rec['results']}")
+    if rec.get("cpars_rating"):
+        parts.append(f"**CPARS:** {rec['cpars_rating']}")
+    if any([rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")]):
+        parts.append("**POC:** " + ", ".join([x for x in [rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")] if x]))
+    return "\n\n".join(parts)
+
+
+def _export_past_perf_docx(path: str, records: list) -> str | None:
+    try:
+        from docx import Document  # type: ignore
+        from docx.shared import Inches  # type: ignore
+    except Exception:
+        st.error("python-docx is required. pip install python-docx")
+        return None
+    doc = Document()
+    for s in doc.sections:
+        s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
+    doc.add_heading("Past Performance", level=1)
+    for i, rec in enumerate(records, start=1):
+        doc.add_heading(f"{i}. {rec.get('project_title')}", level=2)
+        blk = _pp_writeup_block(rec).replace("**", "")  # simple conversion
+        for para in blk.split("\n\n"):
+            doc.add_paragraph(para)
+    doc.save(path)
+    return path
+
+
+def run_past_performance(conn: sqlite3.Connection) -> None:
+    st.header("Past Performance Library")
+    st.caption("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
+
+    # CSV Import
+    with st.expander("Import CSV", expanded=False):
+        st.caption("Columns: project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes")
+        up = st.file_uploader("Upload CSV", type=["csv"], key="pp_csv")
+        if up and st.button("Import", key="pp_do_import"):
+            try:
+                df = pd.read_csv(up)
+                # Normalize headers
+                df.columns = [c.strip().lower() for c in df.columns]
+                required = {"project_title"}
+                if not required.issubset(set(df.columns)):
+                    st.error("CSV must include at least 'project_title'")
+                else:
+                    n=0
+                    with closing(conn.cursor()) as cur:
+                        for _, r in df.iterrows():
+                            cur.execute("""
+                                INSERT INTO past_perf(project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes)
+                                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                            """, (
+                                str(r.get("project_title",""))[:200],
+                                str(r.get("customer",""))[:200],
+                                str(r.get("contract_no",""))[:100],
+                                str(r.get("naics",""))[:20],
+                                str(r.get("role",""))[:100],
+                                str(r.get("pop_start",""))[:20],
+                                str(r.get("pop_end",""))[:20],
+                                float(r.get("value")) if str(r.get("value","")).strip() not in ("","nan") else None,
+                                str(r.get("scope",""))[:2000],
+                                str(r.get("results",""))[:2000],
+                                str(r.get("cpars_rating",""))[:100],
+                                str(r.get("contact_name",""))[:200],
+                                str(r.get("contact_email",""))[:200],
+                                str(r.get("contact_phone",""))[:100],
+                                str(r.get("keywords",""))[:500],
+                                str(r.get("notes",""))[:500],
+                            ))
+                            n+=1
+                    conn.commit()
+                    st.success(f"Imported {n} projects.")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+    # Add Project
+    with st.expander("Add Project", expanded=False):
+        c1, c2, c3 = st.columns([2,2,2])
+        with c1:
+            project_title = st.text_input("Project Title")
+            customer = st.text_input("Customer (Agency/Prime)")
+            contract_no = st.text_input("Contract #")
+            naics = st.text_input("NAICS")
+            role = st.text_input("Role (Prime/Sub)")
+        with c2:
+            pop_start = st.text_input("POP Start (YYYY-MM)")
+            pop_end = st.text_input("POP End (YYYY-MM)")
+            value = st.text_input("Value (number)")
+            cpars_rating = st.text_input("CPARS Rating (optional)")
+            keywords = st.text_input("Keywords (comma-separated)")
+        with c3:
+            contact_name = st.text_input("POC Name")
+            contact_email = st.text_input("POC Email")
+            contact_phone = st.text_input("POC Phone")
+            scope = st.text_area("Scope/Work", height=100)
+            results = st.text_area("Results/Outcome", height=100)
+        notes = st.text_area("Notes", height=70)
+        if st.button("Save Project", key="pp_save_project"):
+            try:
+                v = float(value) if value.strip() else None
+            except Exception:
+                v = None
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO past_perf(project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                    """, (project_title.strip(), customer.strip(), contract_no.strip(), naics.strip(), role.strip(), pop_start.strip(), pop_end.strip(), v, scope.strip(), results.strip(), cpars_rating.strip(), contact_name.strip(), contact_email.strip(), contact_phone.strip(), keywords.strip(), notes.strip()))
+                    conn.commit()
+                st.success("Saved project.")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+    # Filters
+    with st.expander("Filter", expanded=True):
+        f1, f2, f3 = st.columns([2,2,2])
+        with f1:
+            f_kw = st.text_input("Keyword in title/scope/results")
+        with f2:
+            f_naics = st.text_input("NAICS filter")
+        with f3:
+            f_role = st.text_input("Role filter")
+    q = "SELECT * FROM past_perf WHERE 1=1"
+    params = []
+    if f_kw:
+        q += " AND (project_title LIKE ? OR scope LIKE ? OR results LIKE ?)"
+        params.extend([f"%{f_kw}%", f"%{f_kw}%", f"%{f_kw}%"])
+    if f_naics:
+        q += " AND naics LIKE ?"
+        params.append(f"%{f_naics}%")
+    if f_role:
+        q += " AND role LIKE ?"
+        params.append(f"%{f_role}%")
+    df = pd.read_sql_query(q + " ORDER BY id DESC;", conn, params=params)
+    if df.empty:
+        st.info("No projects found.")
+        return
+
+    st.subheader("Projects")
+    st.dataframe(df[["id","project_title","customer","contract_no","naics","role","pop_start","pop_end","value","cpars_rating"]], use_container_width=True, hide_index=True)
+    selected_ids = st.multiselect("Select projects for writeup", options=df["id"].tolist(), format_func=lambda i: f"#{i} — {df.loc[df['id']==i, 'project_title'].values[0]}")
+
+    # Relevance scoring vs RFP
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    rfp_id = None
+    if not df_rf.empty:
+        rfp_id = st.selectbox("RFP context for relevance scoring (optional)", options=[None] + df_rf["id"].tolist(),
+                              format_func=lambda rid: "None" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0]}")
+    if rfp_id:
+        ctx = _load_rfp_context(conn, int(rfp_id))
+        title = (ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "")
+        secs = ctx.get("sections", pd.DataFrame())
+        # Compute scores
+        scores = []
+        for _, r in df.iterrows():
+            scores.append(_pp_score_one(r.to_dict(), title, secs))
+        df_sc = df.copy()
+        df_sc["Relevance"] = scores
+        st.subheader("Relevance vs selected RFP")
+        st.dataframe(df_sc[["project_title","naics","role","pop_end","value","Relevance"]].sort_values("Relevance", ascending=False),
+                     use_container_width=True, hide_index=True)
+
+    # Generate writeups
+    st.subheader("Generate Writeups")
+    tone = st.selectbox("Template", ["Concise bullets", "Narrative paragraph"])
+    max_n = st.slider("How many projects", 1, 7, min(3, len(selected_ids)) if selected_ids else 3)
+    do_gen = st.button("Generate", type="primary")
+    if do_gen:
+        picked = df[df["id"].isin(selected_ids)].head(max_n).to_dict(orient="records")
+        if not picked:
+            st.error("Select at least one project.")
+            return
+        # Build markdown text
+        blocks = []
+        for r in picked:
+            blk = _pp_writeup_block(r)
+            if tone == "Concise bullets":
+                # convert sentences to bullets
+                bullets = []
+                for line in blk.split("\n"):
+                    line = line.strip()
+                    if not line: 
+                        continue
+                    if not line.startswith("**"):
+                        bullets.append(f"- {line}")
+                    else:
+                        bullets.append(line)
+                blocks.append("\n".join(bullets))
+            else:
+                blocks.append(blk)
+        final_md = "\n\n".join(blocks)
+        st.markdown("**Preview**")
+        st.write(final_md)
+
+        # Push to Proposal Builder section
+        st.session_state["pb_section_Past Performance Summary"] = final_md
+        st.success("Pushed to Proposal Builder → Past Performance Summary")
+
+        # Export DOCX
+        out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
+        exp = _export_past_perf_docx(out_path, picked)
+        if exp:
+            st.markdown(f"[Download DOCX]({exp})")
+
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -2046,6 +2328,7 @@ def nav() -> str:
             "RFP Analyzer",
             "L and M Checklist",
             "Proposal Builder",
+            "Past Performance",
             "Subcontractor Finder",
             "Outreach",
             "Quote Comparison",
@@ -2068,6 +2351,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_lm_checklist(conn)
     elif page == "Proposal Builder":
         run_proposal_builder(conn)
+    elif page == "Past Performance":
+        run_past_performance(conn)
     elif page == "Subcontractor Finder":
         run_subcontractor_finder(conn)
     elif page == "Outreach":
