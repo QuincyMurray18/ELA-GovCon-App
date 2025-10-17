@@ -3,6 +3,7 @@ import os
 import sqlite3
 from contextlib import closing
 from typing import Optional, Any, Dict, List, Tuple
+from pathlib import Path
 from datetime import datetime, timedelta
 
 import pandas as pd
