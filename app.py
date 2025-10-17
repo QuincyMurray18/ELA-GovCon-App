@@ -1677,6 +1677,25 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     
 
 
+
+# --- Proposal Builder helpers (inlined) ---
+def _word_count(sections: dict) -> int:
+    total = 0
+    for v in (sections or {}).values():
+        if v:
+            total += len(str(v).split())
+    return total
+
+def _estimate_pages(total_words: int, spacing: str) -> float:
+    wpp = 500  # single
+    s = (spacing or "").lower()
+    if s.startswith("1.15"):
+        wpp = 430
+    elif s.startswith("double"):
+        wpp = 275
+    pages = total_words / max(1, wpp)
+    return round(pages if pages >= 1 else 1.0, 2)
+
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn)
