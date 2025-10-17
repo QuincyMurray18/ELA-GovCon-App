@@ -1582,11 +1582,11 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         return
     rfp_id = st.selectbox(
         "RFP context",
-        options=df_rf["id"].tolist(),
+        options=df_rf['id'].tolist(),
         format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}",
         index=0,
     )
-    st.session_state["current_rfp_id"] = rfp_id
+    st.session_state['current_rfp_id'] = rfp_id
     ctx = _load_rfp_context(conn, rfp_id)
 
     left, right = st.columns([3, 2])
@@ -1597,10 +1597,10 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             "Staffing and Key Personnel","Quality Assurance","Past Performance Summary","Pricing and CLINs","Certifications and Reps","Appendices",
         ]
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
-        content_map: Dict[str, str] = {}
         for sec in selected:
-            default_val = st.session_state.get(f"pb_section_{sec}", "")
-            content_map[sec] = st.text_area(sec, value=default_val, height=140)
+            key = f"pb_section_{sec}"
+            st.session_state.setdefault(key, st.session_state.get(key, ""))
+            st.session_state[key] = st.text_area(sec, value=st.session_state[key], height=140)
 
     with right:
         st.subheader("Guidance and limits")
@@ -1610,13 +1610,16 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
 
         st.markdown("**Must address items from L and M**")
-        items = ctx["items"] if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
+        items = ctx['items'] if isinstance(ctx.get('items'), pd.DataFrame) else pd.DataFrame()
         if not items.empty:
             st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
             st.caption("No checklist items found for this RFP")
 
-        total_words = sum(len((content_map.get(k) or "").split()) for k in selected)
+        total_words = 0
+        for sec in selected:
+            key = f"pb_section_{sec}"
+            total_words += len((st.session_state.get(key) or "").split())
         est_pages = _estimate_pages(total_words, spacing)
         st.info(f"Current word count {total_words}  Estimated pages {est_pages}")
         if est_pages > page_limit:
@@ -1625,17 +1628,14 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
         out_path = os.path.join(DATA_DIR, out_name)
         if st.button("Export DOCX", type="primary"):
-            sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
+            sections = [{"title": sec, "body": st.session_state.get(f"pb_section_{sec}", "")} for sec in selected]
             exported = _export_docx(
                 out_path,
-                doc_title=ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "Proposal",
+                doc_title=(ctx['rfp']['title'] if isinstance(ctx.get('rfp'), pd.DataFrame) and not ctx['rfp'].empty else "Proposal"),
                 sections=sections,
-                clins=ctx["clins"],
-                checklist=ctx["items"],
-                metadata={
-                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                },
+                clins=pd.DataFrame(),
+                checklist=ctx['items'] if isinstance(ctx.get('items'), pd.DataFrame) else None,
+                metadata=(ctx['rfp'].iloc[0].to_dict() if isinstance(ctx.get('rfp'), pd.DataFrame) and not ctx['rfp'].empty else {}),
                 font_name=font_name,
                 font_size_pt=int(font_size),
                 spacing=spacing,
@@ -1644,7 +1644,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
 
-
+# ---------- Subcontractor Finder (Phase D) ----------
 # ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
