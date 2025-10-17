@@ -1061,24 +1061,22 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     (sname.strip() or "Saved Search", json.dumps(params), 1 if auto_push else 0, datetime.utcnow().isoformat()),
                 )
                 conn.commit()
+            st.success("Saved search")
 
-                    st.success("Saved search")
-
+        # Execute ad-hoc search
         if run_search:
-                            params = _sam_build_params({
-        "limit": limit,
-        "posted_from": (posted_from if use_dates else default_from),
-        "posted_to": (posted_to if use_dates else today),
-        "active_only": active_only,
-        "keywords": keywords,
-        "naics": naics,
-        "set_aside": set_aside,
-        "state": state,
-        "org_name": org_name,
-        "types": types,
-    })
-
-
+            params = _sam_build_params({
+                "limit": limit,
+                "posted_from": (posted_from if use_dates else default_from),
+                "posted_to": (posted_to if use_dates else today),
+                "active_only": active_only,
+                "keywords": keywords,
+                "naics": naics,
+                "set_aside": set_aside,
+                "state": state,
+                "org_name": org_name,
+                "types": types,
+            })
             with st.spinner("Searching SAM.gov..."):
                 out = sam_search_cached(params)
 
@@ -1089,11 +1087,9 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.success(f"Found {out.get('totalRecords', 0)} (showing {len(records)})")
                 df = pd.DataFrame(records)
                 if not df.empty:
-                    # Minimal columns
                     cols = [c for c in ["noticeId","title","solicitationNumber","postedDate","department","office","type","naics","baseType","link"] if c in df.columns]
                     st.dataframe(df[cols], use_container_width=True, hide_index=True)
 
-                    # Selection + actions
                     selected = st.multiselect("Select notices", options=df.get("noticeId", pd.Series(dtype=str)).tolist(), key="sam_sel")
                     g1, g2, g3 = st.columns([2,2,2])
                     with g1:
@@ -1102,10 +1098,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                 for nid in selected:
                                     try:
                                         row = df[df["noticeId"]==nid].iloc[0].to_dict()
-                                        cur.execute("""
+                                        cur.execute(
+                                            """
                                             INSERT OR IGNORE INTO sam_watch(notice_id, title, solnum, agency, posted, link, added_at)
                                             VALUES(?,?,?,?,?,?,datetime('now'));
-                                        """, (row.get("noticeId"), row.get("title"), row.get("solicitationNumber"), row.get("department") or row.get("office"), row.get("postedDate"), row.get("link")))
+                                            """,
+                                            (row.get("noticeId"), row.get("title"), row.get("solicitationNumber"), row.get("department") or row.get("office"), row.get("postedDate"), row.get("link"))
+                                        )
                                     except Exception:
                                         pass
                                 conn.commit()
@@ -1117,10 +1116,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                 for nid in selected:
                                     try:
                                         r = df[df["noticeId"]==nid].iloc[0].to_dict()
-                                        cur.execute("""
+                                        cur.execute(
+                                            """
                                             INSERT INTO deals(title, solnum, agency, status, stage, created_at, source_url)
                                             VALUES(?, ?, ?, 'Open', 'New', datetime('now'), ?);
-                                        """, (r.get("title") or "Untitled", r.get("solicitationNumber") or "", r.get("department") or r.get("office") or "", r.get("link") or ""))
+                                            """,
+                                            (r.get("title") or "Untitled", r.get("solicitationNumber") or "", r.get("department") or r.get("office") or "", r.get("link") or "")
+                                        )
                                         pushed += 1
                                     except Exception:
                                         pass
@@ -1128,7 +1130,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                             st.success(f"Pushed {pushed} deal(s)")
                     with g3:
                         if st.button("Export CSV", key="sam_export_csv"):
-                            path = str(Path(DATA_DIR) / f"sam_results_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv")
+                            path = str(Path(DATA_DIR) / f"sam_results_{pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")}.csv")
                             df.to_csv(path, index=False)
                             st.markdown(f"[Download CSV]({path})")
 
