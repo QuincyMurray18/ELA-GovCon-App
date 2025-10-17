@@ -1053,6 +1053,65 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_solnum(text: str) -> str:
         if not text:
             return ""
+
+    def _draft_from_data(prompt: str, df_lm: "pd.DataFrame|None", df_c: "pd.DataFrame|None", df_d: "pd.DataFrame|None", df_p: "pd.DataFrame|None", meta: dict) -> str:
+        """Lightweight templated draft using available structured data; no external calls."""
+        parts = []
+        if prompt:
+            parts.append(prompt.strip())
+        # Capabilities from L/M
+        if df_lm is not None and not df_lm.empty:
+            musts = df_lm[df_lm.get("is_must", 0) == 1]["item_text"].astype(str).tolist() if "is_must" in df_lm.columns else []
+            others = df_lm["item_text"].astype(str).tolist()
+            if musts:
+                parts.append("**Mandatory Compliance Focus**
+- " + "
+- ".join(musts[:12]))
+            elif others:
+                parts.append("**Compliance Focus**
+- " + "
+- ".join(others[:12]))
+        # CLINs summary
+        if df_c is not None and not df_c.empty:
+            try:
+                tbl = df_c.fillna("").astype(str)
+                lines = [f"{r.get('clin','')}: {r.get('description','')}" for r in tbl.to_dict(orient="records")]
+                parts.append("**Contract Line Items (CLINs)**
+- " + "
+- ".join(lines[:15]))
+            except Exception:
+                pass
+        # Dates
+        if df_d is not None and not df_d.empty:
+            try:
+                tbl = df_d.fillna("").astype(str)
+                lines = [f"{r.get('label','')}: {r.get('date_text') or r.get('date_iso','')}" for r in tbl.to_dict(orient="records")]
+                parts.append("**Key Dates**
+- " + "
+- ".join(lines[:12]))
+            except Exception:
+                pass
+        # POCs
+        if df_p is not None and not df_p.empty:
+            try:
+                tbl = df_p.fillna("").astype(str)
+                lines = [f"{r.get('name','')} ({r.get('role','')}), {r.get('email','')}" for r in tbl.to_dict(orient="records")]
+                parts.append("**Government POCs**
+- " + "
+- ".join(lines[:10]))
+            except Exception:
+                pass
+        # Attributes
+        if meta:
+            attribs = [f"{k}: {v}" for k,v in meta.items() if v]
+            if attribs:
+                parts.append("**Attributes**
+- " + "
+- ".join(attribs[:12]))
+        return "
+
+".join(parts).strip()
+
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
         if not text: return ""
@@ -1370,6 +1429,15 @@ with tab_data:
         st.divider()
         # Send selected data to Proposal Builder via session
         st.subheader("Send to Proposal Builder")
+        with st.expander("Analyze & Draft", expanded=False):
+            user_prompt = st.text_area("Guidance (optional)", placeholder="Emphasize past performance in VA hospitals; highlight 541519 expertise; focus on cybersecurity posture.")
+            if st.button("Generate Draft", key=f"gen_draft_{rid}"):
+                # Load current tables (use edited versions if present)
+                df_lm = pd.read_sql_query("SELECT item_text, is_must FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+                draft = _draft_from_data(user_prompt, df_lm, edit_c if "edit_c" in locals() else None, edit_d if "edit_d" in locals() else None, edit_p if "edit_p" in locals() else None, meta)
+                st.session_state["pb_prefill_draft"] = {"title": pb_title, "sections": [{"title":"Draft Narrative","body": draft}], "metadata": meta, "spacing": spacing}
+                st.success("Draft generated and staged. Click Import in Proposal Builder to bring it in.")
+
         colx, coly = st.columns([3,2])
         with colx:
             use_lm = st.checkbox("Include L/M Checklist as a section outline", value=True, key=f"use_lm_{rid}")
@@ -1711,8 +1779,8 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     with left:
         st.subheader("Sections")
     # Import prefill from RFP Analyzer
-    if st.session_state.get('pb_prefill') and st.button('Import from RFP Analyzer', key='pb_import'):
-        pf = st.session_state.get('pb_prefill')
+    (st.session_state.get('pb_prefill') or st.session_state.get('pb_prefill_draft')) and st.button('Import from RFP Analyzer', key='pb_import'):
+        pf = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
         try:
             sections_state = pf.get('sections') or []
             st.session_state['pb_sections'] = sections_state
