@@ -1258,7 +1258,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(rid)) for iid in ids])
                         conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
-                    st.experimental_rerun()
+                    st.rerun()
             # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
@@ -1300,7 +1300,28 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
     return int(round(done / max(1, total) * 100))
 
 
+
+def _ensure_lm_meta(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as c:
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS lm_meta(
+                    id INTEGER PRIMARY KEY,
+                    lm_id INTEGER REFERENCES lm_items(id) ON DELETE CASCADE,
+                    owner TEXT,
+                    ref_page TEXT,
+                    ref_para TEXT,
+                    evidence TEXT,
+                    risk TEXT,
+                    notes TEXT
+                );
+            """)
+            conn.commit()
+    except Exception:
+        pass
+
 def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
+    _ensure_lm_meta(conn)
     """
     Robust loader that prefers tenancy views (*_t) but falls back to base tables
     if those views are not present in the current schema.
@@ -3970,7 +3991,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
             ok = _restore_db_from_upload(conn, up)
             if ok:
                 st.success("Restore completed. Please rerun the app.")
-                st.experimental_rerun()
+                st.rerun()
 
     st.divider()
     st.subheader("Export / Import CSV")
@@ -3992,7 +4013,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
         n = _import_csv_into_table(conn, upcsv, tsel, scoped_to_current=True)
         if n:
             st.success(f"Imported {n} row(s) into {tsel}")
-            st.experimental_rerun()
+            st.rerun()
 
 
 
