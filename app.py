@@ -1152,16 +1152,16 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_parse:
         colA, colB = st.columns([3,2])
         with colA:
-            ups = st.file_uploader("Upload RFP(s) (PDF/DOCX/TXT)", type=["pdf","docx","txt"], accept_multiple_files=True)
+            ups = st.file_uploader("Upload RFP(s, key=ns("ra","uploader")) (PDF/DOCX/TXT)", type=["pdf","docx","txt"], accept_multiple_files=True)
             with st.expander("Manual Text Paste (optional)", expanded=False):
-                pasted = st.text_area("Paste any text to include in parsing", height=150, key=ns("ra","paste"))
-            title = st.text_input("RFP Title (used if combining)", key=ns("ra","title"))
-            solnum = st.text_input("Solicitation # (used if combining)", key=ns("ra","solnum"))
+                pasted = st.text_area("Paste any text to include in parsing", height=150, key="ra_paste")
+            title = st.text_input("RFP Title (used if combining)", key="ra_title")
+            solnum = st.text_input("Solicitation # (used if combining)", key="ra_solnum")
             sam_url = st.text_input("SAM URL (used if combining)", placeholder="https://sam.gov/...")
-            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
+            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True, key=ns("ra","mode"))
         with colB:
             st.markdown("**Parse Controls**")
-            run = st.button("Parse & Save", type="primary", key=ns("ra","parse_btn"))
+            run = st.button("Parse & Save", type="primary", key="ra_parse_btn")
             st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
@@ -1271,13 +1271,13 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No RFPs yet. Parse one on the first tab.")
         else:
-            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key=ns("ra","rfp_sel"))
+            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="ra_rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
             st.caption(f"{len(df_lm)} checklist items")
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
-            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key=ns("ra","lm_set_status"))
-            sel_ids = st.text_input("IDs to update (comma-separated)", key=ns("ra","lm_ids"))
-            if st.button("Update Status", key=ns("ra","lm_status_btn")):
+            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="ra_lm_set_status")
+            sel_ids = st.text_input("IDs to update (comma-separated)", key="ra_lm_ids")
+            if st.button("Update Status", key="ra_lm_status_btn"):
                 ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
                 if ids:
                     with closing(conn.cursor()) as cur:
@@ -1285,7 +1285,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
-            if st.button("Export Compliance Matrix (CSV)", key=ns("ra","lm_export_csv")):
+            if st.button("Export Compliance Matrix (CSV)", key="ra_lm_export_csv"):
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(rid))
                 csv_bytes = out.to_csv(index=False).encode("utf-8")
@@ -1297,7 +1297,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No RFPs yet.")
         else:
-            rid = st.selectbox("RFP for data views", options=df_rf["id"].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key=ns("ra","data_sel"))
+            rid = st.selectbox("RFP for data views", options=df_rf["id"].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="ra_data_sel")
             c1, c2 = st.columns([3,1])
             with c1:
                 st.subheader("CLINs (editable)")
@@ -1409,14 +1409,14 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 key="rfp_ups"
             )
             with st.expander("Manual Text Paste (optional)", expanded=False):
-                pasted = st.text_area("Paste any text to include in parsing", height=150, key=ns("ra","paste"))
-            title = st.text_input("RFP Title (used if combining)", key=ns("ra","title"))
-            solnum = st.text_input("Solicitation # (used if combining)", key=ns("ra","solnum"))
-            sam_url = st.text_input("SAM URL (used if combining)", key=ns("ra","sam_url"), placeholder="https://sam.gov/...")
-            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
+                pasted = st.text_area("Paste any text to include in parsing", height=150, key="ra_paste")
+            title = st.text_input("RFP Title (used if combining)", key="ra_title")
+            solnum = st.text_input("Solicitation # (used if combining)", key="ra_solnum")
+            sam_url = st.text_input("SAM URL (used if combining)", key="ra_sam_url", placeholder="https://sam.gov/...")
+            mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True, key=ns("ra","radio_2") )
         with colB:
             st.markdown("**Parse Controls**")
-            run = st.button("Parse & Save", type="primary", key=ns("ra","parse_btn"))
+            run = st.button("Parse & Save", type="primary", key="ra_parse_btn")
             st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
@@ -1533,14 +1533,14 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No RFPs yet. Parse one on the first tab.")
         else:
-            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key=ns("ra","rfp_sel"))
+            rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="ra_rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
             st.caption(f"{len(df_lm)} checklist items")
             # Inline status editor
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
-            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key=ns("ra","lm_set_status"))
-            sel_ids = st.text_input("IDs to update (comma-separated)", key=ns("ra","lm_ids"))
-            if st.button("Update Status", key=ns("ra","lm_status_btn")):
+            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="ra_lm_set_status")
+            sel_ids = st.text_input("IDs to update (comma-separated)", key="ra_lm_ids")
+            if st.button("Update Status", key="ra_lm_status_btn"):
                 ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
                 if ids:
                     with closing(conn.cursor()) as cur:
@@ -1549,7 +1549,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
             # Export
-            if st.button("Export Compliance Matrix (CSV)", key=ns("ra","lm_export_csv")):
+            if st.button("Export Compliance Matrix (CSV)", key="ra_lm_export_csv"):
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(rid))
                 csv_bytes = out.to_csv(index=False).encode("utf-8")
@@ -1565,7 +1565,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             "RFP for data views",
             options=df_rf["id"].tolist(),
             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
-            key=ns("ra","data_sel")
+            key="ra_data_sel"
         )
         col1, col2, col3 = st.columns(3)
         with col1:
