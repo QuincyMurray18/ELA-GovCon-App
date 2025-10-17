@@ -7,7 +7,6 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import pandas as pd
-import json
 import io
 import streamlit as st
 
@@ -1037,38 +1036,12 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             st.caption("Use Open in SAM for attachments and full details")
 
 
-
-
-
-def _df_to_md(df) -> str:
-    """
-    Minimal Markdown table without requiring 'tabulate'.
-    """
-    import pandas as _pd
-    if df is None or not hasattr(df, "columns"):
-        return ""
-    dff = df.copy()
-    # Convert all to strings
-    dff = dff.fillna("").astype(str)
-    cols = list(dff.columns)
-    if not cols:
-        return ""
-    # Header
-    header = "| " + " | ".join(cols) + " |"
-    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
-    lines = [header, sep]
-    for _, row in dff.iterrows():
-        vals = [str(row.get(c, "")) for c in cols]
-        lines.append("| " + " | ".join(vals) + " |")
-    return "\n".join(lines)
-
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
-    import io, re
-    from contextlib import closing
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
+    
 
-    # ---------- helpers ----------
+    # --- heuristics to auto-fill Title and Solicitation # ---
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
@@ -1079,32 +1052,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_solnum(text: str) -> str:
         if not text:
             return ""
-        m = re.search(r'(?i)Solicitation\s*(Number|No\.? )\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
-        if m:
-            return m.group(2)[:60]
-        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
-        if m:
-            return m.group(1)[:60]
-        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
-        if m:
-            return (m.group(1).upper() + "-" + m.group(2))[:60]
-        return ""
-
-    # ensure meta table
-    try:
-        with closing(conn.cursor()) as _c:
-            _c.execute("""
-                CREATE TABLE IF NOT EXISTS rfp_meta(
-                    id INTEGER PRIMARY KEY,
-                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
-                    key TEXT,
-                    value TEXT
-                );
-            """)
-            conn.commit()
-    except Exception:
-        pass
-
+    # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
         if not text: return ""
         m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
@@ -1136,43 +1084,41 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         m = re.search(r'\b([A-Z][a-zA-Z]+,\s*(?:[A-Z]{2}|[A-Za-z\. ]{3,}))\b', text)
         return m.group(1).strip() if m else ""
 
-    def _draft_from_data(prompt: str, df_lm: "pd.DataFrame|None", df_c: "pd.DataFrame|None", df_d: "pd.DataFrame|None", df_p: "pd.DataFrame|None", meta: dict) -> str:
-        parts = []
-        if prompt:
-            parts.append(prompt.strip())
-        if df_lm is not None and hasattr(df_lm, "empty") and not df_lm.empty:
-            try:
-                musts = df_lm[df_lm.get("is_must", 0) == 1]["item_text"].astype(str).tolist()
-            except Exception:
-                musts = []
-            others = df_lm["item_text"].astype(str).tolist() if "item_text" in df_lm.columns else []
-            if musts:
-                parts.append("**Mandatory Compliance Focus**\n- " + "\n- ".join(musts[:12]))
-            elif others:
-                parts.append("**Compliance Focus**\n- " + "\n- ".join(others[:12]))
-        if df_c is not None and hasattr(df_c, "empty") and not df_c.empty:
-            tbl = df_c.fillna("").astype(str)
-            lines = [f"{r.get('clin','')}: {r.get('description','')}" for r in tbl.to_dict(orient="records")]
-            parts.append("**Contract Line Items (CLINs)**\n- " + "\n- ".join(lines[:15]))
-        if df_d is not None and hasattr(df_d, "empty") and not df_d.empty:
-            tbl = df_d.fillna("").astype(str)
-            lines = [f"{r.get('label','')}: {r.get('date_text') or r.get('date_iso','')}" for r in tbl.to_dict(orient="records")]
-            parts.append("**Key Dates**\n- " + "\n- ".join(lines[:12]))
-        if df_p is not None and hasattr(df_p, "empty") and not df_p.empty:
-            tbl = df_p.fillna("").astype(str)
-            lines = [f"{r.get('name','')} ({r.get('role','')}), {r.get('email','')}" for r in tbl.to_dict(orient="records")]
-            parts.append("**Government POCs**\n- " + "\n- ".join(lines[:10]))
-        if meta:
-            attribs = [f"{k}: {v}" for k, v in meta.items() if v]
-            if attribs:
-                parts.append("**Attributes**\n- " + "\n- ".join(attribs[:12]))
-        return "\n\n".join(parts).strip()
+    # ensure rfp_meta exists
+    try:
+        with closing(conn.cursor()) as _c:
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_meta(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
+                    key TEXT,
+                    value TEXT
+                );
+            """)
+            conn.commit()
+    except Exception:
+        pass
 
-    # ---------------- PARSE & SAVE ----------------
+        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
+        if m:
+            return m.group(2)[:60]
+        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
+        if m:
+            return m.group(1)[:60]
+        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
+        if m:
+            return (m.group(1).upper() + "-" + m.group(2))[:60]
+        return ""
+# ---------------- PARSE & SAVE ----------------
     with tab_parse:
         colA, colB = st.columns([3,2])
         with colA:
-            ups = st.file_uploader("Upload RFP(s) (PDF/DOCX/TXT)", type=["pdf","docx","txt"], accept_multiple_files=True, key="rfp_ups")
+            ups = st.file_uploader(
+                "Upload RFP(s) (PDF/DOCX/TXT)",
+                type=["pdf","docx","txt"],
+                accept_multiple_files=True,
+                key="rfp_ups"
+            )
             with st.expander("Manual Text Paste (optional)", expanded=False):
                 pasted = st.text_area("Paste any text to include in parsing", height=150, key="rfp_paste")
             title = st.text_input("RFP Title (used if combining)", key="rfp_title")
@@ -1197,7 +1143,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     import PyPDF2  # type: ignore
                     reader = PyPDF2.PdfReader(io.BytesIO(data))
                     pages = [(p.extract_text() or "") for p in reader.pages]
-                    return "\n".join(pages)
+                    return "\\n".join(pages)
                 except Exception as e:
                     st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
                     return data.decode("latin-1", errors="ignore")
@@ -1206,7 +1152,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     import docx  # python-docx
                     f = io.BytesIO(data)
                     doc = docx.Document(f)
-                    return "\n".join([p.text for p in doc.paragraphs])
+                    return "\\n".join([p.text for p in doc.paragraphs])
                 except Exception as e:
                     st.warning(f"DOCX parse failed for {file.name}: {e}.")
                     return ""
@@ -1223,21 +1169,27 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         text_parts.append(_read_file(f))
                     if pasted:
                         text_parts.append(pasted)
-                    full_text = "\n\n".join([t for t in text_parts if t]).strip()
+                    full_text = "\\n\\n".join([t for t in text_parts if t]).strip()
                     if not full_text:
                         st.error("Nothing readable found.")
                     else:
                         secs = extract_sections_L_M(full_text)
                         l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
                         clins = extract_clins(full_text); dates = extract_dates(full_text); pocs = extract_pocs(full_text)
-                        meta = {'naics': _extract_naics(full_text), 'set_aside': _extract_set_aside(full_text), 'place_of_performance': _extract_place(full_text)}
+                        meta = {
+                            'naics': _extract_naics(full_text),
+                            'set_aside': _extract_set_aside(full_text),
+                            'place_of_performance': _extract_place(full_text),
+                        }
                         with closing(conn.cursor()) as cur:
-                            cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                                        (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",))
+                            cur.execute(
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",)
+                            )
                             rfp_id = cur.lastrowid
                             for it in l_items:
                                 cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
-                                            (rfp_id, it, 1 if re.search(r'\b(shall|must|required|mandatory|no later than|shall not|will)\b', it, re.IGNORECASE) else 0, "Open"))
+                                            (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
                             for r in clins:
                                 cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
                                             (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
@@ -1247,11 +1199,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             for pc in pocs:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
-                            for k,v in meta.items():
-                                if v:
-                                    cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (rfp_id, k, v))
                             conn.commit()
-                        st.success(f"Combined and saved RFP #{rfp_id}.")
+                        st.success(f"Combined and saved RFP #{rfp_id} (items: {len(l_items)}, CLINs: {len(clins)}, dates: {len(dates)}, POCs: {len(pocs)}).")
                 else:
                     saved = 0
                     for f in ups or []:
@@ -1261,14 +1210,20 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         secs = extract_sections_L_M(text)
                         l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
                         clins = extract_clins(text); dates = extract_dates(text); pocs = extract_pocs(text)
-                        meta = {'naics': _extract_naics(text), 'set_aside': _extract_set_aside(text), 'place_of_performance': _extract_place(text)}
+                        meta = {
+                            'naics': _extract_naics(text),
+                            'set_aside': _extract_set_aside(text),
+                            'place_of_performance': _extract_place(text),
+                        }
                         with closing(conn.cursor()) as cur:
-                            cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                                        (_guess_title(text, f.name), _guess_solnum(text), "", "", "",))
+                            cur.execute(
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                (_guess_title(text, f.name), _guess_solnum(text), "", "", "",)
+                            )
                             rfp_id = cur.lastrowid
                             for it in l_items:
                                 cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
-                                            (rfp_id, it, 1 if re.search(r'\b(shall|must|required|mandatory|no later than|shall not|will)\b', it, re.IGNORECASE) else 0, "Open"))
+                                            (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
                             for r in clins:
                                 cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
                                             (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
@@ -1278,12 +1233,10 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             for pc in pocs:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
-                            for k,v in meta.items():
-                                if v:
-                                    cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (rfp_id, k, v))
                             conn.commit()
                         saved += 1
                     st.success(f"Saved {saved} RFP record(s).")
+
 
     # ---------------- CHECKLIST ----------------
     with tab_checklist:
@@ -1294,6 +1247,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
             st.caption(f"{len(df_lm)} checklist items")
+            # Inline status editor
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
             new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
             sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
@@ -1305,6 +1259,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
+            # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(rid))
@@ -1316,107 +1271,26 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
         if df_rf.empty:
             st.info("No RFPs yet.")
-        else:
-            rid = st.selectbox("RFP for data views", options=df_rf["id"].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_data_sel")
-            c1, c2 = st.columns([3,1])
-            with c1:
-                st.subheader("CLINs (editable)")
-                df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),),)
-                edit_c = st.data_editor(df_c, num_rows="dynamic", use_container_width=True, key=f"clin_edit_{rid}")
-                if st.button("Save CLINs", key=f"save_clin_{rid}"):
-                    rows = edit_c.fillna("").to_dict(orient="records")
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM clin_lines WHERE rfp_id=?;", (int(rid),))
-                        for r in rows:
-                            if any(str(r.get(k,"")).strip() for k in ["clin","description","qty","unit","unit_price","extended_price"]):
-                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
-                                            (int(rid), r.get("clin"), r.get("description"), r.get("qty"), r.get("unit"), r.get("unit_price"), r.get("extended_price")),)
-                        conn.commit()
-                    st.success("CLINs saved.")
-                st.subheader("Key Dates (editable)")
-                df_d = pd.read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(rid),),)
-                edit_d = st.data_editor(df_d, num_rows="dynamic", use_container_width=True, key=f"dates_edit_{rid}")
-                if st.button("Save Key Dates", key=f"save_dates_{rid}"):
-                    rows = edit_d.fillna("").to_dict(orient="records")
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM key_dates WHERE rfp_id=?;", (int(rid),))
-                        for r in rows:
-                            if any(str(r.get(k,"")).strip() for k in ["label","date_text","date_iso"]):
-                                cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
-                                            (int(rid), r.get("label"), r.get("date_text"), r.get("date_iso")),)
-                        conn.commit()
-                    st.success("Key Dates saved.")
-                st.subheader("POCs (editable)")
-                df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),),)
-                edit_p = st.data_editor(df_p, num_rows="dynamic", use_container_width=True, key=f"pocs_edit_{rid}")
-                if st.button("Save POCs", key=f"save_pocs_{rid}"):
-                    rows = edit_p.fillna("").to_dict(orient="records")
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM pocs WHERE rfp_id=?;", (int(rid),))
-                        for r in rows:
-                            if any(str(r.get(k,"")).strip() for k in ["name","role","email","phone"]):
-                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
-                                            (int(rid), r.get("name"), r.get("role"), r.get("email"), r.get("phone")),)
-                        conn.commit()
-                    st.success("POCs saved.")
-            with c2:
-                st.subheader("Attributes")
-                df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),),)
-                st.dataframe(df_meta, use_container_width=True, hide_index=True)
-                with st.form(key=f"meta_add_{rid}"):
-                    mk = st.text_input("Key", placeholder="naics / set_aside / place_of_performance")
-                    mv = st.text_input("Value")
-                    submitted = st.form_submit_button("Add/Update")
-                    if submitted and mk.strip():
-                        with closing(conn.cursor()) as cur:
-                            cur.execute("DELETE FROM rfp_meta WHERE rfp_id=? AND key=?;", (int(rid), mk.strip()))
-                            cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);", (int(rid), mk.strip(), mv.strip()))
-                            conn.commit()
-                        st.success("Attribute saved."); st.rerun()
-
-            st.divider()
-            st.subheader("Send to Proposal Builder")
-            colx, coly = st.columns([3,2])
-            with colx:
-                use_lm = st.checkbox("Include L/M Checklist as a section outline", value=True, key=f"use_lm_{rid}")
-                use_clin = st.checkbox("Include CLINs section", value=True, key=f"use_clin_{rid}")
-                use_dates = st.checkbox("Include Key Dates section", value=True, key=f"use_dates_{rid}")
-                use_pocs = st.checkbox("Include POCs section", value=False, key=f"use_pocs_{rid}")
-            with coly:
-                pb_title = st.text_input("Proposal title", value=df_rf.loc[df_rf['id']==rid,'title'].values[0], key=f"pb_title_{rid}")
-                spacing = st.selectbox("Default spacing", ["Single","1.15","Double"], index=1, key=f"pb_sp_{rid}")
-                if st.button("Copy to Proposal Builder", type="primary", key=f"copy_to_pb_{rid}"):
-                    sections = []
-                    if use_lm:
-                        try:
-                            df_lm = pd.read_sql_query("SELECT item_text, is_must FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
-                            body = "\n".join(["• " + t for t in df_lm["item_text"].astype(str).tolist()])
-                        except Exception:
-                            body = ""
-                        sections.append({"title": "Compliance Outline", "body": body})
-                    if use_clin:
-                        body = _df_to_md(edit_c) if 'edit_c' in locals() else ""
-                        sections.append({"title": "CLINs", "body": body})
-                    if use_dates:
-                        body = _df_to_md(edit_d) if 'edit_d' in locals() else ""
-                        sections.append({"title": "Key Dates", "body": body})
-                    if use_pocs:
-                        body = _df_to_md(edit_p) if 'edit_p' in locals() else ""
-                        sections.append({"title": "Points of Contact", "body": body})
-                    meta = {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {}
-                    st.session_state["pb_prefill"] = {"title": pb_title, "sections": sections, "metadata": meta, "spacing": spacing}
-                    st.success("Copied. Open the Proposal Builder tab and click 'Import from RFP Analyzer'.")
-
-            with st.expander("Analyze & Draft", expanded=False):
-                user_prompt = st.text_area("Guidance (optional)", placeholder="Emphasize past performance; highlight 541519 expertise; focus on cybersecurity posture.", key=f"draft_prompt_{rid}")
-                if st.button("Generate Draft", key=f"gen_draft_{rid}"):
-                    try:
-                        df_lm = pd.read_sql_query("SELECT item_text, is_must FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
-                    except Exception:
-                        df_lm = pd.DataFrame(columns=["item_text","is_must"])
-                    draft = _draft_from_data(user_prompt, df_lm, edit_c if 'edit_c' in locals() else None, edit_d if 'edit_d' in locals() else None, edit_p if 'edit_p' in locals() else None, {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {})
-                    st.session_state["pb_prefill_draft"] = {"title": pb_title, "sections": [{"title":"Draft Narrative","body": draft}], "metadata": {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {}, "spacing": spacing}
-                    st.success("Draft generated and staged. Click Import in Proposal Builder to bring it in.")
+            return
+        rid = st.selectbox(
+            "RFP for data views",
+            options=df_rf["id"].tolist(),
+            format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
+            key="rfp_data_sel"
+        )
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
+            st.subheader("CLINs"); st.dataframe(df_c, use_container_width=True, hide_index=True)
+        with col2:
+            df_d = pd.read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(rid),))
+            st.subheader("Key Dates"); st.dataframe(df_d, use_container_width=True, hide_index=True)
+        with col3:
+            df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),))
+            st.subheader("POCs"); st.dataframe(df_p, use_container_width=True, hide_index=True)
+        st.subheader("Attributes")
+        df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+        st.dataframe(df_meta, use_container_width=True, hide_index=True)
 
 def _compliance_progress(df_items: pd.DataFrame) -> int:
     if df_items is None or df_items.empty:
@@ -1700,107 +1574,78 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     
 
 
-
-# --- Proposal Builder helpers (inlined) ---
-def _word_count(sections: dict) -> int:
-    total = 0
-    for v in (sections or {}).values():
-        if v:
-            total += len(str(v).split())
-    return total
-
-def _estimate_pages(total_words: int, spacing: str) -> float:
-    wpp = 500  # single
-    s = (spacing or "").lower()
-    if s.startswith("1.15"):
-        wpp = 430
-    elif s.startswith("double"):
-        wpp = 275
-    pages = total_words / max(1, wpp)
-    return round(pages if pages >= 1 else 1.0, 2)
-
-
-
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
+    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn)
+    if df_rf.empty:
+        st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
+        return
+    rfp_id = st.selectbox(
+        "RFP context",
+        options=df_rf["id"].tolist(),
+        format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}",
+        index=0,
+    )
+    st.session_state["current_rfp_id"] = rfp_id
+    ctx = _load_rfp_context(conn, rfp_id)
 
-    # Title + spacing
-    colA, colB = st.columns([3,1])
-    with colA:
-        doc_title = st.text_input("Document Title", value=st.session_state.get("pb_title", "Proposal"))
-    with colB:
-        spacing = st.selectbox("Line Spacing", ["Single","1.15","Double"],
-                               index={"Single":0,"1.15":1,"Double":2}.get(str(st.session_state.get("pb_spacing","1.15")),1))
-
-    # Base sections
-    content_map = {
-        "Executive Summary": "",
-        "Technical Approach": "",
-        "Management Approach": "",
-        "Past Performance": "",
-        "Pricing Notes": "",
-    }
-
-    # Import payloads (prefer draft)
-    import_payload = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
-    if import_payload and st.button('Import from RFP Analyzer', key='pb_import'):
-        pf = import_payload
-        if pf.get("title"):
-            doc_title = pf["title"]; st.session_state["pb_title"] = doc_title
-        if pf.get("spacing"):
-            spacing = pf["spacing"]; st.session_state["pb_spacing"] = spacing
-        st.session_state["pb_metadata"] = pf.get("metadata") or {}
-        for s in (pf.get("sections") or []):
-            t = str(s.get("title","Section")).strip() or "Section"
-            b = str(s.get("body",""))
-            content_map[t] = b
-        st.success("Imported from RFP Analyzer.")
-
-    # Merge any previously staged sections
-    if st.session_state.get("pb_sections"):
-        for s in st.session_state["pb_sections"]:
-            t = str(s.get("title","Section")).strip() or "Section"
-            b = str(s.get("body",""))
-            content_map[t] = b
-
-    left, right = st.columns([3,1])
-
+    left, right = st.columns([3, 2])
     with left:
         st.subheader("Sections")
-        keys = list(content_map.keys())
-        preselect = [k for k in keys if content_map.get(k)]
-        selected = st.multiselect("Choose sections to include", keys, default=preselect or keys[:3])
-
-        # Editors
-        edited_map = {}
-        for k in selected:
-            with st.expander(k, expanded=True):
-                txt = st.text_area(f"{k} (body)", value=content_map.get(k, ""), height=240, key=f"sec_{k}")
-                edited_map[k] = txt
+        default_sections = [
+            "Cover Letter","Executive Summary","Understanding of Requirements","Technical Approach","Management Plan",
+            "Staffing and Key Personnel","Quality Assurance","Past Performance Summary","Pricing and CLINs","Certifications and Reps","Appendices",
+        ]
+        selected = st.multiselect("Include sections", default_sections, default=default_sections)
+        content_map: Dict[str, str] = {}
+        for sec in selected:
+            default_val = st.session_state.get(f"pb_section_{sec}", "")
+            content_map[sec] = st.text_area(sec, value=default_val, height=140)
 
     with right:
-        st.subheader("Metadata")
-        meta = st.session_state.get("pb_metadata") or {}
-        if meta:
-            st.dataframe(pd.DataFrame([meta]).T.rename(columns={0:"Value"}), use_container_width=True)
+        st.subheader("Guidance and limits")
+        spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
+        font_name = st.selectbox("Font", ["Times New Roman", "Calibri"], index=0)
+        font_size = st.number_input("Font size", min_value=10, max_value=12, value=11)
+        page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
+
+        st.markdown("**Must address items from L and M**")
+        items = ctx["items"] if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
+        if not items.empty:
+            st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
-            st.caption("No metadata yet. Import from RFP Analyzer to populate.")
+            st.caption("No checklist items found for this RFP")
 
-        total_words = sum(len((edited_map.get(k) or "").split()) for k in selected) if 'edited_map' in locals() else 0
+        total_words = sum(len((content_map.get(k) or "").split()) for k in selected)
         est_pages = _estimate_pages(total_words, spacing)
-        st.metric("Word count", total_words)
-        st.metric("Est. pages", est_pages)
+        st.info(f"Current word count {total_words}  Estimated pages {est_pages}")
+        if est_pages > page_limit:
+            st.error("Content likely exceeds page limit. Consider trimming or tighter formatting")
 
-        if st.button("Export to DOCX", type="primary"):
-            sections_list = [{"title": k, "body": edited_map.get(k,"")} for k in selected]
-            out_path = _export_docx(None, doc_title, sections_list, None, meta, spacing=spacing)
-            st.success("Document created.")
-            st.download_button("Download",
-                               data=open(out_path, "rb").read(),
-                               file_name=Path(out_path).name,
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
+        out_path = os.path.join(DATA_DIR, out_name)
+        if st.button("Export DOCX", type="primary"):
+            sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
+            exported = _export_docx(
+                out_path,
+                doc_title=ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "Proposal",
+                sections=sections,
+                clins=ctx["clins"],
+                checklist=ctx["items"],
+                metadata={
+                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
+                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
+                },
+                font_name=font_name,
+                font_size_pt=int(font_size),
+                spacing=spacing,
+            )
+            if exported:
+                st.success(f"Exported to {exported}")
+                st.markdown(f"[Download DOCX]({exported})")
 
 
+# ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
@@ -4282,3 +4127,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
