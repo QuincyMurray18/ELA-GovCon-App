@@ -1736,7 +1736,31 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
 
     left, right = st.columns([3, 2])
     with left:
-        st.subheader("Sections")
+        st.session_state.setdefault('pb_sections', [])
+    st.session_state.setdefault('pb_title', '')
+    st.session_state.setdefault('pb_spacing', '1.15')
+    st.session_state.setdefault('pb_metadata', {})
+    st.subheader("Sections")
+    st.markdown('**Current Sections**')
+    sec_list = st.session_state.get('pb_sections', [])
+    # Simple editor: title/body pairs
+    for idx, sec in enumerate(list(sec_list)):
+        with st.expander(f"Section {idx+1}: {sec.get('title','(untitled)')}", expanded=False):
+            new_title = st.text_input(f"Title {idx+1}", value=sec.get('title',''), key=f'pb_sec_title_{idx}')
+            new_body = st.text_area(f"Body {idx+1}", value=sec.get('body',''), height=200, key=f'pb_sec_body_{idx}')
+            # Update session as user types
+            st.session_state['pb_sections'][idx] = {'title': new_title, 'body': new_body}
+            if st.button(f"Delete Section {idx+1}", key=f'pb_del_{idx}'):
+                st.session_state['pb_sections'].pop(idx)
+                st.rerun()
+    # Add new section row
+    with st.form('pb_add_section_form'):
+        at = st.text_input('New Section Title', key='pb_new_title')
+        ab = st.text_area('New Section Body', height=150, key='pb_new_body')
+        if st.form_submit_button('Add Section'):
+            st.session_state['pb_sections'].append({'title': at or 'New Section', 'body': ab or ''})
+            st.success('Section added.')
+
     # Import prefill from RFP Analyzer
     if (st.session_state.get('pb_prefill') or st.session_state.get('pb_prefill_draft')) and st.button('Import from RFP Analyzer', key='pb_import'):
         pf = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
