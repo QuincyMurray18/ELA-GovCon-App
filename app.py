@@ -2154,7 +2154,7 @@ def render_outreach_tools():
                     atts = _normalize_extra_files(c_files)
                     # Tracking id per batch
                     import uuid
-                    batch_id = str(uuid.uuid4()
+                    batch_id = str(uuid.uuid4())
                     failures = []
                     sent = 0
                     for em in emails:
@@ -2200,8 +2200,7 @@ def render_outreach_tools():
         if not mb:
             st.info("Generate emails to select one for preview.", icon="ℹ️")
         else:
-            idx = st.number_input("Select one", min_value=1, max_value=len(mb), value=len(mb), step=1,
-                                  key=ns_key("outreach::pick_idx")
+            idx = st.number_input("Select one", min_value=1, max_value=len(mb), value=len(mb), step=1, key=ns_key("outreach::pick_idx"))
             sel = mb[int(idx)-1]
 
             # Show key fields from the generated email
@@ -2217,7 +2216,7 @@ def render_outreach_tools():
 
             # Attachments uploader (REQUIRED) placed below Quote Due
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
-                                           key=ns_key("outreach::extra_files")
+                                           key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
 
@@ -2228,7 +2227,7 @@ def render_outreach_tools():
                     st.warning("Please upload at least one attachment before generating the preview.")
                 else:
                     # Build display names from generated attachments + uploaded files
-                    gen_names = _normalize_sel_attachments(sel.get("attachments")
+                    gen_names = _normalize_sel_attachments(sel.get("attachments"))
                     try:
                         upload_names = [{"name": getattr(f, "name", "file")} for f in files]
                     except Exception:
@@ -2324,7 +2323,7 @@ def render_outreach_tools():
 
             # Attachments uploader (positioned below Quote Due)
             extra_files = st.file_uploader("Attachments (required)", type=None, accept_multiple_files=True,
-                                           key=ns_key("outreach::extra_files")
+                                           key=ns_key("outreach::extra_files"))
             if extra_files is not None:
                 st.session_state[SKEY_ATTACH] = extra_files
 
@@ -2427,14 +2426,12 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             st.success("Saved. You can now send emails from the Outreach composer.")
 
     with st.expander("Quick Outreach Composer", expanded=False):
-        to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"),)
-                           placeholder="recipient@example.com, another@domain.com")
+        to = st.text_input("To (comma-separated)", key=ns_key("outreach::mail_to"), placeholder="recipient@example.com, another@domain.com")
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,)
-                            placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200, placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", accept_multiple_files=True, key=ns_key("outreach::mail_files"))
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
@@ -2466,7 +2463,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                 except Exception as e:
                     st.error(f"Failed to send: {e}")
 
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data")
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
@@ -2477,15 +2474,11 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             if preview.get("bcc"): st.markdown(f"**Bcc:** {preview['bcc']}")
             st.markdown(f"**Subject:** {preview.get('subject','')}")
             html = preview.get("body_html") or ""
-            components.html()
-                f"""
+            components.html(f"""
                 <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
                     {html}
                 </div>
-                """,
-                height=400,
-                scrolling=True,
-            )
+            """, height=400, scrolling=True)
         atts = preview.get("attachments") or []
         if atts:
             names = [a.get("name","file") for a in atts]
@@ -2568,9 +2561,8 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,)
-                            placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200, placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", accept_multiple_files=True, key=ns_key("outreach::mail_files"))
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
@@ -2604,7 +2596,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     st.error(f"Failed to send: {e}")
 
     # === Unified Preview Block (used by both header-level and composer-level triggers) ===
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data")
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
     if preview:
         import streamlit.components.v1 as components
         with st.container(border=True):
@@ -2619,15 +2611,14 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
             st.markdown(f"**Subject:** {preview.get('subject','')}")
 
             html = preview.get("body_html") or ""
-            components.html()
-                f"""
+            components.html(f"""
                 <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
                     {html}
                 </div>
-                """,
-                height=400,
-                scrolling=True,
-            )
+            """, height=400, scrolling=True)
+
+
+
 
             atts = preview.get("attachments") or []
             if atts:
@@ -2685,9 +2676,8 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,)
-                            placeholder="<p>Hello.</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200, placeholder="<p>Hello.</p>")
+        files = st.file_uploader("Attachments", accept_multiple_files=True, key=ns_key("outreach::mail_files"))
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Preview email", use_container_width=True, key=ns_key("outreach::mail_preview_btn")):
@@ -2725,7 +2715,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
                     st.error(f"Failed to send: {e}")
 
     # If a preview has been requested, render it exactly like the HTML body will appear.
-    preview = st.session_state.get(ns_key("outreach::mail_preview_data")
+    preview = st.session_state.get(ns_key("outreach::mail_preview_data"))
     if preview:
         import streamlit.components.v1 as components
 
@@ -2743,15 +2733,15 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
 
             # Render the HTML body using a component so styles and tags are honored
             html = preview.get("body_html") or ""
-            components.html()
-                f"""
+            components.html(f"""
                 <div style="border:1px solid #ddd;padding:16px;margin-top:8px;">
                     {html}
                 </div>
-                """,
-                height=400,
-                scrolling=True,
-            )
+            """, height=400, scrolling=True)
+
+
+
+
 
             # Show attachment list if any
             atts = preview.get("attachments") or []
@@ -2810,9 +2800,8 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         cc = st.text_input("Cc (optional, comma-separated)", key=ns_key("outreach::mail_cc"))
         bcc = st.text_input("Bcc (optional, comma-separated)", key=ns_key("outreach::mail_bcc"))
         subj = st.text_input("Subject", key=ns_key("outreach::mail_subj"))
-        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200,)
-                            placeholder="<p>Hello...</p>")
-        files = st.file_uploader("Attachments", type=None, accept_multiple_files=True, key=ns_key("outreach::mail_files"))
+        body = st.text_area("Message (HTML supported)", key=ns_key("outreach::mail_body"), height=200, placeholder="<p>Hello...</p>")
+        files = st.file_uploader("Attachments", accept_multiple_files=True, key=ns_key("outreach::mail_files"))
         if st.button("Send email", use_container_width=True, key=ns_key("outreach::mail_send_btn")):
             try:
                 send_outreach_email(ACTIVE_USER, to, subj, body, cc_addrs=cc, bcc_addrs=bcc, attachments=files)
@@ -3165,7 +3154,7 @@ def usaspending_search_awards(naics: str = "", psc: str = "", date_from: str = "
                          "psc": it.get("PSC Code")} for it in rows]
                 diag = f"Attempt {name}: HTTP {status}, rows={len(rows)}"
                 if st_debug is not None:
-                    st_debug.code(json.dumps(payload, indent=2)
+                    st_debug.code(json.dumps(payload, indent=2))
                     st_debug.caption(diag)
                 return pd.DataFrame(data), diag
             else:
@@ -3239,7 +3228,7 @@ def sam_search(
     params["noticeType"] = notice_types
 
     if naics_list:   params["naics"] = ",".join([c for c in naics_list if c][:20])
-    if keyword:      params["keywords"] = keyword:
+    if keyword:      params["keywords"] = keyword
 
     try:
         headers = {"X-Api-Key": SAM_API_KEY}
@@ -3269,7 +3258,7 @@ def sam_search(
                 due_ok = True  # allow when min date unknown
             else:
                 due_ok = (d_dt is None) or (d_dt >= min_dt)
-            if not due_ok: continue:
+            if not due_ok: continue
             docs = opp.get("documents", []) or []
             rows.append({
                 "sam_notice_id": opp.get("noticeId"),
@@ -3391,7 +3380,7 @@ def _extract_contacts_from_sam_row(r) -> list:
 
     seen = set(); dedup = []
     for c in out:
-        key = (c.get("email") or c.get("name"), c.get("org")
+        key = (c.get("email") or c.get("name"), c.get("org"))
         if key in seen:
             continue
         seen.add(key); dedup.append(c)
@@ -3822,25 +3811,25 @@ def q_select(sql: str, params: list | tuple = (), one: bool = False, alias: str 
     conn = get_db()
     fin_sql = _append_org_filter(sql, alias) if require_org else sql
     fin_params = list(params) + ([current_org_id()] if require_org else [])
-    cur = conn.execute(fin_sql, tuple(fin_params)
-    return (cur.fetchone() if one else cur.fetchall()
+    cur = conn.execute(fin_sql, tuple(fin_params))
+    return (cur.fetchone() if one else cur.fetchall())
+
 def q_insert(table: str, data: dict):
     _assert_can_write()
     d = dict(data or {})
-    d.setdefault("org_id", current_org_id()
-    d.setdefault("owner_id", current_user_id()
-    keys = list(d.keys()
+    d.setdefault("org_id", current_org_id())
+    d.setdefault("owner_id", current_user_id())
+    keys = list(d.keys())
     vals = [d[k] for k in keys]
-    placeholders = ",".join(["?"] * len(keys)
+    placeholders = ",".join(["?"] * len(keys))
     sql = f"INSERT INTO {table}({','.join(keys)}) VALUES({placeholders})"
     conn = get_db()
     cur = conn.execute(sql, tuple(vals))
     return cur.lastrowid
 
+
 def q_update(table: str, data: dict, where: dict):
     _assert_can_write()
-    if not where or "id" not in where:
-        raise ValueError("q_update requires id in where")
     conn = get_db()
     d = dict(data or {})
     if "version" in where:
@@ -3848,12 +3837,12 @@ def q_update(table: str, data: dict, where: dict):
     sets = ", ".join([f"{k}=?" for k in d.keys()])
     args = [d[k] for k in d.keys()]
     sql = f"UPDATE {table} SET {sets} WHERE id=?"
-    args.append(int(where["id"])
+    args.append(int(where["id"]))
     sql += " AND org_id=?"
-    args.append(current_org_id()
+    args.append(current_org_id())
     if "version" in where:
         sql += " AND version=?"
-        args.append(int(where["version"])
+        args.append(int(where["version"]))
     cur = conn.execute(sql, tuple(args))
     return cur.rowcount
 
@@ -3890,7 +3879,7 @@ def _ensure_tenancy_phase1():
     ]
     for uid, oid, email, dname, role in defaults:
         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                       (VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
+                     (uid, oid, email, dname, role))
     conn.commit()
 
 def current_user_role():
@@ -5465,10 +5454,10 @@ def sam_saved_searches_list():
     except Exception:
         return []
 def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_digest: bool = False, min_score_digest: int = 70):
-    """
-    Check if it's time to auto-fetch SAM results for the current user. If so, run the same search
-    used in SAM Watch and insert new rows into opportunities. Optionally email a digest.
-    """
+def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_digest: bool = False, min_score_digest: int = 70):
+    """Check if it is time to auto-fetch SAM results for the current user.
+    If so, run the same search used in SAM Watch and insert new rows into opportunities.
+    Optionally email a digest."""
     try:
         _ensure_sam_history()
         key_last = f"sam_last_run_{ACTIVE_USER}"
@@ -9001,8 +8990,8 @@ def render_rfp_analyzer():
             added = 0
             for up in uploads:
                 text = read_doc(up)[:800_000]
-                conn.execute("""insert into rfp_files(session_id, filename, mimetype, content_text)
-                                values(?,?,?,?)", (session_id, up.name, getattr(up, "type", ""), text))
+                conn.execute("insert into rfp_files(session_id, filename, mimetype, content_text) values(?,?,?,?)",
+                                (session_id, up.name, getattr(up, "type", ""), text))
                 added += 1
             conn.commit()
             st.success(f"Added {added} file(s) to this thread.")
@@ -12328,6 +12317,9 @@ def _rfp_validate_summary(payload: dict) -> bool:
 def _extract_summary_from_pages(pages: list, file_name: str) -> dict:
     text_all = "\n".join([(p.get("text") or "") for p in pages])[:200000]
 
+def _extract_summary_from_pages(pages: list, file_name: str) -> dict:
+    text_all = "\n".join([(p.get("text") or "") for p in pages])[:200000]
+
     def find_lines(keyword: str):
         hits = []
         for p in pages:
@@ -12354,55 +12346,11 @@ def _extract_summary_from_pages(pages: list, file_name: str) -> dict:
 
     milestones = [s["text"] for s in find_lines("site visit")] + [s["text"] for s in find_lines("questions due")]
 
-    # include first page snippet as a source if present
     if pages:
         p0 = pages[0]
         s_text = (p0.get("text") or "")[:120]
         sources.append({"file_name": file_name, "page": p0.get("page"), "text": s_text})
 
-    brief = (text_all[:500].strip() or "Summary not available.")
-    payload = {
-        "brief": brief,
-        "factors": factors[:10],
-        "clauses": clauses[:10],
-        "dates": dates,
-        "forms": forms[:10],
-        "milestones": milestones[:10],
-        "sources": sources[:20],
-    }
-    if not _rfp_validate_summary(payload):
-        payload = {"brief": brief, "factors": [], "clauses": [], "dates": {}, "forms": [], "milestones": [], "sources": []}
-    return payload
-        "dates": dates,
-        "forms": forms[:10],
-        "milestones": milestones[:10],
-        "sources": sources[:20],
-    }
-    if not _rfp_validate_summary(payload):
-        payload = {"brief": brief, "factors": [], "clauses": [], "dates": {}, "forms": [], "milestones": [], "sources": []}
-    return payload
-    def find_lines(keyword):
-        hits = []
-        for p in pages:
-            t = p.get("text", "") or ""
-            if not t: continue
-            for line in t.splitlines():
-                if keyword.lower() in line.lower():
-                    hits.append({"file_name": file_name, "page": p.get("page"), "text": line.strip()})
-        return hits[:20]
-    sources = []
-    factors = [s["text"] for s in find_lines("Section M")] + [s["text"] for s in find_lines("Evaluation")]
-    clauses = [s["text"] for s in find_lines("Section L")] + [s["text"] for s in find_lines("Clause")]
-    forms = [s["text"] for s in find_lines("SF 1449")] + [s["text"] for s in find_lines("SF 1442")] + [s["text"] for s in find_lines("SF1442")]
-    dates = {}
-    for kw in ["proposal due","offers due","due date","closing date","response date"]:
-        hits = find_lines(kw)
-        if hits:
-            dates.setdefault("due", hits[0]["text"])
-            sources.extend(hits[:3])
-            break
-    milestones = [s["text"] for s in find_lines("site visit")] + [s["text"] for s in find_lines("questions due")]
-    sources.extend([{ "file_name": file_name, "page": p.get("page"), "text": (p.get("text") or "")[:120]} for p in pages[:1]])
     brief = (text_all[:500].strip() or "Summary not available.")
     payload = {
         "brief": brief,
@@ -14760,12 +14708,12 @@ def render_proposal_wizard(notice_id: int):
                 plan = st.text_area("Writing plan", value=plan or "", key=f"wp_{sid}")
                 if st.button("Save section", key=f"sv_{sid}"):
                     cur.execute("UPDATE proposal_sections SET title=?, page_limit=?, font_name=?, font_size=?, writing_plan=? WHERE id=?",
-                                (new_title, None if new_pl==0 else int(new_pl), fname or None, None if fsize==0 else int(fsize), plan or None, sid)
+                                (new_title, None, None, None, None, sid))
                     conn.commit()
                     st.success("Saved")
         if st.button("Next → Uploads"):
             st.session_state["wizard_step"] = 3
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
     if step == 3:
         st.subheader("Step 3 · Supporting files")
         up = st.file_uploader("Upload resumes, past performance, etc.", accept_multiple_files=True)
@@ -14775,7 +14723,7 @@ def render_proposal_wizard(notice_id: int):
                 meta = store_uploaded_file(b, f.name, "proposal", pid)
                 conn = get_db(); cur = conn.cursor()
                 cur.execute("INSERT INTO proposal_files(proposal_id, file_name, file_id, uploaded_at) VALUES(?,?,?,?)",
-                            (pid, f.name, meta.get("checksum"), _dtp5.datetime.utcnow().isoformat())
+                            (pid, f.name, meta.get("checksum"), _dtp5.datetime.utcnow().isoformat()))
                 conn.commit()
         conn = get_db(); cur = conn.cursor()
         rows = cur.execute("SELECT id, file_name, uploaded_at FROM proposal_files WHERE proposal_id=? ORDER BY id DESC", (pid,)).fetchall()
@@ -14783,7 +14731,7 @@ def render_proposal_wizard(notice_id: int):
             st.caption(f"{fname} * {ts}")
         if st.button("Next → Package"):
             st.session_state["wizard_step"] = 4
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
+            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
     if step == 4:
         st.subheader("Step 4 · Package preview")
         conn = get_db(); cur = conn.cursor()
@@ -14796,9 +14744,9 @@ def render_proposal_wizard(notice_id: int):
             st.warning(f"Placeholder issues in {len(bad)} sections")
         st.button("Export (disabled until compliance is Green)", disabled=not ok)
         if ok and st.button("Export now"):
+            snapshot = _jsonp5.dumps({"placeholders": bad})
             cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
-                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), _jsonp5.dumps({"placeholders": bad}))
-            conn.commit()
+                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), snapshot))
             st.success("Export queued")
     cols = st.columns(3)
     with cols[0]:
@@ -14831,8 +14779,8 @@ def _rfp_panel_ui(notice_id: int):
                 _orig_rfp_panel_ui_p5(notice_id)
         except Exception as ex:
             st.warning(f"Analyzer panel partial: {ex}")
-    if feature_flags().get("start_proposal_inline", False) and st.session_state.get("wizard_step") and st.session_state.get("wizard_step") >= 1:
-        render_proposal_wizard(int(notice_id)
+    if feature_flags().get("start_proposal_inline", False) and st.session_state.get("wizard_step", 0) >= 1:
+        render_proposal_wizard(int(notice_id))
 # === PROPOSAL PHASE 5 END ===
 
 
