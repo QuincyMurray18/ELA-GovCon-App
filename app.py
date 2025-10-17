@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import pandas as pd
+import json
 import streamlit as st
 
 # External
@@ -857,182 +858,285 @@ def run_deals(conn: sqlite3.Connection) -> None:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
+
     st.header("SAM Watch")
-    st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
+    st.caption("Save searches, monitor watchlist, and push winners to Deals.")
 
-    api_key = get_sam_api_key()
+    # Tabs
+    tab_search, tab_saved, tab_watch = st.tabs(["Search", "Saved", "Watchlist"])
 
-    # Search filters (dates optional)
-    with st.expander("Search Filters", expanded=True):
-        today = datetime.now().date()
-        default_from = today - timedelta(days=30)
+    # ---------- SEARCH TAB ----------
+    with tab_search:
+        with st.expander("Filters", expanded=True):
+            today = datetime.now().date()
+            default_from = today - timedelta(days=30)
 
-        c1, c2, c3 = st.columns([2, 2, 2])
-        with c1:
-            use_dates = st.checkbox("Filter by posted date", value=False)
-        with c2:
-            active_only = st.checkbox("Active only", value=True)
-        with c3:
-            org_name = st.text_input("Organization/Agency contains")
-
-        if use_dates:
-            d1, d2 = st.columns([2, 2])
-            with d1:
-                posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
-            with d2:
-                posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
-
-        e1, e2, e3 = st.columns([2, 2, 2])
-        with e1:
-            keywords = st.text_input("Keywords (Title contains)")
-        with e2:
-            naics = st.text_input("NAICS (6-digit)")
-        with e3:
-            psc = st.text_input("PSC")
-
-        e4, e5, e6 = st.columns([2, 2, 2])
-        with e4:
-            state = st.text_input("Place of Performance State (e.g., TX)")
-        with e5:
-            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
-        with e6:
-            pass
-
-        ptype_map = {
-            "Pre-solicitation": "p",
-            "Sources Sought": "r",
-            "Special Notice": "s",
-            "Solicitation": "o",
-            "Combined Synopsis/Solicitation": "k",
-            "Justification (J&A)": "u",
-            "Sale of Surplus Property": "g",
-            "Intent to Bundle (DoD)": "i",
-            "Award Notice": "a",
-        }
-        types = st.multiselect(
-            "Notice Types",
-            list(ptype_map.keys()),
-            default=["Solicitation", "Combined Synopsis/Solicitation", "Sources Sought"],
-        )
-
-        g1, g2 = st.columns([2, 2])
-        with g1:
-            limit = st.number_input("Results per page", min_value=1, max_value=1000, value=100, step=50)
-        with g2:
-            max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3)
-
-        run = st.button("Run Search", type="primary")
-
-    results_df = st.session_state.get("sam_results_df", pd.DataFrame())
-
-    if run:
-        if not api_key:
-            st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
-            return
-
-        params: Dict[str, Any] = {
-            "api_key": api_key,
-            "limit": int(limit),
-            "offset": 0,
-            "_max_pages": int(max_pages),
-        }
-        if active_only:
-            params["status"] = "active"
-        if "use_dates" in locals() and use_dates:
-            params["postedFrom"] = posted_from.strftime("%m/%d/%Y")
-            params["postedTo"] = posted_to.strftime("%m/%d/%Y")
-        else:
-            # SAM.gov API requires postedFrom/postedTo; use implicit last 30 days when filter is off
-            _today = datetime.now().date()
-            _from = _today - timedelta(days=30)
-            params["postedFrom"] = _from.strftime("%m/%d/%Y")
-            params["postedTo"] = _today.strftime("%m/%d/%Y")
-        if keywords:
-            params["title"] = keywords
-        if naics:
-            params["ncode"] = naics
-        if psc:
-            params["ccode"] = psc
-        if state:
-            params["state"] = state
-        if set_aside:
-            params["typeOfSetAside"] = set_aside
-        if org_name:
-            params["organizationName"] = org_name
-        if types:
-            params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
-
-        with st.spinner("Searching SAM.gov..."):
-            out = sam_search_cached(params)
-
-        if out.get("error"):
-            st.error(out["error"])
-            return
-
-        recs = out.get("records", [])
-        results_df = flatten_records(recs)
-        st.session_state["sam_results_df"] = results_df
-        st.success(f"Fetched {len(results_df)} notices")
-
-    if (results_df is None or results_df.empty) and not run:
-        st.info("Set filters and click Run Search")
-
-    if results_df is not None and not results_df.empty:
-        st.dataframe(results_df, use_container_width=True, hide_index=True)
-        titles = [f"{row['Title']} [{row.get('Solicitation') or '—'}]" for _, row in results_df.iterrows()]
-        idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i])
-        row = results_df.iloc[idx]
-
-        with st.expander("Opportunity Details", expanded=True):
-            c1, c2 = st.columns([3, 2])
+            c1, c2, c3 = st.columns([2,2,2])
             with c1:
-                st.write(f"**Title:** {row['Title']}")
-                st.write(f"**Solicitation:** {row['Solicitation']}")
-                st.write(f"**Type:** {row['Type']}")
-                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row['Set-Aside Code']})")
-                st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
-                st.write(f"**Agency Path:** {row['Agency Path']}")
+                use_dates = st.checkbox("Filter by posted date", value=False, key="sam_use_dates")
             with c2:
-                st.write(f"**Posted:** {row['Posted']}")
-                st.write(f"**Response Due:** {row['Response Due']}")
-                st.write(f"**Notice ID:** {row['Notice ID']}")
-                if row['SAM Link']:
-                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
+                active_only = st.checkbox("Active only", value=True, key="sam_active_only")
+            with c3:
+                limit = st.number_input("Max records", min_value=10, max_value=1000, step=10, value=200, key="sam_limit")
 
-        c3, c4, c5 = st.columns([2, 2, 2])
-        with c3:
-            if st.button("Add to Deals", key="add_to_deals"):
-                try:
+            if use_dates:
+                d1, d2 = st.columns([2,2])
+                with d1:
+                    posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
+                with d2:
+                    posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
+
+            e1, e2, e3 = st.columns([2,2,2])
+            with e1:
+                keywords = st.text_input("Keywords (title contains)", key="sam_kw")
+            with e2:
+                naics = st.text_input("NAICS (6-digit)", key="sam_naics")
+            with e3:
+                set_aside = st.selectbox("Set-Aside", options=["","SB","WOSB","SDVOSB","8A","HUBZone","VOSB","SDB"], key="sam_sa")
+
+            f1, f2, f3 = st.columns([2,2,2])
+            with f1:
+                state = st.text_input("State (e.g., VA)", key="sam_state")
+            with f2:
+                org_name = st.text_input("Agency/Org name", key="sam_org")
+            with f3:
+                types = st.multiselect("Notice types", options=["Presolicitation","Solicitation","Combined Synopsis/Solicitation","Sources Sought","Special Notice","Award Notice"], key="sam_types")
+
+            # Save search controls
+            st.markdown("**Save this search**")
+            s1, s2 = st.columns([3,1])
+            with s1:
+                sname = st.text_input("Search name", key="sam_save_name", placeholder="e.g., VA Hospitals – 541519 – SDVOSB")
+            with s2:
+                auto_push = st.checkbox("Auto-push to Deals", value=False, key="sam_auto_push")
+
+            c_run, c_save = st.columns([2,2])
+            with c_run:
+                run_search = st.button("Run Search", type="primary", key="sam_run")
+            with c_save:
+                if st.button("Save Search", key="sam_save_btn"):
+                    params = {"limit": int(limit), "api_key": get_sam_api_key(), "_max_pages": 3}
+                    # Mandatory PostedFrom/To: set if user opted; else default last 30 days to avoid 400
+                    if use_dates:
+                        params["postedFrom"] = str(posted_from)
+                        params["postedTo"] = str(posted_to)
+                    else:
+                        params["postedFrom"] = str(default_from)
+                        params["postedTo"] = str(today)
+
+                    if active_only: params["active"] = "true"
+                    if keywords: params["title"] = keywords
+                    if naics: params["naics"] = naics
+                    if set_aside: params["typeOfSetAside"] = set_aside
+                    if state: params["state"] = state
+                    if org_name: params["organizationName"] = org_name
+                    if types:
+                        ptype_map = {
+                            "Presolicitation": "Presolicitation",
+                            "Solicitation": "Solicitation",
+                            "Combined Synopsis/Solicitation": "Combined Synopsis/Solicitation",
+                            "Sources Sought": "Sources Sought",
+                            "Special Notice": "Special Notice",
+                            "Award Notice": "Award Notice",
+                        }
+                        params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
                     with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                            """,
-                            (
-                                row["Title"],
-                                row["Agency Path"],
-                                "Bidding",
-                                None,
-                                row["Notice ID"],
-                                row["Solicitation"],
-                                row["Posted"],
-                                row["Response Due"],
-                                row["NAICS"],
-                                row["PSC"],
-                                row["SAM Link"],
-                            ),
-                        )
+                        cur.execute("INSERT INTO sam_searches(name, params_json, auto_push, created_at, updated_at) VALUES(?,?,?,?,datetime('now'));",
+                                    (sname.strip() or "Saved Search", json.dumps(params), 1 if auto_push else 0, datetime.utcnow().isoformat()))
                         conn.commit()
-                    st.success("Saved to Deals")
-                except Exception as e:
-                    st.error(f"Failed to save deal: {e}")
-        with c4:
-            if st.button("Push to RFP Analyzer", key="push_to_rfp"):
-                st.session_state["rfp_selected_notice"] = row.to_dict()
-                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-        with c5:
-            st.caption("Use Open in SAM for attachments and full details")
+                    st.success("Saved search")
+
+        if run_search:
+            params = {"limit": int(limit), "api_key": get_sam_api_key(), "_max_pages": 3}
+            if use_dates:
+                params["postedFrom"] = str(posted_from)
+                params["postedTo"] = str(posted_to)
+            else:
+                # Default last 30 days (SAM requires dates)
+                params["postedFrom"] = str(default_from)
+                params["postedTo"] = str(today)
+            if active_only: params["active"] = "true"
+            if keywords: params["title"] = keywords
+            if naics: params["naics"] = naics
+            if set_aside: params["typeOfSetAside"] = set_aside
+            if state: params["state"] = state
+            if org_name: params["organizationName"] = org_name
+            if types:
+                ptype_map = {
+                    "Presolicitation": "Presolicitation",
+                    "Solicitation": "Solicitation",
+                    "Combined Synopsis/Solicitation": "Combined Synopsis/Solicitation",
+                    "Sources Sought": "Sources Sought",
+                    "Special Notice": "Special Notice",
+                    "Award Notice": "Award Notice",
+                }
+                params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
+
+            with st.spinner("Searching SAM.gov..."):
+                out = sam_search_cached(params)
+
+            if out.get("error"):
+                st.error(out["error"])
+            else:
+                records = out.get("records", [])
+                st.success(f"Found {out.get('totalRecords', 0)} (showing {len(records)})")
+                df = pd.DataFrame(records)
+                if not df.empty:
+                    # Minimal columns
+                    cols = [c for c in ["noticeId","title","solicitationNumber","postedDate","department","office","type","naics","baseType","link"] if c in df.columns]
+                    st.dataframe(df[cols], use_container_width=True, hide_index=True)
+
+                    # Selection + actions
+                    selected = st.multiselect("Select notices", options=df.get("noticeId", pd.Series(dtype=str)).tolist(), key="sam_sel")
+                    g1, g2, g3 = st.columns([2,2,2])
+                    with g1:
+                        if st.button("⭐ Add to Watchlist", key="sam_add_watch"):
+                            with closing(conn.cursor()) as cur:
+                                for nid in selected:
+                                    try:
+                                        row = df[df["noticeId"]==nid].iloc[0].to_dict()
+                                        cur.execute("""
+                                            INSERT OR IGNORE INTO sam_watch(notice_id, title, solnum, agency, posted, link, added_at)
+                                            VALUES(?,?,?,?,?,?,datetime('now'));
+                                        """, (row.get("noticeId"), row.get("title"), row.get("solicitationNumber"), row.get("department") or row.get("office"), row.get("postedDate"), row.get("link")))
+                                    except Exception:
+                                        pass
+                                conn.commit()
+                            st.success("Added to watchlist")
+                    with g2:
+                        if st.button("Push to Deals", key="sam_push_deals"):
+                            pushed = 0
+                            with closing(conn.cursor()) as cur:
+                                for nid in selected:
+                                    try:
+                                        r = df[df["noticeId"]==nid].iloc[0].to_dict()
+                                        cur.execute("""
+                                            INSERT INTO deals(title, solnum, agency, status, stage, created_at, source_url)
+                                            VALUES(?, ?, ?, 'Open', 'New', datetime('now'), ?);
+                                        """, (r.get("title") or "Untitled", r.get("solicitationNumber") or "", r.get("department") or r.get("office") or "", r.get("link") or ""))
+                                        pushed += 1
+                                    except Exception:
+                                        pass
+                                conn.commit()
+                            st.success(f"Pushed {pushed} deal(s)")
+                    with g3:
+                        if st.button("Export CSV", key="sam_export_csv"):
+                            path = str(Path(DATA_DIR) / f"sam_results_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv")
+                            df.to_csv(path, index=False)
+                            st.markdown(f"[Download CSV]({path})")
+
+    # ---------- SAVED TAB ----------
+    with tab_saved:
+        df_s = pd.read_sql_query("SELECT id, name, auto_push, created_at, updated_at FROM sam_searches_t ORDER BY id DESC;", conn)
+        if df_s.empty:
+            st.info("No saved searches yet.")
+        else:
+            st.dataframe(df_s, use_container_width=True, hide_index=True)
+            s_sel = st.selectbox("Pick a saved search", options=df_s["id"].tolist(), format_func=lambda i: f"#{i} — {df_s.loc[df_s['id']==i,'name'].values[0]}", key="sam_saved_sel")
+
+            c1, c2, c3, c4 = st.columns([2,2,2,2])
+            with c1:
+                if st.button("Run Saved Search", type="primary", key="sam_run_saved"):
+                    row = pd.read_sql_query("SELECT params_json, auto_push FROM sam_searches WHERE id=?;", conn, params=(int(s_sel),)).iloc[0]
+                    params = json.loads(row["params_json"])
+                    params["api_key"] = get_sam_api_key()
+                    with st.spinner("Searching SAM.gov..."):
+                        out = sam_search_cached(params)
+                    if out.get("error"):
+                        st.error(out["error"])
+                    else:
+                        recs = out.get("records", [])
+                        st.success(f"Found {out.get('totalRecords', 0)} (showing {len(recs)})")
+                        df = pd.DataFrame(recs)
+                        if not df.empty:
+                            st.dataframe(df[ [c for c in ["noticeId","title","solicitationNumber","postedDate","department","type","naics","link"] if c in df.columns] ], use_container_width=True, hide_index=True)
+                            # Auto-push if enabled
+                            if int(row["auto_push"]) == 1:
+                                with closing(conn.cursor()) as cur:
+                                    for _, r in df.iterrows():
+                                        try:
+                                            cur.execute("""
+                                                INSERT INTO deals(title, solnum, agency, status, stage, created_at, source_url)
+                                                VALUES(?, ?, ?, 'Open', 'New', datetime('now'), ?);
+                                            """, (r.get("title") or "Untitled", r.get("solicitationNumber") or "", r.get("department") or "", r.get("link") or ""))
+                                        except Exception:
+                                            pass
+                                    conn.commit()
+                                st.info("Auto-pushed to Deals (new rows may be de-duplicated by your workflow).")
+                            # Log run
+                            try:
+                                seen = ",".join(df["noticeId"].astype(str).tolist()) if "noticeId" in df.columns else ""
+                                with closing(conn.cursor()) as cur:
+                                    cur.execute("INSERT INTO sam_runs(search_id, run_at, new_count, seen_ids) VALUES(?, datetime('now'), ?, ?);", (int(s_sel), int(len(df)), seen))
+                                    conn.commit()
+                            except Exception:
+                                pass
+            with c2:
+                if st.button("Export Alerts CSV", key="sam_saved_alert_csv"):
+                    df_r = pd.read_sql_query("SELECT run_at, new_count FROM sam_runs_t WHERE search_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(s_sel),))
+                    last = df_r.iloc[0].to_dict() if not df_r.empty else {"run_at":"—","new_count":0}
+                    df_srow = df_s[df_s["id"]==s_sel].iloc[0]
+                    csvp = Path(DATA_DIR) / f"sam_alert_{int(s_sel)}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+                    pd.DataFrame([{
+                        "Search": df_srow["name"],
+                        "Last Run (UTC)": last["run_at"],
+                        "Last Count": last["new_count"]
+                    }]).to_csv(csvp, index=False)
+                    st.markdown(f"[Download CSV]({csvp})")
+            with c3:
+                new_name = st.text_input("Rename to", key="sam_saved_rename")
+                if st.button("Rename", key="sam_saved_rename_btn"):
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("UPDATE sam_searches SET name=?, updated_at=datetime('now') WHERE id=?;", (new_name.strip() or "Saved Search", int(s_sel)))
+                        conn.commit()
+                    st.success("Renamed"); st.rerun()
+            with c4:
+                if st.button("Delete Saved", key="sam_saved_delete"):
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM sam_searches WHERE id=?;", (int(s_sel),))
+                        conn.commit()
+                    st.success("Deleted"); st.rerun()
+
+    # ---------- WATCHLIST TAB ----------
+    with tab_watch:
+        df_w = pd.read_sql_query("SELECT id, notice_id, title, solnum, agency, posted, link, added_at FROM sam_watch_t ORDER BY added_at DESC;", conn)
+        st.dataframe(df_w, use_container_width=True, hide_index=True)
+
+        w_sel = st.multiselect("Select watchlist items", options=df_w["id"].astype(int).tolist() if not df_w.empty else [], key="sam_watch_sel",
+                               format_func=lambda i: f"#{i} — {df_w.loc[df_w['id']==i,'title'].values[0][:60]}")
+        h1, h2, h3 = st.columns([2,2,2])
+        with h1:
+            if st.button("Push selected to Deals", key="sam_watch_push"):
+                pushed = 0
+                with closing(conn.cursor()) as cur:
+                    for wid in w_sel:
+                        try:
+                            row = df_w[df_w["id"]==wid].iloc[0].to_dict()
+                            cur.execute("""
+                                INSERT INTO deals(title, solnum, agency, status, stage, created_at, source_url)
+                                VALUES(?, ?, ?, 'Open', 'New', datetime('now'), ?);
+                            """, (row.get("title") or "Untitled", row.get("solnum") or "", row.get("agency") or "", row.get("link") or ""))
+                            pushed += 1
+                        except Exception:
+                            pass
+                    conn.commit()
+                st.success(f"Pushed {pushed} deal(s)")
+        with h2:
+            if st.button("Remove from Watchlist", key="sam_watch_remove"):
+                with closing(conn.cursor()) as cur:
+                    for wid in w_sel:
+                        try:
+                            cur.execute("DELETE FROM sam_watch WHERE id=?;", (int(wid),))
+                        except Exception:
+                            pass
+                    conn.commit()
+                st.success("Removed"); st.rerun()
+        with h3:
+            if st.button("Export Watchlist CSV", key="sam_watch_csv"):
+                path = str(Path(DATA_DIR) / f"sam_watch_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv")
+                (df_w if not df_w.empty else pd.DataFrame()).to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
+
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
