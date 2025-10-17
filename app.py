@@ -17,7 +17,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 
 APP_TITLE = "ELA GovCon Suite"
-BUILD_LABEL = "Master A–E — SAM Watch • RFP Analyzer • L&M • Proposal DOCX • Subs+Outreach • Quotes • Pricing • Win Prob"
+BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -69,6 +69,27 @@ def get_db() -> sqlite3.Connection:
             CREATE TABLE IF NOT EXISTS app_settings(
                 key TEXT PRIMARY KEY,
                 val TEXT
+            );
+        """)
+
+        # Org profile (Phase F - Capability Statement)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS org_profile(
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                company_name TEXT,
+                tagline TEXT,
+                address TEXT,
+                phone TEXT,
+                email TEXT,
+                website TEXT,
+                uei TEXT,
+                cage TEXT,
+                naics TEXT,
+                core_competencies TEXT,
+                differentiators TEXT,
+                certifications TEXT,
+                past_performance TEXT,
+                primary_poc TEXT
             );
         """)
 
@@ -241,7 +262,6 @@ def save_uploaded_file(uploaded_file, subdir: str = "") -> Optional[str]:
 
 # -------------------- SAM Watch helpers (Phase A) --------------------
 def get_sam_api_key() -> Optional[str]:
-    """Session override -> secrets (nested or top-level) -> env var."""
     key = st.session_state.get("temp_sam_key")
     if key:
         return key
@@ -587,19 +607,18 @@ def run_deals(conn: sqlite3.Connection) -> None:
         st.error(f"Failed to load deals {e}")
 
 
-# ---------- SAM Watch (search + push) ----------
+# ---------- SAM Watch (Phase A) ----------
 def run_sam_watch(conn: sqlite3.Connection) -> None:
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
-    # Inline API key override
     with st.expander("API Key", expanded=False):
         st.text_input("Override SAM API Key (optional)", key="temp_sam_key")
         if st.session_state.get("temp_sam_key"):
             st.success("Using inline override key for this session")
     api_key = get_sam_api_key()
     if not api_key:
-        st.error("No SAM API key found. Add it to st.secrets as sam.api_key or SAM_API_KEY, or use inline override.")
+        st.error("No SAM API key found. Add it to st.secrets or use inline override.")
 
     with st.expander("Diagnostics", expanded=False):
         st.write("**API key loaded:**", bool(api_key))
@@ -646,7 +665,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with c7:
             state = st.text_input("Place of Performance State (e.g., TX)")
         with c8:
-            set_aside = st.text_input("Set-Aside Code (e.g., SB, 8A, SDVOSB)")
+            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
         with c9:
             org_name = st.text_input("Organization/Agency contains")
 
@@ -1135,7 +1154,7 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
         st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
     with st.expander("Import Vendors (CSV)", expanded=False):
-        st.caption("Headers supported: name, email, phone, city, state, naics, cage, uei, website, notes")
+        st.caption("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
         up = st.file_uploader("Upload vendor CSV", type=["csv"], key="vendor_csv")
         if up and st.button("Import CSV"):
             try:
@@ -1143,7 +1162,6 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 if "name" not in {c.lower() for c in df.columns}:
                     st.error("CSV must include a 'name' column")
                 else:
-                    # Normalize
                     df.columns = [c.lower() for c in df.columns]
                     n=0
                     with closing(conn.cursor()) as cur:
@@ -1207,7 +1225,6 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
-    # Query vendors
     q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors WHERE 1=1"
     params: List[Any] = []
     if f_naics:
@@ -1776,6 +1793,251 @@ def run_win_probability(conn: sqlite3.Connection) -> None:
         st.markdown(f"[Download assessment CSV]({path})")
 
 
+# ---------- Phase F: Chat Assistant (rules-based over DB) ----------
+def _kb_search(conn: sqlite3.Connection, rfp_id: Optional[int], query: str) -> Dict[str, Any]:
+    q = query.lower()
+    res: Dict[str, Any] = {}
+    # RFP sections
+    if rfp_id:
+        dfL = pd.read_sql_query("SELECT section, content FROM rfp_sections WHERE rfp_id=?;", conn, params=(rfp_id,))
+    else:
+        dfL = pd.read_sql_query("SELECT section, content FROM rfp_sections;", conn)
+    if not dfL.empty:
+        dfL["score"] = dfL["content"].str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
+        res["sections"] = dfL.sort_values("score", ascending=False).head(5)
+
+    # Checklist
+    if rfp_id:
+        dfCk = pd.read_sql_query("SELECT item_text, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+    else:
+        dfCk = pd.read_sql_query("SELECT item_text, status FROM lm_items;", conn)
+    if not dfCk.empty:
+        dfCk["score"] = dfCk["item_text"].str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
+        res["checklist"] = dfCk.sort_values("score", ascending=False).head(10)
+
+    # CLINs
+    if rfp_id:
+        dfCL = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
+    else:
+        dfCL = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines;", conn)
+    if not dfCL.empty:
+        dfCL["score"] = (dfCL["clin"].astype(str) + " " + dfCL["description"].astype(str)).str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
+        res["clins"] = dfCL.sort_values("score", ascending=False).head(10)
+
+    # Dates
+    if rfp_id:
+        dfDt = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=?;", conn, params=(rfp_id,))
+    else:
+        dfDt = pd.read_sql_query("SELECT label, date_text FROM key_dates;", conn)
+    if not dfDt.empty:
+        dfDt["score"] = (dfDt["label"].astype(str) + " " + dfDt["date_text"].astype(str)).str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
+        res["dates"] = dfDt.sort_values("score", ascending=False).head(10)
+
+    # POCs
+    if rfp_id:
+        dfP = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(rfp_id,))
+    else:
+        dfP = pd.read_sql_query("SELECT name, role, email, phone FROM pocs;", conn)
+    if not dfP.empty:
+        dfP["score"] = (dfP["name"].astype(str) + " " + dfP["role"].astype(str) + " " + dfP["email"].astype(str)).str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
+        res["pocs"] = dfP.sort_values("score", ascending=False).head(10)
+
+    # Quotes summary by vendor
+    if rfp_id:
+        dfQ = pd.read_sql_query("""
+            SELECT q.vendor, SUM(l.extended_price) AS total, COUNT(DISTINCT l.clin) AS clins_quoted
+            FROM quotes q JOIN quote_lines l ON q.id=l.quote_id
+            WHERE q.rfp_id=?
+            GROUP BY q.vendor
+            ORDER BY total ASC;
+        """, conn, params=(rfp_id,))
+        res["quotes"] = dfQ
+
+    # Coverage & compliance
+    if rfp_id:
+        df_target = pd.read_sql_query("SELECT DISTINCT clin FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
+        total_clins = int(df_target["clin"].nunique()) if not df_target.empty else 0
+        df_items = pd.read_sql_query("SELECT status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+        compl = 0
+        if not df_items.empty:
+            compl = int(round(((df_items["status"]=="Complete").sum() / max(1, len(df_items))) * 100))
+        res["meta"] = {"total_clins": total_clins, "compliance_pct": compl}
+
+    return res
+
+
+def run_chat_assistant(conn: sqlite3.Connection) -> None:
+    st.header("Chat Assistant (DB-aware)")
+    st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
+
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    rfp_opt = None
+    if not df_rf.empty:
+        rfp_opt = st.selectbox("Context (optional)", options=[None] + df_rf["id"].tolist(),
+                               format_func=lambda rid: "All RFPs" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid, 'title'].values[0]}")
+
+    q = st.text_input("Ask a question (e.g., 'When are proposals due?', 'Show POCs', 'Which vendor is lowest?')")
+    ask = st.button("Ask", type="primary")
+    if not ask:
+        st.caption("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
+        return
+
+    res = _kb_search(conn, rfp_opt, q or "")
+    # Heuristic intents
+    ql = (q or "").lower()
+    if any(w in ql for w in ["due", "deadline", "close"]):
+        st.subheader("Key Dates")
+        df = res.get("dates", pd.DataFrame())
+        if df is not None and not df.empty:
+            st.dataframe(df[["label","date_text"]], use_container_width=True, hide_index=True)
+    if any(w in ql for w in ["poc", "contact", "officer", "specialist"]):
+        st.subheader("Points of Contact")
+        df = res.get("pocs", pd.DataFrame())
+        if df is not None and not df.empty:
+            st.dataframe(df[["name","role","email","phone"]], use_container_width=True, hide_index=True)
+    if "clin" in ql:
+        st.subheader("CLINs")
+        df = res.get("clins", pd.DataFrame())
+        if df is not None and not df.empty:
+            st.dataframe(df[["clin","description","qty","unit"]], use_container_width=True, hide_index=True)
+    if any(w in ql for w in ["checklist", "compliance"]):
+        st.subheader("Checklist (top hits)")
+        df = res.get("checklist", pd.DataFrame())
+        if df is not None and not df.empty:
+            st.dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
+        meta = res.get("meta", {})
+        if meta:
+            st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
+    if any(w in ql for w in ["quote", "price", "vendor", "lowest"]):
+        st.subheader("Quote Totals by Vendor")
+        df = res.get("quotes", pd.DataFrame())
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.caption("Lowest total appears at the top.")
+
+    # Generic best-matches
+    sec = res.get("sections", pd.DataFrame())
+    if sec is not None and not sec.empty:
+        st.subheader("Relevant RFP Sections (snippets)")
+        sh = sec.copy()
+        sh["snippet"] = sh["content"].str.slice(0, 400)
+        st.dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
+
+
+# ---------- Phase F: Capability Statement ----------
+def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
+    try:
+        from docx import Document  # type: ignore
+        from docx.shared import Pt, Inches  # type: ignore
+    except Exception:
+        st.error("python-docx is required. pip install python-docx")
+        return None
+
+    doc = Document()
+    for s in doc.sections:
+        s.top_margin = Inches(0.7); s.bottom_margin = Inches(0.7); s.left_margin = Inches(0.7); s.right_margin = Inches(0.7)
+
+    title = profile.get("company_name") or "Capability Statement"
+    doc.add_heading(title, level=1)
+    if profile.get("tagline"):
+        p = doc.add_paragraph(profile["tagline"]); p.runs[0].italic = True
+
+    meta = [
+        ("Address", "address"), ("Phone", "phone"), ("Email", "email"), ("Website", "website"),
+        ("UEI", "uei"), ("CAGE", "cage")
+    ]
+    p = doc.add_paragraph()
+    for label, key in meta:
+        val = profile.get(key, "")
+        if val:
+            p.add_run(f"{label}: {val}  ")
+
+    def add_bullets(title, key):
+        txt = (profile.get(key) or "").strip()
+        if not txt:
+            return
+        doc.add_heading(title, level=2)
+        for line in [x.strip() for x in txt.splitlines() if x.strip()]:
+            doc.add_paragraph(line, style="List Bullet")
+
+    # Content blocks
+    add_bullets("Core Competencies", "core_competencies")
+    add_bullets("Differentiators", "differentiators")
+    add_bullets("Certifications", "certifications")
+    add_bullets("Past Performance Highlights", "past_performance")
+
+    naics = (profile.get("naics") or "").replace(",", ", ")
+    if naics.strip():
+        doc.add_heading("NAICS Codes", level=2)
+        doc.add_paragraph(naics)
+
+    contact = profile.get("primary_poc", "")
+    if contact.strip():
+        doc.add_heading("Primary POC", level=2)
+        doc.add_paragraph(contact)
+
+    doc.save(path)
+    return path
+
+
+def run_capability_statement(conn: sqlite3.Connection) -> None:
+    st.header("Capability Statement")
+    st.caption("Store your company profile and export a polished 1-page DOCX capability statement.")
+
+    # Load existing (id=1)
+    df = pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
+    vals = df.iloc[0].to_dict() if not df.empty else {}
+
+    with st.form("org_profile_form"):
+        c1, c2 = st.columns([2,2])
+        with c1:
+            company_name = st.text_input("Company Name", value=vals.get("company_name",""))
+            tagline = st.text_input("Tagline (optional)", value=vals.get("tagline",""))
+            address = st.text_area("Address", value=vals.get("address",""), height=70)
+            phone = st.text_input("Phone", value=vals.get("phone",""))
+            email = st.text_input("Email", value=vals.get("email",""))
+            website = st.text_input("Website", value=vals.get("website",""))
+        with c2:
+            uei = st.text_input("UEI", value=vals.get("uei",""))
+            cage = st.text_input("CAGE", value=vals.get("cage",""))
+            naics = st.text_input("NAICS (comma separated)", value=vals.get("naics",""))
+            core_competencies = st.text_area("Core Competencies (one per line)", value=vals.get("core_competencies",""), height=110)
+            differentiators = st.text_area("Differentiators (one per line)", value=vals.get("differentiators",""), height=110)
+        c3, c4 = st.columns([2,2])
+        with c3:
+            certifications = st.text_area("Certifications (one per line)", value=vals.get("certifications",""), height=110)
+        with c4:
+            past_performance = st.text_area("Past Performance Highlights (one per line)", value=vals.get("past_performance",""), height=110)
+            primary_poc = st.text_area("Primary POC (name, title, email, phone)", value=vals.get("primary_poc",""), height=70)
+        saved = st.form_submit_button("Save Profile", type="primary")
+
+    if saved:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute("DELETE FROM org_profile WHERE id=1;")
+                cur.execute("""
+                    INSERT INTO org_profile(id, company_name, tagline, address, phone, email, website, uei, cage, naics, core_competencies, differentiators, certifications, past_performance, primary_poc)
+                    VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                """, (company_name, tagline, address, phone, email, website, uei, cage, naics, core_competencies, differentiators, certifications, past_performance, primary_poc))
+                conn.commit()
+            st.success("Profile saved.")
+        except Exception as e:
+            st.error(f"Save failed: {e}")
+
+    # Export
+    if st.button("Export Capability Statement DOCX"):
+        prof = pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
+        if prof.empty:
+            st.error("Save your profile first.")
+        else:
+            p = prof.iloc[0].to_dict()
+            path = os.path.join(DATA_DIR, "Capability_Statement.docx")
+            out = _export_capability_docx(path, p)
+            if out:
+                st.success("Exported.")
+                st.markdown(f"[Download DOCX]({out})")
+
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -1798,6 +2060,8 @@ def nav() -> str:
             "Quote Comparison",
             "Pricing Calculator",
             "Win Probability",
+            "Chat Assistant",
+            "Capability Statement",
             "Contacts",
             "Deals",
         ],
@@ -1823,6 +2087,10 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_pricing_calculator(conn)
     elif page == "Win Probability":
         run_win_probability(conn)
+    elif page == "Chat Assistant":
+        run_chat_assistant(conn)
+    elif page == "Capability Statement":
+        run_capability_statement(conn)
     elif page == "Contacts":
         run_contacts(conn)
     elif page == "Deals":
@@ -1832,7 +2100,6 @@ def router(page: str, conn: sqlite3.Connection) -> None:
 
 
 def main() -> None:
-    init_session()
     conn = get_db()
     st.title(APP_TITLE)
     st.caption(BUILD_LABEL)
