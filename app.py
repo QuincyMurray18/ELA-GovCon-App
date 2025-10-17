@@ -15850,109 +15850,35 @@ def _p5_placeholder_scan(proposal_id: int) -> list:
 
 def render_proposal_wizard(notice_id: int):
     import streamlit as st
-    _p5_schema()
-    st.session_state.setdefault("wizard_step", 1)
-    st.session_state.setdefault("current_proposal_id", None)
-    owner=st.session_state.get("user_id") or "user"
-    if not st.session_state["current_proposal_id"]:
-        pid=_p5_create_or_get_proposal(int(notice_id), owner)
-        _p5_seed_sections_from_rfp(int(notice_id), pid)
-        st.session_state["current_proposal_id"]=pid
-    pid=int(st.session_state["current_proposal_id"])
-    st.markdown("#### Proposal Wizard")
-    steps=["1. Outline", "2. Sections", "3. Uploads", "4. Package"]
-    scols=st.columns(4)
-    for i, c in enumerate(scols, start=1):
-        with c: st.button(
-            steps[i-1], disabled=(st.session_state["wizard_step"] == i), key=f"p5tab{i}")
-    step=st.session_state["wizard_step"]
-    if step == 1:
-        st.subheader("Step 1 · Outline from Analyzer")
-        data=_p5_latest_rfp_json(int(notice_id)) or {}
-        st.write("Factors and requirements")
-        for it in (data.get("lm_requirements") or [])[:50]:
-            st.markdown(f"- {it.get('text', '')}".strip()
-        if st.button("Next → Sections"):
-            st.session_state["wizard_step"]=2
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
-    if step == 2:
-        st.subheader("Step 2 · Section stubs")
-        conn=get_db(); cur=conn.cursor()
-        rows=cur.execute(
-            "SELECT id, key, title, page_limit, font_name, font_size, writing_plan FROM proposal_sections WHERE proposal_id=? ORDER BY id", (pid,)).fetchall()
-        for sid, key, title, pl, fname, fsize, plan in rows:
-            with st.container(border=True):
-                new_title=st.text_input("Title", value=title, key=f"t_{sid}")
-                new_pl=st.number_input("Page limit", value=int(
-                    pl) if pl is not None else 0, min_value=0, max_value=500, key=f"pl_{sid}")
-                fname=st.text_input(
-                    "Font name", value=fname or "", key=f"fn_{sid}")
-                fsize=st.number_input("Font size", value=int(
-                    fsize) if fsize else 0, min_value=0, max_value=72, key=f"fs_{sid}")
-                plan=st.text_area(
-                    "Writing plan", value=plan or "", key=f"wp_{sid}")
-                if st.button("Save section", key=f"sv_{sid}"):
-                    cur.execute("UPDATE proposal_sections SET title=?, page_limit=?, font_name=?, font_size=?, writing_plan=? WHERE id=?",
-                                (new_title, None, None, None, None, sid))
-                    conn.commit()
-                    st.success("Saved")
-        if st.button("Next → Uploads"):
-            st.session_state["wizard_step"]=3
-            (st.experimental_rerun() if hasattr(
-                st, "experimental_rerun") else st.rerun())
-    if step == 3:
-        st.subheader("Step 3 · Supporting files")
-        up=st.file_uploader(
-            "Upload resumes, past performance, etc.", accept_multiple_files=True)
-        if up:
-            for f in up:
-                b=f.read()
-                meta=store_uploaded_file(b, f.name, "proposal", pid)
-                conn=get_db(); cur=conn.cursor()
-                cur.execute("INSERT INTO proposal_files(proposal_id, file_name, file_id, uploaded_at) VALUES(?,?,?,?)",
-                            (pid, f.name, meta.get("checksum"), _dtp5.datetime.utcnow().isoformat()))
-                conn.commit()
-        conn=get_db(); cur=conn.cursor()
-        rows=cur.execute(
-            "SELECT id, file_name, uploaded_at FROM proposal_files WHERE proposal_id=? ORDER BY id DESC", (pid,)).fetchall()
-        for fid, fname, ts in rows:
-            st.caption(f"{fname} * {ts}")
-        if st.button("Next → Package"):
-            st.session_state["wizard_step"]=4
-            (st.experimental_rerun() if hasattr(
-                st, "experimental_rerun") else st.rerun())
-    if step == 4:
-        st.subheader("Step 4 · Package preview")
-        conn=get_db(); cur=conn.cursor()
-        cstate=cur.execute(
-            "SELECT compliance_state FROM notices WHERE id=?", (int(notice_id),)).fetchone()
-        cstate=cstate[0] if cstate else "Unreviewed"
-        bad=_p5_placeholder_scan(pid)
-        ok=(cstate == "Green" and not bad)
-        st.caption(f"Compliance: {cstate}")
-        if bad:
-            st.warning(f"Placeholder issues in {len(bad)} sections")
-        st.button("Export (disabled until compliance is Green)", disabled=not ok)
-        if ok and st.button("Export now"):
-            snapshot=_jsonp5.dumps({"placeholders": bad})
-            cur.execute("INSERT INTO exports(proposal_id, type, file_id, created_at, checklist_snapshot) VALUES(?,?,?,?,?)",
-                        (pid, "zip", f"export-{pid}", _dtp5.datetime.utcnow().isoformat(), snapshot))
-            st.success("Export queued")
-    cols=st.columns(3)
-    with cols[0]:
-        if st.button("← Back") and st.session_state["wizard_step"] > 1:
-            st.session_state["wizard_step"] -= 1
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
-    with cols[2]:
-        if st.button("Close wizard"):
-            st.session_state["current_proposal_id"]=None
-            st.session_state["wizard_step"]=1
-            (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
-try:
-    _orig_rfp_panel_ui_p5=_rfp_panel_ui
-except Exception:
-    _orig_rfp_panel_ui_p5=None
-
+    try:
+        if _rfp6_flag():
+            data = latest_rfp_impact(int(notice_id))
+            if data and isinstance(data, dict) and data.get("impact"):
+                imp = data["impact"]
+                with st.expander("Impact TODOs", expanded=True):
+                    todo = []
+                    for label in ["sections","forms","clins","rtm"]:
+                        b = imp.get(label, {}) or {}
+                        if any(b.get(k) for k in ["added","removed","changed"]):
+                            todo.append(f"{label} changed")
+                    d = imp.get("dates", {}) or {}
+                    if d.get("submission_changed"):
+                        todo.append("due date changed")
+                    if d.get("milestones"):
+                        todo.append("milestones updated")
+                    if todo:
+                        for t in todo[:10]:
+                            st.caption(str(t))
+                    else:
+                        st.caption("No pending impact items.")
+    except Exception:
+        pass
+    # Always defer to original wizard if available
+    if _orig_render_proposal_wizard_p6:
+        try:
+            return _orig_render_proposal_wizard_p6(int(notice_id))
+        except Exception:
+            return None
 def _rfp_panel_ui(notice_id: int):
     import streamlit as st
     if not feature_flags().get("rfp_analyzer_panel", False):
@@ -16112,49 +16038,66 @@ except Exception:
 
 def _rfp_panel_ui_p2_with_impact(notice_id: int):
     import streamlit as st
+    # Call original if present
     if _orig_rfp_panel_ui_p2_ref:
         try:
             _orig_rfp_panel_ui_p2_ref(notice_id)
         except Exception as ex:
-            st.warning(f"Analyzer base failed: {ex}")
-    if not _rfp6_flag():
-        return
-    with st.sidebar:
-        st.markdown("### Impact")
-        data = latest_rfp_impact(int(notice_id))
-        if not data:
-            st.caption("No impact cached yet.")
-            if st.button("Compute impact"):
-                res = compute_and_store_rfp_impact(int(notice_id))
-                if res.get("ok"):
-                    st.success("Impact computed.")
-                else:
-                    st.warning(str(res))
+            try: st.warning(f"Analyzer base failed: {ex}")
+            except Exception: pass
+    # Feature flag guard
+    try:
+        if not _rfp6_flag():
             return
-        st.json(data.get("impact") or {})
+    except Exception:
+        return
+    # Minimal, robust sidebar panel
+    try:
+        with st.sidebar:
+            st.markdown("### Impact")
+            data = latest_rfp_impact(int(notice_id))
+            if not data or not isinstance(data, dict):
+                st.caption("No impact cached yet.")
+                if st.button("Compute impact"):
+                    res = compute_and_store_rfp_impact(int(notice_id))
+                    if res and isinstance(res, dict) and res.get("ok"):
+                        st.success("Impact computed.")
+                    else:
+                        st.warning(str(res))
+                return
+            st.json(data.get("impact") or {})
+    except Exception:
+        pass
 def render_proposal_wizard(notice_id: int):
     import streamlit as st
-    if _rfp6_flag():
-        data = latest_rfp_impact(int(notice_id)
-        if data and data.get("impact"):
-            imp = data["impact"]
-            with st.expander("Impact TODOs", expanded=True):
-                todo = []
-                for label in ["sections","forms","clins","rtm"]:
-                    b = imp.get(label,{})
-                    if any(b.get(k) for k in ["added","removed","changed"]):
-                        todo.append(f"{label}: " + ", ".join([f"{k}:{', '.join(map(str, b.get(k, [])[:5]))}" for k in ["added","removed","changed"] if b.get(k)]))
-                if imp.get("dates",{}).get("submission_changed"):
-                    todo.append("dates: submission due changed")
-                ms = imp.get("dates",{}).get("milestones",{})
-                if any(ms.get(k) for k in ["added","removed","changed"]):
-                    todo.append("dates: milestones updated")
-                if todo:
-                    for t in todo: st.caption(t)
-                else:
-                    st.caption("No pending impact items.")
+    try:
+        if _rfp6_flag():
+            data = latest_rfp_impact(int(notice_id))
+            if data and isinstance(data, dict) and data.get("impact"):
+                imp = data["impact"]
+                with st.expander("Impact TODOs", expanded=True):
+                    todo = []
+                    for label in ["sections","forms","clins","rtm"]:
+                        b = (imp.get(label) or {})
+                        if any(b.get(k) for k in ["added","removed","changed"]):
+                            todo.append(f"{label} changed")
+                    d = (imp.get("dates") or {})
+                    if d.get("submission_changed"):
+                        todo.append("due date changed")
+                    if d.get("milestones"):
+                        todo.append("milestones updated")
+                    if todo:
+                        for t in todo[:10]:
+                            st.caption(str(t))
+                    else:
+                        st.caption("No pending impact items.")
+    except Exception:
+        pass
     if _orig_render_proposal_wizard_p6:
-        return _orig_render_proposal_wizard_p6(int(notice_id)
+        try:
+            return _orig_render_proposal_wizard_p6(int(notice_id))
+        except Exception:
+            return None
 # === RFP PHASE 6 END ===
 
 
