@@ -4425,9 +4425,7 @@ def _rfp_push_to_builder_phase_r(notice_id:int, section_map: Dict[str,str], opts
 def render_rfp_analyzer_phase_r():
     _phase_r_init_db()
     st.sidebar.subheader("Phase R Analyzer")
-    enable = st.sidebar.checkbox("Enable Phase R UI", value=False, key="rfp_phase_r")
-    if not enable:
-        return
+    # Phase R always enabled
     # Pick notice id from rfp_json if possible
     notice_id = None
     with closing(_get_db_conn_phase_r()) as conn:
@@ -4573,6 +4571,7 @@ except Exception:
 def render_rfp_analyzer_phase_r_v2():
     _phase_r_init_db()
     st.sidebar.subheader("Phase R Analyzer")
+    st.info('Phase R UI active')
     # Phase R UI is always enabled
 
 
@@ -4741,3 +4740,20 @@ def run_rfp_analyzer(*args, **kwargs):
         except Exception:
             return None
 # === End override ===
+
+
+# === Phase R authoritative RFP Analyzer entrypoint (final) ===
+def run_rfp_analyzer(*args, **kwargs):
+    try:
+        import streamlit as st  # ensure st in scope
+        st.markdown("### RFP Analyzer — Phase R")
+    except Exception:
+        pass
+    try:
+        return render_rfp_analyzer_phase_r_v2()  # type: ignore[name-defined]
+    except Exception:
+        try:
+            return render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
+        except Exception:
+            return None
+# === End Phase R authoritative entrypoint ===
