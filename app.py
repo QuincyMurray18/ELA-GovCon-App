@@ -987,7 +987,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     for it in l_items:
                         cur.execute(
                             "INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?, ?, ?, ?);",
-                            (rfp_id, it, 1, 'Open'),
+                            (rfp_id, it, (1 if re.search(r"\b(shall|must|required|mandatory|no later than|shall not|will)\b", it, re.IGNORECASE) else 0), \'Open\'),
                         )
                     for r in clins:
                         cur.execute(
@@ -1012,7 +1012,67 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
 
 # ---------- L & M Checklist ----------
+
+# ---- Compliance (Phase K) helpers ----
+def _compliance_progress(df_items: pd.DataFrame) -> int:
+    if df_items is None or df_items.empty:
+        return 0
+    done = int((df_items["status"]=="Complete").sum())
+    total = int(len(df_items))
+    return int(round(done / max(1, total) * 100))
+
+def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
+    q = """
+        SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
+               COALESCE(m.owner,'') AS owner,
+               COALESCE(m.ref_page,'') AS ref_page,
+               COALESCE(m.ref_para,'') AS ref_para,
+               COALESCE(m.evidence,'') AS evidence,
+               COALESCE(m.risk,'Green') AS risk,
+               COALESCE(m.notes,'') AS notes
+        FROM lm_items i
+        LEFT JOIN lm_meta m ON m.lm_id = i.id
+        WHERE i.rfp_id = ?
+        ORDER BY i.id ASC;
+    """
+    return pd.read_sql_query(q, conn, params=(rfp_id,))
+
+def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    sections = ctx.get("sections", pd.DataFrame())
+    text_all = " ".join((sections["content"].tolist() if isinstance(sections, pd.DataFrame) and not sections.empty else []))
+    tl = text_all.lower()
+
+    m = re.search(r'(?:page\s+limit|not\s+exceed)\s+(?:of\s+)?(\d{1,3})\s+pages?', tl)
+    if m: rows.append({"Rule":"Page Limit","Detail":f"Limit {m.group(1)} pages detected","Severity":"Amber"})
+    if re.search(r'(font|typeface).{0,20}(size|pt).{0,5}(10|11)', tl):
+        rows.append({"Rule":"Font size","Detail":"Minimum font size 10/11pt likely required","Severity":"Amber"})
+    if re.search(r'margin[s]?\s+(?:of|at\s+least)\s+\d', tl):
+        rows.append({"Rule":"Margins","Detail":"Specific margin requirements detected","Severity":"Amber"})
+    if re.search(r'volume[s]?\s+(i{1,3}|iv|v|technical|price)', tl):
+        rows.append({"Rule":"Volumes","Detail":"Multiple volumes required","Severity":"Amber"})
+    if re.search(r'(sam\.gov|piee|wawf|email submission|portal)', tl):
+        rows.append({"Rule":"Submission portal","Detail":"Specific portal/email submission detected","Severity":"Amber"})
+
+    dates = ctx.get("dates", pd.DataFrame())
+    if isinstance(dates, pd.DataFrame) and not dates.empty:
+        due = dates[dates["label"].str.contains("due", case=False, na=False)]
+        if not due.empty:
+            dt = pd.to_datetime(due.iloc[0]["date_text"], errors="coerce")
+            if pd.notnull(dt):
+                days = (pd.Timestamp(dt) - pd.Timestamp.utcnow()).days
+                if days <= 3: rows.append({"Rule":"Timeline","Detail":f"Proposals due in {days} day(s)","Severity":"Red"})
+                elif days <= 7: rows.append({"Rule":"Timeline","Detail":f"Proposals due in {days} days","Severity":"Amber"})
+
+    if isinstance(df_items, pd.DataFrame) and not df_items.empty:
+        open_musts = df_items[(df_items["is_must"]==1) & (df_items["status"]!="Complete")]
+        if not open_musts.empty:
+            rows.append({"Rule":"Open MUST items","Detail":f"{len(open_musts)} mandatory items still open","Severity":"Red"})
+
+    return pd.DataFrame(rows)
+
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
+
     st.header("L and M Checklist")
     rfp_id = st.session_state.get('current_rfp_id')
     if not rfp_id:
@@ -1024,7 +1084,8 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
             return
-        opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(), format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
+        opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(),
+                           format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
         st.session_state['current_rfp_id'] = rfp_id
 
@@ -1034,12 +1095,14 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     except Exception as e:
         st.error(f"Failed to load items: {e}")
         return
-
     if df_items.empty:
         st.info("No L/M items found for this RFP.")
         return
 
-    c1, c2 = st.columns([2,2])
+    pct = _compliance_progress(df_items)
+    st.progress(pct/100.0, text=f"{pct}% complete")
+
+    c1, c2, c3 = st.columns([2,2,2])
     with c1:
         if st.button("Mark all Complete"):
             try:
@@ -1058,10 +1121,21 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
                 st.success("All items reset")
             except Exception as e:
                 st.error(f"Update failed: {e}")
+    with c3:
+        if st.button("Mark all MUST to Open"):
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE lm_items SET status='Open' WHERE rfp_id=? AND is_must=1;", (rfp_id,))
+                    conn.commit()
+                st.success("All MUST items set to Open")
+            except Exception as e:
+                st.error(f"Update failed: {e}")
 
+    st.subheader("Checklist")
     for _, row in df_items.iterrows():
         key = f"lm_{row['id']}"
-        checked = st.checkbox(row['item_text'], value=(row['status']=='Complete'), key=key)
+        label = ("[MUST] " if row['is_must']==1 else "") + row['item_text']
+        checked = st.checkbox(label, value=(row['status']=='Complete'), key=key)
         new_status = 'Complete' if checked else 'Open'
         if new_status != row['status']:
             try:
@@ -1071,102 +1145,71 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             except Exception as e:
                 st.error(f"Failed to update item {row['id']}: {e}")
 
+    st.divider()
 
-# ---------- Proposal Builder (Phase C) ----------
-def _load_rfp_context(conn: sqlite3.Connection, rfp_id: Optional[int]):
-    ctx = {"rfp": None, "sections": pd.DataFrame(), "items": pd.DataFrame(), "clins": pd.DataFrame(), "dates": pd.DataFrame(), "pocs": pd.DataFrame()}
-    try:
-        if rfp_id:
-            ctx["rfp"] = pd.read_sql_query("SELECT * FROM rfps WHERE id=?;", conn, params=(rfp_id,))
-            ctx["sections"] = pd.read_sql_query("SELECT section, content FROM rfp_sections WHERE rfp_id=?;", conn, params=(rfp_id,))
-            ctx["items"] = pd.read_sql_query("SELECT item_text, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
-            ctx["clins"] = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
-            ctx["dates"] = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=?;", conn, params=(rfp_id,))
-            ctx["pocs"] = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(rfp_id,))
-    except Exception as e:
-        st.error(f"Failed to load RFP context {e}")
-    return ctx
+    st.subheader("Compliance Matrix")
+    df_mx = _load_compliance_matrix(conn, int(rfp_id))
+    if df_mx.empty:
+        st.info("No items to show.")
+        return
 
+    view = df_mx.rename(columns={
+        "item_text":"Requirement","is_must":"Must?","status":"Status",
+        "owner":"Owner","ref_page":"Page","ref_para":"Para",
+        "evidence":"Evidence/Link","risk":"Risk","notes":"Notes"
+    })
+    st.dataframe(view[["Requirement","Must?","Status","Owner","Page","Para","Evidence/Link","Risk","Notes"]],
+                 use_container_width=True, hide_index=True)
 
-def _estimate_pages(word_count: int, spacing: str) -> float:
-    if spacing == "Single":
-        wpp = 500
-    elif spacing == "1.15":
-        wpp = 430
+    st.markdown("**Edit selected requirement**")
+    pick = st.selectbox("Requirement", options=df_mx["lm_id"].tolist(),
+                        format_func=lambda lid: f"#{lid} — {df_mx.loc[df_mx['lm_id']==lid,'item_text'].values[0][:80]}")
+
+    rec = df_mx[df_mx["lm_id"]==pick].iloc[0].to_dict()
+    e1, e2, e3, e4 = st.columns([2,1,1,1])
+    with e1:
+        owner = st.text_input("Owner", value=rec.get("owner",""), key=f"mx_owner_{pick}")
+        notes = st.text_area("Notes", value=rec.get("notes",""), key=f"mx_notes_{pick}", height=90)
+    with e2:
+        page = st.text_input("Page", value=rec.get("ref_page",""), key=f"mx_page_{pick}")
+        para = st.text_input("Paragraph", value=rec.get("ref_para",""), key=f"mx_para_{pick}")
+    with e3:
+        risk = st.selectbox("Risk", ["Green","Yellow","Red"],
+                            index=["Green","Yellow","Red"].index(rec.get("risk","Green")), key=f"mx_risk_{pick}")
+    with e4:
+        evidence = st.text_input("Evidence/Link", value=rec.get("evidence",""), key=f"mx_evid_{pick}")
+
+    csave, cexp = st.columns([2,2])
+    with csave:
+        if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes)
+                        VALUES(?,?,?,?,?,?,?)
+                        ON CONFLICT(lm_id) DO UPDATE SET
+                            owner=excluded.owner, ref_page=excluded.ref_page, ref_para=excluded.ref_para,
+                            evidence=excluded.evidence, risk=excluded.risk, notes=excluded.notes;
+                    """, (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip()))
+                    conn.commit()
+                st.success("Saved"); st.rerun()
+            except Exception as e2:
+                st.error(f"Save failed: {e2}")
+    with cexp:
+        if st.button("Export Matrix CSV", key="mx_export"):
+            out = view.copy()
+            path = str(Path(DATA_DIR) / f"compliance_matrix_rfp_{int(rfp_id)}.csv")
+            out.to_csv(path, index=False)
+            st.success("Exported"); st.markdown(f"[Download CSV]({path})")
+
+    st.subheader("Red-Flag Finder")
+    ctx = _load_rfp_context(conn, int(rfp_id))
+    flags = _compliance_flags(ctx, df_items)
+    if flags is None or flags.empty:
+        st.write("No obvious flags detected.")
     else:
-        wpp = 300
-    return round(max(1, word_count) / wpp, 2)
-
-
-def _export_docx(output_path: str, doc_title: str, sections: List[Dict[str, str]],
-                 clins: pd.DataFrame, checklist: pd.DataFrame, metadata: Dict[str, str],
-                 font_name: str = "Times New Roman", font_size_pt: int = 11, spacing: str = "1.15") -> Optional[str]:
-    try:
-        from docx import Document  # type: ignore
-        from docx.shared import Pt, Inches  # type: ignore
-        from docx.enum.text import WD_LINE_SPACING  # type: ignore
-    except Exception:
-        st.error("python-docx is required. pip install python-docx")
-        return None
-
-    doc = Document()
-    secs = doc.sections
-    for s in secs:
-        s.top_margin = Inches(1)
-        s.bottom_margin = Inches(1)
-        s.left_margin = Inches(1)
-        s.right_margin = Inches(1)
-
-    style = doc.styles["Normal"]
-    style.font.name = font_name
-    style.font.size = Pt(font_size_pt)
-
-    doc.add_heading(doc_title or "Proposal", level=1)
-    if metadata:
-        p = doc.add_paragraph()
-        for k, v in metadata.items():
-            if v:
-                p.add_run(f"{k}: {v}  ")
-
-    for sec in sections:
-        doc.add_heading(sec.get("title") or "Section", level=2)
-        body = sec.get("body") or ""
-        for para in body.split("\n\n"):
-            if not para.strip():
-                continue
-            p = doc.add_paragraph(para.strip())
-            if spacing == "Single":
-                p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-            elif spacing == "1.15":
-                p.paragraph_format.line_spacing = 1.15
-            else:
-                p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
-
-    if clins is not None and not clins.empty:
-        doc.add_heading("CLIN Table", level=2)
-        cols = ["clin", "description", "qty", "unit", "unit_price", "extended_price"]
-        t = doc.add_table(rows=1, cols=len(cols))
-        hdr = t.rows[0].cells
-        for i, c in enumerate(cols):
-            hdr[i].text = c.upper()
-        for _, r in clins.iterrows():
-            row = t.add_row().cells
-            for i, c in enumerate(cols):
-                row[i].text = str(r.get(c, "") or "")
-
-    if checklist is not None and not checklist.empty:
-        doc.add_heading("Compliance Checklist", level=2)
-        cols = ["item_text", "status"]
-        t = doc.add_table(rows=1, cols=len(cols))
-        for i, c in enumerate(["Requirement", "Status"]):
-            t.rows[0].cells[i].text = c
-        for _, r in checklist.iterrows():
-            row = t.add_row().cells
-            row[0].text = str(r.get("item_text", ""))
-            row[1].text = str(r.get("status", ""))
-
-    doc.save(output_path)
-    return output_path
+        st.dataframe(flags, use_container_width=True, hide_index=True)
+    
 
 
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
@@ -3124,3 +3167,16 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+        # Phase K (Compliance)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lm_meta(
+                lm_id INTEGER PRIMARY KEY REFERENCES lm_items(id) ON DELETE CASCADE,
+                owner TEXT,
+                ref_page TEXT,
+                ref_para TEXT,
+                evidence TEXT,
+                risk TEXT DEFAULT 'Green',
+                notes TEXT
+            );
+        """)
