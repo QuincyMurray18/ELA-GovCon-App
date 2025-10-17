@@ -1720,6 +1720,7 @@ def _estimate_pages(total_words: int, spacing: str) -> float:
     return round(pages if pages >= 1 else 1.0, 2)
 
 
+
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
 
@@ -1728,9 +1729,10 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     with colA:
         doc_title = st.text_input("Document Title", value=st.session_state.get("pb_title", "Proposal"))
     with colB:
-        spacing = st.selectbox("Line Spacing", ["Single","1.15","Double"], index={"Single":0,"1.15":1,"Double":2}.get(st.session_state.get("pb_spacing","1.15"),1))
+        spacing = st.selectbox("Line Spacing", ["Single","1.15","Double"],
+                               index={"Single":0,"1.15":1,"Double":2}.get(str(st.session_state.get("pb_spacing","1.15")),1))
 
-    # Build a base content map
+    # Base sections
     content_map = {
         "Executive Summary": "",
         "Technical Approach": "",
@@ -1739,59 +1741,65 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         "Pricing Notes": "",
     }
 
-    # Import from RFP Analyzer payloads (draft first)
-    if (st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')) and st.button('Import from RFP Analyzer', key='pb_import'):
-        pf = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
-        if pf:
-            # title/spacing/meta
-            if pf.get("title"):
-                doc_title = pf["title"]
-                st.session_state["pb_title"] = doc_title
-            if pf.get("spacing"):
-                spacing = pf["spacing"]
-                st.session_state["pb_spacing"] = spacing
-            st.session_state["pb_metadata"] = pf.get("metadata") or {}
-            # sections -> content_map
-            for s in (pf.get("sections") or []):
-                t = str(s.get("title","Section")).strip() or "Section"
-                b = str(s.get("body",""))
-                content_map[t] = b
-            st.success("Imported from RFP Analyzer.")
+    # Import payloads (prefer draft)
+    import_payload = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
+    if import_payload and st.button('Import from RFP Analyzer', key='pb_import'):
+        pf = import_payload
+        if pf.get("title"):
+            doc_title = pf["title"]; st.session_state["pb_title"] = doc_title
+        if pf.get("spacing"):
+            spacing = pf["spacing"]; st.session_state["pb_spacing"] = spacing
+        st.session_state["pb_metadata"] = pf.get("metadata") or {}
+        for s in (pf.get("sections") or []):
+            t = str(s.get("title","Section")).strip() or "Section"
+            b = str(s.get("body",""))
+            content_map[t] = b
+        st.success("Imported from RFP Analyzer.")
 
-    # If we had a previous import, merge that in
+    # Merge any previously staged sections
     if st.session_state.get("pb_sections"):
         for s in st.session_state["pb_sections"]:
             t = str(s.get("title","Section")).strip() or "Section"
             b = str(s.get("body",""))
             content_map[t] = b
 
-    # Section selection + editors
-    st.subheader("Sections")
-    keys = list(content_map.keys())
-    # preselect the ones with content
-    preselect = [k for k in keys if content_map.get(k)]
-    selected = st.multiselect("Choose sections to include", keys, default=preselect or keys[:3])
+    left, right = st.columns([3,1])
 
-    # Editors for selected sections
-    edited_map = {}
-    for k in selected:
-        with st.expander(k, expanded=True):
-            txt = st.text_area(f"{k} (body)", value=content_map.get(k, ""), height=240, key=f"sec_{k}")
-            edited_map[k] = txt
+    with left:
+        st.subheader("Sections")
+        keys = list(content_map.keys())
+        preselect = [k for k in keys if content_map.get(k)]
+        selected = st.multiselect("Choose sections to include", keys, default=preselect or keys[:3])
 
-    # Stats + export
-    total_words = sum(len((edited_map.get(k) or "").split()) for k in selected)
-    est_pages = _estimate_pages(total_words, spacing)
+        # Editors
+        edited_map = {}
+        for k in selected:
+            with st.expander(k, expanded=True):
+                txt = st.text_area(f"{k} (body)", value=content_map.get(k, ""), height=240, key=f"sec_{k}")
+                edited_map[k] = txt
 
-    st.caption(f"Selected sections: {len(selected)} | Words: {total_words} | Est. pages: {est_pages}")
+    with right:
+        st.subheader("Metadata")
+        meta = st.session_state.get("pb_metadata") or {}
+        if meta:
+            st.dataframe(pd.DataFrame([meta]).T.rename(columns={0:"Value"}), use_container_width=True)
+        else:
+            st.caption("No metadata yet. Import from RFP Analyzer to populate.")
 
-    meta = st.session_state.get("pb_metadata") or {}
-    if st.button("Export to DOCX", type="primary"):
-        # convert edited_map to list of sections for export shim
-        sections_list = [{"title": k, "body": edited_map.get(k,"")} for k in selected]
-        out_path = _export_docx(None, doc_title, sections_list, None, meta, spacing=spacing)
-        st.success("Document created.")
-        st.download_button("Download", data=open(out_path, "rb").read(), file_name=Path(out_path).name, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        total_words = sum(len((edited_map.get(k) or "").split()) for k in selected) if 'edited_map' in locals() else 0
+        est_pages = _estimate_pages(total_words, spacing)
+        st.metric("Word count", total_words)
+        st.metric("Est. pages", est_pages)
+
+        if st.button("Export to DOCX", type="primary"):
+            sections_list = [{"title": k, "body": edited_map.get(k,"")} for k in selected]
+            out_path = _export_docx(None, doc_title, sections_list, None, meta, spacing=spacing)
+            st.success("Document created.")
+            st.download_button("Download",
+                               data=open(out_path, "rb").read(),
+                               file_name=Path(out_path).name,
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
 
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
