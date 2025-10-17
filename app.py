@@ -4252,6 +4252,32 @@ def _rfp_parse_attachments_phase_r(notice_id:int) -> List[Dict[str, Any]]:
 _REQ_ANCHOR = re.compile(r"\\b(MUST|SHALL|WILL)\\b.*", re.I)
 _SEC_HINT = re.compile(r"\\bSECTION\\s+([A-Z])\\b|\\b(L|M|C|K)\\b\\s*[-:]?", re.I)
 
+def _rfp_extract_from_text_phase_r(text: str) -> list[dict]:
+    """Extract MUST/SHALL lines from pasted text. Returns requirement dicts compatible with upsert."""
+    reqs = []
+    if not text:
+        return reqs
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    idx = 0
+    for ln in lines:
+        if _REQ_ANCHOR.search(ln):
+            idx += 1
+            m = _SEC_HINT.search(ln)
+            sec_hint = None
+            if m:
+                sec_hint = (m.group(1) or m.group(2) or "").upper()
+            reqs.append({
+                "ref": f"R{idx:04d}",
+                "text": ln,
+                "section_hint": sec_hint or "",
+                "source_file": "(pasted)",
+                "page_from": None,
+                "page_to": None,
+                "priority": 1 if "MUST" in ln.upper() or "SHALL" in ln.upper() else 0,
+            })
+    return reqs
+
+
 def _rfp_extract_requirements_phase_r(notice_id:int) -> List[Dict[str,Any]]:
     """Lightweight text-based requirement extraction from rfp_json description and notes.
     This avoids heavy PDF dependencies for now.
@@ -4542,3 +4568,164 @@ except Exception:
             pass
         return None
 # ----- End safety wrapper -----
+
+
+def render_rfp_analyzer_phase_r_v2():
+    _phase_r_init_db()
+    st.sidebar.subheader("Phase R Analyzer")
+    enable = st.sidebar.checkbox("Enable Phase R UI", value=True, key="rfp_phase_r")
+    if not enable:
+        return
+
+    # Select or enter Notice ID
+    with closing(_get_db_conn_phase_r()) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT notice_id FROM rfp_json ORDER BY notice_id DESC LIMIT 200")
+            rows = [r[0] for r in cur.fetchall()]
+        except Exception:
+            rows = []
+
+    notice_id = None
+    if rows:
+        notice_id = st.sidebar.selectbox("Notice", rows, format_func=lambda x: f"Notice {x}")
+    else:
+        notice_str = st.sidebar.text_input("Notice ID", value=st.session_state.get("rfp_phase_r_notice",""))
+        st.session_state["rfp_phase_r_notice"] = notice_str
+        if notice_str.strip().isdigit():
+            notice_id = int(notice_str.strip())
+
+    st.header("RFP Analyzer — Phase R")
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Keywords
+    kw_default = st.session_state.get("rfp_phase_r_keywords", "price schedule, past performance, key personnel")
+    keywords = col2.text_input("Keywords", value=kw_default, key="rfp_phase_r_keywords")
+
+    # Optional pasted text input for environments without rfp_json
+    with st.expander("Pasted RFP text (optional)", expanded=not bool(rows)):
+        pasted = st.text_area("Paste any solicitation text here for quick parsing",
+                              value=st.session_state.get("rfp_phase_r_pasted",""),
+                              height=160, key="rfp_phase_r_pasted")
+
+    # Handlers
+    if col1.button("Reparse"):
+        if notice_id is not None:
+            atts = _rfp_parse_attachments_phase_r(int(notice_id))
+            _rfp_upsert_artifacts_phase_r(int(notice_id), atts)
+            reqs = _rfp_extract_requirements_phase_r(int(notice_id))
+            _rfp_upsert_requirements_phase_r(int(notice_id), reqs)
+            st.success(f"Parsed {len(atts)} attachments and {len(reqs)} requirements for Notice {notice_id}.")
+        elif pasted.strip():
+            # Derive a deterministic pseudo notice id from paste content
+            h = int(hashlib.sha256(pasted.encode('utf-8')).hexdigest(), 16) % 899999 + 100001
+            notice_id = h
+            reqs = _rfp_extract_from_text_phase_r(pasted)
+            _rfp_upsert_artifacts_phase_r(int(notice_id), [])
+            _rfp_upsert_requirements_phase_r(int(notice_id), reqs)
+            st.success(f"Parsed {len(reqs)} requirements from pasted text. Assigned Notice {notice_id}.")
+            st.experimental_rerun()
+        else:
+            st.warning("Provide a Notice ID or paste text to parse.")
+
+    if col3.button("Score"):
+        if notice_id is None:
+            st.warning("Set a Notice ID first or parse pasted text.")
+        else:
+            with closing(_get_db_conn_phase_r()) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT ref, text, priority FROM rfp_requirements WHERE notice_id=? ORDER BY id", (int(notice_id),))
+                reqs = [{"ref": r[0], "text": r[1], "priority": r[2]} for r in cur.fetchall()]
+            glob, per = _rfp_score_requirements_phase_r(reqs, [k.strip() for k in keywords.split(",") if k.strip()])
+            _rfp_upsert_scores_phase_r(int(notice_id), glob, per)
+            st.success(f"Compliance score {glob:.1f} for Notice {notice_id}.")
+
+    if col4.button("Prechecks"):
+        if notice_id is None:
+            st.warning("Set a Notice ID first or parse pasted text.")
+        else:
+            issues = _rfp_run_prechecks_phase_r(int(notice_id))
+            if issues:
+                st.warning("\\n".join(f"• {x}" for x in issues))
+            else:
+                st.success("No precheck issues.")
+
+    tabs = st.tabs(["Overview", "Requirements", "Attachments", "Compliance"])
+
+    with tabs[0]:
+        st.subheader("Overview")
+        if notice_id is None:
+            st.info("Enter a Notice ID or paste text then click Reparse.")
+        else:
+            with closing(_get_db_conn_phase_r()) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(1) FROM rfp_artifacts WHERE notice_id=?", (int(notice_id),))
+                n_art = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(1) FROM rfp_requirements WHERE notice_id=?", (int(notice_id),))
+                n_req = cur.fetchone()[0]
+                cur.execute("SELECT compliance_score FROM rfp_scores WHERE notice_id=? AND section_key='global' LIMIT 1", (int(notice_id),))
+                row = cur.fetchone()
+                score = row[0] if row else None
+            st.metric("Attachments", n_art)
+            st.metric("Requirements", n_req)
+            st.metric("Compliance score", 0.0 if score is None else float(score))
+            if st.button("Push to Proposal Builder"):
+                pid = _rfp_push_to_builder_phase_r(int(notice_id), section_map={}, opts={})
+                st.success(f"Pushed to Proposal Builder. Proposal ID {pid}")
+
+    with tabs[1]:
+        st.subheader("Requirements")
+        if notice_id is None:
+            st.info("No Notice selected.")
+        else:
+            with closing(_get_db_conn_phase_r()) as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT ref, COALESCE(section_hint,''), COALESCE(source_file,''), COALESCE(page_from,''), COALESCE(page_to,''), COALESCE(priority,0), COALESCE(text,'')
+                    FROM rfp_requirements WHERE notice_id=? ORDER BY id
+                """, (int(notice_id),))
+                rows = cur.fetchall()
+            if rows:
+                import pandas as pd
+                df = pd.DataFrame(rows, columns=["Ref","Section","Source","PageFrom","PageTo","Priority","Text"])
+                st.dataframe(df, use_container_width=True, height=360)
+            else:
+                st.info("No requirements yet. Click Reparse.")
+
+    with tabs[2]:
+        st.subheader("Attachments")
+        if notice_id is None:
+            st.info("No Notice selected.")
+        else:
+            with closing(_get_db_conn_phase_r()) as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT filename, COALESCE(kind,''), COALESCE(pages,''), COALESCE(sha256,''), COALESCE(extracted_at,'')
+                    FROM rfp_artifacts WHERE notice_id=? ORDER BY id
+                """, (int(notice_id),))
+                rows = cur.fetchall()
+            if rows:
+                import pandas as pd
+                df = pd.DataFrame(rows, columns=["Filename","Kind","Pages","SHA256","ExtractedAt"])
+                st.dataframe(df, use_container_width=True, height=260)
+            else:
+                st.info("No attachments recorded.")
+
+    with tabs[3]:
+        st.subheader("Compliance")
+        if notice_id is None:
+            st.info("No Notice selected.")
+        else:
+            with closing(_get_db_conn_phase_r()) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT compliance_score, keyword_score, findings_json FROM rfp_scores WHERE notice_id=? AND section_key='global' LIMIT 1", (int(notice_id),))
+                row = cur.fetchone()
+            if row:
+                st.metric("Global compliance score", float(row[0]))
+                st.caption(row[2] or "")
+            else:
+                st.info("No score yet. Click Score.")
+    return None
+
+# Replace old renderer with v2
+render_rfp_analyzer_phase_r = render_rfp_analyzer_phase_r_v2
