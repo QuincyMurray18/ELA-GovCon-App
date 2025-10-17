@@ -4757,3 +4757,25 @@ def run_rfp_analyzer(*args, **kwargs):
         except Exception:
             return None
 # === End Phase R authoritative entrypoint ===
+
+
+
+# === Restore: use legacy RFP Analyzer UI ===
+def run_rfp_analyzer(*args, **kwargs):  # final binding
+    try:
+        # Preferred: renamed legacy if present
+        return _legacy_run_rfp_analyzer(*args, **kwargs)  # type: ignore[name-defined]
+    except NameError:
+        # Fallback: original legacy name if it still exists
+        try:
+            return _orig_run_rfp_analyzer(*args, **kwargs)  # type: ignore[name-defined]
+        except Exception:
+            pass
+    except Exception as _e:
+        try:
+            import streamlit as st
+            st.error("RFP Analyzer encountered an error in legacy UI. Check logs. Showing no-op to keep app running.")
+        except Exception:
+            pass
+        return None
+# === End restore ===
