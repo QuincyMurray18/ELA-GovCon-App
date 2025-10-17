@@ -12049,7 +12049,7 @@ def _sam_phase1_filters_panel():
             st.session_state["sam_page"] = 0
             do_search = True
     # Show hidden toggle
-    show_hidden = st.checkbox("Show hidden saved/dismissed", value=st.session_state.get("sam_show_hidden", False)
+    show_hidden = st.checkbox("Show hidden saved/dismissed", value=st.session_state.get("sam_show_hidden", False))
     st.session_state["sam_show_hidden"] = show_hidden
     return filt, do_search, show_hidden
 
@@ -12100,10 +12100,10 @@ def _sam_phase1_results_grid():
             with c1:
                 st.caption(row.get("notice_type") or "")
                 if feature_flags().get("pipeline_star", False) and user_id:
-                    starred = bool(row.get("starred")
+                    starred = bool(row.get("starred"))
                     label = "★" if starred else "☆"
                     if st.button(label, key=f"star_{row['id']}"):
-                        new_state = toggle_pipeline_star(user_id, int(row["id"])
+                        new_state = toggle_pipeline_star(user_id, int(row["id"]))
                         # reflect immediately
                         row["starred"] = new_state
             with c2:
