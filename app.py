@@ -12013,29 +12013,30 @@ def _sam_phase1_filters_panel():
     filt = st.session_state.setdefault("sam_filters", {})
     c1, c2 = st.columns([3, 2])
     with c1:
-        filt["keywords"] = st.text_input("Keywords", value=filt.get("keywords", "")
+        filt["keywords"] = st.text_input("Keywords", value=filt.get("keywords", ""))
     with c2:
         types = ["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"]
-        filt["types"] = st.multiselect("Notice types", options=types, default=filt.get("types", ["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"])
+        filt["types"] = st.multiselect("Notice types", options=types, default=filt.get("types", ["Solicitation","Combined Synopsis or Solicitation","Presolicitation","Sources Sought"]))
     c3, c4 = st.columns(2)
     with c3:
         filt["naics"] = st.multiselect("NAICS", options=filt.get("naics_options", []), default=filt.get("naics", []), help="Type to add codes")
-        filt["psc"] = st.multiselect("PSC", options=filt.get("psc_options", []), default=filt.get("psc", [])
     with c4:
-        filt["agency"] = st.text_input("Agency contains", value=filt.get("agency", "")
-        stt = st.selectbox("State", options=[""] + [
-            "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"
-        ], index= ([""] + ["AL"]).index(filt.get("place_state","")) if filt.get("place_state") else 0)
+        filt["psc"] = st.multiselect("PSC", options=filt.get("psc_options", []), default=filt.get("psc", []), help="Type to add codes")
+        filt["agency"] = st.text_input("Agency contains", value=filt.get("agency", ""))
+        states = [""] + ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]
+        curr_state = filt.get("place_state","") or ""
+        idx = states.index(curr_state) if curr_state in states else 0
+        stt = st.selectbox("State", options=states, index=idx)
         filt["place_state"] = stt or None
-        filt["place_city"] = st.text_input("City", value=filt.get("place_city", "")
+        filt["place_city"] = st.text_input("City", value=filt.get("place_city", ""))
     # Posted window control, off by default
-    filt["posted_enabled"] = st.checkbox("Limit by posted date", value=filt.get("posted_enabled", False)
+    filt["posted_enabled"] = st.checkbox("Limit by posted date", value=filt.get("posted_enabled", False))
     if filt["posted_enabled"]:
         c5, c6 = st.columns(2)
         with c5:
-            filt["posted_from"] = st.text_input("Posted from (YYYY-MM-DD)", value=filt.get("posted_from","")
+            filt["posted_from"] = st.text_input("Posted from (YYYY-MM-DD)", value=filt.get("posted_from",""))
         with c6:
-            filt["posted_to"] = st.text_input("Posted to (YYYY-MM-DD)", value=filt.get("posted_to","")
+            filt["posted_to"] = st.text_input("Posted to (YYYY-MM-DD)", value=filt.get("posted_to",""))
     # Buttons
     b1, b2, b3 = st.columns([1,1,4])
     do_search = False
@@ -12066,9 +12067,9 @@ def _sam_phase1_results_grid():
     cols_top = st.columns([4,1])
     with cols_top[1]:
         if ff.get("sam_page_size", False) and user_id:
-            new_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(size)
+            new_size = st.selectbox("Page size", options=[25,50,100], index=[25,50,100].index(size))
             if new_size != size:
-                set_user_page_size(user_id, int(new_size)
+                set_user_page_size(user_id, int(new_size))
                 size = int(new_size)
     # Fetch and upsert on demand
     filt = st.session_state.get("sam_filters", {})
@@ -12085,7 +12086,7 @@ def _sam_phase1_results_grid():
         st.session_state["sam_ingested_page"] = page
         st.session_state["sam_ingested_filters"] = dict(filt)
     # List from DB
-    res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False)
+    res = list_notices(filt, page, size, user_id, show_hidden=st.session_state.get("sam_show_hidden", False))
     items = res["items"]
     # Table
     if not items:
