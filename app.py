@@ -1,3 +1,12 @@
+# === Phase R early stub: run_rfp_analyzer ===
+def run_rfp_analyzer(*args, **kwargs):
+    try:
+        return render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
+    except Exception:
+        # Safe no-op if Phase R not loaded yet
+        return None
+# === End Phase R early stub ===
+
 
 import os
 import sqlite3
