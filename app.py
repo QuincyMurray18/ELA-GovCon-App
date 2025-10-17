@@ -4506,3 +4506,31 @@ try:
 except Exception as _e:
     # Keep app resilient
     pass
+
+
+# ----- Phase R safety wrapper for legacy analyzer -----
+try:
+    _orig_run_rfp_analyzer = run_rfp_analyzer  # type: ignore[name-defined]
+    def run_rfp_analyzer(*args, **kwargs):  # noqa: F811
+        try:
+            return _orig_run_rfp_analyzer(*args, **kwargs)
+        except Exception as _e:
+            try:
+                import streamlit as st  # type: ignore
+                st.warning("Legacy RFP Analyzer failed. Falling back to Phase R Analyzer.")
+            except Exception:
+                pass
+            try:
+                render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
+            except Exception:
+                pass
+            return None
+except Exception:
+    # If legacy function is absent, define to Phase R directly
+    def run_rfp_analyzer(*args, **kwargs):  # noqa: F811
+        try:
+            render_rfp_analyzer_phase_r()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        return None
+# ----- End safety wrapper -----
