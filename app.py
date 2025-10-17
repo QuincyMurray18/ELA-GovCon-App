@@ -1679,7 +1679,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
             st.success("Scenario created.")
-            st.experimental_rerun()
+            st.rerun()
         return
     else:
         if df_sc.empty:
@@ -2409,7 +2409,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     with closing(conn.cursor()) as cur:
                         cur.execute("INSERT INTO white_templates(name, description, created_at) VALUES(?,?,datetime('now'));", (t_name.strip(), t_desc.strip()))
                         conn.commit()
-                    st.success("Template saved"); st.experimental_rerun()
+                    st.success("Template saved"); st.rerun()
         with t_col2:
             if df_t.empty:
                 st.info("No templates yet.")
@@ -2427,7 +2427,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                         cur.execute("INSERT INTO white_template_sections(template_id, position, title, body) VALUES(?,?,?,?);",
                                     (int(t_sel), pos, ts_title.strip(), ts_body.strip()))
                         conn.commit()
-                    st.success("Section added"); st.experimental_rerun()
+                    st.success("Section added"); st.rerun()
                 # Reorder / delete (simple)
                 if not df_ts.empty:
                     st.markdown("**Reorder / Delete**")
@@ -2440,13 +2440,13 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("UPDATE white_template_sections SET position=? WHERE id=?;", (int(new_pos), int(r["id"])))
                                     conn.commit()
-                                st.success("Updated position"); st.experimental_rerun()
+                                st.success("Updated position"); st.rerun()
                         with c3:
                             if st.button("Delete", key=f"wp_ts_del_{int(r['id'])}"):
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("DELETE FROM white_template_sections WHERE id=?;", (int(r["id"]),))
                                     conn.commit()
-                                st.success("Deleted"); st.experimental_rerun()
+                                st.success("Deleted"); st.rerun()
 
     st.divider()
 
@@ -2480,7 +2480,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                             cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body) VALUES(?,?,?,?);",
                                         (int(pid), int(r["position"]), r.get("title"), r.get("body")))
                     conn.commit()
-                st.success("Draft created"); st.experimental_rerun()
+                st.success("Draft created"); st.rerun()
     with c2:
         if df_p.empty:
             st.info("No drafts yet.")
@@ -2507,7 +2507,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                             (int(p_sel), pos, ns_title.strip(), ns_body.strip(), img_path))
                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                 conn.commit()
-            st.success("Section added"); st.experimental_rerun()
+            st.success("Section added"); st.rerun()
 
         # Section list
         if df_sec.empty:
@@ -2527,7 +2527,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                                         (new_title.strip(), new_body.strip(), int(new_pos), int(r["id"])))
                             cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                             conn.commit()
-                        st.success("Updated"); st.experimental_rerun()
+                        st.success("Updated"); st.rerun()
                 with e3:
                     up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
                     if st.button("Save image", key=f"wp_sec_img_save_{int(r['id'])}"):
@@ -2539,14 +2539,14 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                                 cur.execute("UPDATE white_paper_sections SET image_path=? WHERE id=?;", (img_path, int(r["id"])))
                                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                                 conn.commit()
-                            st.success("Image saved"); st.experimental_rerun()
+                            st.success("Image saved"); st.rerun()
                 with e4:
                     if st.button("Delete", key=f"wp_sec_del_{int(r['id'])}"):
                         with closing(conn.cursor()) as cur:
                             cur.execute("DELETE FROM white_paper_sections WHERE id=?;", (int(r["id"]),))
                             cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                             conn.commit()
-                        st.success("Deleted"); st.experimental_rerun()
+                        st.success("Deleted"); st.rerun()
                 st.divider()
 
             # Export & Push
