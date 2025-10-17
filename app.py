@@ -1527,6 +1527,77 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     
 
 
+
+# --- Proposal Builder helpers ---
+def _word_count(sections: dict[str, str]) -> int:
+    total = 0
+    for v in (sections or {}).values():
+        if v:
+            total += len(str(v).split())
+    return total
+
+def _estimate_pages(total_words: int, spacing: str) -> float:
+    # Approx words per page for 11pt Times/Calibri
+    wpp = 500
+    if str(spacing).lower().startswith("1.15"):
+        wpp = 430
+    elif str(spacing).lower().startswith("double"):
+        wpp = 275
+    return round(max(1.0, total_words / wpp), 2)
+
+def _render_outline_docx(out_path: str, title: str, sections: dict[str, str], checklist: "pd.DataFrame" | None, metadata: dict | None, font_name: str = "Times New Roman", font_size_pt: int = 11, spacing: str = "1.15") -> str:
+    try:
+        import docx  # python-docx
+        from docx.shared import Pt
+        from docx.enum.text import WD_LINE_SPACING
+    except Exception as e:
+        # If python-docx isn't available, write a fallback TXT
+        with open(out_path.replace(".docx", ".txt"), "w", encoding="utf-8") as f:
+            f.write(f"{title}\n\n")
+            for k, v in (sections or {}).items():
+                f.write(f"{k}\n{'-'*len(k)}\n{v}\n\n")
+        return out_path.replace(".docx", ".txt")
+
+    doc = docx.Document()
+    # Title
+    h = doc.add_heading(title or "Proposal", level=0)
+    # Meta
+    if metadata:
+        p = doc.add_paragraph()
+        for k, v in metadata.items():
+            run = p.add_run(f"{k}: {v}    ")
+    # Sections
+    for k, v in (sections or {}).items():
+        doc.add_heading(k, level=1)
+        for para in str(v).split("\n\n"):
+            p = doc.add_paragraph(para.strip())
+            p_format = p.paragraph_format
+            if str(spacing).lower().startswith("double"):
+                p_format.line_spacing = WD_LINE_SPACING.DOUBLE
+            elif str(spacing).lower().startswith("1.15"):
+                p_format.line_spacing = 1.15
+            else:
+                p_format.line_spacing = 1.0
+            for run in p.runs:
+                run.font.name = font_name
+                run.font.size = Pt(font_size_pt)
+    # Checklist appendix (optional)
+    if checklist is not None and hasattr(checklist, "empty") and not checklist.empty:
+        doc.add_page_break()
+        doc.add_heading("Compliance Checklist", level=1)
+        cols = ["id","item_text","is_must","status"]
+        cols = [c for c in cols if c in checklist.columns]
+        table = doc.add_table(rows=1, cols=len(cols))
+        hdr_cells = table.rows[0].cells
+        for j, c in enumerate(cols):
+            hdr_cells[j].text = c
+        for _, row in checklist.iterrows():
+            cells = table.add_row().cells
+            for j, c in enumerate(cols):
+                cells[j].text = str(row.get(c, ""))
+    doc.save(out_path)
+    return out_path
+
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn)
