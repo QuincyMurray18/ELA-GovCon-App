@@ -860,6 +860,63 @@ def run_deals(conn: sqlite3.Connection) -> None:
 def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 
+
+    # --- SAM param sanitizer (ptype codes, date MM/dd/yyyy, ncode, status) ---
+    def _sam_build_params(ui: dict) -> dict:
+        # Date format MM/dd/yyyy
+        def fmt(d):
+            try:
+                return pd.to_datetime(d).strftime("%m/%d/%Y")
+            except Exception:
+                return None
+        today = datetime.now().date()
+        default_from = today - timedelta(days=30)
+
+        p = {"limit": int(ui.get("limit", 200)), "api_key": get_sam_api_key(), "_max_pages": 3}
+
+        pf = ui.get("posted_from") or default_from
+        pt = ui.get("posted_to") or today
+        p["postedFrom"] = fmt(pf)
+        p["postedTo"] = fmt(pt)
+
+        if ui.get("active_only"):
+            p["status"] = "active"
+
+        if ui.get("keywords"):
+            p["title"] = ui["keywords"]
+        # NAICS uses ncode per spec
+        if ui.get("naics"):
+            p["ncode"] = str(ui["naics"]).strip()
+
+        if ui.get("set_aside"):
+            # pass through; user may give official codes (e.g., SDVOSBC); otherwise try light map
+            sa_map = {"SB":"SBA","WOSB":"WOSB","SDVOSB":"SDVOSBC","8A":"8A","HUBZone":"HZC","VOSB":"VSA","SDB":"SBA"}
+            p["typeOfSetAside"] = sa_map.get(ui["set_aside"], ui["set_aside"])
+
+        if ui.get("state"):
+            p["state"] = ui["state"]
+        if ui.get("org_name"):
+            p["organizationName"] = ui["org_name"]
+
+        # ptype letters
+        type_map = {
+            "Presolicitation":"p",
+            "Solicitation":"o",
+            "Combined Synopsis/Solicitation":"k",
+            "Sources Sought":"r",
+            "Special Notice":"s",
+            "Award Notice":"a",
+            "Justification (J&A)":"u",
+            "Sale of Surplus Property":"g",
+            "Intent to Bundle Requirements (DoD-Funded)":"i",
+        }
+        sel = ui.get("types") or []
+        if sel:
+            codes = [type_map[t] for t in sel if t in type_map]
+            if codes:
+                p["ptype"] = ",".join(codes)
+
+        return p
     # --- ensure Phase P tables/views exist + safe read helper ---
     def _ensure_sam_p_schema(_conn: sqlite3.Connection):
         with closing(_conn.cursor()) as _c:
@@ -983,31 +1040,18 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 run_search = st.button("Run Search", type="primary", key="sam_run")
             with c_save:
                 if st.button("Save Search", key="sam_save_btn"):
-                    params = {"limit": int(limit), "api_key": get_sam_api_key(), "_max_pages": 3}
-                    # Mandatory PostedFrom/To: set if user opted; else default last 30 days to avoid 400
-                    if use_dates:
-                        params["postedFrom"] = str(posted_from)
-                        params["postedTo"] = str(posted_to)
-                    else:
-                        params["postedFrom"] = str(default_from)
-                        params["postedTo"] = str(today)
-
-                    if active_only: params["active"] = "true"
-                    if keywords: params["title"] = keywords
-                    if naics: params["naics"] = naics
-                    if set_aside: params["typeOfSetAside"] = set_aside
-                    if state: params["state"] = state
-                    if org_name: params["organizationName"] = org_name
-                    if types:
-                        ptype_map = {
-                            "Presolicitation": "Presolicitation",
-                            "Solicitation": "Solicitation",
-                            "Combined Synopsis/Solicitation": "Combined Synopsis/Solicitation",
-                            "Sources Sought": "Sources Sought",
-                            "Special Notice": "Special Notice",
-                            "Award Notice": "Award Notice",
-                        }
-                        params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
+                                        params = _sam_build_params({
+                        "limit": limit,
+                        "posted_from": (posted_from if use_dates else default_from),
+                        "posted_to": (posted_to if use_dates else today),
+                        "active_only": active_only,
+                        "keywords": keywords,
+                        "naics": naics,
+                        "set_aside": set_aside,
+                        "state": state,
+                        "org_name": org_name,
+                        "types": types,
+                    })
                     with closing(conn.cursor()) as cur:
                         cur.execute("INSERT INTO sam_searches(name, params_json, auto_push, created_at, updated_at) VALUES(?,?,?,?,datetime('now'));",
                                     (sname.strip() or "Saved Search", json.dumps(params), 1 if auto_push else 0, datetime.utcnow().isoformat()))
@@ -1015,30 +1059,18 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     st.success("Saved search")
 
         if run_search:
-            params = {"limit": int(limit), "api_key": get_sam_api_key(), "_max_pages": 3}
-            if use_dates:
-                params["postedFrom"] = str(posted_from)
-                params["postedTo"] = str(posted_to)
-            else:
-                # Default last 30 days (SAM requires dates)
-                params["postedFrom"] = str(default_from)
-                params["postedTo"] = str(today)
-            if active_only: params["active"] = "true"
-            if keywords: params["title"] = keywords
-            if naics: params["naics"] = naics
-            if set_aside: params["typeOfSetAside"] = set_aside
-            if state: params["state"] = state
-            if org_name: params["organizationName"] = org_name
-            if types:
-                ptype_map = {
-                    "Presolicitation": "Presolicitation",
-                    "Solicitation": "Solicitation",
-                    "Combined Synopsis/Solicitation": "Combined Synopsis/Solicitation",
-                    "Sources Sought": "Sources Sought",
-                    "Special Notice": "Special Notice",
-                    "Award Notice": "Award Notice",
-                }
-                params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
+                        params = _sam_build_params({
+                "limit": limit,
+                "posted_from": (posted_from if use_dates else default_from),
+                "posted_to": (posted_to if use_dates else today),
+                "active_only": active_only,
+                "keywords": keywords,
+                "naics": naics,
+                "set_aside": set_aside,
+                "state": state,
+                "org_name": org_name,
+                "types": types,
+            })
 
             with st.spinner("Searching SAM.gov..."):
                 out = sam_search_cached(params)
@@ -1107,8 +1139,20 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             with c1:
                 if st.button("Run Saved Search", type="primary", key="sam_run_saved"):
                     row = pd.read_sql_query("SELECT params_json, auto_push FROM sam_searches WHERE id=?;", conn, params=(int(s_sel),)).iloc[0]
-                    params = json.loads(row["params_json"])
-                    params["api_key"] = get_sam_api_key()
+                                        ui = json.loads(row["params_json"])
+                    # Backward compat: allow older saved shape; map to our UI keys if needed
+                    params = _sam_build_params({
+                        "limit": ui.get("limit", 200),
+                        "posted_from": ui.get("postedFrom") or ui.get("posted_from"),
+                        "posted_to": ui.get("postedTo") or ui.get("posted_to"),
+                        "active_only": (ui.get("status")=="active") or ui.get("active") in ("true", True),
+                        "keywords": ui.get("title"),
+                        "naics": ui.get("ncode") or ui.get("naics"),
+                        "set_aside": ui.get("typeOfSetAside"),
+                        "state": ui.get("state"),
+                        "org_name": ui.get("organizationName"),
+                        "types": ui.get("types") or ui.get("ptype"),
+                    })
                     with st.spinner("Searching SAM.gov..."):
                         out = sam_search_cached(params)
                     if out.get("error"):
