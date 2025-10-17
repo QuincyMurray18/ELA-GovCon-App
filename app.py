@@ -1299,8 +1299,33 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
     total = int(len(df_items))
     return int(round(done / max(1, total) * 100))
 
+
+def _ensure_lm_checklist_schema(conn: sqlite3.Connection) -> None:
+    """Ensure lm_meta exists and create fallback *_t views if tenancy views are missing."""
+    with closing(conn.cursor()) as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lm_meta(
+                lm_id INTEGER PRIMARY KEY REFERENCES lm_items(id) ON DELETE CASCADE,
+                owner TEXT,
+                ref_page TEXT,
+                ref_para TEXT,
+                evidence TEXT,
+                risk TEXT DEFAULT 'Green',
+                notes TEXT
+            );
+        """)
+        try:
+            cur.execute("""CREATE VIEW IF NOT EXISTS lm_items_t AS SELECT * FROM lm_items;""")
+        except Exception:
+            pass
+        try:
+            cur.execute("""CREATE VIEW IF NOT EXISTS lm_meta_t AS SELECT * FROM lm_meta;""")
+        except Exception:
+            pass
+        conn.commit()
+
 def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
-    q = """
+    q_view = """
         SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
                COALESCE(m.owner,'') AS owner,
                COALESCE(m.ref_page,'') AS ref_page,
@@ -1311,9 +1336,13 @@ def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFra
         FROM lm_items_t i
         LEFT JOIN lm_meta_t m ON m.lm_id = i.id
         WHERE i.rfp_id = ?
-        ORDER BY i.id ASC;
+        ORDER BY i.id;
     """
-    return pd.read_sql_query(q, conn, params=(rfp_id,))
+    q_base = q_view.replace('lm_items_t','lm_items').replace('lm_meta_t','lm_meta')
+    try:
+        return pd.read_sql_query(q_view, conn, params=(rfp_id,))
+    except Exception:
+        return pd.read_sql_query(q_base, conn, params=(rfp_id,))
 
 def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -1351,6 +1380,7 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
 
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
+    _ensure_lm_checklist_schema(conn)
     st.header("L and M Checklist")
     rfp_id = st.session_state.get('current_rfp_id')
     if not rfp_id:
