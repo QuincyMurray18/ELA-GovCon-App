@@ -4859,3 +4859,48 @@ def run_rfp_analyzer(conn=None):
             st.code(sample[:500])
     return None
 # === End failsafe renderer ===
+
+
+# === Safe DB connection helper and File Manager wrapper ===
+def _ela_get_conn(candidate=None):
+    import sqlite3, os
+    # If a valid sqlite3.Connection is passed, use it
+    try:
+        if isinstance(candidate, sqlite3.Connection):
+            return candidate
+    except Exception:
+        pass
+    # Try app-level get_db()
+    try:
+        return get_db()  # type: ignore[name-defined]
+    except Exception:
+        pass
+    # Fallback local path
+    try:
+        os.makedirs("data", exist_ok=True)
+        return sqlite3.connect("data/app.db")
+    except Exception:
+        return None
+
+try:
+    _legacy_run_file_manager = run_file_manager  # type: ignore[name-defined]
+    def run_file_manager(conn=None):  # noqa: F811
+        c = _ela_get_conn(conn)
+        if c is None:
+            try:
+                import streamlit as st
+                st.error("Database connection unavailable for File Manager.")
+            except Exception:
+                pass
+            return None
+        return _legacy_run_file_manager(c)
+except Exception:
+    # If original isn't present, define a no-op
+    def run_file_manager(conn=None):  # noqa: F811
+        try:
+            import streamlit as st
+            st.warning("File Manager module not available.")
+        except Exception:
+            pass
+        return None
+# === End wrapper ===
