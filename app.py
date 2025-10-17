@@ -3739,6 +3739,41 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
             st.success(f"Imported {n} row(s) into {tsel}")
             st.experimental_rerun()
 
+
+
+# ---------- Phase O: Global Theme & Layout ----------
+def apply_theme() -> None:
+    css = """
+    <style>
+    /* Base font and spacing */
+    html, body, [class*="css"]  { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+    .main .block-container { padding-top: 1rem; padding-bottom: 4rem; max-width: 1400px; }
+    /* Headings */
+    h1, h2, h3 { letter-spacing: 0.2px; }
+    h1 { font-size: 1.8rem; margin-bottom: .25rem; }
+    h2 { font-size: 1.2rem; margin-top: 1rem; }
+    /* Sidebar */
+    section[data-testid="stSidebar"] { width: 320px !important; }
+    .sidebar-brand { font-weight: 700; font-size: 1.1rem; margin: .25rem 0 .5rem 0; }
+    .sidebar-subtle { color: rgba(0,0,0,.55); font-size: .85rem; margin-bottom: .5rem; }
+    /* Cards */
+    .card { border: 1px solid rgba(0,0,0,.08); border-radius: 14px; padding: 14px 16px; margin: 8px 0 14px 0; box-shadow: 0 1px 2px rgba(0,0,0,.04); background: #fff; }
+    .card h3 { margin: 0 0 6px 0; font-size: 1.05rem; }
+    /* Dataframes */
+    div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; border: 1px solid rgba(0,0,0,.08); }
+    /* Tabs */
+    button[data-baseweb="tab"] { padding-top: 6px !important; padding-bottom: 6px !important; font-weight: 600; }
+    /* Buttons */
+    .stButton>button { border-radius: 10px; padding: 0.4rem 0.8rem; }
+    /* Hide Streamlit default footer/menu */
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+def page_header(title: str, subtitle: str | None = None) -> None:
+    st.markdown(f"<div class='card'><h3>{title}</h3>" + (f"<div class='sidebar-subtle'>{subtitle}</div>" if subtitle else "") + "</div>", unsafe_allow_html=True)
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
