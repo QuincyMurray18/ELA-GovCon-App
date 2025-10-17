@@ -696,7 +696,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             params["postedTo"] = posted_to.strftime("%m/%d/%Y")
         else:
             # SAM.gov API requires postedFrom/postedTo; use implicit last 30 days when filter is off
-            from datetime import datetime, timedelta
             _today = datetime.now().date()
             _from = _today - timedelta(days=30)
             params["postedFrom"] = _from.strftime("%m/%d/%Y")
