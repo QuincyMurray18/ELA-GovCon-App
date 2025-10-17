@@ -1070,8 +1070,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         import PyPDF2  # type: ignore
                         reader = PyPDF2.PdfReader(io.BytesIO(data))
                         pages = [p.extract_text() or "" for p in reader.pages]
-                        text_parts.append("
-".join(pages))
+                        text_parts.append("\n".join(pages))
                     except Exception as e:
                         st.warning(f"PDF text extraction failed: {e}. Falling back to binary decode.")
                         text_parts.append(data.decode("latin-1", errors="ignore"))
@@ -1080,8 +1079,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         import docx  # python-docx
                         f = io.BytesIO(data)
                         doc = docx.Document(f)
-                        text_parts.append("
-".join([p.text for p in doc.paragraphs]))
+                        text_parts.append("\n".join([p.text for p in doc.paragraphs]))
                     except Exception as e:
                         st.warning(f"DOCX parse failed: {e}. Try uploading a TXT or PDF.")
                 else:
