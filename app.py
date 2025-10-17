@@ -987,7 +987,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     for it in l_items:
                         cur.execute(
                             "INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?, ?, ?, ?);",
-                            (rfp_id, it, (1 if re.search(r"\b(shall|must|required|mandatory|no later than|shall not|will)\b", it, re.IGNORECASE) else 0), \'Open\'),
+                            (rfp_id, it, (1 if re.search(r"\b(shall|must|required|mandatory|no later than|shall not|will)\b", it, re.IGNORECASE) else 0), 'Open'),
                         )
                     for r in clins:
                         cur.execute(
