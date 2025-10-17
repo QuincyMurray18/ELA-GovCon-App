@@ -1039,6 +1039,29 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 
 
+
+def _df_to_md(df) -> str:
+    """
+    Minimal Markdown table without requiring 'tabulate'.
+    """
+    import pandas as _pd
+    if df is None or not hasattr(df, "columns"):
+        return ""
+    dff = df.copy()
+    # Convert all to strings
+    dff = dff.fillna("").astype(str)
+    cols = list(dff.columns)
+    if not cols:
+        return ""
+    # Header
+    header = "| " + " | ".join(cols) + " |"
+    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
+    lines = [header, sep]
+    for _, row in dff.iterrows():
+        vals = [str(row.get(c, "")) for c in cols]
+        lines.append("| " + " | ".join(vals) + " |")
+    return "\n".join(lines)
+
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     import io, re
     from contextlib import closing
@@ -1372,13 +1395,13 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             body = ""
                         sections.append({"title": "Compliance Outline", "body": body})
                     if use_clin:
-                        body = edit_c.to_markdown(index=False) if 'edit_c' in locals() else ""
+                        body = _df_to_md(edit_c) if 'edit_c' in locals() else ""
                         sections.append({"title": "CLINs", "body": body})
                     if use_dates:
-                        body = edit_d.to_markdown(index=False) if 'edit_d' in locals() else ""
+                        body = _df_to_md(edit_d) if 'edit_d' in locals() else ""
                         sections.append({"title": "Key Dates", "body": body})
                     if use_pocs:
-                        body = edit_p.to_markdown(index=False) if 'edit_p' in locals() else ""
+                        body = _df_to_md(edit_p) if 'edit_p' in locals() else ""
                         sections.append({"title": "Points of Contact", "body": body})
                     meta = {r["key"]: r["value"] for _, r in df_meta.iterrows()} if not df_meta.empty else {}
                     st.session_state["pb_prefill"] = {"title": pb_title, "sections": sections, "metadata": meta, "spacing": spacing}
