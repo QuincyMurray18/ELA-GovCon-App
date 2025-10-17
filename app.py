@@ -1766,7 +1766,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     with left:
         st.subheader("Sections")
     # Import prefill from RFP Analyzer
-    (st.session_state.get('pb_prefill') or st.session_state.get('pb_prefill_draft')) and st.button('Import from RFP Analyzer', key='pb_import'):
+    if (st.session_state.get('pb_prefill') or st.session_state.get('pb_prefill_draft')) and st.button('Import from RFP Analyzer', key='pb_import'):
         pf = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
         try:
             sections_state = pf.get('sections') or []
