@@ -4573,9 +4573,8 @@ except Exception:
 def render_rfp_analyzer_phase_r_v2():
     _phase_r_init_db()
     st.sidebar.subheader("Phase R Analyzer")
-    enable = st.sidebar.checkbox("Enable Phase R UI", value=True, key="rfp_phase_r")
-    if not enable:
-        return
+    # Phase R UI is always enabled
+
 
     # Select or enter Notice ID
     with closing(_get_db_conn_phase_r()) as conn:
