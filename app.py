@@ -1719,116 +1719,80 @@ def _estimate_pages(total_words: int, spacing: str) -> float:
     pages = total_words / max(1, wpp)
     return round(pages if pages >= 1 else 1.0, 2)
 
+
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
-    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn)
-    if df_rf.empty:
-        st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
-        return
-    rfp_id = st.selectbox(
-        "RFP context",
-        options=df_rf["id"].tolist(),
-        format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}",
-        index=0,
-    )
-    st.session_state["current_rfp_id"] = rfp_id
-    ctx = _load_rfp_context(conn, rfp_id)
 
-    left, right = st.columns([3, 2])
-    with left:
-        st.session_state.setdefault('pb_sections', [])
-    st.session_state.setdefault('pb_title', '')
-    st.session_state.setdefault('pb_spacing', '1.15')
-    st.session_state.setdefault('pb_metadata', {})
-    st.subheader("Sections")
-    st.markdown('**Current Sections**')
-    sec_list = st.session_state.get('pb_sections', [])
-    # Simple editor: title/body pairs
-    for idx, sec in enumerate(list(sec_list)):
-        with st.expander(f"Section {idx+1}: {sec.get('title','(untitled)')}", expanded=False):
-            new_title = st.text_input(f"Title {idx+1}", value=sec.get('title',''), key=f'pb_sec_title_{idx}')
-            new_body = st.text_area(f"Body {idx+1}", value=sec.get('body',''), height=200, key=f'pb_sec_body_{idx}')
-            # Update session as user types
-            st.session_state['pb_sections'][idx] = {'title': new_title, 'body': new_body}
-            if st.button(f"Delete Section {idx+1}", key=f'pb_del_{idx}'):
-                st.session_state['pb_sections'].pop(idx)
-                st.rerun()
-    # Add new section row
-    with st.form('pb_add_section_form'):
-        at = st.text_input('New Section Title', key='pb_new_title')
-        ab = st.text_area('New Section Body', height=150, key='pb_new_body')
-        if st.form_submit_button('Add Section'):
-            st.session_state['pb_sections'].append({'title': at or 'New Section', 'body': ab or ''})
-            st.success('Section added.')
+    # Title + spacing
+    colA, colB = st.columns([3,1])
+    with colA:
+        doc_title = st.text_input("Document Title", value=st.session_state.get("pb_title", "Proposal"))
+    with colB:
+        spacing = st.selectbox("Line Spacing", ["Single","1.15","Double"], index={"Single":0,"1.15":1,"Double":2}.get(st.session_state.get("pb_spacing","1.15"),1))
 
-    # Import prefill from RFP Analyzer
-    if (st.session_state.get('pb_prefill') or st.session_state.get('pb_prefill_draft')) and st.button('Import from RFP Analyzer', key='pb_import'):
+    # Build a base content map
+    content_map = {
+        "Executive Summary": "",
+        "Technical Approach": "",
+        "Management Approach": "",
+        "Past Performance": "",
+        "Pricing Notes": "",
+    }
+
+    # Import from RFP Analyzer payloads (draft first)
+    if (st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')) and st.button('Import from RFP Analyzer', key='pb_import'):
         pf = st.session_state.get('pb_prefill_draft') or st.session_state.get('pb_prefill')
-        try:
-            sections_state = pf.get('sections') or []
-            st.session_state['pb_sections'] = sections_state
-            st.session_state['pb_title'] = pf.get('title') or st.session_state.get('pb_title')
-            st.session_state['pb_spacing'] = pf.get('spacing') or st.session_state.get('pb_spacing')
-            st.session_state['pb_metadata'] = pf.get('metadata') or {}
-            st.success('Imported from RFP Analyzer.')
-        except Exception as e:
-            st.warning(f'Could not import prefill: {e}')
+        if pf:
+            # title/spacing/meta
+            if pf.get("title"):
+                doc_title = pf["title"]
+                st.session_state["pb_title"] = doc_title
+            if pf.get("spacing"):
+                spacing = pf["spacing"]
+                st.session_state["pb_spacing"] = spacing
+            st.session_state["pb_metadata"] = pf.get("metadata") or {}
+            # sections -> content_map
+            for s in (pf.get("sections") or []):
+                t = str(s.get("title","Section")).strip() or "Section"
+                b = str(s.get("body",""))
+                content_map[t] = b
+            st.success("Imported from RFP Analyzer.")
 
-        default_sections = [
-            "Cover Letter","Executive Summary","Understanding of Requirements","Technical Approach","Management Plan",
-            "Staffing and Key Personnel","Quality Assurance","Past Performance Summary","Pricing and CLINs","Certifications and Reps","Appendices",
-        ]
-        selected = st.multiselect("Include sections", default_sections, default=default_sections)
-        content_map: Dict[str, str] = {}
-        for sec in selected:
-            default_val = st.session_state.get(f"pb_section_{sec}", "")
-            content_map[sec] = st.text_area(sec, value=default_val, height=140)
+    # If we had a previous import, merge that in
+    if st.session_state.get("pb_sections"):
+        for s in st.session_state["pb_sections"]:
+            t = str(s.get("title","Section")).strip() or "Section"
+            b = str(s.get("body",""))
+            content_map[t] = b
 
-    with right:
-        st.subheader("Guidance and limits")
-        spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
-        font_name = st.selectbox("Font", ["Times New Roman", "Calibri"], index=0)
-        font_size = st.number_input("Font size", min_value=10, max_value=12, value=11)
-        page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
+    # Section selection + editors
+    st.subheader("Sections")
+    keys = list(content_map.keys())
+    # preselect the ones with content
+    preselect = [k for k in keys if content_map.get(k)]
+    selected = st.multiselect("Choose sections to include", keys, default=preselect or keys[:3])
 
-        st.markdown("**Must address items from L and M**")
-        items = ctx["items"] if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
-        if not items.empty:
-            st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
-        else:
-            st.caption("No checklist items found for this RFP")
+    # Editors for selected sections
+    edited_map = {}
+    for k in selected:
+        with st.expander(k, expanded=True):
+            txt = st.text_area(f"{k} (body)", value=content_map.get(k, ""), height=240, key=f"sec_{k}")
+            edited_map[k] = txt
 
-        selected = selected if 'selected' in locals() and selected else []
-        total_words = sum(len((content_map.get(k) or "").split()) for k in selected)
-        est_pages = _estimate_pages(total_words, spacing)
-        st.info(f"Current word count {total_words}  Estimated pages {est_pages}")
-        if est_pages > page_limit:
-            st.error("Content likely exceeds page limit. Consider trimming or tighter formatting")
+    # Stats + export
+    total_words = sum(len((edited_map.get(k) or "").split()) for k in selected)
+    est_pages = _estimate_pages(total_words, spacing)
 
-        out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
-        out_path = os.path.join(DATA_DIR, out_name)
-        if st.button("Export DOCX", type="primary"):
-            sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
-            exported = _export_docx(
-                out_path,
-                doc_title=ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "Proposal",
-                sections=sections,
-                clins=ctx["clins"],
-                checklist=ctx["items"],
-                metadata={
-                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                },
-                font_name=font_name,
-                font_size_pt=int(font_size),
-                spacing=spacing,
-            )
-            if exported:
-                st.success(f"Exported to {exported}")
-                st.markdown(f"[Download DOCX]({exported})")
+    st.caption(f"Selected sections: {len(selected)} | Words: {total_words} | Est. pages: {est_pages}")
 
+    meta = st.session_state.get("pb_metadata") or {}
+    if st.button("Export to DOCX", type="primary"):
+        # convert edited_map to list of sections for export shim
+        sections_list = [{"title": k, "body": edited_map.get(k,"")} for k in selected]
+        out_path = _export_docx(None, doc_title, sections_list, None, meta, spacing=spacing)
+        st.success("Document created.")
+        st.download_button("Download", data=open(out_path, "rb").read(), file_name=Path(out_path).name, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-# ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
