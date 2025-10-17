@@ -1258,7 +1258,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(rid)) for iid in ids])
                         conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
-                    st.rerun()
+                    st.experimental_rerun()
             # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
@@ -1300,28 +1300,7 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
     return int(round(done / max(1, total) * 100))
 
 
-
-def _ensure_lm_meta(conn: sqlite3.Connection) -> None:
-    try:
-        with closing(conn.cursor()) as c:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS lm_meta(
-                    id INTEGER PRIMARY KEY,
-                    lm_id INTEGER REFERENCES lm_items(id) ON DELETE CASCADE,
-                    owner TEXT,
-                    ref_page TEXT,
-                    ref_para TEXT,
-                    evidence TEXT,
-                    risk TEXT,
-                    notes TEXT
-                );
-            """)
-            conn.commit()
-    except Exception:
-        pass
-
 def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
-    _ensure_lm_meta(conn)
     """
     Robust loader that prefers tenancy views (*_t) but falls back to base tables
     if those views are not present in the current schema.
@@ -1547,77 +1526,6 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         st.dataframe(flags, use_container_width=True, hide_index=True)
     
 
-
-
-# --- Proposal Builder helpers ---
-def _word_count(sections: dict[str, str]) -> int:
-    total = 0
-    for v in (sections or {}).values():
-        if v:
-            total += len(str(v).split())
-    return total
-
-def _estimate_pages(total_words: int, spacing: str) -> float:
-    # Approx words per page for 11pt Times/Calibri
-    wpp = 500
-    if str(spacing).lower().startswith("1.15"):
-        wpp = 430
-    elif str(spacing).lower().startswith("double"):
-        wpp = 275
-    return round(max(1.0, total_words / wpp), 2)
-
-def _render_outline_docx(out_path: str, title: str, sections: dict[str, str], checklist: Optional[pd.DataFrame] = None, metadata: Optional[dict] = None, font_name: str = "Times New Roman", font_size_pt: int = 11, spacing: str = "1.15") -> str:
-    try:
-        import docx  # python-docx
-        from docx.shared import Pt
-        from docx.enum.text import WD_LINE_SPACING
-    except Exception as e:
-        # If python-docx isn't available, write a fallback TXT
-        with open(out_path.replace(".docx", ".txt"), "w", encoding="utf-8") as f:
-            f.write(f"{title}\n\n")
-            for k, v in (sections or {}).items():
-                f.write(f"{k}\n{'-'*len(k)}\n{v}\n\n")
-        return out_path.replace(".docx", ".txt")
-
-    doc = docx.Document()
-    # Title
-    h = doc.add_heading(title or "Proposal", level=0)
-    # Meta
-    if metadata:
-        p = doc.add_paragraph()
-        for k, v in metadata.items():
-            run = p.add_run(f"{k}: {v}    ")
-    # Sections
-    for k, v in (sections or {}).items():
-        doc.add_heading(k, level=1)
-        for para in str(v).split("\n\n"):
-            p = doc.add_paragraph(para.strip())
-            p_format = p.paragraph_format
-            if str(spacing).lower().startswith("double"):
-                p_format.line_spacing = WD_LINE_SPACING.DOUBLE
-            elif str(spacing).lower().startswith("1.15"):
-                p_format.line_spacing = 1.15
-            else:
-                p_format.line_spacing = 1.0
-            for run in p.runs:
-                run.font.name = font_name
-                run.font.size = Pt(font_size_pt)
-    # Checklist appendix (optional)
-    if checklist is not None and hasattr(checklist, "empty") and not checklist.empty:
-        doc.add_page_break()
-        doc.add_heading("Compliance Checklist", level=1)
-        cols = ["id","item_text","is_must","status"]
-        cols = [c for c in cols if c in checklist.columns]
-        table = doc.add_table(rows=1, cols=len(cols))
-        hdr_cells = table.rows[0].cells
-        for j, c in enumerate(cols):
-            hdr_cells[j].text = c
-        for _, row in checklist.iterrows():
-            cells = table.add_row().cells
-            for j, c in enumerate(cols):
-                cells[j].text = str(row.get(c, ""))
-    doc.save(out_path)
-    return out_path
 
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
@@ -3991,7 +3899,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
             ok = _restore_db_from_upload(conn, up)
             if ok:
                 st.success("Restore completed. Please rerun the app.")
-                st.rerun()
+                st.experimental_rerun()
 
     st.divider()
     st.subheader("Export / Import CSV")
@@ -4013,7 +3921,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
         n = _import_csv_into_table(conn, upcsv, tsel, scoped_to_current=True)
         if n:
             st.success(f"Imported {n} row(s) into {tsel}")
-            st.rerun()
+            st.experimental_rerun()
 
 
 
