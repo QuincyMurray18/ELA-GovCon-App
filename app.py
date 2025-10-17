@@ -898,7 +898,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         if df_rf.empty:
             st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
             return
-        opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(), format_func=lambda rid: f\"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}\")
+        opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(), format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
         st.session_state['current_rfp_id'] = rfp_id
 
