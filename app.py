@@ -1370,6 +1370,22 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+
+def _load_rfp_context(conn: sqlite3.Connection, rfp_id: int) -> dict:
+    try:
+        rf = pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        rf = pd.DataFrame()
+    try:
+        df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_items = pd.DataFrame(columns=["id","item_text","is_must","status"])
+    joined = "\n".join(df_items["item_text"].astype(str).tolist()) if not df_items.empty else ""
+    sections = pd.DataFrame([{"name":"Checklist Items","content": joined}])
+    meta = rf.iloc[0].to_dict() if not rf.empty else {}
+    return {"rfp": meta, "sections": sections, "items": df_items}
+
+
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
     st.header("L and M Checklist")
