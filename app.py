@@ -4779,3 +4779,83 @@ def run_rfp_analyzer(*args, **kwargs):  # final binding
             pass
         return None
 # === End restore ===
+
+
+# === RFP Analyzer Minimal Renderer (failsafe) ===
+def run_rfp_analyzer(conn=None):
+    import sqlite3
+    try:
+        import streamlit as st
+    except Exception:
+        # Not in Streamlit context; nothing to render
+        return None
+
+    # Header
+    st.header("RFP Analyzer")
+    st.caption("Failsafe view. This will always render.")
+
+    # DB connection
+    def _conn():
+        try:
+            return get_db()  # type: ignore[name-defined]
+        except Exception:
+            try:
+                return conn if isinstance(conn, sqlite3.Connection) else None
+            except Exception:
+                return None
+    c = _conn()
+    if c is None:
+        # Try default local path
+        try:
+            import sqlite3, os
+            os.makedirs("data", exist_ok=True)
+            c = sqlite3.connect("data/app.db")
+        except Exception:
+            c = None
+
+    # Notices list
+    notices = []
+    if c is not None:
+        try:
+            cur = c.cursor()
+            cur.execute("SELECT DISTINCT notice_id FROM rfp_json ORDER BY notice_id DESC LIMIT 200")
+            notices = [r[0] for r in cur.fetchall() if r and r[0] is not None]
+        except Exception:
+            notices = []
+
+    colA, colB = st.columns([2,1])
+    if notices:
+        sel = colA.selectbox("Notice", notices, format_func=lambda x: f"Notice {x}")
+        colB.metric("Notices found", len(notices))
+        # Show basic info from rfp_json to prove render
+        try:
+            cur = c.cursor()
+            cur.execute("SELECT data_json FROM rfp_json WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(sel),))
+            row = cur.fetchone()
+            if row and row[0]:
+                import json, pandas as pd
+                data = json.loads(row[0])
+                meta = {k: data.get(k) for k in ("title","posted_date","due_date","naics","psc","agency","type")}
+                st.subheader(meta.get("title") or "Selected Notice")
+                st.json({k:v for k,v in meta.items() if v})
+                # Show a small table of attachments if present
+                atts = data.get("attachments") or data.get("files") or []
+                if atts:
+                    df = pd.DataFrame([{ "name": a.get("name") or a.get("filename"),
+                                         "type": a.get("type") or a.get("kind"),
+                                         "url": a.get("url") } for a in atts])
+                    st.dataframe(df, use_container_width=True, height=220)
+                else:
+                    st.info("No attachments listed in rfp_json.")
+            else:
+                st.warning("No rfp_json row found for the selected notice.")
+        except Exception as e:
+            st.error(f"Read error: {e}")
+    else:
+        st.warning("No notices in database. Use the text box below to test rendering.")
+        sample = st.text_area("Paste any solicitation paragraph to verify UI renders", height=120)
+        if sample.strip():
+            st.success("Text received. UI is working.")
+            st.code(sample[:500])
+    return None
+# === End failsafe renderer ===
