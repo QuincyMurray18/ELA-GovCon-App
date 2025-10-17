@@ -334,6 +334,24 @@ def get_db() -> sqlite3.Connection:
                 changed_at TEXT
             );
         """)
+
+        # Phase J (File Manager)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS files(
+                id INTEGER PRIMARY KEY,
+                owner_type TEXT,            -- 'RFP' | 'Deal' | 'Vendor' | 'Other'
+                owner_id INTEGER,           -- nullable when owner_type='Other'
+                filename TEXT,
+                path TEXT,
+                size INTEGER,
+                mime TEXT,
+                tags TEXT,
+                notes TEXT,
+                uploaded_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_type, owner_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_tags ON files(tags);")
         conn.commit()
     return conn
 
@@ -2783,6 +2801,211 @@ def run_crm(conn: sqlite3.Connection) -> None:
                 df.to_csv(path, index=False)
                 st.markdown(f"[Download CSV]({path})")
 
+
+
+# ---------- Phase J: File Manager & Submission Kit ----------
+def _detect_mime(name: str) -> str:
+    name = (name or "").lower()
+    if name.endswith(".pdf"): return "application/pdf"
+    if name.endswith(".docx"): return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if name.endswith(".xlsx"): return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if name.endswith(".zip"): return "application/zip"
+    if name.endswith(".png"): return "image/png"
+    if name.endswith(".jpg") or name.endswith(".jpeg"): return "image/jpeg"
+    if name.endswith(".txt"): return "text/plain"
+    return "application/octet-stream"
+
+
+def run_file_manager(conn: sqlite3.Connection) -> None:
+    st.header("File Manager")
+    st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
+
+    # --- Attach uploader ---
+    with st.expander("Upload & Attach", expanded=True):
+        c1, c2 = st.columns([2,2])
+        with c1:
+            owner_type = st.selectbox("Attach to", ["RFP", "Deal", "Vendor", "Other"], key="fm_owner_type")
+            owner_id = None
+            if owner_type == "RFP":
+                df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+                if not df_rf.empty:
+                    owner_id = st.selectbox("RFP", options=df_rf["id"].tolist(),
+                                            format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
+                                            key="fm_owner_rfp")
+            elif owner_type == "Deal":
+                df_deal = pd.read_sql_query("SELECT id, title FROM deals ORDER BY id DESC;", conn)
+                if not df_deal.empty:
+                    owner_id = st.selectbox("Deal", options=df_deal["id"].tolist(),
+                                            format_func=lambda i: f"#{i} — {df_deal.loc[df_deal['id']==i, 'title'].values[0]}",
+                                            key="fm_owner_deal")
+            elif owner_type == "Vendor":
+                df_v = pd.read_sql_query("SELECT id, name FROM vendors ORDER BY name;", conn)
+                if not df_v.empty:
+                    owner_id = st.selectbox("Vendor", options=df_v["id"].tolist(),
+                                            format_func=lambda i: f"#{i} — {df_v.loc[df_v['id']==i, 'name'].values[0]}",
+                                            key="fm_owner_vendor")
+            # Owner_id can be None for "Other"
+        with c2:
+            tags = st.text_input("Tags (comma-separated)", key="fm_tags")
+            notes = st.text_area("Notes (optional)", height=70, key="fm_notes")
+
+        ups = st.file_uploader("Select files", type=None, accept_multiple_files=True, key="fm_files")
+        if st.button("Upload", key="fm_upload"):
+            if not ups:
+                st.warning("Pick at least one file")
+            else:
+                saved = 0
+                for f in ups:
+                    pth = save_uploaded_file(f, subdir="attachments")
+                    if not pth: 
+                        continue
+                    try:
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("""
+                                INSERT INTO files(owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at)
+                                VALUES(?,?,?,?,?,?,?,?,datetime('now'));
+                            """, (
+                                owner_type, int(owner_id) if owner_id else None, f.name, pth, f.size, _detect_mime(f.name),
+                                tags.strip(), notes.strip()
+                            ))
+                            conn.commit()
+                            saved += 1
+                    except Exception as e:
+                        st.error(f"DB save failed: {e}")
+                st.success(f"Uploaded {saved} file(s).")
+
+    # --- Library & filters ---
+    with st.expander("Library", expanded=True):
+        l1, l2, l3 = st.columns([2,2,2])
+        with l1:
+            f_owner = st.selectbox("Filter by type", ["All", "RFP", "Deal", "Vendor", "Other"], key="fm_f_owner")
+        with l2:
+            f_tag = st.text_input("Tag contains", key="fm_f_tag")
+        with l3:
+            f_kw = st.text_input("Filename contains", key="fm_f_kw")
+
+        q = "SELECT id, owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at FROM files WHERE 1=1"
+        params = []
+        if f_owner and f_owner != "All":
+            q += " AND owner_type=?"; params.append(f_owner)
+        if f_tag:
+            q += " AND tags LIKE ?"; params.append(f"%{f_tag}%")
+        if f_kw:
+            q += " AND filename LIKE ?"; params.append(f"%{f_kw}%")
+        q += " ORDER BY uploaded_at DESC"
+        df_files = pd.read_sql_query(q, conn, params=params)
+        if df_files.empty:
+            st.write("No files yet.")
+        else:
+            st.dataframe(df_files.drop(columns=["path"]), use_container_width=True, hide_index=True)
+            # Per-row controls
+            for _, r in df_files.iterrows():
+                c1, c2, c3, c4 = st.columns([3,2,2,2])
+                with c1:
+                    st.caption(f"#{int(r['id'])} — {r['filename']} ({r['owner_type']} {int(r['owner_id']) if r['owner_id'] else ''})")
+                with c2:
+                    new_tags = st.text_input("Tags", value=r.get("tags") or "", key=f"fm_row_tags_{int(r['id'])}")
+                with c3:
+                    new_notes = st.text_input("Notes", value=r.get("notes") or "", key=f"fm_row_notes_{int(r['id'])}")
+                with c4:
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        if st.button("Save", key=f"fm_row_save_{int(r['id'])}"):
+                            with closing(conn.cursor()) as cur:
+                                cur.execute("UPDATE files SET tags=?, notes=? WHERE id=?;", (new_tags.strip(), new_notes.strip(), int(r["id"])))
+                                conn.commit()
+                            st.success("Updated")
+                    with b2:
+                        if st.button("Delete", key=f"fm_row_del_{int(r['id'])}"):
+                            with closing(conn.cursor()) as cur:
+                                cur.execute("DELETE FROM files WHERE id=?;", (int(r["id"]),))
+                                conn.commit()
+                            try:
+                                import os
+                                if r.get("path") and os.path.exists(r["path"]):
+                                    os.remove(r["path"])
+                            except Exception:
+                                pass
+                            st.success("Deleted"); st.rerun()
+
+    # --- Submission Kit (ZIP) ---
+    st.subheader("Submission Kit (ZIP)")
+    df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+    if df_rf_all.empty:
+        st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
+        return
+
+    kit_rfp = st.selectbox("RFP", options=df_rf_all["id"].tolist(),
+                           format_func=lambda rid: f"#{rid} — {df_rf_all.loc[df_rf_all['id']==rid,'title'].values[0]}",
+                           key="fm_kit_rfp")
+
+    # Load files for this RFP
+    df_kit = pd.read_sql_query("SELECT id, filename, path, tags FROM files WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;",
+                               conn, params=(int(kit_rfp),))
+    st.caption("Select attachments to include")
+    selected = []
+    if df_kit.empty:
+        st.write("No attachments linked to this RFP yet.")
+    else:
+        for _, r in df_kit.iterrows():
+            if st.checkbox(f"{r['filename']}  {('['+r['tags']+']') if r.get('tags') else ''}", key=f"fm_ck_{int(r['id'])}"):
+                selected.append(int(r["id"]))
+
+    # Optional: include generated docs if they exist
+    st.markdown("**Optional generated docs to include (if found):**")
+    gen_paths = []
+    # Proposal doc
+    prop_path = str(Path(DATA_DIR) / f"Proposal_RFP_{int(kit_rfp)}.docx")
+    if Path(prop_path).exists():
+        if st.checkbox("Include Proposal DOCX", key="fm_inc_prop"):
+            gen_paths.append(prop_path)
+    # Past Performance writeups
+    pp_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
+    if Path(pp_path).exists():
+        if st.checkbox("Include Past Performance DOCX", key="fm_inc_pp"):
+            gen_paths.append(pp_path)
+    # White papers (include any)
+    white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
+    if white_candidates:
+        inc_wp = st.multiselect("Include White Papers", options=[str(p) for p in white_candidates],
+                                format_func=lambda p: Path(p).name, key="fm_inc_wp")
+        gen_paths.extend(inc_wp)
+
+    if st.button("Build ZIP", type="primary", key="fm_build_zip"):
+        if not selected and not gen_paths:
+            st.warning("Select at least one attachment or generated document.")
+        else:
+            # Collect paths
+            rows = []
+            if selected:
+                ph = ",".join(["?"]*len(selected))
+                df_sel = pd.read_sql_query(f"SELECT filename, path FROM files WHERE id IN ({ph});", conn, params=selected)
+                for _, r in df_sel.iterrows():
+                    rows.append((r["filename"], r["path"]))
+            for p in gen_paths:
+                rows.append((Path(p).name, p))
+
+            # Create ZIP
+            from zipfile import ZipFile, ZIP_DEFLATED
+            ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+            zip_path = str(Path(DATA_DIR) / f"submission_kit_RFP_{int(kit_rfp)}_{ts}.zip")
+            try:
+                with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as z:
+                    for fname, p in rows:
+                        try:
+                            z.write(p, arcname=fname)
+                        except Exception:
+                            pass
+                    # Add a manifest
+                    manifest = "Submission Kit Manifest\n"
+                    manifest += f"RFP ID: {int(kit_rfp)}\n"
+                    manifest += "\nIncluded files:\n" + "\n".join(f"- {fname}" for fname, _ in rows)
+                    z.writestr("MANIFEST.txt", manifest)
+                st.success("Submission kit created")
+                st.markdown(f"[Download ZIP]({zip_path})")
+            except Exception as e:
+                st.error(f"ZIP failed: {e}")
+
 # ---------- nav + main ----------
 def init_session() -> None:
     if "initialized" not in st.session_state:
@@ -2800,6 +3023,7 @@ def nav() -> str:
             "RFP Analyzer",
             "L and M Checklist",
             "Proposal Builder",
+            "File Manager",
             "Past Performance",
             "White Paper Builder",
             "Subcontractor Finder",
@@ -2825,6 +3049,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_lm_checklist(conn)
     elif page == "Proposal Builder":
         run_proposal_builder(conn)
+    elif page == "File Manager":
+        run_file_manager(conn)
     elif page == "Past Performance":
         run_past_performance(conn)
     elif page == "White Paper Builder":
