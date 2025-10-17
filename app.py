@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ===== app.py =====
 
 def _strip_markdown_to_plain(txt: str) -> str:
@@ -23,7 +24,7 @@ def _strip_markdown_to_plain(txt: str) -> str:
     # Strip blockquote markers
     s = _re.sub(r"^[ \t]*>[ \t]?", "", s, flags=_re.MULTILINE)
     # Remove list markers
-    s = _re.sub(r"^[ \t]*([-*•]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
+    s = _re.sub(r"^[ \t]*([-**]|\d+\.)[ \t]+", "", s, flags=_re.MULTILINE)
     # Remove table pipes (keep content)
     s = _re.sub(r"^\|", "", s, flags=_re.MULTILINE)
     s = _re.sub(r"\|$", "", s, flags=_re.MULTILINE)
@@ -260,10 +261,10 @@ def _render_markdown_to_docx(doc, md_text):
                 _add_paragraph_with_inlines(doc, text)
             continue
 
-        # Bullets: -, *, •
-        if _re.match(r'^\s*(\-|\*|•)\s+', line):
+        # Bullets: -, *, *
+        if _re.match(r'^\s*(\-|\*|*)\s+', line):
             flush_numbers()
-            bullet_buf.append(_re.sub(r'^\s*(\-|\*|•)\s+', '', line, count=1))
+            bullet_buf.append(_re.sub(r'^\s*(\-|\*|*)\s+', '', line, count=1))
             continue
 
         # Numbered: 1. text
@@ -389,8 +390,8 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
             flush_bullets(); flush_numbers(); doc.add_heading(line[3:].strip(), level=2); continue
         if line.startswith("# "):
             flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
-        if _re.match(r"^(\-|\*|•)\s+", line):
-            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+        if _re.match(r"^(\-|\*|*)\s+", line):
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|*)\s+", "", line, count=1)); continue
         if _re.match(r"^\d+\.\s+", line):
             flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
         flush_bullets(); flush_numbers(); doc.add_paragraph(line)
@@ -458,8 +459,8 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
             flush_bullets(); flush_numbers(); doc.add_heading(line[3:].strip(), level=2); continue
         if line.startswith("# "):
             flush_bullets(); flush_numbers(); doc.add_heading(line[2:].strip(), level=1); continue
-        if _re.match(r"^(\-|\*|•)\s+", line):
-            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1)); continue
+        if _re.match(r"^(\-|\*|*)\s+", line):
+            flush_numbers(); bullet_buf.append(_re.sub(r"^(\-|\*|*)\s+", "", line, count=1)); continue
         if _re.match(r"^\d+\.\s+", line):
             flush_bullets(); num_buf.append(_re.sub(r"^\d+\.\s+", "", line, count=1)); continue
         flush_bullets(); flush_numbers(); doc.add_paragraph(line)
@@ -532,11 +533,9 @@ def _tenancy_phase1_bootstrap():
             role TEXT NOT NULL CHECK(role IN('Admin','Member','Viewer')),
             created_at TEXT NOT NULL
         );""")
-        # Seed a default org and 3 users if empty
         row = cur.execute("SELECT COUNT(*) FROM orgs").fetchone()
         if row and row[0] == 0:
             cur.execute("INSERT OR IGNORE INTO orgs(id, name, created_at) VALUES(?,?,datetime('now'))", ('org-default','Default Org'))
-        # Ensure at least one user exists for the default org
         rowu = cur.execute("SELECT COUNT(*) FROM users").fetchone()
         if rowu and rowu[0] == 0:
             users = [
@@ -545,19 +544,19 @@ def _tenancy_phase1_bootstrap():
                 ('user-charles','org-default','charles@example.com','Charles','Viewer'),
             ]
             for uid, oid, email, name, role in users:
-                cur.execute("INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                            (uid, oid, email, name, role)
+                cur.execute(
+                    "INSERT OR IGNORE INTO users(id, org_id, email, display_name, role, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                    (uid, oid, email, name, role),
+                )
         conn.commit()
     except Exception as ex:
-        # Do not break startup on bootstrap failure
         try: log_json('error', 'tenancy_bootstrap_failed', error=str(ex))
         except Exception: pass
-
 try:
     _tenancy_phase1_bootstrap()
 except Exception:
     pass
-# === TENANCY EARLY BOOTSTRAP END ===
+    pass
 
 
 # === EARLY DB BOOTSTRAP START ===
@@ -1093,7 +1092,8 @@ try:
 except Exception:
     class _Stub:
         def cache_data(self, **kw):
-            def deco(fn): return fn:
+            def deco(fn):
+                return fn
             return deco
     st = _Stub()
 
@@ -1498,10 +1498,10 @@ def _do_login():
                         # fallback create if missing
                         oid = "org-ela"
                         conn.execute("INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES(?,?,datetime('now'))", (oid, "ELA Management LLC"))
-                        uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                                     (uid, oid, f"{user.lower()}@ela.local", user, "Member")
-                        st.session_state["user_id"] = uid
+                                     (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
+                        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                                     (uid, oid, f"{user.lower()}@ela.local", user, "Member"))
                         st.session_state["org_id"] = oid
                         st.session_state["role"] = "Member"
                     st.session_state.setdefault("private_mode", True)
@@ -1521,7 +1521,7 @@ def _do_login():
                         oid = cur[0] if cur else "org-ela"
                         uid = f"u-{user.lower()}"
                         conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member')
+                                     (uid, oid, f"{user.lower()}@ela.local", user, 'Member'))
                         st.session_state["user_id"] = uid
                         st.session_state["org_id"] = oid
                         st.session_state["role"] = 'Member'
@@ -1624,7 +1624,7 @@ with st.sidebar:
 with st.sidebar:
     st.subheader("Security")
     with st.expander("Change My PIN", expanded=False):
-        st.write("Update your sign-in PIN. New PIN must be 4–12 characters.")
+        st.write("Update your sign-in PIN. New PIN must be 4-12 characters.")
         curr = st.text_input("Current PIN", type="password", key="pin_cur")
         new1 = st.text_input("New PIN", type="password", key="pin_new1")
         new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
@@ -1632,7 +1632,7 @@ with st.sidebar:
             if not _verify_pin(ACTIVE_USER, curr or ''):
                 st.error("Current PIN is incorrect.")
             elif not new1 or len(new1) < 4 or len(new1) > 12:
-                st.error("New PIN must be 4–12 characters.")
+                st.error("New PIN must be 4-12 characters.")
             elif new1 != new2:
                 st.error("New PINs do not match.")
             else:
@@ -1685,7 +1685,7 @@ with st.sidebar:
                 st.exception(RuntimeError(f"{label}: {e}"))
 # === End multi-user block ===
 
-# === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
+# === Outreach Email (per-user) - Gmail SMTP (added 2025-10-08) ===
 # Supports per-user "From" emails, stored credentials, and a sidebar composer.
 import smtplib
 from email.message import EmailMessage
@@ -1721,7 +1721,7 @@ def _save_mail_store(store: dict):
 def set_user_smtp_app_password(user: str, app_password: str):
     store = _load_mail_store()
     u = store.get(user, {})
-    # Light obfuscation (not true encryption) — recommend using Gmail App Passwords
+    # Light obfuscation (not true encryption) - recommend using Gmail App Passwords
     u["smtp_host"] = "smtp.gmail.com"
     u["smtp_port"] = 587
     u["username"] = USER_EMAILS.get(user, "")
@@ -2388,7 +2388,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         "from_addr": from_addr,
     }
 
-    st.subheader("Email – Outreach")
+    st.subheader("Email - Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
         st.caption("No email configured for this user. Only Charles and Collin are set up.")
@@ -3291,7 +3291,7 @@ def sam_search(
                             "min_due_days": min_days, "noticeType": notice_types,
                             "active": active, "limit": limit}}
         if df.empty:
-            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+            info["hint"] = "Try min_days=0-1, add keyword, increase look-back, or clear noticeType."
         return df, info
     except requests.RequestException as e:
         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
@@ -3554,12 +3554,12 @@ def _render_identity_chip():
         if oname or uname:
             c1, c2, c3 = st.columns([0.6,0.2,0.2])
             with c3:
-                st.caption(f"Org: {oname or 'unknown'}  •  User: {uname or 'unknown'}  •  Role: {role or 'unknown'}")
+                st.caption(f"Org: {oname or 'unknown'}  *  User: {uname or 'unknown'}  *  Role: {role or 'unknown'}")
     except Exception as _ex:
         import streamlit as st
         st.caption("identity: n/a")
 _render_identity_chip()
-st.caption("SubK sourcing • SAM watcher • proposals • outreach • CRM • goals • chat with memory & file uploads")
+st.caption("SubK sourcing * SAM watcher * proposals * outreach * CRM * goals * chat with memory & file uploads")
 DB_PATH = "data/app.db"
 
 NAICS_SEEDS = [
@@ -3889,8 +3889,8 @@ def _ensure_tenancy_phase1():
         ("u-collin",  org_id, "collin@ela.local",  "Collin",  "Member"),
     ]
     for uid, oid, email, dname, role in defaults:
-        cur.execute("""INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at)
-                       VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role)
+        conn.execute("INSERT OR IGNORE INTO users(id,org_id,email,display_name,role,created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                       (VALUES(?,?,?,?,?,datetime('now'))""", (uid, oid, email, dname, role))
     conn.commit()
 
 def current_user_role():
@@ -4113,12 +4113,12 @@ def to_xlsx_bytes(df_dict):
 
 
 
-def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_font: str = None, require_size_pt: int = None,
+def _validate_text_for_guardrails(md_text: str, page_limits: int = None, require_font: str = None, require_size_pt: int = None,
                                   margins_in: float = None, line_spacing: float = None, filename_pattern: str = None):
     """
     Lightweight validator used across export flows.
     Returns a tuple: (issues: list[str], estimated_pages: int)
-    Heuristics only — cannot actually inspect fonts from Markdown.
+    Heuristics only - cannot actually inspect fonts from Markdown.
     """
     import math, re as _re
     text = (md_text or "").strip()
@@ -4146,8 +4146,8 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
 def _normalize_markdown_sections(md_text: str) -> str:
     """
     Clean common generation artifacts:
-      • Collapse immediately repeated headings with the same text
-      • Trim double spaces after heading text
+      - Collapse immediately repeated headings with the same text
+      - Trim double spaces after heading text
     """
     if not md_text:
         return md_text
@@ -4185,7 +4185,7 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
     """
     Minimal Markdown-ish to DOCX converter:
       - Headings: lines starting with #, ##, ### map to H1/H2/H3
-      - Bullets: lines starting with -, *, or • map to bullets
+      - Bullets: lines starting with -, *, or * map to bullets
       - Numbered: lines like "1. text" map to numbered list (approx)
       - Everything else is a normal paragraph
     Returns bytes of the generated .docx file.
@@ -4268,9 +4268,9 @@ def _md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New
             continue
 
         # Bullets
-        if re.match(r"^(\-|\*|•)\s+", line):
+        if re.match(r"^(\-|\*|*)\s+", line):
             flush_numbers()
-            bullet_buf.append(re.sub(r"^(\-|\*|•)\s+", "", line, count=1))
+            bullet_buf.append(re.sub(r"^(\-|\*|*)\s+", "", line, count=1))
             continue
 
         # Numbered list approx (e.g., "1. step")
@@ -4649,7 +4649,7 @@ try:
                 value_amt = st.number_input("Contract value", min_value=0.0, step=1000.0)
                 role = st.text_input("Role", value="Prime")
                 location = st.text_input("Location", value="")
-                highlights = st.text_area("Highlights bullets", height=120, value="• Scope coverage\n• Key metrics\n• Outcomes")
+                highlights = st.text_area("Highlights bullets", height=120, value="* Scope coverage\n* Key metrics\n* Outcomes")
             contact_name = st.text_input("POC name", value="")
             contact_email = st.text_input("POC email", value="")
             contact_phone = st.text_input("POC phone", value="")
@@ -4888,7 +4888,7 @@ with legacy_tabs[0]:
 
         conn.commit()
         __ctx_pipeline = True
-        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+        st.success(f"Saved - updated {updated} row(s), deleted {deleted} row(s).")
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
@@ -5085,7 +5085,7 @@ with legacy_tabs[1]:
             if info and not info.get("ok", True):
                 msg += f" ({info.get('reason','')})"
             if not GOOGLE_PLACES_KEY:
-                msg += " — Google Places key is missing."
+                msg += " - Google Places key is missing."
             st.warning(msg)
 
 
@@ -5526,7 +5526,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
             if not best.empty and USER_EMAILS.get(ACTIVE_USER, ""):
                 lines = ["Top SAM results (auto digest)"]
                 for _, r in best.iterrows():
-                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
+                    lines.append(f"* [{int(r['Score'])}] {str(r.get('title',''))[:90]} - {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
                 try:
                     send_outreach_email(ACTIVE_USER, USER_EMAILS.get(ACTIVE_USER), "SAM Watch: Daily digest", "<br>".join(lines)
                     cur.execute("insert into sam_history(ts_utc,user,action) values(?,?,?)", (str(now_utc), ACTIVE_USER, "digest_sent"))
@@ -5555,7 +5555,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         email = USER_EMAILS.get(ACTIVE_USER, get_setting("company_email","")
         summary = str(row.get("description",""))[:1200]
 
-        md = f"""# {company} – Proposal Draft
+        md = f"""# {company} - Proposal Draft
 **Opportunity:** {title}
 **Agency:** {agency}
 **Solicitation #:** {sol}
@@ -5855,7 +5855,7 @@ except Exception:
                     if not best.empty:
                         lines = ["Top SAM results (auto)"]
                         for _, r in best.iterrows():
-                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
+                            lines.append(f"* [{int(r['Score'])}] {str(r.get('title',''))[:90]} - {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
                         try:
                             send_outreach_email(ACTIVE_USER, email_to_self, "SAM Watch: Top matches", "<br>".join(lines)
                             st.info(f"Emailed {len(best)} matches to {email_to_self}")
@@ -5931,7 +5931,7 @@ except Exception:
         if st.button("Save selected to pipeline"):
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
-            st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+            st.success(f"Saved to pipeline - inserted {ins}, updated {upd}.")
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 try:
     _ss = locals().get('save_sel', None)
@@ -5982,7 +5982,7 @@ except Exception as _e_sync:
 # [disabled to fix indentation]                             body = f"<p>Hello Contracting Officer,</p><p>We reviewed <strong>{str(r.get('title',''))}</strong> at {str(r.get('agency',''))}. We have relevant past performance and would like to confirm points of contact and any site-visit details.</p><p>Regards,<br>{get_setting('company_name','ELA Management LLC')}</p>"
 # [disabled to fix indentation]                             bods.append({"to":"","subject":subj,"body":body,"vendor_id":0})
 # [disabled to fix indentation]                         st.session_state['mail_bodies'] = bods
-# [disabled to fix indentation]                         st.success("Drafts prepared — open the Outreach tab to review and send.")
+# [disabled to fix indentation]                         st.success("Drafts prepared - open the Outreach tab to review and send.")
 # [disabled to fix indentation]                 except Exception as _e_prep:
 # [disabled to fix indentation]                     st.caption(f"[CO outreach prep note: {_e_prep}]")
     else:
@@ -6045,9 +6045,9 @@ with legacy_tabs[6]:
     company = get_setting("company_name", "ELA Management LLC")
     tagline = st.text_input("Tagline", key="cap_tagline_input_capability_builder", value="Responsive project management for federal facilities and services")
     core = st.text_area("Core competencies", key="cap_core_textarea_capability_builder", value="Janitorial Landscaping Staffing Logistics Construction Support IT Charter buses Lodging Security Education Training Disaster relief")
-    diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization • Quality controls • Transparent reporting • Nationwide partner network")
+    diff = st.text_area("Differentiators", key="cap_diff_textarea_capability_builder", value="Fast mobilization * Quality controls * Transparent reporting * Nationwide partner network")
     past_perf = st.text_area("Representative experience", key="cap_past_textarea_capability_builder", value="Project A: Custodial support, 100k sq ft. Project B: Grounds keeping, 200 acres.")
-    contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC • info@elamanagement.com • 555 555 5555 • UEI XXXXXXX • CAGE XXXXX")
+    contact = st.text_area("Contact info", key="cap_contact_textarea_capability_builder", value="ELA Management LLC * info@elamanagement.com * 555 555 5555 * UEI XXXXXXX * CAGE XXXXX")
 
     c1, c2, c3 = st.columns([1,1,2])
 
@@ -6089,7 +6089,7 @@ with legacy_tabs[7]:
     st.subheader("White paper builder")
     title = st.text_input("Title", key="wp_title_input_whitepaper_builder", value="Improving Facility Readiness with Outcome based Service Contracts")
     thesis = st.text_area("Thesis", key="wp_thesis_textarea_whitepaper_builder", value="Outcome based service contracts reduce total cost and improve satisfaction when paired with clear SLAs and transparent data.")
-    audience = st.text_input("Audience", key="wp_audience_input_whitepaper_builder", value="Facility Managers • Contracting Officers • Program Managers")
+    audience = st.text_input("Audience", key="wp_audience_input_whitepaper_builder", value="Facility Managers * Contracting Officers * Program Managers")
 
     col_w1, col_w2, col_w3 = st.columns([1,1,2])
     with col_w1:
@@ -6177,7 +6177,7 @@ with legacy_tabs[11]:
             st.info("Select a valid session to continue.")
         else:
             cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
-            st.caption(f"Session #{session_id} — {cur_title}")
+            st.caption(f"Session #{session_id} - {cur_title}")
 
             # File uploads for this chat session
             up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT)", type=["pdf","docx","doc","txt"],
@@ -7747,7 +7747,7 @@ def render_rfp_panel():
     meta = _get_notice_meta(nid)
     st.markdown("---")
     st.subheader("RFP Analyzer")
-    st.caption(f"{meta['title']}  •  {meta['agency']}  •  Due {meta['due'] or 'n/a'}")
+    st.caption(f"{meta['title']}  *  {meta['agency']}  *  Due {meta['due'] or 'n/a'}")
 
     # Controls
     c1, c2 = st.columns([1,1])
@@ -8720,7 +8720,7 @@ except Exception as _ex:
 # LEGACY_REMOVED                             "min_due_days": min_days, "noticeType": notice_types,
 # LEGACY_REMOVED                             "active": active, "limit": limit}}
 # LEGACY_REMOVED         if df.empty:
-# LEGACY_REMOVED             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+# LEGACY_REMOVED             info["hint"] = "Try min_days=0-1, add keyword, increase look-back, or clear noticeType."
 # LEGACY_REMOVED         return df, info
 # LEGACY_REMOVED     except requests.RequestException as e:
 # LEGACY_REMOVED         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
@@ -8856,7 +8856,7 @@ with st.sidebar:
     st.markdown(f"**OpenAI Key:** {_ok(bool(OPENAI_API_KEY))}")
     st.markdown(f"**Google Places Key:** {_ok(bool(GOOGLE_PLACES_KEY))}")
     st.markdown(f"**SAM.gov Key:** {_ok(bool(SAM_API_KEY))}")
-    st.caption(f"OpenAI SDK: {_openai_version} • Model: {OPENAI_MODEL}")
+    st.caption(f"OpenAI SDK: {_openai_version} * Model: {OPENAI_MODEL}")
     if st.button("Test model"):
         st.info(llm("You are a health check.", "Reply READY.", max_tokens=5)
     # Company identifiers (ELA Management LLC)
@@ -9242,11 +9242,11 @@ def render_proposal_builder():
                     heading = (user_prompt.split('\n', 1)[0].strip() or 'Section')
                     tmpl = [
                         f'## {heading}',
-                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
-                        '• Roles and responsibilities: Identify key staff and escalation paths.',
-                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
-                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
-                        '• Compliance notes: Where Section L & M items are satisfied.',
+                        '* Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
+                        '* Roles and responsibilities: Identify key staff and escalation paths.',
+                        '* Quality assurance: Inspections, KPIs, and corrective actions.',
+                        '* Risk mitigation: Top risks and mitigations tied to timeline.',
+                        '* Compliance notes: Where Section L & M items are satisfied.',
                     ]
                     return '\n'.join(tmpl)
                 try:
@@ -9258,11 +9258,11 @@ def render_proposal_builder():
                     heading = (user_prompt.split('\n', 1)[0].strip() or 'Section')
                     tmpl = [
                         f'## {heading}',
-                        '• Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
-                        '• Roles and responsibilities: Identify key staff and escalation paths.',
-                        '• Quality assurance: Inspections, KPIs, and corrective actions.',
-                        '• Risk mitigation: Top risks and mitigations tied to timeline.',
-                        '• Compliance notes: Where Section L & M items are satisfied.',
+                        '* Approach overview: Describe how we will fulfill the PWS tasks with measurable SLAs.',
+                        '* Roles and responsibilities: Identify key staff and escalation paths.',
+                        '* Quality assurance: Inspections, KPIs, and corrective actions.',
+                        '* Risk mitigation: Top risks and mitigations tied to timeline.',
+                        '* Compliance notes: Where Section L & M items are satisfied.',
                     ]
                     return '\n'.join(tmpl)
                 return _out
@@ -9300,7 +9300,7 @@ def render_proposal_builder():
                 df_sel = pd.read_sql_query(f"select title, agency, performance_period, value, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
                 lines = []
                 for _, r in df_sel.iterrows():
-                    lines.append(f"- {r['title']} — {r['agency']} ({r['performance_period']}) — ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                    lines.append(f"- {r['title']} - {r['agency']} ({r['performance_period']}) - ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
                 pp_text = "\n".join(lines)
 
             # Build common system context
@@ -9616,9 +9616,9 @@ def md_to_docx_bytes(md_text: str, title: str = "", base_font: str = "Times New 
             doc.add_heading(line[2:].strip(), level=1)
             continue
 
-        if _re.match(r"^(\-|\*|•)\s+", line):
+        if _re.match(r"^(\-|\*|*)\s+", line):
             flush_numbers()
-            bullet_buf.append(_re.sub(r"^(\-|\*|•)\s+", "", line, count=1))
+            bullet_buf.append(_re.sub(r"^(\-|\*|*)\s+", "", line, count=1))
             continue
 
         if _re.match(r"^\d+\.\s+", line):
@@ -10444,7 +10444,7 @@ egacy_tabs[13]:
                     for i, stage_name in enumerate(DEAL_STAGES):
                         with cols[i]:
                             st.markdown(f"#### {stage_name}")
-                            st.caption(f"{int(_counts.get(stage_name, 0))} deals • ${float(_totals.get(stage_name, 0.0)):,.2f}")
+                            st.caption(f"{int(_counts.get(stage_name, 0))} deals * ${float(_totals.get(stage_name, 0.0)):,.2f}")
 
                             # Quick add in this stage
                             with st.container(border=True):
@@ -10476,7 +10476,7 @@ egacy_tabs[13]:
                                         try: badge += f"  ·  RFQ coverage: {float(_cov):.0f}%":
                                         except Exception: pass
                                     st.markdown(f"**{row['title']}**{badge}")
-                                    st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
+                                    st.caption(f"Owner: {row['owner'] or 'Unassigned'}  *  Amount: ${float(row['amount'] or 0):,.2f}")
                                     kc1, kc2 = st.columns([1,1])
                                     with kc1:
                                         next_action = st.text_input('Next action', value=row.get('next_action') or '', key=f"next_{row['id']}")
@@ -11061,7 +11061,7 @@ def _send_team_alert(msg: str):
 
 
 
-# === [MERGE UI] SAM Watch — Minimal UI (final) ===
+# === [MERGE UI] SAM Watch - Minimal UI (final) ===
 try:
     import streamlit as _st
     # Helper to build a stable selection key even if ACTIVE_USER is missing
@@ -11241,7 +11241,7 @@ except Exception as _e_ui:
 # === [END MERGE UI] ===
 
 
-# === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
+# === Deals tab (formerly Deadlines) - standalone UI with hyperlinks ===
 try:
     with tabs[TAB['Deals']]:
         st.subheader("Deals")
@@ -12553,19 +12553,19 @@ def _rfp_panel_ui(notice_id: int):
             st.write(data.get("brief", "")
             st.subheader("Factors")
             for f in data.get("factors", []):
-                st.write("• " + f)
+                st.write("* " + f)
             st.subheader("Clauses")
             for c in data.get("clauses", []):
-                st.write("• " + c)
+                st.write("* " + c)
             st.subheader("Dates")
             for k, v in (data.get("dates") or {}).items():
                 st.write(f"{k}: {v}")
             st.subheader("Forms")
             for f in data.get("forms", []):
-                st.write("• " + f)
+                st.write("* " + f)
             st.subheader("Milestones")
             for m in data.get("milestones", []):
-                st.write("• " + m)
+                st.write("* " + m)
         st.markdown("---")
         st.subheader("Q and A")
         q = st.text_input("Ask a question about this RFP")
@@ -14306,7 +14306,7 @@ def render_sam_watch_minimal_ui():
             return
         for r in rows:
             with st.container(border=True):
-                st.write(r.get("title")); st.caption(f"{r.get('agency','')} • {r.get('notice_type','')} • Due {r.get('due_at','')}")
+                st.write(r.get("title")); st.caption(f"{r.get('agency','')} * {r.get('notice_type','')} * Due {r.get('due_at','')}")
 
 # Integrate fallback into render_sam()
 try:
@@ -14574,7 +14574,7 @@ def render_sam_watch_minimal_ui():
                     st.error(f"Save failed: {ex}")
         for r in rows:
             with st.container(border=True):
-                st.write(r.get("title")); st.caption(f"{r.get('agency','')} • {r.get('notice_type','')} • Due {r.get('due_at','')}")
+                st.write(r.get("title")); st.caption(f"{r.get('agency','')} * {r.get('notice_type','')} * Due {r.get('due_at','')}")
     if _ss_flag() and st.session_state.get("saved_search_modal_open"):
         st.markdown("### Saved Searches")
         conn = get_db(); cur = conn.cursor()
@@ -14584,7 +14584,7 @@ def render_sam_watch_minimal_ui():
             st.info("No saved searches yet.")
         else:
             for rid, name, cad, rec, active, last_run, qj in rows:
-                with st.expander(f"{name} • {cad} • {'active' if active else 'inactive'}", expanded=False):
+                with st.expander(f"{name} * {cad} * {'active' if active else 'inactive'}", expanded=False):
                     st.caption(f"Recipients: {rec}")
                     c1,c2,c3,c4,c5 = st.columns(5)
                     with c1:
@@ -14780,7 +14780,7 @@ def render_proposal_wizard(notice_id: int):
         conn = get_db(); cur = conn.cursor()
         rows = cur.execute("SELECT id, file_name, uploaded_at FROM proposal_files WHERE proposal_id=? ORDER BY id DESC", (pid,)).fetchall()
         for fid, fname, ts in rows:
-            st.caption(f"{fname} • {ts}")
+            st.caption(f"{fname} * {ts}")
         if st.button("Next → Package"):
             st.session_state["wizard_step"] = 4
             (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
@@ -16160,7 +16160,7 @@ def render_vendors(opp_id: int):
             st.caption("No saved vendor searches yet.")
         else:
             for rid, nm, cad, rcps, active, last_run, qj in rows:
-                with st.expander(f"{nm} • {cad} • {'active' if active else 'inactive'}", expanded=False):
+                with st.expander(f"{nm} * {cad} * {'active' if active else 'inactive'}", expanded=False):
                     st.caption(f"Recipients: {rcps}")
                     c1,c2,c3,c4 = st.columns(4)
                     with c1:
@@ -16471,7 +16471,7 @@ def render_rfq_generator(opp_id: int):
         for cl in (an.get("clauses") or [])[:200]:
             cite = cl.get("cite") or {}
             c = f"{cite.get('file','')} p.{cite.get('page')}" if (cite.get('file') or cite.get('page') is not None) else ""
-            st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('• ' + c) if c else ''}")
+            st.caption(f"{cl.get('ref') or ''} {cl.get('title') or ''} {('* ' + c) if c else ''}")
 
 # Attach generator UI below Vendors tab if available
 try:
@@ -16583,7 +16583,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
     st.caption(f'{len(targets)} vendors selected')
     # Subject and body templates
     st.markdown('**Email template**')
-    subj_t = st.text_input('Subject', value='RFQ: {title} — reply by {due_date}', key='rfqg2_subj')
+    subj_t = st.text_input('Subject', value='RFQ: {title} - reply by {due_date}', key='rfqg2_subj')
     body_t = st.text_area('Body', value='Hello {company},\n\nWe invite you to quote for {title}. Please submit by {due_date}.\nOpen your secure link: {link}\n\nThank you.', key='rfqg2_body', height=140)
     # Preview first three
     conn = get_db(); cur = conn.cursor()
@@ -16841,14 +16841,14 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
                 # show latest quote total if any
                 row = cur.execute("SELECT total_price, status, updated_at FROM vendor_quotes WHERE rfq_id=? AND vendor_id=? ORDER BY id DESC LIMIT 1", (int(rfq_id), int(vid))).fetchone()
                 if row and row[0] is not None:
-                    st.caption(f"Total: {row[0]:.2f}  •  updated {row[2]}")
+                    st.caption(f"Total: {row[0]:.2f}  *  updated {row[2]}")
                 # Manual intake form
                 with st.expander("Manual intake / update"):
                     # fetch rfq_lines
                     lines = cur.execute("SELECT id, description FROM rfq_lines WHERE rfq_id=? ORDER BY id", (int(rfq_id),)).fetchall()
                     price_inputs = {}
                     for lid, desc in lines[:200]:
-                        price_inputs[lid] = st.number_input(f"Ext price — {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
+                        price_inputs[lid] = st.number_input(f"Ext price - {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
                     ex = st.text_area("Exceptions / notes", key=f"exc_{vid}")
                     up = st.file_uploader("Attach vendor PDF(s)", type=["pdf","doc","docx"], accept_multiple_files=True, key=f"up_{vid}")
                     c1,c2 = st.columns(2)
@@ -17116,7 +17116,7 @@ def render_vendors(opp_id: int):
             cnt = _p8_seed_vendors_for_notice(int(opp_id)
             st.success(f'Added {cnt} vendors from Finder results')
     with c2:
-        subj = st.text_input('Email subject', value='RFQ for {title} — due {due_date}', key='p8_subj')
+        subj = st.text_input('Email subject', value='RFQ for {title} - due {due_date}', key='p8_subj')
     with c3:
         body = st.text_area('Email body', value='Hello {company},\nPlease quote the attached RFQ. Due {due_date}.', key='p8_body')
     # Pick vendors by state/naics filters
@@ -17124,7 +17124,7 @@ def render_vendors(opp_id: int):
     stt = (cur.execute('SELECT place_state FROM notices WHERE id=?', (int(opp_id),)).fetchone() or [''])[0] or ''
     ncs = (cur.execute('SELECT naics FROM notices WHERE id=?', (int(opp_id),)).fetchone() or [''])[0] or ''
     vrows = cur.execute("SELECT id, name, state, naics, email FROM vendors WHERE (state=? OR ?='') AND (naics LIKE ? OR ?='') ORDER BY name", (stt, stt, f'%{ncs}%', ncs)).fetchall()
-    choices = {f"{v} — {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
+    choices = {f"{v} - {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
     sel = st.multiselect('Target vendors', options=list(choices.keys()))
     target_ids = [choices[k] for k in sel]
     if st.button(f'Send RFQs to {len(target_ids)} vendor(s)', disabled=(len(target_ids)==0)):
@@ -17157,7 +17157,7 @@ def render_vendors(opp_id: int):
         for cid, v, act, d in rows:
             nm = (cur.execute('SELECT name FROM vendors WHERE id=?', (int(v),)).fetchone() or ['Vendor'])[0]
             cA, cB = st.columns([3,1])
-            with cA: st.caption(f"{nm} • {act} • due {d}")
+            with cA: st.caption(f"{nm} * {act} * due {d}")
             with cB:
                 if st.button('Done', key=f'c_done_{cid}'):
                     _p8_mark_chase_done(int(cid)); st.experimental_rerun() if hasattr(st,'experimental_rerun') else st.rerun()
