@@ -1144,13 +1144,13 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     with st.expander("Filters", expanded=True):
         c1, c2, c3, c4 = st.columns([2,2,2,2])
         with c1:
-            f_naics = st.text_input("NAICS", value=default_naics)
+            f_naics = st.text_input("NAICS", value=default_naics, key="filter_naics")
         with c2:
-            f_state = st.text_input("State (e.g., TX)", value=default_state)
+            f_state = st.text_input("State (e.g., TX)", value=default_state, key="filter_state")
         with c3:
-            f_city = st.text_input("City contains")
+            f_city = st.text_input("City contains", key="filter_city")
         with c4:
-            f_kw = st.text_input("Keyword in name/notes")
+            f_kw = st.text_input("Keyword in name/notes", key="filter_kw")
         st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
     with st.expander("Import Vendors (CSV)", expanded=False):
@@ -1194,18 +1194,18 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     with st.expander("Add Vendor", expanded=False):
         c1, c2, c3 = st.columns([2,2,2])
         with c1:
-            v_name = st.text_input("Company name")
-            v_email = st.text_input("Email")
-            v_phone = st.text_input("Phone")
+            v_name = st.text_input("Company name", key="add_name")
+            v_email = st.text_input("Email", key="add_email")
+            v_phone = st.text_input("Phone", key="add_phone")
         with c2:
-            v_city = st.text_input("City")
-            v_state = st.text_input("State")
-            v_naics = st.text_input("NAICS")
+            v_city = st.text_input("City", key="add_city")
+            v_state = st.text_input("State", key="add_state")
+            v_naics = st.text_input("NAICS", key="add_naics")
         with c3:
-            v_cage = st.text_input("CAGE")
-            v_uei = st.text_input("UEI")
-            v_site = st.text_input("Website")
-        v_notes = st.text_area("Notes", height=80)
+            v_cage = st.text_input("CAGE", key="add_cage")
+            v_uei = st.text_input("UEI", key="add_uei")
+            v_site = st.text_input("Website", key="add_site")
+        v_notes = st.text_area("Notes", height=80, key="add_notes")
         if st.button("Save Vendor"):
             if not v_name.strip():
                 st.error("Name is required")
