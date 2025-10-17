@@ -859,6 +859,74 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
 
+
+    # --- ensure Phase P tables/views exist + safe read helper ---
+    def _ensure_sam_p_schema(_conn: sqlite3.Connection):
+        with closing(_conn.cursor()) as _c:
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS sam_searches(
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    auto_push INTEGER DEFAULT 0,
+                    created_at TEXT,
+                    updated_at TEXT
+                );
+            """)
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS sam_watch(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT UNIQUE,
+                    title TEXT,
+                    solnum TEXT,
+                    agency TEXT,
+                    posted TEXT,
+                    link TEXT,
+                    added_at TEXT
+                );
+            """)
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS sam_runs(
+                    id INTEGER PRIMARY KEY,
+                    search_id INTEGER REFERENCES sam_searches(id) ON DELETE CASCADE,
+                    run_at TEXT,
+                    new_count INTEGER,
+                    seen_ids TEXT
+                );
+            """)
+            # Tenancy-aware views if current_tenant exists; otherwise simple passthrough views
+            try:
+                _c.execute("""CREATE VIEW IF NOT EXISTS sam_searches_t AS
+                              SELECT * FROM sam_searches
+                              WHERE COALESCE(tenant_id,(SELECT ctid FROM current_tenant WHERE id=1)) =
+                                    (SELECT ctid FROM current_tenant WHERE id=1);""")
+            except Exception:
+                _c.execute("CREATE VIEW IF NOT EXISTS sam_searches_t AS SELECT * FROM sam_searches;")
+            try:
+                _c.execute("""CREATE VIEW IF NOT EXISTS sam_watch_t AS
+                              SELECT * FROM sam_watch
+                              WHERE COALESCE(tenant_id,(SELECT ctid FROM current_tenant WHERE id=1)) =
+                                    (SELECT ctid FROM current_tenant WHERE id=1);""")
+            except Exception:
+                _c.execute("CREATE VIEW IF NOT EXISTS sam_watch_t AS SELECT * FROM sam_watch;")
+            try:
+                _c.execute("""CREATE VIEW IF NOT EXISTS sam_runs_t AS
+                              SELECT * FROM sam_runs
+                              WHERE COALESCE(tenant_id,(SELECT ctid FROM current_tenant WHERE id=1)) =
+                                    (SELECT ctid FROM current_tenant WHERE id=1);""")
+            except Exception:
+                _c.execute("CREATE VIEW IF NOT EXISTS sam_runs_t AS SELECT * FROM sam_runs;")
+            _conn.commit()
+
+    def _safe_read(sql1: str, sql_fallback: str | None = None, params: tuple = ()):
+        try:
+            return pd.read_sql_query(sql1, conn, params=params)
+        except Exception:
+            if sql_fallback:
+                return pd.read_sql_query(sql_fallback, conn, params=params)
+            raise
+
+    _ensure_sam_p_schema(conn)
     st.header("SAM Watch")
     st.caption("Save searches, monitor watchlist, and push winners to Deals.")
 
@@ -1027,7 +1095,8 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
     # ---------- SAVED TAB ----------
     with tab_saved:
-        df_s = pd.read_sql_query("SELECT id, name, auto_push, created_at, updated_at FROM sam_searches_t ORDER BY id DESC;", conn)
+        df_s = _safe_read("SELECT id, name, auto_push, created_at, updated_at FROM sam_searches_t ORDER BY id DESC;",
+                  "SELECT id, name, auto_push, created_at, updated_at FROM sam_searches ORDER BY id DESC;")
         if df_s.empty:
             st.info("No saved searches yet.")
         else:
@@ -1073,7 +1142,9 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                 pass
             with c2:
                 if st.button("Export Alerts CSV", key="sam_saved_alert_csv"):
-                    df_r = pd.read_sql_query("SELECT run_at, new_count FROM sam_runs_t WHERE search_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(s_sel),))
+                    df_r = _safe_read("SELECT run_at, new_count FROM sam_runs_t WHERE search_id=? ORDER BY id DESC LIMIT 1;",
+                  "SELECT run_at, new_count FROM sam_runs WHERE search_id=? ORDER BY id DESC LIMIT 1;",
+                  params=(int(s_sel),))
                     last = df_r.iloc[0].to_dict() if not df_r.empty else {"run_at":"—","new_count":0}
                     df_srow = df_s[df_s["id"]==s_sel].iloc[0]
                     csvp = Path(DATA_DIR) / f"sam_alert_{int(s_sel)}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -1099,7 +1170,8 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
     # ---------- WATCHLIST TAB ----------
     with tab_watch:
-        df_w = pd.read_sql_query("SELECT id, notice_id, title, solnum, agency, posted, link, added_at FROM sam_watch_t ORDER BY added_at DESC;", conn)
+        df_w = _safe_read("SELECT id, notice_id, title, solnum, agency, posted, link, added_at FROM sam_watch_t ORDER BY added_at DESC;",
+                  "SELECT id, notice_id, title, solnum, agency, posted, link, added_at FROM sam_watch ORDER BY added_at DESC;")
         st.dataframe(df_w, use_container_width=True, hide_index=True)
 
         w_sel = st.multiselect("Select watchlist items", options=df_w["id"].astype(int).tolist() if not df_w.empty else [], key="sam_watch_sel",
