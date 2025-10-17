@@ -1300,41 +1300,88 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
     return int(round(done / max(1, total) * 100))
 
 
+
 def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
     """
-    Robust loader that prefers tenancy views (*_t) but falls back to base tables
-    if those views are not present in the current schema.
+    Robust loader:
+      1) If tenancy views exist (lm_items_t/lm_meta_t), use them.
+      2) Else if base tables exist (lm_items/lm_meta), use them.
+      3) Else return lm_items-only with blank meta columns.
     """
-    q_view = """
-        SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
-               COALESCE(m.owner,'') AS owner,
-               COALESCE(m.ref_page,'') AS ref_page,
-               COALESCE(m.ref_para,'') AS ref_para,
-               COALESCE(m.evidence,'') AS evidence,
-               COALESCE(m.risk,'Green') AS risk,
-               COALESCE(m.notes,'') AS notes
-        FROM lm_items_t i
-        LEFT JOIN lm_meta_t m ON m.lm_id = i.id
-        WHERE i.rfp_id = ?
-        ORDER BY i.id;
-    """
-    q_base = """
-        SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
-               COALESCE(m.owner,'') AS owner,
-               COALESCE(m.ref_page,'') AS ref_page,
-               COALESCE(m.ref_para,'') AS ref_para,
-               COALESCE(m.evidence,'') AS evidence,
-               COALESCE(m.risk,'Green') AS risk,
-               COALESCE(m.notes,'') AS notes
-        FROM lm_items i
-        LEFT JOIN lm_meta m ON m.lm_id = i.id
-        WHERE i.rfp_id = ?
-        ORDER BY i.id;
-    """
+    # Ensure lm_meta exists (no-op if already there)
     try:
-        return pd.read_sql_query(q_view, conn, params=(rfp_id,))
+        with closing(conn.cursor()) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS lm_meta(\n"
+                      " id INTEGER PRIMARY KEY,\n"
+                      " lm_id INTEGER REFERENCES lm_items(id) ON DELETE CASCADE,\n"
+                      " owner TEXT, ref_page TEXT, ref_para TEXT, evidence TEXT, risk TEXT, notes TEXT\n"
+                      ");")
+            conn.commit()
     except Exception:
-        return pd.read_sql_query(q_base, conn, params=(rfp_id,))
+        pass
+
+    def _has(name: str) -> bool:
+        try:
+            q = "SELECT name FROM sqlite_master WHERE name=?;"
+            return pd.read_sql_query(q, conn, params=(name,)).shape[0] > 0
+        except Exception:
+            return False
+
+    use_views = _has("lm_items_t")
+    use_meta_view = _has("lm_meta_t")
+
+    if use_views and use_meta_view:
+        q = """
+            SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
+                   COALESCE(m.owner,'') AS owner,
+                   COALESCE(m.ref_page,'') AS ref_page,
+                   COALESCE(m.ref_para,'') AS ref_para,
+                   COALESCE(m.evidence,'') AS evidence,
+                   COALESCE(m.risk,'Green') AS risk,
+                   COALESCE(m.notes,'') AS notes
+            FROM lm_items_t i
+            LEFT JOIN lm_meta_t m ON m.lm_id = i.id
+            WHERE i.rfp_id = ?
+            ORDER BY i.id;
+        """
+        try:
+            return pd.read_sql_query(q, conn, params=(rfp_id,))
+        except Exception:
+            pass  # fall through
+
+    # Base tables path (works even if lm_meta is empty)
+    if _has("lm_items"):
+        # Only join lm_meta if it truly exists (older DBs may lack it)
+        if _has("lm_meta"):
+            q = """
+                SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
+                       COALESCE(m.owner,'') AS owner,
+                       COALESCE(m.ref_page,'') AS ref_page,
+                       COALESCE(m.ref_para,'') AS ref_para,
+                       COALESCE(m.evidence,'') AS evidence,
+                       COALESCE(m.risk,'Green') AS risk,
+                       COALESCE(m.notes,'') AS notes
+                FROM lm_items i
+                LEFT JOIN lm_meta m ON m.lm_id = i.id
+                WHERE i.rfp_id = ?
+                ORDER BY i.id;
+            """
+        else:
+            q = """
+                SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
+                       '' AS owner, '' AS ref_page, '' AS ref_para, '' AS evidence, 'Green' AS risk, '' AS notes
+                FROM lm_items i
+                WHERE i.rfp_id = ?
+                ORDER BY i.id;
+            """
+        try:
+            return pd.read_sql_query(q, conn, params=(rfp_id,))
+        except Exception:
+            pass
+
+    # Final fallback: empty frame with expected columns
+    cols = ["lm_id","item_text","is_must","status","owner","ref_page","ref_para","evidence","risk","notes"]
+    return pd.DataFrame(columns=cols)
 
 def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
     rows = []
