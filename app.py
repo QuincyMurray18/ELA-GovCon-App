@@ -1055,6 +1055,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             st.caption("We'll auto-extract Section L/M checklist items, CLINs, key dates, and POCs.")
 
         if run:
+            
             # ---- load text ----
             text_parts = []
             if up is not None:
@@ -1067,16 +1068,16 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         text_parts.append(data.decode("latin-1", errors="ignore"))
                 elif name.endswith(".pdf"):
                     try:
-                        import PyPDF2  # type: ignore
+                        import io, PyPDF2  # type: ignore
                         reader = PyPDF2.PdfReader(io.BytesIO(data))
-                        pages = [p.extract_text() or "" for p in reader.pages]
+                        pages = [(p.extract_text() or "") for p in reader.pages]
                         text_parts.append("\n".join(pages))
                     except Exception as e:
                         st.warning(f"PDF text extraction failed: {e}. Falling back to binary decode.")
                         text_parts.append(data.decode("latin-1", errors="ignore"))
                 elif name.endswith(".docx"):
                     try:
-                        import docx  # python-docx
+                        import io, docx  # python-docx
                         f = io.BytesIO(data)
                         doc = docx.Document(f)
                         text_parts.append("\n".join([p.text for p in doc.paragraphs]))
@@ -1084,15 +1085,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         st.warning(f"DOCX parse failed: {e}. Try uploading a TXT or PDF.")
                 else:
                     st.error("Unsupported file type")
+
             if pasted:
                 text_parts.append(pasted)
-            full_text = "
 
-".join([t for t in text_parts if t]).strip()
-
-            if not full_text:
-                st.error("No text to parse. Upload a file or paste text.")
-                return
+            full_text = "\n\n".join([t for t in text_parts if t]).strip()
 
             # ---- derive artifacts ----
             secs = extract_sections_L_M(full_text)
