@@ -899,205 +899,166 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.caption(f"Posted: {row.get('Posted') or '—'} • Due: {row.get('Response Due') or '—'}")
                 if row.get('SAM Link'):
                     st.link_button('Open on SAM', row['SAM Link'])
-with right_col:
-    st.markdown('### Details')
-    raw_map = st.session_state.get('sam_raw_map', {}) or {}
-    cand_ids = [str(row.get('Notice ID') or ''), str(row.get('Solicitation') or '')]
-    rec = None
-    for cid in cand_ids:
-        if cid in raw_map:
-            rec = raw_map[cid]; break
 
-    meta_lines = []
-    if isinstance(rec, dict):
-        type_sa = rec.get('typeOfSetAsideDescription') or rec.get('typeOfSetAside') or ''
-        naics = rec.get('naics') or rec.get('naicsCode') or ''
-        psc = rec.get('psc') or rec.get('classificationCode') or ''
-        dept = rec.get('department') or rec.get('subTier') or rec.get('office') or ''
-        status = rec.get('status') or ''
-        proc = rec.get('procurementType') or ''
-        pop = rec.get('placeOfPerformance')
+            with right_col:
+                st.markdown('### Details')
+                raw_map = st.session_state.get('sam_raw_map', {}) or {}
+                cand_ids = [str(row.get(k) or '') for k in ('Notice ID', 'Record ID', 'Notice ID Raw', 'Record ID Raw') if row.get(k)]
+                rec = None
+                for cid in cand_ids:
+                    if cid and cid in raw_map:
+                        rec = raw_map[cid]; break
 
-        if proc: meta_lines.append(f"- **Procurement Type**: {proc}")
-        if type_sa: meta_lines.append(f"- **Set-Aside**: {type_sa}")
-        if naics: meta_lines.append(f"- **NAICS**: {naics}")
-        if psc: meta_lines.append(f"- **PSC**: {psc}")
-        if dept: meta_lines.append(f"- **Org/Office**: {dept}")
-        if status: meta_lines.append(f"- **Status**: {status}")
-        if isinstance(pop, dict):
-            meta_lines.append(f"- **Place of Performance**: {_pretty_place_of_performance(pop)}")
+                def _pretty_place_of_performance(pop: dict) -> str:
+                    if not isinstance(pop, dict):
+                        return ''
+                    city = (pop.get('city') or {}).get('name') if isinstance(pop.get('city'), dict) else ''
+                    state = (pop.get('state') or {}).get('code') if isinstance(pop.get('state'), dict) else (pop.get('state') or '')
+                    zipc = pop.get('zip') or ''
+                    country = (pop.get('country') or {}).get('code') if isinstance(pop.get('country'), dict) else (pop.get('country') or '')
+                    parts = [p for p in [city, state, zipc, country] if p]
+                    return ", ".join(parts)
 
-        contacts = _extract_contacts(rec)
-        if contacts:
-            clines = []
-            for c in contacts:
-                name = c.get("name") or "POC"
-                parts = [name]
-                if c.get("role"): parts.append(f"({c['role']})")
-                if c.get("email"): parts.append(c["email"])
-                if c.get("phone"): parts.append(c["phone"])
-                clines.append(" ".join(parts))
-            meta_lines.append("- **POC/CO**:
-  - " + "\n  - ".join(clines))
+                def _extract_contacts(r: dict):
+                    out = []
+                    if isinstance(r, dict):
+                        for key in ('primaryPointOfContact', 'secondaryPointOfContact', 'additionalPointOfContact'):
+                            c = r.get(key)
+                            if isinstance(c, dict):
+                                out.append({
+                                    "name": c.get('fullName') or c.get('name') or '',
+                                    "role": c.get('type') or '',
+                                    "email": c.get('email') or '',
+                                    "phone": c.get('phone') or '',
+                                })
+                        contacts = r.get('contacts')
+                        if isinstance(contacts, list):
+                            for c in contacts:
+                                if isinstance(c, dict):
+                                    out.append({
+                                        "name": c.get('fullName') or c.get('name') or '',
+                                        "role": c.get('type') or '',
+                                        "email": c.get('email') or '',
+                                        "phone": c.get('phone') or '',
+                                    })
+                    return [c for c in out if any(v for v in c.values())]
 
-        addr = _extract_address(rec)
-        if addr:
-            meta_lines.append(f"- **Address/POP**: {addr}")
+                def _extract_address(r: dict) -> str:
+                    addr = r.get('placeOfPerformance') or r.get('address') or {}
+                    if not isinstance(addr, dict):
+                        return ''
+                    city = addr.get('city') or ''
+                    state = addr.get('state') or ''
+                    zipcode = addr.get('zipcode') or addr.get('zip') or ''
+                    if not city and isinstance(addr.get('city'), dict):
+                        city = addr['city'].get('name') or ''
+                    if not state and isinstance(addr.get('state'), dict):
+                        state = addr['state'].get('code') or addr['state'].get('name') or ''
+                    parts = [p for p in [zipcode, city, state] if p]
+                    return ", ".join(parts)
 
-    if meta_lines:
-        st.markdown("\n".join(meta_lines))
-    else:
-        st.caption('No additional metadata available from API for this notice.')
+                meta_lines = []
+                if isinstance(rec, dict):
+                    type_sa = rec.get('typeOfSetAsideDescription') or rec.get('typeOfSetAside') or ''
+                    naics = rec.get('naics') or rec.get('naicsCode') or ''
+                    psc = rec.get('psc') or rec.get('classificationCode') or ''
+                    dept = rec.get('department') or rec.get('subTier') or rec.get('office') or ''
+                    status = rec.get('status') or ''
+                    proc = rec.get('procurementType') or ''
+                    pop = rec.get('placeOfPerformance')
 
-    st.markdown('### Documents')
-    def _extract_docs(r: dict):
-        docs = []
-        if not isinstance(r, dict):
-            return docs
+                    if proc: meta_lines.append(f"- **Procurement Type**: {proc}")
+                    if type_sa: meta_lines.append(f"- **Set-Aside**: {type_sa}")
+                    if naics: meta_lines.append(f"- **NAICS**: {naics}")
+                    if psc: meta_lines.append(f"- **PSC**: {psc}")
+                    if dept: meta_lines.append(f"- **Org/Office**: {dept}")
+                    if status: meta_lines.append(f"- **Status**: {status}")
+                    if isinstance(pop, dict):
+                        meta_lines.append(f"- **Place of Performance**: {_pretty_place_of_performance(pop)}")
 
-        def add_doc(it):
-            if not isinstance(it, dict):
-                return
-            name = it.get('fileName') or it.get('name') or it.get('title') or it.get('description')
-            url = it.get('url') or it.get('href') or it.get('link') or it.get('resourceLink')
-            size = it.get('fileSize') or it.get('size') or ''
-            mime = it.get('mimeType') or it.get('type') or ''
-            if url:
-                docs.append({'name': name or (url.split('/')[-1] if isinstance(url, str) else 'document'),
-                             'url': url, 'size': size, 'type': mime})
+                    contacts = _extract_contacts(rec)
+                    if contacts:
+                        clines = []
+                        for c in contacts:
+                            name = c.get("name") or "POC"
+                            parts = [name]
+                            if c.get("role"): parts.append(f"({c['role']})")
+                            if c.get("email"): parts.append(c["email"])
+                            if c.get("phone"): parts.append(c["phone"])
+                            clines.append(" ".join(parts))
+                        meta_lines.append("- **POC/CO**:\n  - " + "\n  - ".join(clines))
 
-        for key in ['attachments','documents','resourceLinks','links']:
-            vals = r.get(key)
-            if isinstance(vals, list):
-                for it in vals:
-                    add_doc(it)
+                    addr = _extract_address(rec)
+                    if addr:
+                        meta_lines.append(f"- **Address/POP**: {addr}")
 
-        for key in ['data','attributes']:
-            vals = r.get(key)
-            if isinstance(vals, dict):
-                for subk in ['attachments','documents','resourceLinks','links']:
-                    arr = vals.get(subk)
-                    if isinstance(arr, list):
-                        for it in arr:
-                            add_doc(it)
-
-        uniq, seen = [], set()
-        for d in docs:
-            u = d.get('url')
-            if u and u not in seen:
-                seen.add(u); uniq.append(d)
-        return uniq
-
-    docs = _extract_docs(rec or {})
-
-    def _looks_placeholder(u: str) -> bool:
-        return isinstance(u, str) and "search?noticeid=" in u.lower()
-
-    if (not docs) or all(_looks_placeholder(d.get('url','')) for d in docs):
-        nid = str(row.get('Notice ID') or '')
-        docs = _fetch_attachments_from_api(nid, api_key) or []
-
-    if not docs:
-        st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
-    else:
-        for i, d in enumerate(docs):
-            st.write(f"- {d['name']}  •  {d.get('type') or ''}  •  {d.get('size') or ''}")
-            try:
-                u = d.get('url') or ''
-                if isinstance(u, str) and u.lower().startswith('http') and any(u.lower().endswith(ext) for ext in ['.pdf','.doc','.docx','.xlsx','.xls','.txt','.zip']):
-                    import requests
-                    resp = requests.get(u, timeout=10)
-                    if resp.status_code == 200 and resp.content:
-                        st.download_button('Download', resp.content, file_name=d['name'] or f'doc_{i}', key=f"sam_doc_{row.get('Notice ID','')}_{i}")
-                    else:
-                        if row.get('SAM Link'):
-                            st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
+                if meta_lines:
+                    st.markdown("\n".join(meta_lines))
                 else:
-                    if row.get('SAM Link'):
-                        st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
-            except Exception:
-                if row.get('SAM Link'):
-                    st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
-        with st.expander("Opportunity Details", expanded=True):
-            c1, c2 = st.columns([3, 2])
-            with c1:
-                st.write(f"**Title:** {row['Title']}")
-                st.write(f"**Solicitation:** {row['Solicitation']}")
-                st.write(f"**Type:** {row['Type']}")
-                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row.get('Set-Aside Code','')})")
-                st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
-                st.write(f"**Agency Path:** {row['Agency Path']}")
-            with c2:
-                st.write(f"**Posted:** {row['Posted']}")
-                st.write(f"**Response Due:** {row['Response Due']}")
-                st.write(f"**Notice ID:** {row['Notice ID']}")
-                if row['SAM Link']:
-                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
+                    st.caption('No additional metadata available from API for this notice.')
 
-        c3, c4, c5 = st.columns([2, 2, 2])
-        with c3:
-            if st.button("Add to Deals", key="sam_add_to_deals"):
-                notice_id = str(row.get("Notice ID") or "")
-                solnum = str(row.get("Solicitation") or "")
-                try:
-                    df_chk = pd.read_sql_query(
-                        "SELECT id, title FROM deals_t WHERE (COALESCE(notice_id,'')=? AND notice_id!='') "
-                        "OR (COALESCE(solnum,'')=? AND solnum!='');",
-                        conn, params=(notice_id, solnum)
-                    )
-                except Exception:
-                    df_chk = pd.DataFrame()
+                st.markdown('### Documents')
+                def _extract_docs(r: dict):
+                    docs = []
+                    if not isinstance(r, dict):
+                        return docs
 
-                if not df_chk.empty:
-                    deal_id = int(df_chk.iloc[0]["id"])
-                    st.info(f"Already in Deals as #{deal_id} — {df_chk.iloc[0]['title']}")
-                else:
+                    def add_doc(it):
+                        if not isinstance(it, dict):
+                            return
+                        title = it.get('title') or it.get('fileName') or ''
+                        url = it.get('url') or it.get('link') or ''
+                        size = it.get('size') or it.get('fileSize') or ''
+                        typ = it.get('type') or it.get('fileType') or ''
+                        if title or url:
+                            docs.append({"title": title, "url": url, "size": size, "type": typ})
+
+                    for k in ('attachments', 'links', 'documents', 'additionalInfo'):
+                        val = r.get(k)
+                        if isinstance(val, list):
+                            for it in val:
+                                add_doc(it)
+                    return docs
+
+                def _fetch_attachments_from_api(notice_id: str, api_key: str):
                     try:
-                        with closing(conn.cursor()) as cur:
-                            cur.execute(
-                                """
-                                INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                """,
-                                (
-                                    row["Title"],
-                                    row["Agency Path"],
-                                    "Bidding",
-                                    None,
-                                    notice_id,
-                                    solnum,
-                                    row["Posted"],
-                                    row["Response Due"],
-                                    row["NAICS"],
-                                    row["PSC"],
-                                    row["SAM Link"],
-                                ),
-                            )
-                            conn.commit()
-                        st.success("Saved to Deals")
-                    except Exception as e:
-                        st.error(f"Failed to save deal: {e}")
-        with c4:
-            if st.button("Push to RFP Analyzer", key="sam_push_to_rfp"):
-                st.session_state["rfp_selected_notice"] = row.to_dict()
-                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-        with c5:
-            st.caption("Use Open in SAM for attachments and full details")
+                        base = "https://api.sam.gov/prod/opportunities/v2/search"
+                        params = {"noticeid": notice_id, "limit": 1, "api_key": api_key}
+                        import requests
+                        resp = requests.get(base, params=params, timeout=15)
+                        if resp.status_code == 200:
+                            data = resp.json() or {}
+                            arr = data.get('opportunitiesData') or data.get('data') or []
+                            docs = []
+                            for rec_item in arr:
+                                docs.extend(_extract_docs(rec_item))
+                            return docs
+                    except Exception:
+                        return []
+                    return []
 
-def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
-    st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
-    
+                docs = _extract_docs(rec or {})
 
-    # --- heuristics to auto-fill Title and Solicitation # ---
-    def _guess_title(text: str, fallback: str) -> str:
-        for line in (text or "").splitlines():
-            s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
-                return s[:200]
-        return fallback
+                def _looks_placeholder(u: str) -> bool:
+                    return isinstance(u, str) and "search?noticeid=" in u.lower()
 
-    def _guess_solnum(text: str) -> str:
+                if (not docs) or all(_looks_placeholder(d.get('url','')) for d in docs):
+                    nid = str(row.get('Notice ID') or '')
+                    docs = _fetch_attachments_from_api(nid, api_key) or []
+
+                if not docs:
+                    st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
+                else:
+                    for d in docs[:50]:
+                        title = d.get('title') or 'Attachment'
+                        url = d.get('url') or ''
+                        meta = " ".join([x for x in [d.get('type') or '', str(d.get('size') or '')] if x]).strip()
+                        if url:
+                            st.write(f"• [{title}]({url})  {'— ' + meta if meta else ''}")
+                        else:
+                            st.write(f"• {title}  {'— ' + meta if meta else ''}")
+        except Exception as ex:
+            st.warning(f"Details panel unavailable: {ex}")
         if not text:
             return ""
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
