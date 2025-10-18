@@ -1096,7 +1096,38 @@ def extract_sections_L_M(text: str) -> dict:
     import re
     out: dict[str, str] = {}
     if not text:
-        return out
+        # Add short aliases for downstream compatibility
+    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
+    for k in list(out.keys()):
+        lk = k.lower()
+        if lk.startswith('section l') or 'instructions' in lk:
+            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
+        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
+            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
+    return out
+
+# -------- derive L/M checklist items (failsafe) --------
+def derive_lm_items(text: str) -> list[str]:
+    """
+    Extract bullet-like lines from L/M sections to seed the compliance checklist.
+    Very tolerant; returns short, de-duplicated items.
+    """
+    import re
+    if not text:
+        return []
+    # Split on bullet markers / numbering
+    parts = re.split(r"(?m)^\s*(?:[-*•]\s+|\d+[)\.]\s+|[A-Z]\)\s+)", text)
+    out = []
+    seen = set()
+    for p in parts:
+        s = re.sub(r"\s+", " ", p.strip())
+        if 8 <= len(s) <= 280:
+            # Prefer lines that look like instructions/requirements
+            if re.search(r"(?i)shall|must|required|submit|provide|include|no later than|will", s) or s.endswith(('.', ';')):
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
+    return out[:200]
 
     # Candidate anchors (case-insensitive, line-start)
     anchors = [
@@ -1117,7 +1148,15 @@ def extract_sections_L_M(text: str) -> dict:
     if not marks:
         # Fallback: return the full text under a generic key
         out["Full Text"] = text
-        return out
+        # Add short aliases for downstream compatibility
+    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
+    for k in list(out.keys()):
+        lk = k.lower()
+        if lk.startswith('section l') or 'instructions' in lk:
+            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
+        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
+            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
+    return out
 
     for i, (pos, label) in enumerate(marks):
         end = marks[i+1][0] if i + 1 < len(marks) else len(text)
@@ -1129,6 +1168,14 @@ def extract_sections_L_M(text: str) -> dict:
         else:
             out[label] = chunk
 
+    # Add short aliases for downstream compatibility
+    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
+    for k in list(out.keys()):
+        lk = k.lower()
+        if lk.startswith('section l') or 'instructions' in lk:
+            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
+        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
+            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
     return out
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
@@ -2040,6 +2087,14 @@ def _smtp_settings() -> Dict[str, Any]:
                     out[k] = v
             except Exception:
                 pass
+    # Add short aliases for downstream compatibility
+    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
+    for k in list(out.keys()):
+        lk = k.lower()
+        if lk.startswith('section l') or 'instructions' in lk:
+            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
+        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
+            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
     return out
 
 
@@ -2093,6 +2148,14 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
     out = t
     for k, v in repl.items():
         out = out.replace(f"{{{{{k}}}}}", str(v))
+    # Add short aliases for downstream compatibility
+    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
+    for k in list(out.keys()):
+        lk = k.lower()
+        if lk.startswith('section l') or 'instructions' in lk:
+            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
+        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
+            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
     return out
 
 
