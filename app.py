@@ -4264,7 +4264,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     elif page == "RFP Analyzer":
         run_rfp_analyzer(conn)
     elif page == "L and M Checklist":
-        run_lm_checklist(conn)
+        globals().get('run_lm_checklist', lambda _c: None)(conn)
     elif page == "Proposal Builder":
         run_proposal_builder(conn)
         # Phase V panel
