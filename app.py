@@ -4089,6 +4089,32 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
+    # Safety shim: ensure _ensure_lm_tables is available in this scope
+    if '_ensure_lm_tables' not in globals():
+        def _ensure_lm_tables(conn: sqlite3.Connection) -> None:
+            with closing(conn.cursor()) as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS lm_items(
+                        id INTEGER PRIMARY KEY,
+                        rfp_id INTEGER NOT NULL,
+                        item_text TEXT,
+                        is_must INTEGER DEFAULT 0,
+                        status TEXT DEFAULT 'Open'
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS lm_meta(
+                        id INTEGER PRIMARY KEY,
+                        lm_id INTEGER REFERENCES lm_items(id) ON DELETE CASCADE,
+                        owner TEXT,
+                        ref_page TEXT,
+                        ref_para TEXT,
+                        evidence TEXT,
+                        risk TEXT DEFAULT 'Green',
+                        notes TEXT
+                    );
+                """)
+                conn.commit()
     """L&M Checklist: view, add items, flag issues, and export."""
     _ensure_lm_tables(conn)
     st.header("L&M Checklist")
