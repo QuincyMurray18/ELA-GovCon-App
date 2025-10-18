@@ -1119,6 +1119,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             return (m.group(1).upper() + "-" + m.group(2))[:60]
         return ""
 # ---------------- PARSE & SAVE ----------------
+    tab_parse, tab_checklist, tab_clinss = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
     with tab_parse:
         colA, colB = st.columns([3,2])
         with colA:
@@ -1291,7 +1292,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         import pandas as _pd
         from contextlib import closing as _closing_ed
         with st.expander('Manual Editors', expanded=False):
-            tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
+            tab_lm, tab_clins, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
             with tab_lm:
                 try:
                     df_lm_e = _pd.read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
@@ -1308,7 +1309,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                             cur.execute('INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);', (int(rid), txt, int(r.get('is_must') or 0), str(r.get('status') or 'Open')))
                         conn.commit()
                     st.success('L/M saved.')
-            with tab_clin:
+            with tab_clins:
                 try:
                     df_c_e = _pd.read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
