@@ -711,6 +711,9 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
         with st.spinner(f"Searching SAM.gov... (page {page_index+1})"):
             out = sam_search_cached(params)
+            raw_records = out.get('records') or []
+            raw_map = {str(r.get('noticeId') or r.get('id') or r.get('solicitationNumber') or ''): r for r in raw_records}
+            st.session_state['sam_raw_map'] = raw_map
 
         if out.get("error"):
             st.error(out["error"])
@@ -776,6 +779,118 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i], key="sam_pick")
         row = results_df.iloc[idx]
 
+        # (X.3a) Right-side details drawer with full metadata & documents
+        try:
+            left_col, right_col = st.columns([3, 4])
+            with left_col:
+                st.markdown('### Notice')
+                st.markdown(f"**{row.get('Title','')}**")
+                st.caption(f"Sol#: {row.get('Solicitation') or '—'} • Type: {row.get('Type') or '—'} • Set-Aside: {row.get('Set-Aside') or '—'}")
+                st.caption(f"NAICS: {row.get('NAICS') or '—'} • PSC: {row.get('PSC') or '—'}")
+                st.caption(f"Posted: {row.get('Posted') or '—'} • Due: {row.get('Response Due') or '—'}")
+                if row.get('SAM Link'):
+                    st.link_button('Open on SAM', row['SAM Link'])
+        
+            with right_col:
+                st.markdown('### Details')
+                raw_map = st.session_state.get('sam_raw_map', {}) or {}
+                cand_ids = [str(row.get('Notice ID') or ''), str(row.get('Solicitation') or '')]
+                rec = None
+                for cid in cand_ids:
+                    if cid in raw_map:
+                        rec = raw_map[cid]; break
+        
+                meta_lines = []
+                if isinstance(rec, dict):
+                    for key in ['procurementType','typeOfSetAside','typeOfSetAsideDescription','naics','psc','department',
+                                'office','subTier','placeOfPerformance','classificationCode','organizationType','status']:
+                        val = rec.get(key)
+                        if val:
+                            meta_lines.append(f"- **{key.replace('_',' ').title()}**: {val}")
+        
+                    poc = None
+                    for k in ['pointOfContact','primaryPointOfContact','contacts','contact']:
+                        if k in rec and rec[k]:
+                            poc = rec[k]; break
+                    if poc:
+                        meta_lines.append(f"- **POC/CO**: {poc}")
+        
+                    addr = None
+                    for k in ['address','officeAddress','contractingOfficeAddress','placeOfPerformance']:
+                        if k in rec and rec[k]:
+                            addr = rec[k]; break
+                    if addr:
+                        meta_lines.append(f"- **Address/POP**: {addr}")
+        
+                if meta_lines:
+                    st.markdown('\n'.join(meta_lines))
+                else:
+                    st.caption('No additional metadata available from API for this notice.')
+        
+                st.markdown('### Documents')
+                def _extract_docs(r: dict):
+                    docs = []
+                    if not isinstance(r, dict):
+                        return docs
+        
+                    def add_doc(it):
+                        if not isinstance(it, dict):
+                            return
+                        name = it.get('fileName') or it.get('name') or it.get('title') or it.get('description')
+                        url = it.get('url') or it.get('href') or it.get('link') or it.get('resourceLink')
+                        size = it.get('fileSize') or it.get('size') or ''
+                        mime = it.get('mimeType') or it.get('type') or ''
+                        if url:
+                            docs.append({'name': name or (url.split('/')[-1] if isinstance(url, str) else 'document'),
+                                         'url': url, 'size': size, 'type': mime})
+        
+                    for key in ['attachments','documents','resourceLinks','links']:
+                        vals = r.get(key)
+                        if isinstance(vals, list):
+                            for it in vals:
+                                add_doc(it)
+        
+                    for key in ['data','attributes']:
+                        vals = r.get(key)
+                        if isinstance(vals, dict):
+                            for subk in ['attachments','documents','resourceLinks','links']:
+                                arr = vals.get(subk)
+                                if isinstance(arr, list):
+                                    for it in arr:
+                                        add_doc(it)
+        
+                    uniq, seen = [], set()
+                    for d in docs:
+                        u = d.get('url')
+                        if u and u not in seen:
+                            seen.add(u); uniq.append(d)
+                    return uniq
+        
+                docs = _extract_docs(rec or {})
+                if not docs:
+                    st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
+                else:
+                    for i, d in enumerate(docs):
+                        st.write(f"- {d['name']}  •  {d.get('type') or ''}  •  {d.get('size') or ''}")
+                        try:
+                            u = d['url']
+                            if isinstance(u, str) and u.lower().startswith('http') and any(u.lower().endswith(ext) for ext in ['.pdf','.doc','.docx','.xlsx','.xls','.txt']):
+                                import requests
+                                resp = requests.get(u, timeout=10)
+                                if resp.status_code == 200 and resp.content:
+                                    st.download_button('Download', resp.content, file_name=d['name'] or f'doc_{i}', key=f'sam_doc_{i}')
+                                else:
+                                    if row.get('SAM Link'):
+                                        st.link_button('Open on SAM', row['SAM Link'])
+                            else:
+                                if row.get('SAM Link'):
+                                    st.link_button('Open on SAM', row['SAM Link'])
+                        except Exception:
+                            if row.get('SAM Link'):
+                                st.link_button('Open on SAM', row['SAM Link'])
+        
+        except Exception as _x3a_err:
+            st.caption(f'Details panel temporarily unavailable: {type(_x3a_err).__name__}')
         with st.expander("Opportunity Details", expanded=True):
             c1, c2 = st.columns([3, 2])
             with c1:
