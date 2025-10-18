@@ -1053,26 +1053,23 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
+            if len(s) >= 8 and not s.lower().startswith(("solicitation", "request for", "rfp", "rfq", "sources sought")):
                 return s[:200]
         return fallback
 
     def _guess_solnum(text: str) -> str:
-def _guess_solnum(text: str) -> str:
-    if not text:
+        if not text:
+            return ""
+        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
+        if m:
+            return m.group(2)[:60]
+        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
+        if m:
+            return m.group(1)[:60]
+        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
+        if m:
+            return (m.group(1).upper() + "-" + m.group(2))[:60]
         return ""
-    m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
-    if m:
-        return m.group(2)[:60]
-    m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
-    if m:
-        return m.group(1)[:60]
-    m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
-    if m:
-        return (m.group(1).upper() + "-" + m.group(2))[:60]
-    return ""
-
-    # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
         if not text: return ""
         m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
@@ -1702,7 +1699,7 @@ with cexp:
 
 
 def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Optional[int] = None) -> float:
-    """Rough page estimate at common spacings for 11pt fonts."""
+    # Rough page estimate at common spacings for 11pt fonts.
     if words_per_page is None:
         s = (spacing or "1.15").strip().lower()
         if s in {"1", "1.0", "single"}:
@@ -1882,11 +1879,8 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                     with closing(conn.cursor()) as cur:
                         for _, r in df.iterrows():
                             cur.execute(
-                                """
-                                INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                                VALUES(?,?,?,?,?,?,?,?,?,?)
-                                ;
-                                """,
+                            cur.execute(
+                                "INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes) VALUES (?,?,?,?,?,?,?,?,?,?);",
                                 (
                                     str(r.get("name",""))[:200],
                                     str(r.get("cage",""))[:20],
@@ -1898,9 +1892,8 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                                     str(r.get("email",""))[:120],
                                     str(r.get("website",""))[:200],
                                     str(r.get("notes",""))[:500],
-                                ),
+                                )
                             )
-                            n+=1
                     conn.commit()
                     st.success(f"Imported {n} vendors")
             except Exception as e:
@@ -1928,19 +1921,16 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 try:
                     with closing(conn.cursor()) as cur:
                         cur.execute(
-                            """
-                            INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                            VALUES(?,?,?,?,?,?,?,?,?,?)
-                            ;
-                            """,
-                            (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
+                    with closing(conn.cursor()) as cur:
+                        cur.execute(
+                            "INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes) VALUES (?,?,?,?,?,?,?,?,?,?);",
+                            (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip())
                         )
                         conn.commit()
-                    st.success("Vendor saved")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
-    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors_t WHERE 1=1"
+    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors WHERE 1=1"
     params: List[Any] = []
     if f_naics:
         q += " AND (naics LIKE ? )"
@@ -2061,7 +2051,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     if vendor_ids:
         ph = ",".join(["?"] * len(vendor_ids))
         df_sel = pd.read_sql_query(
-            f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});",
+            f"SELECT id, name, email, phone, city, state, naics FROM vendors WHERE id IN ({ph});",
             conn,
             params=vendor_ids,
         )
@@ -2069,7 +2059,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         st.info("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
         f_naics = st.text_input("NAICS filter")
         f_state = st.text_input("State filter")
-        q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+        q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
         params: List[Any] = []
         if f_naics:
             q += " AND naics LIKE ?"
@@ -2247,15 +2237,9 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.subheader("Comparison")
     df_target = pd.read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? GROUP BY clin, description ORDER BY clin;", conn, params=(rfp_id,))
     df_lines = pd.read_sql_query("""
-        SELECT q.vendor, l.clin, l.qty, l.unit_price, l.extended_price
-        FROM quote_lines l
-        JOIN quotes q ON q.id = l.quote_id
-        WHERE q.rfp_id=?
-    """, conn, params=(rfp_id,))
+    df_lines = pd.read_sql_query("SELECT q.vendor, l.clin, l.qty, l.unit_price, l.extended_price FROM quote_lines l JOIN quotes q ON q.id = l.quote_id WHERE q.rfp_id=?;", conn, params=(rfp_id,))
     if df_lines.empty:
-        st.info("No quote lines yet.")
-        return
-
+        st.info("No quote lines yet."); return
     mat = df_lines.pivot_table(index="clin", columns="vendor", values="extended_price", aggfunc="sum").fillna(0.0)
     mat = mat.sort_index()
     st.dataframe(mat.style.format("{:,.2f}"), use_container_width=True)
@@ -3471,7 +3455,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                                             format_func=lambda i: f"#{i} — {df_deal.loc[df_deal['id']==i, 'title'].values[0]}",
                                             key="fm_owner_deal")
             elif owner_type == "Vendor":
-                df_v = pd.read_sql_query("SELECT id, name FROM vendors_t ORDER BY name;", conn)
+                df_v = pd.read_sql_query("SELECT id, name FROM vendors ORDER BY name;", conn)
                 if not df_v.empty:
                     owner_id = st.selectbox("Vendor", options=df_v["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_v.loc[df_v['id']==i, 'name'].values[0]}",
@@ -3860,7 +3844,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     # ---- Vendors ----
     st.markdown("### Vendors")
     try:
-        df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors_t ORDER BY name;", conn)
+        df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors ORDER BY name;", conn)
     except Exception as e:
         st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
@@ -4395,4 +4379,3 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 pre[key_name] = b
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
-
