@@ -899,140 +899,140 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.caption(f"Posted: {row.get('Posted') or '—'} • Due: {row.get('Response Due') or '—'}")
                 if row.get('SAM Link'):
                     st.link_button('Open on SAM', row['SAM Link'])
-with right_col:
-    st.markdown('### Details')
-    raw_map = st.session_state.get('sam_raw_map', {}) or {}
-    cand_ids = [str(row.get('Notice ID') or ''), str(row.get('Solicitation') or '')]
-    rec = None
-    for cid in cand_ids:
-        if cid in raw_map:
-            rec = raw_map[cid]; break
-
-    meta_lines = []
-    if isinstance(rec, dict):
-        type_sa = rec.get('typeOfSetAsideDescription') or rec.get('typeOfSetAside') or ''
-        naics = rec.get('naics') or rec.get('naicsCode') or ''
-        psc = rec.get('psc') or rec.get('classificationCode') or ''
-        dept = rec.get('department') or rec.get('subTier') or rec.get('office') or ''
-        status = rec.get('status') or ''
-        proc = rec.get('procurementType') or ''
-        pop = rec.get('placeOfPerformance')
-
-        if proc: meta_lines.append(f"- **Procurement Type**: {proc}")
-        if type_sa: meta_lines.append(f"- **Set-Aside**: {type_sa}")
-        if naics: meta_lines.append(f"- **NAICS**: {naics}")
-        if psc: meta_lines.append(f"- **PSC**: {psc}")
-        if dept: meta_lines.append(f"- **Org/Office**: {dept}")
-        if status: meta_lines.append(f"- **Status**: {status}")
-        if isinstance(pop, dict):
-            meta_lines.append(f"- **Place of Performance**: {_pretty_place_of_performance(pop)}")
-
-        contacts = _extract_contacts(rec)
-        if contacts:
-            clines = []
-            for c in contacts:
-                name = c.get("name") or "POC"
-                parts = [name]
-                if c.get("role"): parts.append(f"({c['role']})")
-                if c.get("email"): parts.append(c["email"])
-                if c.get("phone"): parts.append(c["phone"])
-                clines.append(" ".join(parts))
-            meta_lines.append("- **POC/CO**:\n  - " + "\n  - ".join(clines))
-
-        addr = _extract_address(rec)
-        if addr:
-            meta_lines.append(f"- **Address/POP**: {addr}")
-
-    if meta_lines:
-        st.markdown("\n".join(meta_lines))
-    else:
-        st.caption('No additional metadata available from API for this notice.')
-
-    st.markdown('### Documents')
-    def _extract_docs(r: dict):
-        docs = []
-        if not isinstance(r, dict):
-            return docs
-
-        def add_doc(it):
-            if not isinstance(it, dict):
-                return
-            name = it.get('fileName') or it.get('name') or it.get('title') or it.get('description')
-            url = it.get('url') or it.get('href') or it.get('link') or it.get('resourceLink')
-            size = it.get('fileSize') or it.get('size') or ''
-            mime = it.get('mimeType') or it.get('type') or ''
-            if url:
-                docs.append({'name': name or (url.split('/')[-1] if isinstance(url, str) else 'document'),
-                             'url': url, 'size': size, 'type': mime})
-
-        for key in ['attachments','documents','resourceLinks','links']:
-            vals = r.get(key)
-            if isinstance(vals, list):
-                for it in vals:
-                    add_doc(it)
-
-        for key in ['data','attributes']:
-            vals = r.get(key)
-            if isinstance(vals, dict):
-                for subk in ['attachments','documents','resourceLinks','links']:
-                    arr = vals.get(subk)
-                    if isinstance(arr, list):
-                        for it in arr:
-                            add_doc(it)
-
-        uniq, seen = [], set()
-        for d in docs:
-            u = d.get('url')
-            if u and u not in seen:
-                seen.add(u); uniq.append(d)
-        return uniq
-
-    docs = _extract_docs(rec or {})
-
-    def _looks_placeholder(u: str) -> bool:
-        return isinstance(u, str) and "search?noticeid=" in u.lower()
-
-    if (not docs) or all(_looks_placeholder(d.get('url','')) for d in docs):
-        nid = str(row.get('Notice ID') or '')
-        docs = _fetch_attachments_from_api(nid, api_key) or []
-
-    if not docs:
-        st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
-    else:
-        for i, d in enumerate(docs):
-            st.write(f"- {d['name']}  •  {d.get('type') or ''}  •  {d.get('size') or ''}")
-            try:
-                u = d.get('url') or ''
-                if isinstance(u, str) and u.lower().startswith('http') and any(u.lower().endswith(ext) for ext in ['.pdf','.doc','.docx','.xlsx','.xls','.txt','.zip']):
-                    import requests
-                    resp = requests.get(u, timeout=10)
-                    if resp.status_code == 200 and resp.content:
-                        st.download_button('Download', resp.content, file_name=d['name'] or f'doc_{i}', key=f"sam_doc_{row.get('Notice ID','')}_{i}")
-                    else:
-                        if row.get('SAM Link'):
-                            st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
+            with right_col:
+                st.markdown('### Details')
+                raw_map = st.session_state.get('sam_raw_map', {}) or {}
+                cand_ids = [str(row.get('Notice ID') or ''), str(row.get('Solicitation') or '')]
+                rec = None
+                for cid in cand_ids:
+                    if cid in raw_map:
+                        rec = raw_map[cid]; break
+            
+                meta_lines = []
+                if isinstance(rec, dict):
+                    type_sa = rec.get('typeOfSetAsideDescription') or rec.get('typeOfSetAside') or ''
+                    naics = rec.get('naics') or rec.get('naicsCode') or ''
+                    psc = rec.get('psc') or rec.get('classificationCode') or ''
+                    dept = rec.get('department') or rec.get('subTier') or rec.get('office') or ''
+                    status = rec.get('status') or ''
+                    proc = rec.get('procurementType') or ''
+                    pop = rec.get('placeOfPerformance')
+            
+                    if proc: meta_lines.append(f"- **Procurement Type**: {proc}")
+                    if type_sa: meta_lines.append(f"- **Set-Aside**: {type_sa}")
+                    if naics: meta_lines.append(f"- **NAICS**: {naics}")
+                    if psc: meta_lines.append(f"- **PSC**: {psc}")
+                    if dept: meta_lines.append(f"- **Org/Office**: {dept}")
+                    if status: meta_lines.append(f"- **Status**: {status}")
+                    if isinstance(pop, dict):
+                        meta_lines.append(f"- **Place of Performance**: {_pretty_place_of_performance(pop)}")
+            
+                    contacts = _extract_contacts(rec)
+                    if contacts:
+                        clines = []
+                        for c in contacts:
+                            name = c.get("name") or "POC"
+                            parts = [name]
+                            if c.get("role"): parts.append(f"({c['role']})")
+                            if c.get("email"): parts.append(c["email"])
+                            if c.get("phone"): parts.append(c["phone"])
+                            clines.append(" ".join(parts))
+                        meta_lines.append("- **POC/CO**:\n  - " + "\n  - ".join(clines))
+            
+                    addr = _extract_address(rec)
+                    if addr:
+                        meta_lines.append(f"- **Address/POP**: {addr}")
+            
+                if meta_lines:
+                    st.markdown("\n".join(meta_lines))
                 else:
-                    if row.get('SAM Link'):
-                        st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
-            except Exception:
-                if row.get('SAM Link'):
-                    st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
-        with st.expander("Opportunity Details", expanded=True):
-            c1, c2 = st.columns([3, 2])
-            with c1:
-                st.write(f"**Title:** {row['Title']}")
-                st.write(f"**Solicitation:** {row['Solicitation']}")
-                st.write(f"**Type:** {row['Type']}")
-                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row.get('Set-Aside Code','')})")
-                st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
-                st.write(f"**Agency Path:** {row['Agency Path']}")
-            with c2:
-                st.write(f"**Posted:** {row['Posted']}")
-                st.write(f"**Response Due:** {row['Response Due']}")
-                st.write(f"**Notice ID:** {row['Notice ID']}")
-                if row['SAM Link']:
-                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
-
+                    st.caption('No additional metadata available from API for this notice.')
+            
+                st.markdown('### Documents')
+                def _extract_docs(r: dict):
+                    docs = []
+                    if not isinstance(r, dict):
+                        return docs
+            
+                    def add_doc(it):
+                        if not isinstance(it, dict):
+                            return
+                        name = it.get('fileName') or it.get('name') or it.get('title') or it.get('description')
+                        url = it.get('url') or it.get('href') or it.get('link') or it.get('resourceLink')
+                        size = it.get('fileSize') or it.get('size') or ''
+                        mime = it.get('mimeType') or it.get('type') or ''
+                        if url:
+                            docs.append({'name': name or (url.split('/')[-1] if isinstance(url, str) else 'document'),
+                                         'url': url, 'size': size, 'type': mime})
+            
+                    for key in ['attachments','documents','resourceLinks','links']:
+                        vals = r.get(key)
+                        if isinstance(vals, list):
+                            for it in vals:
+                                add_doc(it)
+            
+                    for key in ['data','attributes']:
+                        vals = r.get(key)
+                        if isinstance(vals, dict):
+                            for subk in ['attachments','documents','resourceLinks','links']:
+                                arr = vals.get(subk)
+                                if isinstance(arr, list):
+                                    for it in arr:
+                                        add_doc(it)
+            
+                    uniq, seen = [], set()
+                    for d in docs:
+                        u = d.get('url')
+                        if u and u not in seen:
+                            seen.add(u); uniq.append(d)
+                    return uniq
+            
+                docs = _extract_docs(rec or {})
+            
+                def _looks_placeholder(u: str) -> bool:
+                    return isinstance(u, str) and "search?noticeid=" in u.lower()
+            
+                if (not docs) or all(_looks_placeholder(d.get('url','')) for d in docs):
+                    nid = str(row.get('Notice ID') or '')
+                    docs = _fetch_attachments_from_api(nid, api_key) or []
+            
+                if not docs:
+                    st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
+                else:
+                    for i, d in enumerate(docs):
+                        st.write(f"- {d['name']}  •  {d.get('type') or ''}  •  {d.get('size') or ''}")
+                        try:
+                            u = d.get('url') or ''
+                            if isinstance(u, str) and u.lower().startswith('http') and any(u.lower().endswith(ext) for ext in ['.pdf','.doc','.docx','.xlsx','.xls','.txt','.zip']):
+                                import requests
+                                resp = requests.get(u, timeout=10)
+                                if resp.status_code == 200 and resp.content:
+                                    st.download_button('Download', resp.content, file_name=d['name'] or f'doc_{i}', key=f"sam_doc_{row.get('Notice ID','')}_{i}")
+                                else:
+                                    if row.get('SAM Link'):
+                                        st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
+                            else:
+                                if row.get('SAM Link'):
+                                    st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
+                        except Exception:
+                            if row.get('SAM Link'):
+                                st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
+                    with st.expander("Opportunity Details", expanded=True):
+                        c1, c2 = st.columns([3, 2])
+                        with c1:
+                            st.write(f"**Title:** {row['Title']}")
+                            st.write(f"**Solicitation:** {row['Solicitation']}")
+                            st.write(f"**Type:** {row['Type']}")
+                            st.write(f"**Set-Aside:** {row['Set-Aside']} ({row.get('Set-Aside Code','')})")
+                            st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
+                            st.write(f"**Agency Path:** {row['Agency Path']}")
+                        with c2:
+                            st.write(f"**Posted:** {row['Posted']}")
+                            st.write(f"**Response Due:** {row['Response Due']}")
+                            st.write(f"**Notice ID:** {row['Notice ID']}")
+                            if row['SAM Link']:
+                                st.markdown(f"[Open in SAM]({row['SAM Link']})")
+            
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
             if st.button("Add to Deals", key="sam_add_to_deals"):
@@ -1105,8 +1105,10 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
         return m.group(1)[:60] if m else ''
 
+        except Exception as e:
+            st.warning(f"Details panel error: {e}")
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
-def _extract_naics(text: str) -> str:
+        def _extract_naics(text: str) -> str:
         if not text: return ""
         m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
         if m: return m.group(1)[:6]
@@ -1115,22 +1117,22 @@ def _extract_naics(text: str) -> str:
         m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
         return m.group(1) if m else ""
 
-    def _extract_set_aside(text: str) -> str:
+        def _extract_set_aside(text: str) -> str:
         if not text: return ""
         tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
         for t in tags:
-            if re.search(rf'(?i)\b{re.escape(t)}\b', text):
-                norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
-                if norm == "8(A)": norm = "8A"
-                return norm
+        if re.search(rf'(?i)\b{re.escape(t)}\b', text):
+        norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
+        if norm == "8(A)": norm = "8A"
+        return norm
         m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
         if m:
-            v = m.group(1).strip()
-            v = re.sub(r'\s+', ' ', v)
-            return v[:80]
+        v = m.group(1).strip()
+        v = re.sub(r'\s+', ' ', v)
+        return v[:80]
         return ""
 
-    def _extract_place(text: str) -> str:
+        def _extract_place(text: str) -> str:
         if not text: return ""
         m = re.search(r'(?i)Place\s+of\s+Performance\s*[:\-]?\s*([^\n]{3,80})', text)
         if m: return m.group(1).strip()
