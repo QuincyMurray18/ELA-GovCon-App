@@ -1072,6 +1072,18 @@ def run_deals(conn: sqlite3.Connection) -> None:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
         c3, c4, c5 = st.columns([2, 2, 2])
+
+
+        try:
+
+
+            c3, c4, c5
+
+
+        except NameError:
+
+
+            c3 = st.container(); c4 = st.container(); c5 = st.container()
         with c3:
             if st.button("Add to Deals", key="sam_add_to_deals"):
                 notice_id = str(row.get("Notice ID") or "")
