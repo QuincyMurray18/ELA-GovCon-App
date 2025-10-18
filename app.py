@@ -6,6 +6,8 @@ from typing import Optional, Any, Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
+import re
+
 # --- Safe SAM API key helper (in-file fallback) ---
 def get_sam_api_key():
     try:
@@ -103,6 +105,113 @@ DB_PATH = os.path.join(DATA_DIR, "govcon.db")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 SAM_ENDPOINT = "https://api.sam.gov/opportunities/v2/search"
 
+
+
+# --- Phase X.3b helpers: pretty metadata + docs fetch ---
+def _pretty_place_of_performance(pop: dict) -> str:
+    try:
+        city = ((pop.get("city") or {}).get("name")) if isinstance(pop.get("city"), dict) else pop.get("city")
+        state = ((pop.get("state") or {}).get("code")) if isinstance(pop.get("state"), dict) else pop.get("state")
+        zipc = pop.get("zip") or pop.get("zipcode") or ""
+        country = ((pop.get("country") or {}).get("name")) if isinstance(pop.get("country"), dict) else pop.get("country") or ""
+        parts = [p for p in [city, state] if p]
+        line = ", ".join(parts)
+        if zipc: line = f"{line} {zipc}".strip()
+        if country and country not in line:
+            line = f"{line}, {country}".strip(", ")
+        return line or ""
+    except Exception:
+        return ""
+
+def _extract_contacts(rec: dict):
+    """Return a list of {name, email, phone, role} contacts from various SAM fields"""
+    out = []
+    if not isinstance(rec, dict):
+        return out
+    candidates = []
+    for k in ["pointOfContact","primaryPointOfContact","secondaryPointOfContact","contacts","contact","poc"]:
+        v = rec.get(k)
+        if v: candidates.append(v)
+    for v in candidates:
+        if isinstance(v, list):
+            for it in v:
+                if isinstance(it, dict):
+                    out.append({
+                        "name": it.get("fullName") or it.get("name") or it.get("contactFullName") or it.get("title") or "",
+                        "email": it.get("email") or it.get("emailAddress") or "",
+                        "phone": it.get("phone") or it.get("telephone") or it.get("phoneNumber") or "",
+                        "role": it.get("type") or it.get("role") or ""
+                    })
+        elif isinstance(v, dict):
+            out.append({
+                "name": v.get("fullName") or v.get("name") or v.get("contactFullName") or v.get("title") or "",
+                "email": v.get("email") or v.get("emailAddress") or "",
+                "phone": v.get("phone") or v.get("telephone") or v.get("phoneNumber") or "",
+                "role": v.get("type") or v.get("role") or ""
+            })
+        elif isinstance(v, str):
+            out.append({"name": v, "email":"", "phone":"", "role":""})
+    # de-dupe by (name,email)
+    seen = set()
+    uniq = []
+    for c in out:
+        k = (c.get("name","").strip().lower(), c.get("email","").strip().lower())
+        if k in seen: 
+            continue
+        seen.add(k); uniq.append(c)
+    return uniq
+
+def _extract_address(rec: dict):
+    """Prefer contracting office address; fallback to placeOfPerformance"""
+    for k in ["contractingOfficeAddress","officeAddress","address"]:
+        v = rec.get(k)
+        if isinstance(v, dict):
+            try:
+                parts = [v.get("city"), v.get("state"), v.get("zipcode") or v.get("zip"), v.get("countryCode") or (v.get("country") or {}).get("code")]
+                return ", ".join([p for p in parts if p])
+            except Exception:
+                pass
+        elif isinstance(v, str):
+            return v
+    pop = rec.get("placeOfPerformance")
+    if isinstance(pop, dict):
+        return _pretty_place_of_performance(pop)
+    return ""
+
+def _fetch_attachments_from_api(notice_id: str, api_key: str):
+    """Best-effort: call SAM attachments endpoint; return list of {name,url,size,type}."""
+    try:
+        import requests
+        if not (notice_id and api_key):
+            return []
+        urls = [
+            f"https://api.sam.gov/opportunities/v2/resources/attachments/{notice_id}",
+            f"https://api.sam.gov/prod/opportunities/v2/resources/attachments/{notice_id}"
+        ]
+        for base in urls:
+            resp = requests.get(base, params={"api_key": api_key, "limit": 100}, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = []
+                arr = data.get("data") or data.get("attachments") or []
+                if isinstance(arr, dict):
+                    arr = arr.get("attachments") or []
+                for a in arr or []:
+                    if not isinstance(a, dict): 
+                        continue
+                    name = a.get("fileName") or a.get("file") or a.get("title") or "document"
+                    url = a.get("url") or a.get("href") or a.get("uri") or ""
+                    size = a.get("fileSize") or a.get("size") or ""
+                    mime = a.get("mimeType") or a.get("type") or ""
+                    if isinstance(url, str) and url and url.startswith("/"):
+                        url = "https://sam.gov" + url
+                    if name or url:
+                        items.append({"name": name, "url": url, "size": size, "type": mime})
+                if items:
+                    return items
+    except Exception:
+        pass
+    return []
 
 # -------------------- setup --------------------
 def ensure_dirs() -> None:
@@ -790,107 +899,125 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.caption(f"Posted: {row.get('Posted') or '—'} • Due: {row.get('Response Due') or '—'}")
                 if row.get('SAM Link'):
                     st.link_button('Open on SAM', row['SAM Link'])
-        
-            with right_col:
-                st.markdown('### Details')
-                raw_map = st.session_state.get('sam_raw_map', {}) or {}
-                cand_ids = [str(row.get('Notice ID') or ''), str(row.get('Solicitation') or '')]
-                rec = None
-                for cid in cand_ids:
-                    if cid in raw_map:
-                        rec = raw_map[cid]; break
-        
-                meta_lines = []
-                if isinstance(rec, dict):
-                    for key in ['procurementType','typeOfSetAside','typeOfSetAsideDescription','naics','psc','department',
-                                'office','subTier','placeOfPerformance','classificationCode','organizationType','status']:
-                        val = rec.get(key)
-                        if val:
-                            meta_lines.append(f"- **{key.replace('_',' ').title()}**: {val}")
-        
-                    poc = None
-                    for k in ['pointOfContact','primaryPointOfContact','contacts','contact']:
-                        if k in rec and rec[k]:
-                            poc = rec[k]; break
-                    if poc:
-                        meta_lines.append(f"- **POC/CO**: {poc}")
-        
-                    addr = None
-                    for k in ['address','officeAddress','contractingOfficeAddress','placeOfPerformance']:
-                        if k in rec and rec[k]:
-                            addr = rec[k]; break
-                    if addr:
-                        meta_lines.append(f"- **Address/POP**: {addr}")
-        
-                if meta_lines:
-                    st.markdown('\n'.join(meta_lines))
+with right_col:
+    st.markdown('### Details')
+    raw_map = st.session_state.get('sam_raw_map', {}) or {}
+    cand_ids = [str(row.get('Notice ID') or ''), str(row.get('Solicitation') or '')]
+    rec = None
+    for cid in cand_ids:
+        if cid in raw_map:
+            rec = raw_map[cid]; break
+
+    meta_lines = []
+    if isinstance(rec, dict):
+        type_sa = rec.get('typeOfSetAsideDescription') or rec.get('typeOfSetAside') or ''
+        naics = rec.get('naics') or rec.get('naicsCode') or ''
+        psc = rec.get('psc') or rec.get('classificationCode') or ''
+        dept = rec.get('department') or rec.get('subTier') or rec.get('office') or ''
+        status = rec.get('status') or ''
+        proc = rec.get('procurementType') or ''
+        pop = rec.get('placeOfPerformance')
+
+        if proc: meta_lines.append(f"- **Procurement Type**: {proc}")
+        if type_sa: meta_lines.append(f"- **Set-Aside**: {type_sa}")
+        if naics: meta_lines.append(f"- **NAICS**: {naics}")
+        if psc: meta_lines.append(f"- **PSC**: {psc}")
+        if dept: meta_lines.append(f"- **Org/Office**: {dept}")
+        if status: meta_lines.append(f"- **Status**: {status}")
+        if isinstance(pop, dict):
+            meta_lines.append(f"- **Place of Performance**: {_pretty_place_of_performance(pop)}")
+
+        contacts = _extract_contacts(rec)
+        if contacts:
+            clines = []
+            for c in contacts:
+                name = c.get("name") or "POC"
+                parts = [name]
+                if c.get("role"): parts.append(f"({c['role']})")
+                if c.get("email"): parts.append(c["email"])
+                if c.get("phone"): parts.append(c["phone"])
+                clines.append(" ".join(parts))
+            meta_lines.append("- **POC/CO**:
+  - " + "\n  - ".join(clines))
+
+        addr = _extract_address(rec)
+        if addr:
+            meta_lines.append(f"- **Address/POP**: {addr}")
+
+    if meta_lines:
+        st.markdown("\n".join(meta_lines))
+    else:
+        st.caption('No additional metadata available from API for this notice.')
+
+    st.markdown('### Documents')
+    def _extract_docs(r: dict):
+        docs = []
+        if not isinstance(r, dict):
+            return docs
+
+        def add_doc(it):
+            if not isinstance(it, dict):
+                return
+            name = it.get('fileName') or it.get('name') or it.get('title') or it.get('description')
+            url = it.get('url') or it.get('href') or it.get('link') or it.get('resourceLink')
+            size = it.get('fileSize') or it.get('size') or ''
+            mime = it.get('mimeType') or it.get('type') or ''
+            if url:
+                docs.append({'name': name or (url.split('/')[-1] if isinstance(url, str) else 'document'),
+                             'url': url, 'size': size, 'type': mime})
+
+        for key in ['attachments','documents','resourceLinks','links']:
+            vals = r.get(key)
+            if isinstance(vals, list):
+                for it in vals:
+                    add_doc(it)
+
+        for key in ['data','attributes']:
+            vals = r.get(key)
+            if isinstance(vals, dict):
+                for subk in ['attachments','documents','resourceLinks','links']:
+                    arr = vals.get(subk)
+                    if isinstance(arr, list):
+                        for it in arr:
+                            add_doc(it)
+
+        uniq, seen = [], set()
+        for d in docs:
+            u = d.get('url')
+            if u and u not in seen:
+                seen.add(u); uniq.append(d)
+        return uniq
+
+    docs = _extract_docs(rec or {})
+
+    def _looks_placeholder(u: str) -> bool:
+        return isinstance(u, str) and "search?noticeid=" in u.lower()
+
+    if (not docs) or all(_looks_placeholder(d.get('url','')) for d in docs):
+        nid = str(row.get('Notice ID') or '')
+        docs = _fetch_attachments_from_api(nid, api_key) or []
+
+    if not docs:
+        st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
+    else:
+        for i, d in enumerate(docs):
+            st.write(f"- {d['name']}  •  {d.get('type') or ''}  •  {d.get('size') or ''}")
+            try:
+                u = d.get('url') or ''
+                if isinstance(u, str) and u.lower().startswith('http') and any(u.lower().endswith(ext) for ext in ['.pdf','.doc','.docx','.xlsx','.xls','.txt','.zip']):
+                    import requests
+                    resp = requests.get(u, timeout=10)
+                    if resp.status_code == 200 and resp.content:
+                        st.download_button('Download', resp.content, file_name=d['name'] or f'doc_{i}', key=f"sam_doc_{row.get('Notice ID','')}_{i}")
+                    else:
+                        if row.get('SAM Link'):
+                            st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
                 else:
-                    st.caption('No additional metadata available from API for this notice.')
-        
-                st.markdown('### Documents')
-                def _extract_docs(r: dict):
-                    docs = []
-                    if not isinstance(r, dict):
-                        return docs
-        
-                    def add_doc(it):
-                        if not isinstance(it, dict):
-                            return
-                        name = it.get('fileName') or it.get('name') or it.get('title') or it.get('description')
-                        url = it.get('url') or it.get('href') or it.get('link') or it.get('resourceLink')
-                        size = it.get('fileSize') or it.get('size') or ''
-                        mime = it.get('mimeType') or it.get('type') or ''
-                        if url:
-                            docs.append({'name': name or (url.split('/')[-1] if isinstance(url, str) else 'document'),
-                                         'url': url, 'size': size, 'type': mime})
-        
-                    for key in ['attachments','documents','resourceLinks','links']:
-                        vals = r.get(key)
-                        if isinstance(vals, list):
-                            for it in vals:
-                                add_doc(it)
-        
-                    for key in ['data','attributes']:
-                        vals = r.get(key)
-                        if isinstance(vals, dict):
-                            for subk in ['attachments','documents','resourceLinks','links']:
-                                arr = vals.get(subk)
-                                if isinstance(arr, list):
-                                    for it in arr:
-                                        add_doc(it)
-        
-                    uniq, seen = [], set()
-                    for d in docs:
-                        u = d.get('url')
-                        if u and u not in seen:
-                            seen.add(u); uniq.append(d)
-                    return uniq
-        
-                docs = _extract_docs(rec or {})
-                if not docs:
-                    st.caption('No attachment list available via API. Use **Open on SAM** above to view files.')
-                else:
-                    for i, d in enumerate(docs):
-                        st.write(f"- {d['name']}  •  {d.get('type') or ''}  •  {d.get('size') or ''}")
-                        try:
-                            u = d['url']
-                            if isinstance(u, str) and u.lower().startswith('http') and any(u.lower().endswith(ext) for ext in ['.pdf','.doc','.docx','.xlsx','.xls','.txt']):
-                                import requests
-                                resp = requests.get(u, timeout=10)
-                                if resp.status_code == 200 and resp.content:
-                                    st.download_button('Download', resp.content, file_name=d['name'] or f'doc_{i}', key=f'sam_doc_{i}')
-                                else:
-                                    if row.get('SAM Link'):
-                                        st.link_button('Open on SAM', row['SAM Link'])
-                            else:
-                                if row.get('SAM Link'):
-                                    st.link_button('Open on SAM', row['SAM Link'])
-                        except Exception:
-                            if row.get('SAM Link'):
-                                st.link_button('Open on SAM', row['SAM Link'])
-        
-        except Exception as _x3a_err:
-            st.caption(f'Details panel temporarily unavailable: {type(_x3a_err).__name__}')
+                    if row.get('SAM Link'):
+                        st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
+            except Exception:
+                if row.get('SAM Link'):
+                    st.link_button('Open on SAM', row['SAM Link'], key=f"sam_open_{row.get('Notice ID','')}_{i}")
         with st.expander("Opportunity Details", expanded=True):
             c1, c2 = st.columns([3, 2])
             with c1:
