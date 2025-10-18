@@ -1206,8 +1206,9 @@ def extract_clins(text: str) -> list[dict]:
 # -------- Key dates extractor (heuristic) --------
 def extract_dates(text: str) -> list[dict]:
     """
-    Pull common milestone dates (questions due, proposals due, site visit) and
-    return list of dicts: {label, date_text, date_iso}
+    Extract milestone-like dates from text.
+    Returns list of dicts: {label, date_text, date_iso}.
+    Very tolerant; won't raise on bad input.
     """
     import re
     from datetime import datetime
@@ -1215,20 +1216,22 @@ def extract_dates(text: str) -> list[dict]:
     if not text:
         return out
 
-    # Patterns
-    date_patterns = [
-        r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|"
-        r"Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},\s*\d{4})",
-        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+    # Month name date e.g., "September 12, 2025" or "Sep 12, 2025"
+    long_month = r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},\s*\d{4}"
+    # Numeric date
+    numeric = r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b"
+
+    date_re = re.compile(f"({long_month})|({numeric})")
+
+    # Keywords to infer labels
+    label_keywords = [
+        ("Questions Due", r"(?i)(question|q&a|rfi).{0,40}(due|deadline|by)"),
+        ("Site Visit", r"(?i)(site\s+visit|walk-?through|pre-?bid\s+meeting)"),
+        ("Pre-Proposal Conference", r"(?i)(pre[-\s]?proposal|pre[-\s]?bid).{0,20}(conference|meeting)"),
+        ("Proposals Due", r"(?i)(proposal|quote|response|bid).{0,40}(due|deadline|closing|close)"),
+        ("Award", r"(?i)(anticipated|target).{0,20}award|award\s+date"),
     ]
-    # Labels
-    label_map = [
-        (r"(?i)questions? due|Q&A due|RFI due", "Questions Due"),
-        (r"(?i)proposal(s)? due|response(s)? due|closing date|offers due|quote(s)? due", "Proposals Due"),
-        (r"(?i)site (?:visit|walk|inspection)", "Site Visit"),
-        (r"(?i)pre[- ]proposal (?:conference|meeting)", "Pre-proposal Conference"),
-        (r"(?i)amendment|modification", "Amendment"),
-    ]
+    label_res = [(name, re.compile(p)) for name,p in label_keywords]
 
     def to_iso(s: str) -> str | None:
         fmts = ["%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y"]
@@ -1239,44 +1242,30 @@ def extract_dates(text: str) -> list[dict]:
                 pass
         return None
 
-    lines = text.splitlines()
-    for ln in lines:
-        matched_label = None
-        for pat, label in label_map:
-            if re.search(pat, ln):
-                matched_label = label
-                break
-        if not matched_label:
-            continue
-        # find a date token in the same line
-        dtxt = None
-        for dp in date_patterns:
-            m = re.search(dp, ln)
-            if m:
-                dtxt = m.group(0)
-                break
-        if not dtxt:
-            # sometimes date spills to next line
-            idx = lines.index(ln)
-            if idx + 1 < len(lines):
-                nxt = lines[idx+1]
-                for dp in date_patterns:
-                    m = re.search(dp, nxt)
-                    if m:
-                        dtxt = m.group(0); break
-        out.append({"label": matched_label, "date_text": dtxt or ln.strip()[:80], "date_iso": to_iso(dtxt) if dtxt else None})
+    for line in text.splitlines():
+        for m in date_re.finditer(line):
+            dtxt = m.group(0)
+            # Infer label by searching the line context
+            label = "Date"
+            ctx = line[: max(0, m.start())]
+            for name, rx in label_res:
+                if rx.search(line):
+                    label = name
+                    break
+                if ctx and rx.search(ctx):
+                    label = name
+                    break
+            out.append({"label": label, "date_text": dtxt, "date_iso": to_iso(dtxt)})
 
-    # Deduplicate by (label,date_text)
-    seen = set(); uniq = []
-    for r in out:
-        key = (r["label"], r["date_text"])
-        if key in seen:
-            continue
-        seen.add(key); uniq.append(r)
-    return uniq[:200]
-
-
-# -------- POC/CO extractor (heuristic) --------
+    # De-duplicate
+    seen = set()
+    uniq = []
+    for rec in out:
+        key = (rec["label"], rec["date_text"])
+        if key not in seen:
+            seen.add(key)
+            uniq.append(rec)
+    return uniq
 def extract_pocs(text: str) -> list[dict]:
     """
     Extract POC/CO contacts by scanning for emails and nearby names/phones.
