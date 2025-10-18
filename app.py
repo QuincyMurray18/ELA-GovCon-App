@@ -1512,7 +1512,7 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_rfp_context(conn: sqlite3.Connection, rfp_id: int) -> dict:
-    """Return a consistent context dict for an RFP: {rfp: dict, sections: DataFrame, items: DataFrame, clins: DataFrame}."
+    """Return a consistent context dict for an RFP: {rfp: dict, sections: DataFrame, items: DataFrame, clins: DataFrame}."""
     try:
         rf = pd.read_sql_query("SELECT id, title, solnum, notice_id, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
         meta = rf.iloc[0].to_dict() if not rf.empty else {}
@@ -1659,34 +1659,6 @@ with csave:
             st.success("Saved"); st.rerun()
         except Exception as e2:
             st.error(f"Save failed: {e2}")
-    csave, cexp = st.columns([2,2])
-    with csave:
-    pass
-    if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
-        try:
-            with closing(conn.cursor()) as cur:
-                # Try UPDATE first
-                cur.execute(
-                    "UPDATE lm_meta SET owner=?, ref_page=?, ref_para=?, evidence=?, risk=?, notes=? WHERE lm_id=?;",
-                    (owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip(), int(pick))
-                )
-                if cur.rowcount == 0:
-                    # Insert if not existing
-                    cur.execute(
-                        "INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes) VALUES(?,?,?,?,?,?,?);",
-                        (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip())
-                    )
-                conn.commit()
-            st.success("Saved"); st.rerun()
-        except Exception as e2:
-            st.error(f"Save failed: {e2}")
-with cexp:
-        if st.button("Export Matrix CSV", key="mx_export"):
-            out = view.copy()
-            path = str(Path(DATA_DIR) / f"compliance_matrix_rfp_{int(rfp_id)}.csv")
-            out.to_csv(path, index=False)
-            st.success("Exported"); st.markdown(f"[Download CSV]({path})")
-
     st.subheader("Red-Flag Finder")
     ctx = _load_rfp_context(conn, int(rfp_id))
     flags = _compliance_flags(ctx, df_items)
