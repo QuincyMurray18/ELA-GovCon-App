@@ -19,11 +19,40 @@ def get_sam_api_key():
 
 
 # --- SAM Watch safe fallbacks (only used if app doesn't already define them) ---
+
 if 'sam_search_cached' not in globals():
     def sam_search_cached(params: dict):
-        # Placeholder: real SAM integration not wired in this build
-        return {"error": "SAM search engine not wired in this build.", "records": []}
-
+        """Wired to SAM.gov search; expects api_key, limit, offset, postedFrom/postedTo (mm/dd/YYYY), optional status/title/ncode/ccode/state/typeOfSetAside/ptype"""
+        api_key = params.pop("api_key", None)
+        if not api_key:
+            return {"error": "Missing SAM API key.", "records": []}
+        q = {k: v for k, v in params.items() if v not in (None, "", [])}
+        q["api_key"] = api_key
+        endpoints = [
+            "https://api.sam.gov/prod/opportunities/v3/search",
+            "https://api.sam.gov/prod/opportunities/v1/search",
+        ]
+        last_err = None
+        for url in endpoints:
+            try:
+                r = requests.get(url, params=q, timeout=20)
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, dict):
+                        if "opportunitiesData" in data:
+                            recs = data.get("opportunitiesData") or []
+                        elif "data" in data:
+                            recs = data.get("data") or []
+                        else:
+                            recs = data.get("results") or data.get("records") or []
+                    else:
+                        recs = []
+                    return {"records": recs, "endpoint": url, "count": len(recs)}
+                else:
+                    last_err = f"HTTP {r.status_code}: {r.text[:400]}"
+            except Exception as e:
+                last_err = str(e)
+        return {"error": last_err or "SAM API call failed.", "records": []}
 if 'flatten_records' not in globals():
     def flatten_records(records):
         rows = []
