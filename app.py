@@ -1641,32 +1641,31 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         evidence = st.text_input("Evidence/Link", value=rec.get("evidence",""), key=f"mx_evid_{pick}")
 
 
-csave, cexp = st.columns([2,2])
-with csave:
-    if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
-        try:
-            with closing(conn.cursor()) as cur:
-                cur.execute(
-                    "UPDATE lm_meta SET owner=?, ref_page=?, ref_para=?, evidence=?, risk=?, notes=? WHERE lm_id=?;",
-                    (owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip(), int(pick))
-                )
-                if cur.rowcount == 0:
+    csave, cexp = st.columns([2,2])
+    with csave:
+        if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
+            try:
+                with closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes) VALUES(?,?,?,?,?,?,?);",
-                        (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip())
+                        "UPDATE lm_meta SET owner=?, ref_page=?, ref_para=?, evidence=?, risk=?, notes=? WHERE lm_id=?;",
+                        (owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip(), int(pick))
                     )
-                conn.commit()
-            st.success("Saved"); st.rerun()
-        except Exception as e2:
-            st.error(f"Save failed: {e2}")
-    st.subheader("Red-Flag Finder")
-    ctx = _load_rfp_context(conn, int(rfp_id))
-    flags = _compliance_flags(ctx, df_items)
-    if flags is None or flags.empty:
-        st.write("No obvious flags detected.")
-    else:
-        st.dataframe(flags, use_container_width=True, hide_index=True)
-    
+                    if cur.rowcount == 0:
+                        cur.execute(
+                            "INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes) VALUES(?,?,?,?,?,?,?);",
+                            (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip())
+                        )
+                    conn.commit()
+                st.success("Saved"); st.rerun()
+            except Exception as e2:
+                st.error(f"Save failed: {e2}")
+        st.subheader("Red-Flag Finder")
+        ctx = _load_rfp_context(conn, int(rfp_id))
+        flags = _compliance_flags(ctx, df_items)
+        if flags is None or flags.empty:
+            st.write("No obvious flags detected.")
+        else:
+            st.dataframe(flags, use_container_width=True, hide_index=True)    
 
 
 
@@ -4225,6 +4224,186 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
 def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
+
+def run_lm_checklist(conn: sqlite3.Connection) -> None:
+    """L&M Checklist: view, add items, flag issues, and export."""
+    _ensure_lm_tables(conn)
+    st.header("L&M Checklist")
+
+    # RFP picker
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
+    if df_rf.empty:
+        st.info("No RFPs yet. Go to RFP Analyzer → Parse & Save to create one.")
+        return
+    rfp_id = st.selectbox("RFP", options=df_rf["id"].tolist(),
+                          format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}",
+                          key="lm_rfp")
+    if not rfp_id:
+        return
+
+    ctx = _load_rfp_context(conn, int(rfp_id))
+    tabs = st.tabs(["Compliance Matrix", "Red‑Flags"])
+
+    # --- Compliance Matrix ---
+    with tabs[0]:
+        # Existing items
+        df_items = _load_compliance_matrix(conn, int(rfp_id))
+        st.subheader("Matrix")
+        if df_items.empty:
+            st.caption("No rows yet — add one below.")
+        else:
+            st.dataframe(df_items, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Add / Update Row")
+        with st.form(key=f"mx_form_{rfp_id}"):
+            col1, col2 = st.columns(2)
+            with col1:
+                para = st.text_input("Para/Ref", key=f"mx_para_{rfp_id}")
+                text = st.text_area("Requirement Text", key=f"mx_text_{rfp_id}", height=120)
+                owner = st.text_input("Owner", key=f"mx_owner_{rfp_id}")
+            with col2:
+                evidence = st.text_input("Evidence", key=f"mx_evid_{rfp_id}")
+                risk = st.selectbox("Risk", ["Low","Med","High"], index=0, key=f"mx_risk_{rfp_id}")
+                status = st.selectbox("Status", ["Open","In Progress","Done"], index=0, key=f"mx_status_{rfp_id}")
+            notes = st.text_area("Notes", key=f"mx_notes_{rfp_id}", height=100)
+            submitted = st.form_submit_button("Save Matrix Row")
+        if submitted:
+            try:
+                _save_matrix_row(conn, int(rfp_id), para, text, owner, evidence, risk, notes, status)
+                st.success("Saved.")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e!s}")
+
+        st.divider()
+        st.subheader("Quick Flags")
+        if 'df_items' not in locals():
+            df_items = _load_compliance_matrix(conn, int(rfp_id))
+        flags = _compliance_flags(ctx, df_items)
+        if flags is not None and not flags.empty:
+            st.dataframe(flags, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No flags detected.")
+
+    # --- Red‑Flags ---
+    with tabs[1]:
+        st.subheader("Auto‑Detected Red‑Flags")
+        df_rf = _red_flags_for_rfp(ctx, df_items if 'df_items' in locals() else None)
+        if df_rf is not None and not df_rf.empty:
+            st.dataframe(df_rf, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No red‑flags detected.")
+
+def run_file_manager(conn: sqlite3.Connection) -> None:
+    """Manage file attachments and build a submission kit ZIP."""
+    _ensure_files_table(conn)
+    st.header("File Manager")
+    st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
+
+    # --- Attach uploader ---
+    with st.expander("Upload & Attach", expanded=True):
+        c1, c2 = st.columns([2,2])
+        with c1:
+            owner_type = st.selectbox("Attach to", ["RFP", "Deal", "Vendor", "Other"], key="fm_owner_type")
+            owner_id = None
+            if owner_type == "RFP":
+                df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
+                if not df_rf.empty:
+                    owner_id = st.selectbox("RFP", options=df_rf["id"].tolist(),
+                                            format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
+                                            key="fm_owner_rfp")
+            elif owner_type == "Deal":
+                df_deal = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn)
+                if not df_deal.empty:
+                    owner_id = st.selectbox("Deal", options=df_deal["id"].tolist(),
+                                            format_func=lambda i: f"#{i} — {df_deal.loc[df_deal['id']==i, 'title'].values[0]}",
+                                            key="fm_owner_deal")
+            elif owner_type == "Vendor":
+                df_v = pd.read_sql_query("SELECT id, name FROM vendors_t ORDER BY id DESC;", conn)
+                if not df_v.empty:
+                    owner_id = st.selectbox("Vendor", options=df_v["id"].tolist(),
+                                            format_func=lambda i: f"#{i} — {df_v.loc[df_v['id']==i, 'name'].values[0]}",
+                                            key="fm_owner_vendor")
+            tag = st.text_input("Tag (optional)", key="fm_tag")
+        with c2:
+            up = st.file_uploader("Upload file", type=None, key="fm_uploader")
+            if up is not None and owner_type and (owner_id or owner_type == "Other"):
+                save_dir = Path(DATA_DIR) / "uploads"
+                save_dir.mkdir(parents=True, exist_ok=True)
+                fpath = save_dir / up.name
+                fpath.write_bytes(up.read())
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO files(owner_type, owner_id, tag, path, name, size, created_at)
+                        VALUES(?,?,?,?,?,?, datetime('now'));
+                    """, (owner_type, int(owner_id) if owner_id else None, tag, str(fpath), up.name, fpath.stat().st_size))
+                    conn.commit()
+                st.success(f"Saved {up.name}")
+
+    st.divider()
+    st.subheader("Submission Kit (ZIP)")
+
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
+    if df_rf.empty:
+        st.info("No RFPs yet.")
+        return
+    kit_rfp = st.selectbox("RFP", options=df_rf["id"].tolist(),
+                           format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}",
+                           key="fm_rfp")
+    df_kit = pd.read_sql_query("SELECT id, name, path FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY id DESC;",
+                               conn, params=(int(kit_rfp),))
+    if df_kit.empty:
+        st.caption("No attachments yet for this RFP.")
+    else:
+        selected = st.multiselect(
+            "Select attachments to include",
+            options=df_kit["id"].tolist(),
+            format_func=lambda i: df_kit.loc[df_kit["id"]==i, "name"].values[0],
+            key="fm_sel"
+        )
+    st.caption("Optional generated docs to include (if found):")
+    gen_paths = []
+    prop_path = str(Path(DATA_DIR) / f"Proposal_RFP_{int(kit_rfp)}.docx")
+    if Path(prop_path).exists():
+        if st.checkbox("Include Proposal DOCX", key="fm_inc_prop"):
+            gen_paths.append(prop_path)
+    pp_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
+    if Path(pp_path).exists():
+        if st.checkbox("Include Past Performance DOCX", key="fm_inc_pp"):
+            gen_paths.append(pp_path)
+    white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
+    if white_candidates:
+        wp_paths = [str(p) for p in white_candidates]
+        inc_wp = st.multiselect("Include White Papers", options=wp_paths,
+                                format_func=lambda p: os.path.basename(p), key="fm_wp")
+        for p in inc_wp:
+            if os.path.exists(p):
+                gen_paths.append(p)
+
+    if st.button("Build Submission Kit ZIP", key="fm_zip"):
+        try:
+            import zipfile, os
+            paths = []
+            if df_kit is not None and not df_kit.empty and selected:
+                rows = df_kit[df_kit["id"].isin(selected)]
+                paths.extend([p for p in rows["path"].tolist() if p and os.path.exists(p)])
+            paths.extend([p for p in gen_paths if p and os.path.exists(p)])
+            if not paths:
+                st.warning("No files selected.")
+            else:
+                zip_path = os.path.join(DATA_DIR, f"submission_kit_rfp_{int(kit_rfp)}.zip")
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+                    for p in paths:
+                        z.write(p, arcname=os.path.basename(p))
+                st.success("ZIP built.")
+                st.markdown(f"[Download ZIP]({zip_path})")
+        except Exception as e:
+            st.error(f"Failed to build ZIP: {e}")
+
+
+
+
 
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
