@@ -4258,7 +4258,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     elif page == "Proposal Builder":
         run_proposal_builder(conn)
         # Phase V panel
-        pb_phase_v_section_library(conn)
+        globals().get('pb_phase_v_section_library', lambda _c: None)(conn)
     elif page == "File Manager":
         run_file_manager(conn)
     elif page == "Past Performance":
