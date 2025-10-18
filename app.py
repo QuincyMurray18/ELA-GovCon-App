@@ -1512,20 +1512,27 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+
 def _load_rfp_context(conn: sqlite3.Connection, rfp_id: int) -> dict:
+    """Return a consistent context dict for an RFP: {rfp: dict, sections: DataFrame, items: DataFrame, clins: DataFrame}."
     try:
-        rf = pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+        rf = pd.read_sql_query("SELECT id, title, solnum, notice_id, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+        meta = rf.iloc[0].to_dict() if not rf.empty else {}
     except Exception:
         rf = pd.DataFrame()
+        meta = {}
     try:
         df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         df_items = pd.DataFrame(columns=["id","item_text","is_must","status"])
+    try:
+        df_clins = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_clins = pd.DataFrame(columns=["clin","description","qty","unit","unit_price","extended_price"])
+
     joined = "\n".join(df_items["item_text"].astype(str).tolist()) if not df_items.empty else ""
     sections = pd.DataFrame([{"name":"Checklist Items","content": joined}])
-    meta = rf.iloc[0].to_dict() if not rf.empty else {}
-    return {"rfp": meta, "sections": sections, "items": df_items}
-
+    return {"rfp": meta, "sections": sections, "items": df_items, "clins": df_clins}
 
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
@@ -1637,15 +1644,26 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
     csave, cexp = st.columns([2,2])
     with csave:
-        if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
-            try:
-                with closing(conn.cursor()) as cur:
-                    cur.execute("""
-                        INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes)
-                        VALUES(?,?,?,?,?,?,?)
-                        ON CONFLICT(lm_id) DO UPDATE SET
-                            owner=excluded.owner, ref_page=excluded.ref_page, ref_para=excluded.ref_para,
-                            evidence=excluded.evidence, risk=excluded.risk, notes=excluded.notes;
+        
+    if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
+        try:
+            with closing(conn.cursor()) as cur:
+                # Try UPDATE first
+                cur.execute(
+                    "UPDATE lm_meta SET owner=?, ref_page=?, ref_para=?, evidence=?, risk=?, notes=? WHERE lm_id=?;",
+                    (owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip(), int(pick))
+                )
+                if cur.rowcount == 0:
+                    # Insert if not existing
+                    cur.execute(
+                        "INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes) VALUES(?,?,?,?,?,?,?);",
+                        (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip())
+                    )
+                conn.commit()
+            st.success("Saved"); st.rerun()
+        except Exception as e2:
+            st.error(f"Save failed: {e2}")
+
                     """, (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip()))
                     conn.commit()
                 st.success("Saved"); st.rerun()
@@ -1789,25 +1807,34 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         if est_pages > page_limit:
             st.error("Content likely exceeds page limit. Consider trimming or tighter formatting")
 
+        
         out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
         out_path = os.path.join(DATA_DIR, out_name)
         if st.button("Export DOCX", type="primary"):
+            meta = ctx.get("rfp", {}) if isinstance(ctx.get("rfp"), dict) else {}
+            rfp_title = meta.get("title") or "Proposal"
+            rfp_sol = meta.get("solnum") or ""
+            rfp_notice = meta.get("notice_id") or ""
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
             exported = _export_docx(
                 out_path,
-                doc_title=ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "Proposal",
+                doc_title=rfp_title,
                 sections=sections,
-                clins=ctx["clins"],
-                checklist=ctx["items"],
+                clins=ctx.get("clins"),
+                checklist=ctx.get("items"),
                 metadata={
-                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
+                    "Solicitation": rfp_sol,
+                    "Notice ID": rfp_notice,
                 },
                 font_name=font_name,
                 font_size_pt=int(font_size),
                 spacing=spacing,
             )
             if exported:
+                st.success(f"Exported to {exported}")
+                st.markdown(f"[Download DOCX]({exported})")
+
+    
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
 
@@ -3573,53 +3600,44 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         if st.checkbox("Include Past Performance DOCX", key="fm_inc_pp"):
             gen_paths.append(pp_path)
     # White papers (include any)
-    white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
-    if white_candidates:
-        inc_wp = st.multiselect("Include White Papers", options=[str(p) for p in white_candidates],
-                                format_func=lambda p: Path(p).name, key="fm_inc_wp")
-        gen_paths.extend(inc_wp)
+    
+white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
+if white_candidates:
+    wp_paths = [str(p) for p in white_candidates]
+    inc_wp = st.multiselect("Include White Papers", options=wp_paths, format_func=lambda p: os.path.basename(p))
+    for p in inc_wp:
+        if os.path.exists(p):
+            gen_paths.append(p)
 
-    if st.button("Build ZIP", type="primary", key="fm_build_zip"):
-        if not selected and not gen_paths:
-            st.warning("Select at least one attachment or generated document.")
-        else:
-            # Collect paths
-            rows = []
-            if selected:
-                ph = ",".join(["?"]*len(selected))
-                df_sel = pd.read_sql_query(f"SELECT filename, path FROM files_t WHERE id IN ({ph});", conn, params=selected)
-                for _, r in df_sel.iterrows():
-                    rows.append((r["filename"], r["path"]))
-            for p in gen_paths:
-                rows.append((Path(p).name, p))
+# Build the ZIP
+build = st.button("Build ZIP", key="fm_build_zip")
+if build:
+    sel_paths = []
+    if not df_kit.empty and selected:
+        for fid in selected:
+            row = df_kit[df_kit["id"]==fid].iloc[0]
+            p = row.get("path"); fname = row.get("filename") or os.path.basename(p or "")
+            if p and os.path.exists(p):
+                sel_paths.append((p, fname))
+    # include generated docs
+    for p in gen_paths:
+        if os.path.exists(p):
+            sel_paths.append((p, os.path.basename(p)))
 
-            # Create ZIP
-            from zipfile import ZipFile, ZIP_DEFLATED
-            ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-            zip_path = str(Path(DATA_DIR) / f"submission_kit_RFP_{int(kit_rfp)}_{ts}.zip")
-            try:
-                with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as z:
-                    for fname, p in rows:
-                        try:
-                            z.write(p, arcname=fname)
-                        except Exception:
-                            pass
-                    # Add a manifest
-                    manifest = "Submission Kit Manifest\n"
-                    manifest += f"RFP ID: {int(kit_rfp)}\n"
-                    manifest += "\nIncluded files:\n" + "\n".join(f"- {fname}" for fname, _ in rows)
-                    z.writestr("MANIFEST.txt", manifest)
-                st.success("Submission kit created")
-                st.markdown(f"[Download ZIP]({zip_path})")
-            except Exception as e:
-                st.error(f"ZIP failed: {e}")
+    if not sel_paths:
+        st.warning("Nothing selected to include.")
+    else:
+        zpath = str(Path(DATA_DIR) / f"submission_kit_rfp_{int(kit_rfp)}.zip")
+        import zipfile
+        with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for p, arc in sel_paths:
+                try:
+                    z.write(p, arcname=arc)
+                except Exception:
+                    pass
+        st.success("Submission kit built.")
+        st.markdown(f"[Download ZIP]({zpath})")
 
-
-
-# ---------- Phase L: RFQ Pack ----------
-def _rfq_pack_by_id(conn: sqlite3.Connection, pid: int) -> dict | None:
-    df = pd.read_sql_query("SELECT * FROM rfq_packs_t WHERE id=?;", conn, params=(pid,))
-    return None if df.empty else df.iloc[0].to_dict()
 
 def _rfq_lines(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
