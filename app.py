@@ -4755,3 +4755,282 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:  # OVERRIDE
                 st.session_state["rfp_selected_notice"] = row.to_dict()
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
 # ===================== End Phase X.1 — SAM Watch upgrades =====================
+
+
+# ======================= Phase X.2 — SAM Watch pagination & filters =======================
+def run_sam_watch(conn: sqlite3.Connection) -> None:  # OVERRIDE (Phase X.2)
+    _ensure_sam_x1_tables(conn)
+    st.header("SAM Watch")
+    st.caption("Broader filters, pagination, and de-dupe guards. (Dates hidden: default last 365 days)")
+
+    api_key = get_sam_api_key()
+
+    # State for pagination
+    if ns("sam","page") not in st.session_state:
+        st.session_state[ns("sam","page")] = 0
+
+    # Search panel
+    with st.expander("Search Filters", expanded=True):
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            active_only = st.checkbox("Active only", value=True, key=ns("sam", "active"))
+        with c2:
+            org_name = st.text_input("Organization/Agency contains", key=ns("sam", "org"))
+        with c3:
+            keywords = st.text_input("Keywords (Title contains)", key=ns("sam", "kw"))
+
+        d1, d2, d3 = st.columns([2, 2, 2])
+        with d1:
+            naics_in = st.text_input("NAICS (comma-separated; blank=All)", key=ns("sam","naics_multi"))
+        with d2:
+            psc_in = st.text_input("PSC (comma-separated; optional)", key=ns("sam","psc_multi"))
+        with d3:
+            state = st.text_input("Place of Performance State (e.g., TX)", key=ns("sam","state"))
+
+        e1, e2, e3 = st.columns([2, 2, 2])
+        with e1:
+            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key=ns("sam", "sa"))
+        with e2:
+            exclude_saved = st.checkbox("Exclude Saved", value=True, key=ns("sam","ex_saved"))
+        with e3:
+            exclude_dismissed = st.checkbox("Exclude Dismissed", value=True, key=ns("sam","ex_dismissed"))
+
+        ptype_map = {
+            "Pre-solicitation": "p",
+            "Sources Sought": "r",
+            "Special Notice": "s",
+            "Solicitation": "o",
+            "Combined Synopsis/Solicitation": "k",
+            "Justification (J&A)": "u",
+            "Sale of Surplus Property": "g",
+            "Intent to Bundle (DoD)": "i",
+            "Award Notice": "a",
+        }
+        types = st.multiselect(
+            "Notice Types",
+            list(ptype_map.keys()),
+            default=["Solicitation", "Combined Synopsis/Solicitation", "Sources Sought"],
+            key=ns("sam", "types")
+        )
+
+        g1, g2, g3 = st.columns([2, 2, 2])
+        with g1:
+            limit = st.number_input("Results per page", min_value=10, max_value=1000, value=100, step=10, key=ns("sam", "limit"))
+        with g2:
+            st.write("")  # spacer
+            run_clicked = st.button("Run Search", type="primary", key=ns("sam","run"))
+            if run_clicked:
+                st.session_state[ns("sam","page")] = 0
+        with g3:
+            save_q = st.text_input("Save this search as…", placeholder="e.g., IT services – TX – SB", key=ns("sam", "savename"))
+            if st.button("Save Search", key=ns("sam","savebtn")):
+                name = (save_q or "").strip()
+                if not name:
+                    st.warning("Enter a name to save this search.")
+                else:
+                    params = _build_params(active_only, org_name, keywords, naics_in, psc_in, state, set_aside, types, limit, 0, api_key=None)
+                    try:
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("INSERT INTO sam_searches(name, params_json, created_at) VALUES(?,?, datetime('now'));", (name, json.dumps(params)))
+                            conn.commit()
+                        st.success("Saved search.")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+
+    # Parameter builder (dates hidden; default last 365 days)
+    def _build_params(active_only_v, org_v, kw_v, naics_csv, psc_csv, state_v, sa_v, types_list, limit_v, page_index, api_key):
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        pf = (today - timedelta(days=365)).strftime("%m/%d/%Y")
+        pt = today.strftime("%m/%d/%Y")
+        params = {
+            "limit": int(limit_v),
+            "offset": int(page_index) * int(limit_v),
+            "postedFrom": pf,
+            "postedTo": pt,
+        }
+        if api_key:
+            params["api_key"] = api_key
+        if active_only_v:
+            params["status"] = "active"
+        if kw_v:
+            params["title"] = kw_v
+        if org_v:
+            params["organizationName"] = org_v
+        if state_v:
+            params["state"] = state_v
+        if sa_v:
+            params["typeOfSetAside"] = sa_v
+        if types_list:
+            ptype_map_local = {
+                "Pre-solicitation": "p", "Sources Sought": "r", "Special Notice": "s", "Solicitation": "o",
+                "Combined Synopsis/Solicitation": "k", "Justification (J&A)": "u", "Sale of Surplus Property": "g",
+                "Intent to Bundle (DoD)": "i", "Award Notice": "a"
+            }
+            params["ptype"] = ",".join(ptype_map_local[t] for t in types_list if t in ptype_map_local)
+        # CSV fields
+        if naics_csv:
+            naics_csv = ",".join([x.strip() for x in naics_csv.split(",") if x.strip()])
+            if naics_csv:
+                params["ncode"] = naics_csv
+        if psc_csv:
+            psc_csv = ",".join([x.strip() for x in psc_csv.split(",") if x.strip()])
+            if psc_csv:
+                params["ccode"] = psc_csv
+        return params
+
+    # Saved searches & watchlist
+    with st.expander("Saved Searches & Watchlist", expanded=False):
+        try:
+            df_ss = pd.read_sql_query("SELECT id, name, params_json, created_at FROM sam_searches ORDER BY id DESC;", conn, params=())
+        except Exception:
+            df_ss = pd.DataFrame()
+        if df_ss.empty:
+            st.caption("No saved searches yet.")
+        else:
+            st.dataframe(df_ss[["id","name","created_at"]], use_container_width=True, hide_index=True)
+            cid = st.selectbox("Run a saved search", options=[None]+df_ss["id"].tolist(), key=ns("sam","ss_pick"))
+            if cid:
+                row = df_ss[df_ss["id"]==cid].iloc[0]
+                st.session_state[ns("sam","page")] = 0
+                base_params = json.loads(row["params_json"] or "{}")
+                params = dict(base_params)
+                params["api_key"] = api_key
+                with st.spinner(f"Running saved search: {row['name']}"):
+                    out = sam_search_cached(params)
+                if out.get("error"):
+                    st.error(out["error"])
+                else:
+                    recs = out.get("records", [])
+                    results_df = flatten_records(recs)
+                    st.session_state["sam_results_df"] = results_df
+                    st.success(f"Fetched {len(results_df)} notices")
+
+        st.markdown("---")
+        try:
+            df_watch = pd.read_sql_query("SELECT id, notice_id, title, solnum, ntype, due, set_aside, naics, psc, agency_path, sam_url, is_active, saved_at FROM sam_notices ORDER BY saved_at DESC;", conn, params=())
+        except Exception:
+            df_watch = pd.DataFrame()
+        st.subheader("Watchlist")
+        if df_watch.empty:
+            st.caption("Empty")
+        else:
+            st.dataframe(df_watch.drop(columns=["sam_url"]).rename(columns={"ntype":"Type","due":"Response Due"}), use_container_width=True, hide_index=True)
+            for _, r in df_watch.head(50).iterrows():
+                c1, c2, c3 = st.columns([3,2,2])
+                with c1:
+                    st.caption(f"#{int(r['id'])}  {r.get('title') or ''}")
+                with c2:
+                    new_active = st.checkbox("Active", value=bool(r.get("is_active",1)), key=ns("sam","active_row", int(r["id"])))
+                with c3:
+                    if st.button("Remove", key=ns("sam","rm", int(r["id"]))):
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("DELETE FROM sam_notices WHERE id=?;", (int(r["id"]),))
+                            conn.commit()
+                        st.success("Removed"); st.rerun()
+                try:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("UPDATE sam_notices SET is_active=? WHERE id=?;", (1 if new_active else 0, int(r["id"])))
+                        conn.commit()
+                except Exception:
+                    pass
+
+    # Execute search with pagination
+    page = int(st.session_state.get(ns("sam","page"), 0))
+    results_df = st.session_state.get("sam_results_df", pd.DataFrame())
+    run_now = st.session_state.get(ns("sam","run"), False)
+
+    if run_now:
+        params = _build_params(active_only, org_name, keywords, naics_in, psc_in, state, set_aside, types, limit, page, api_key)
+        if not api_key:
+            st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
+            return
+        with st.spinner(f"Searching SAM.gov… (page {page+1})"):
+            out = sam_search_cached(params)
+        if out.get("error"):
+            st.error(out["error"])
+        else:
+            recs = out.get("records", [])
+            results_df = flatten_records(recs)
+            st.session_state["sam_results_df"] = results_df
+            st.success(f"Fetched {len(results_df)} notices on page {page+1}")
+
+    # Exclusion sets
+    ex_ids = set()
+    if exclude_saved:
+        try:
+            rows = pd.read_sql_query("SELECT notice_id FROM sam_notices;", conn, params=())
+            ex_ids.update([str(x) for x in rows["notice_id"].dropna().tolist()])
+        except Exception:
+            pass
+    if exclude_dismissed:
+        try:
+            rows = pd.read_sql_query("SELECT notice_id FROM sam_dismissed;", conn, params=())
+            ex_ids.update([str(x) for x in rows["notice_id"].dropna().tolist()])
+        except Exception:
+            pass
+
+    if results_df is None or results_df.empty:
+        st.info("No results yet. Run a search or open a saved search.")
+        return
+
+    # Filter out excluded
+    if "Notice ID" in results_df.columns and ex_ids:
+        results_df = results_df[~results_df["Notice ID"].astype(str).isin(ex_ids)]
+
+    st.dataframe(results_df, use_container_width=True, hide_index=True)
+
+    # Pagination controls
+    cprev, cpg, cnext = st.columns([1,2,1])
+    with cprev:
+        if st.button("Prev", disabled=(page<=0), key=ns("sam","prev")):
+            st.session_state[ns("sam","page")] = max(0, page-1)
+            st.session_state[ns("sam","run")] = True
+            st.rerun()
+    with cpg:
+        st.caption(f"Page {page+1}")
+    with cnext:
+        nxt_enabled = len(results_df) >= int(limit) // 2
+        if st.button("Next", disabled=not nxt_enabled, key=ns("sam","next")):
+            st.session_state[ns("sam","page")] = page+1
+            st.session_state[ns("sam","run")] = True
+            st.rerun()
+
+    # Row actions
+    titles = [f"{row['Title']} [{row.get('Solicitation') or '—'}]" for _, row in results_df.iterrows()]
+    if titles:
+        idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i], key=ns("sam","pick"))
+        row = results_df.iloc[idx]
+
+        with st.expander("Opportunity Details", expanded=True):
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.write(f"**Title:** {row['Title']}")
+                st.write(f"**Solicitation:** {row['Solicitation']}")
+                st.write(f"**Type:** {row['Type']}")
+                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row.get('Set-Aside Code','')})")
+                st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
+                st.write(f"**Agency Path:** {row['Agency Path']}")
+            with c2:
+                st.write(f"**Posted:** {row['Posted']}")
+                st.write(f"**Response Due:** {row['Response Due']}")
+                st.write(f"**Notice ID:** {row['Notice ID']}")
+                if row['SAM Link']:
+                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
+
+        b1, b2, b3 = st.columns([2,2,2])
+        with b1:
+            if st.button("Save Notice", key=ns("sam","save_notice", idx)):
+                ok, msg = _save_notice(conn, row.to_dict())
+                if ok: st.success("Saved to watchlist")
+                else: st.error(msg)
+        with b2:
+            if st.button("Add to Deals (dedupe-safe)", key=ns("sam","add_deal", idx)):
+                ok, msg, did = _upsert_deal_from_notice(conn, row.to_dict())
+                if ok: st.success(f"Ready in Deals (ID {did})")
+                else: st.error(msg)
+        with b3:
+            if st.button("Push to RFP Analyzer", key=ns("sam","push_rfp", idx)):
+                st.session_state["rfp_selected_notice"] = row.to_dict()
+                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+# ===================== End Phase X.2 — SAM Watch pagination & filters =====================
