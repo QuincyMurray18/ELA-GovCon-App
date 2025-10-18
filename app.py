@@ -1660,6 +1660,84 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     
 
 
+
+def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: int | None = None) -> float:
+    """Rough page estimate at common spacings for 11pt fonts."""
+    if words_per_page is None:
+        s = (spacing or "1.15").strip().lower()
+        if s in {"1", "1.0", "single"}:
+            wpp = 500
+        elif s in {"1.15", "1,15"}:
+            wpp = 400
+        elif s in {"1.5", "1,5"}:
+            wpp = 300
+        elif s in {"double", "2", "2.0"}:
+            wpp = 250
+        else:
+            wpp = 400
+    else:
+        wpp = max(50, int(words_per_page))
+    return round((total_words or 0) / float(wpp), 2)
+
+
+def _export_docx(path: str,
+                 doc_title: str,
+                 sections: list[dict],
+                 clins: "pd.DataFrame" | None = None,
+                 checklist: "pd.DataFrame" | None = None,
+                 metadata: dict | None = None,
+                 font_name: str = "Times New Roman",
+                 font_size_pt: int = 11,
+                 spacing: str = "1.15") -> str | None:
+    try:
+        from docx import Document  # type: ignore
+        from docx.shared import Pt  # type: ignore
+        from docx.enum.text import WD_LINE_SPACING  # type: ignore
+    except Exception:
+        st.error("python-docx is required. pip install python-docx")
+        return None
+    spacing_map = {
+        "single": WD_LINE_SPACING.SINGLE, "1": WD_LINE_SPACING.SINGLE, "1.0": WD_LINE_SPACING.SINGLE,
+        "1.15": WD_LINE_SPACING.ONE_POINT_FIVE, "1,15": WD_LINE_SPACING.ONE_POINT_FIVE,
+        "1.5": WD_LINE_SPACING.ONE_POINT_FIVE, "double": WD_LINE_SPACING.DOUBLE,
+        "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
+    }
+    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
+    doc = Document()
+    h = doc.add_heading(doc_title or "Proposal", level=1)
+    if metadata:
+        p = doc.add_paragraph(" | ".join(f"{k}: {v}" for k,v in metadata.items()))
+    for s in (sections or []):
+        title = str(s.get("title","")).strip()
+        body = str(s.get("body","")).strip()
+        if title: doc.add_heading(title, level=2)
+        for para in body.split("\n\n"):
+            if para.strip():
+                p = doc.add_paragraph(para.strip())
+                try: p.paragraph_format.line_spacing_rule = line_spacing
+                except Exception: pass
+                for run in p.runs:
+                    try: run.font.name = font_name; run.font.size = Pt(font_size_pt)
+                    except Exception: pass
+    try:
+        if isinstance(clins, pd.DataFrame) and not clins.empty:
+            tbl = doc.add_table(rows=1, cols=len(clins.columns))
+            for j, col in enumerate(clins.columns): tbl.rows[0].cells[j].text = str(col)
+            for _, row in clins.iterrows():
+                cells = tbl.add_row().cells
+                for j, col in enumerate(clins.columns):
+                    val = row.get(col); cells[j].text = "" if pd.isna(val) else str(val)
+    except Exception: pass
+    try:
+        if isinstance(checklist, pd.DataFrame) and not checklist.empty:
+            doc.add_heading("Compliance Checklist", level=2)
+            for _, r in checklist.iterrows():
+                txt = str(r.get("item_text","")).strip()
+                if txt: doc.add_paragraph(txt, style="List Bullet")
+    except Exception: pass
+    doc.save(path)
+    return path
+
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn)
