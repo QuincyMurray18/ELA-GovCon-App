@@ -3445,7 +3445,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                     try:
                         with closing(conn.cursor()) as cur:
                             cur.execute("""
-                                INSERT INTO files(owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at)
+                                INSERT INTO files_t(owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at)
                                 VALUES(?,?,?,?,?,?,?,?,datetime('now'));
                             """, (
                                 owner_type, int(owner_id) if owner_id else None, f.name, pth, f.size, _detect_mime(f.name),
@@ -4335,7 +4335,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                 fpath.write_bytes(up.read())
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
-                        INSERT INTO files(owner_type, owner_id, tag, path, name, size, created_at)
+                        INSERT INTO files_t(owner_type, owner_id, tag, path, name, size, created_at)
                         VALUES(?,?,?,?,?,?, datetime('now'));
                     """, (owner_type, int(owner_id) if owner_id else None, tag, str(fpath), up.name, fpath.stat().st_size))
                     conn.commit()
