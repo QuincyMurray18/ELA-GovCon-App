@@ -863,12 +863,16 @@ def run_deals(conn: sqlite3.Connection) -> None:
         st.error(f"Failed to load deals {e}")
 
 
-# ---------- SAM Watch (Phase A) ----------
-def run_sam_watch(conn: sqlite3.Connection) -> None:
+# ---------- SAM Watch (Phase A) ----------def run_sam_watch(conn: sqlite3.Connection) -> None:
     st.header("SAM Watch")
     st.caption("Broader filters, pagination, and de-dupe guards. (Dates hidden: default last 365 days)")
 
     api_key = get_sam_api_key()
+
+    # --- paging state
+    if "sam_page" not in st.session_state:
+        st.session_state["sam_page"] = 0
+    page = int(st.session_state.get("sam_page", 0))
 
     # Helper: ids already saved to Deals/RFPs for de-dupe
     try:
@@ -892,11 +896,11 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
-            use_dates = st.checkbox("Filter by posted date", value=False)
+            use_dates = st.checkbox("Filter by posted date", value=False, key="sam_use_dates")
         with c2:
-            active_only = st.checkbox("Active only", value=True)
+            active_only = st.checkbox("Active only", value=True, key="sam_active")
         with c3:
-            org_name = st.text_input("Organization/Agency contains")
+            org_name = st.text_input("Organization/Agency contains", key="sam_org")
 
         if use_dates:
             d1, d2 = st.columns([2, 2])
@@ -907,19 +911,19 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
         e1, e2, e3 = st.columns([2, 2, 2])
         with e1:
-            keywords = st.text_input("Keywords (Title contains)")
+            keywords = st.text_input("Keywords (Title contains)", key="sam_kw")
         with e2:
-            naics = st.text_input("NAICS (6-digit)")
+            naics = st.text_input("NAICS (6-digit)", key="sam_naics")
         with e3:
-            psc = st.text_input("PSC")
+            psc = st.text_input("PSC", key="sam_psc")
 
         e4, e5, e6 = st.columns([2, 2, 2])
         with e4:
-            state = st.text_input("Place of Performance State (e.g., TX)")
+            state = st.text_input("Place of Performance State (e.g., TX)", key="sam_state")
         with e5:
-            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
+            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key="sam_sa")
         with e6:
-            hide_saved = st.checkbox("Hide already saved (Deals/RFPs)", value=True)
+            hide_saved = st.checkbox("Hide already saved (Deals/RFPs)", value=True, key="sam_hide_saved")
 
         ptype_map = {
             "Pre-solicitation": "p",
@@ -936,32 +940,33 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             "Notice Types",
             list(ptype_map.keys()),
             default=["Solicitation", "Combined Synopsis/Solicitation", "Sources Sought"],
+            key="sam_types"
         )
 
         g1, g2 = st.columns([2, 2])
         with g1:
-            limit = st.number_input("Results per page", min_value=1, max_value=1000, value=100, step=50)
+            limit = st.number_input("Results per page", min_value=10, max_value=1000, value=100, step=10, key="sam_limit")
         with g2:
-            max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3)
-
-        run = st.button("Run Search", type="primary")
+            run = st.button("Run Search", type="primary", key="sam_run")
+            if run:
+                st.session_state["sam_page"] = 0
+                page = 0
 
     results_df = st.session_state.get("sam_results_df", pd.DataFrame())
 
-    if run:
+    def _do_search(page_index: int):
         if not api_key:
             st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
-            return
+            return pd.DataFrame(), 0
 
         params: Dict[str, Any] = {
             "api_key": api_key,
             "limit": int(limit),
-            "offset": 0,
-            "_max_pages": int(max_pages),
+            "offset": int(page_index) * int(limit),
         }
         if active_only:
             params["status"] = "active"
-        if "use_dates" in locals() and use_dates:
+        if use_dates:
             params["postedFrom"] = posted_from.strftime("%m/%d/%Y")
             params["postedTo"] = posted_to.strftime("%m/%d/%Y")
         else:
@@ -980,34 +985,43 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             params["state"] = state
         if set_aside:
             params["typeOfSetAside"] = set_aside
-        if org_name:
-            params["organizationName"] = org_name
         if types:
             params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
 
-        with st.spinner("Searching SAM.gov..."):
+        with st.spinner(f"Searching SAM.gov... (page {page_index+1})"):
             out = sam_search_cached(params)
 
         if out.get("error"):
             st.error(out["error"])
-            return
+            return pd.DataFrame(), 0
 
         recs = out.get("records", [])
-        results_df = flatten_records(recs)
+        df = flatten_records(recs)
 
         # De-dupe filter for display
         hidden_count = 0
-        if hide_saved and results_df is not None and not results_df.empty:
-            mask = results_df.apply(
+        if hide_saved and df is not None and not df.empty:
+            mask = df.apply(
                 lambda r: (str(r.get("Notice ID") or "") in saved_notice_ids) or (str(r.get("Solicitation") or "") in saved_solnums),
                 axis=1
             )
             hidden_count = int(mask.sum())
-            results_df = results_df[~mask].reset_index(drop=True)
+            df = df[~mask].reset_index(drop=True)
 
+        return df, hidden_count
+
+    if run:
+        results_df, hidden_count = _do_search(page)
         st.session_state["sam_results_df"] = results_df
         st.session_state["sam_hidden_count"] = hidden_count
-        st.success(f"Fetched {len(results_df)} notices (hidden {hidden_count} already-saved)")
+        st.session_state["sam_last_limit"] = int(limit)
+
+    # Auto-run when the user paginates
+    if st.session_state.get("sam_paging", False):
+        st.session_state["sam_paging"] = False
+        results_df, hidden_count = _do_search(page)
+        st.session_state["sam_results_df"] = results_df
+        st.session_state["sam_hidden_count"] = hidden_count
 
     if (results_df is None or results_df.empty) and not run:
         st.info("Set filters and click Run Search")
@@ -1018,8 +1032,27 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             st.caption(f"{hidden_count} notices were hidden because they already exist in Deals/RFPs.")
 
         st.dataframe(results_df, use_container_width=True, hide_index=True)
+
+        # Pagination controls
+        cprev, cpg, cnext = st.columns([1,2,1])
+        with cprev:
+            if st.button("Prev", disabled=(page<=0), key="sam_prev"):
+                st.session_state["sam_page"] = max(0, page-1)
+                st.session_state["sam_paging"] = True
+                st.rerun()
+        with cpg:
+            st.caption(f"Page {page+1}")
+        with cnext:
+            # Enable next if we filled (optimistic)
+            current_limit = int(st.session_state.get("sam_last_limit", limit))
+            nxt_enabled = len(results_df) >= max(10, current_limit//2)
+            if st.button("Next", disabled=not nxt_enabled, key="sam_next"):
+                st.session_state["sam_page"] = page+1
+                st.session_state["sam_paging"] = True
+                st.rerun()
+
         titles = [f"{row['Title']} [{row.get('Solicitation') or '—'}]" for _, row in results_df.iterrows()]
-        idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i])
+        idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i], key="sam_pick")
         row = results_df.iloc[idx]
 
         with st.expander("Opportunity Details", expanded=True):
@@ -1028,7 +1061,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.write(f"**Title:** {row['Title']}")
                 st.write(f"**Solicitation:** {row['Solicitation']}")
                 st.write(f"**Type:** {row['Type']}")
-                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row['Set-Aside Code']})")
+                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row.get('Set-Aside Code','')})")
                 st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
                 st.write(f"**Agency Path:** {row['Agency Path']}")
             with c2:
@@ -1040,8 +1073,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
-            # De-dupe on insert
-            if st.button("Add to Deals", key="add_to_deals"):
+            if st.button("Add to Deals", key="sam_add_to_deals"):
                 notice_id = str(row.get("Notice ID") or "")
                 solnum = str(row.get("Solicitation") or "")
                 try:
@@ -1083,7 +1115,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     except Exception as e:
                         st.error(f"Failed to save deal: {e}")
         with c4:
-            if st.button("Push to RFP Analyzer", key="push_to_rfp"):
+            if st.button("Push to RFP Analyzer", key="sam_push_to_rfp"):
                 st.session_state["rfp_selected_notice"] = row.to_dict()
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
