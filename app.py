@@ -4089,6 +4089,29 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
+    # Safety shim for _red_flags_for_rfp (local fallback)
+    if '_red_flags_for_rfp' not in globals():
+        def _red_flags_for_rfp(ctx: dict | None, df_items: "pd.DataFrame" | None):
+            import pandas as pd
+            rows = []
+            if df_items is not None and not df_items.empty:
+                for _, r in df_items.iterrows():
+                    req = str(r.get("item_text",""))
+                    is_must = int(r.get("is_must",0)) == 1
+                    status = str(r.get("status","Open"))
+                    owner = str(r.get("owner","")) if "owner" in df_items.columns else ""
+                    risk = str(r.get("risk","")) if "risk" in df_items.columns else ""
+                    if is_must and status.lower() != "complete":
+                        rows.append({"Flag":"Must item not complete","Requirement":req,"Owner":owner or "(unassigned)","Risk":risk or "(n/a)"})
+                    if not owner:
+                        rows.append({"Flag":"Missing owner","Requirement":req,"Owner":"(unassigned)","Risk":risk or "(n/a)"})
+                    if risk.lower() in {"yellow","red"}:
+                        rows.append({"Flag":f"Risk {risk}","Requirement":req,"Owner":owner or "(unassigned)","Risk":risk})
+            if isinstance(ctx, dict):
+                missing = [k for k in ("solnum","due_date","agency") if not ctx.get(k)]
+                if missing:
+                    rows.append({"Flag":f"Missing context: {', '.join(missing)}","Requirement":"","Owner":"","Risk":""})
+            return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Flag","Requirement","Owner","Risk"])
     # Safety shim: ensure _ensure_lm_tables is available in this scope
     if '_ensure_lm_tables' not in globals():
         def _ensure_lm_tables(conn: sqlite3.Connection) -> None:
