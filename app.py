@@ -1033,6 +1033,8 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                             if row['SAM Link']:
                                 st.markdown(f"[Open in SAM]({row['SAM Link']})")
             
+        except Exception as e:
+            st.warning(f"Details panel error: {e}")
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
             if st.button("Add to Deals", key="sam_add_to_deals"):
