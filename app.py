@@ -1879,7 +1879,6 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                     with closing(conn.cursor()) as cur:
                         for _, r in df.iterrows():
                             cur.execute(
-                            cur.execute(
                                 "INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes) VALUES (?,?,?,?,?,?,?,?,?,?);",
                                 (
                                     str(r.get("name",""))[:200],
@@ -1919,8 +1918,6 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 st.error("Name is required")
             else:
                 try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
                     with closing(conn.cursor()) as cur:
                         cur.execute(
                             "INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes) VALUES (?,?,?,?,?,?,?,?,?,?);",
@@ -2236,7 +2233,6 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
 
     st.subheader("Comparison")
     df_target = pd.read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? GROUP BY clin, description ORDER BY clin;", conn, params=(rfp_id,))
-    df_lines = pd.read_sql_query("""
     df_lines = pd.read_sql_query("SELECT q.vendor, l.clin, l.qty, l.unit_price, l.extended_price FROM quote_lines l JOIN quotes q ON q.id = l.quote_id WHERE q.rfp_id=?;", conn, params=(rfp_id,))
     if df_lines.empty:
         st.info("No quote lines yet."); return
