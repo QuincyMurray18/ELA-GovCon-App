@@ -864,17 +864,31 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 
 # ---------- SAM Watch (Phase A) ----------
-
 def run_sam_watch(conn: sqlite3.Connection) -> None:
     st.header("SAM Watch")
-    st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
+    st.caption("Broader filters, pagination, and de-dupe guards. (Dates hidden: default last 365 days)")
 
     api_key = get_sam_api_key()
 
-    # Search filters (dates optional)
+    # Helper: ids already saved to Deals/RFPs for de-dupe
+    try:
+        df_deals_ids = pd.read_sql_query("SELECT id, notice_id, solnum FROM deals_t;", conn, params=())
+    except Exception:
+        df_deals_ids = pd.DataFrame(columns=["id","notice_id","solnum"])
+    try:
+        df_rfp_ids = pd.read_sql_query("SELECT id, notice_id, solnum FROM rfps;", conn, params=())
+    except Exception:
+        df_rfp_ids = pd.DataFrame(columns=["id","notice_id","solnum"])
+
+    saved_notice_ids = set((df_deals_ids["notice_id"].dropna().astype(str).tolist() if not df_deals_ids.empty else [])) | \
+                       set((df_rfp_ids["notice_id"].dropna().astype(str).tolist() if not df_rfp_ids.empty else []))
+    saved_solnums = set((df_deals_ids["solnum"].dropna().astype(str).tolist() if not df_deals_ids.empty else [])) | \
+                    set((df_rfp_ids["solnum"].dropna().astype(str).tolist() if not df_rfp_ids.empty else []))
+
+    # Search filters
     with st.expander("Search Filters", expanded=True):
         today = datetime.now().date()
-        default_from = today - timedelta(days=30)
+        default_from = today - timedelta(days=365)
 
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
@@ -905,7 +919,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with e5:
             set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
         with e6:
-            pass
+            hide_saved = st.checkbox("Hide already saved (Deals/RFPs)", value=True)
 
         ptype_map = {
             "Pre-solicitation": "p",
@@ -951,9 +965,9 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             params["postedFrom"] = posted_from.strftime("%m/%d/%Y")
             params["postedTo"] = posted_to.strftime("%m/%d/%Y")
         else:
-            # SAM.gov API requires postedFrom/postedTo; use implicit last 30 days when filter is off
+            # implicit last 365 days when filter is OFF
             _today = datetime.now().date()
-            _from = _today - timedelta(days=30)
+            _from = _today - timedelta(days=365)
             params["postedFrom"] = _from.strftime("%m/%d/%Y")
             params["postedTo"] = _today.strftime("%m/%d/%Y")
         if keywords:
@@ -980,13 +994,29 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
         recs = out.get("records", [])
         results_df = flatten_records(recs)
+
+        # De-dupe filter for display
+        hidden_count = 0
+        if hide_saved and results_df is not None and not results_df.empty:
+            mask = results_df.apply(
+                lambda r: (str(r.get("Notice ID") or "") in saved_notice_ids) or (str(r.get("Solicitation") or "") in saved_solnums),
+                axis=1
+            )
+            hidden_count = int(mask.sum())
+            results_df = results_df[~mask].reset_index(drop=True)
+
         st.session_state["sam_results_df"] = results_df
-        st.success(f"Fetched {len(results_df)} notices")
+        st.session_state["sam_hidden_count"] = hidden_count
+        st.success(f"Fetched {len(results_df)} notices (hidden {hidden_count} already-saved)")
 
     if (results_df is None or results_df.empty) and not run:
         st.info("Set filters and click Run Search")
 
     if results_df is not None and not results_df.empty:
+        hidden_count = int(st.session_state.get("sam_hidden_count", 0) or 0)
+        if hidden_count > 0:
+            st.caption(f"{hidden_count} notices were hidden because they already exist in Deals/RFPs.")
+
         st.dataframe(results_df, use_container_width=True, hide_index=True)
         titles = [f"{row['Title']} [{row.get('Solicitation') or '—'}]" for _, row in results_df.iterrows()]
         idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i])
@@ -1010,39 +1040,54 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
+            # De-dupe on insert
             if st.button("Add to Deals", key="add_to_deals"):
+                notice_id = str(row.get("Notice ID") or "")
+                solnum = str(row.get("Solicitation") or "")
                 try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                            """,
-                            (
-                                row["Title"],
-                                row["Agency Path"],
-                                "Bidding",
-                                None,
-                                row["Notice ID"],
-                                row["Solicitation"],
-                                row["Posted"],
-                                row["Response Due"],
-                                row["NAICS"],
-                                row["PSC"],
-                                row["SAM Link"],
-                            ),
-                        )
-                        conn.commit()
-                    st.success("Saved to Deals")
-                except Exception as e:
-                    st.error(f"Failed to save deal: {e}")
+                    df_chk = pd.read_sql_query(
+                        "SELECT id, title FROM deals_t WHERE (COALESCE(notice_id,'')=? AND notice_id!='') "
+                        "OR (COALESCE(solnum,'')=? AND solnum!='');",
+                        conn, params=(notice_id, solnum)
+                    )
+                except Exception:
+                    df_chk = pd.DataFrame()
+
+                if not df_chk.empty:
+                    deal_id = int(df_chk.iloc[0]["id"])
+                    st.info(f"Already in Deals as #{deal_id} — {df_chk.iloc[0]['title']}")
+                else:
+                    try:
+                        with closing(conn.cursor()) as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                """,
+                                (
+                                    row["Title"],
+                                    row["Agency Path"],
+                                    "Bidding",
+                                    None,
+                                    notice_id,
+                                    solnum,
+                                    row["Posted"],
+                                    row["Response Due"],
+                                    row["NAICS"],
+                                    row["PSC"],
+                                    row["SAM Link"],
+                                ),
+                            )
+                            conn.commit()
+                        st.success("Saved to Deals")
+                    except Exception as e:
+                        st.error(f"Failed to save deal: {e}")
         with c4:
             if st.button("Push to RFP Analyzer", key="push_to_rfp"):
                 st.session_state["rfp_selected_notice"] = row.to_dict()
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
-
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
