@@ -4371,3 +4371,387 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
 
+# ======================= Phase X.1 — SAM Watch upgrades =======================
+# Saved searches, watchlist, and dedupe-safe handoff to Deals/RFP Analyzer.
+# (This block overrides run_sam_watch defined earlier, without touching other modules.)
+
+def _ensure_sam_x1_tables(conn):
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sam_searches(
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sam_notices(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT UNIQUE,
+                    title TEXT,
+                    solnum TEXT,
+                    ntype TEXT,
+                    posted TEXT,
+                    due TEXT,
+                    set_aside TEXT,
+                    naics TEXT,
+                    psc TEXT,
+                    agency_path TEXT,
+                    sam_url TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    saved_at TEXT
+                );
+            """)
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_sam_notices_notice ON sam_notices(notice_id);")
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _row_to_notice_dict(row: "pd.Series|dict"):
+    d = dict(row if isinstance(row, dict) else row.to_dict())
+    return {
+        "notice_id": d.get("Notice ID") or d.get("notice_id") or "",
+        "title": d.get("Title") or d.get("title") or "",
+        "solnum": d.get("Solicitation") or d.get("solnum") or "",
+        "ntype": d.get("Type") or d.get("type") or "",
+        "posted": d.get("Posted") or d.get("posted") or "",
+        "due": d.get("Response Due") or d.get("due") or "",
+        "set_aside": d.get("Set-Aside") or d.get("set_aside") or "",
+        "naics": d.get("NAICS") or d.get("naics") or "",
+        "psc": d.get("PSC") or d.get("psc") or "",
+        "agency_path": d.get("Agency Path") or d.get("agency_path") or "",
+        "sam_url": d.get("SAM Link") or d.get("sam_url") or "",
+    }
+
+
+def _save_notice(conn, row_dict: dict) -> tuple[bool, str]:
+    nd = _row_to_notice_dict(row_dict)
+    if not nd.get("notice_id") and not nd.get("sam_url"):
+        return (False, "Missing notice ID / URL")
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                INSERT INTO sam_notices(notice_id, title, solnum, ntype, posted, due, set_aside, naics, psc, agency_path, sam_url, is_active, saved_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+                ON CONFLICT(notice_id) DO UPDATE SET
+                    title=excluded.title, solnum=excluded.solnum, ntype=excluded.ntype,
+                    posted=excluded.posted, due=excluded.due, set_aside=excluded.set_aside,
+                    naics=excluded.naics, psc=excluded.psc, agency_path=excluded.agency_path,
+                    sam_url=excluded.sam_url, is_active=1;
+                """,
+                (
+                    nd["notice_id"], nd["title"], nd["solnum"], nd["ntype"], nd["posted"],
+                    nd["due"], nd["set_aside"], nd["naics"], nd["psc"], nd["agency_path"], nd["sam_url"], 1
+                )
+            )
+            conn.commit()
+        return (True, "saved")
+    except Exception as e:
+        return (False, str(e))
+
+
+def _deal_exists(conn, notice_id: str|None, solnum: str|None) -> int|None:
+    try:
+        with closing(conn.cursor()) as cur:
+            if notice_id:
+                cur.execute("SELECT id FROM deals WHERE notice_id=? LIMIT 1;", (notice_id.strip(),))
+                r = cur.fetchone()
+                if r: return int(r[0])
+            if solnum:
+                cur.execute("SELECT id FROM deals WHERE solnum=? LIMIT 1;", (solnum.strip(),))
+                r = cur.fetchone()
+                if r: return int(r[0])
+        return None
+    except Exception:
+        return None
+
+
+def _upsert_deal_from_notice(conn, row_dict: dict) -> tuple[bool, str, int|None]:
+    nd = _row_to_notice_dict(row_dict)
+    did = _deal_exists(conn, nd.get("notice_id"), nd.get("solnum"))
+    try:
+        with closing(conn.cursor()) as cur:
+            if did is None:
+                cur.execute(
+                    """
+                    INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?);
+                    """,
+                    (
+                        nd["title"], nd["agency_path"], "Bidding", None,
+                        nd["notice_id"], nd["solnum"], nd["posted"], nd["due"],
+                        nd["naics"], nd["psc"], nd["sam_url"]
+                    )
+                )
+                did = cur.lastrowid
+            else:
+                cur.execute(
+                    """
+                    UPDATE deals
+                    SET title=COALESCE(?, title),
+                        agency=COALESCE(?, agency),
+                        posted_date=COALESCE(?, posted_date),
+                        rfp_deadline=COALESCE(?, rfp_deadline),
+                        naics=COALESCE(?, naics),
+                        psc=COALESCE(?, psc),
+                        sam_url=COALESCE(?, sam_url)
+                    WHERE id=?;
+                    """,
+                    (
+                        nd["title"] or None, nd["agency_path"] or None, nd["posted"] or None, nd["due"] or None,
+                        nd["naics"] or None, nd["psc"] or None, nd["sam_url"] or None, int(did)
+                    )
+                )
+            conn.commit()
+        return (True, "ok", int(did) if did is not None else None)
+    except Exception as e:
+        return (False, str(e), None)
+
+
+def run_sam_watch(conn: sqlite3.Connection) -> None:  # OVERRIDE
+    _ensure_sam_x1_tables(conn)
+    st.header("SAM Watch")
+    st.caption("Live SAM.gov search with saved searches, watchlist, and duplicate-safe handoff.")
+
+    api_key = get_sam_api_key()
+
+    # Search panel
+    with st.expander("Search Filters", expanded=True):
+        today = datetime.now().date()
+        default_from = today - timedelta(days=30)
+
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            use_dates = st.checkbox("Filter by posted date", value=False, key=ns("sam", "dates"))
+        with c2:
+            active_only = st.checkbox("Active only", value=True, key=ns("sam", "active"))
+        with c3:
+            org_name = st.text_input("Organization/Agency contains", key=ns("sam", "org"))
+
+        if use_dates:
+            d1, d2 = st.columns([2, 2])
+            with d1:
+                posted_from = st.date_input("Posted From", value=default_from, key=ns("sam", "from"))
+            with d2:
+                posted_to = st.date_input("Posted To", value=today, key=ns("sam", "to"))
+
+        e1, e2, e3 = st.columns([2, 2, 2])
+        with e1:
+            keywords = st.text_input("Keywords (Title contains)", key=ns("sam", "kw"))
+        with e2:
+            naics = st.text_input("NAICS (6-digit)", key=ns("sam", "naics"))
+        with e3:
+            psc = st.text_input("PSC", key=ns("sam", "psc"))
+
+        e4, e5, e6 = st.columns([2, 2, 2])
+        with e4:
+            state = st.text_input("Place of Performance State (e.g., TX)", key=ns("sam", "state"))
+        with e5:
+            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key=ns("sam", "sa"))
+        with e6:
+            pass
+
+        ptype_map = {
+            "Pre-solicitation": "p",
+            "Sources Sought": "r",
+            "Special Notice": "s",
+            "Solicitation": "o",
+            "Combined Synopsis/Solicitation": "k",
+            "Justification (J&A)": "u",
+            "Sale of Surplus Property": "g",
+            "Intent to Bundle (DoD)": "i",
+            "Award Notice": "a",
+        }
+        types = st.multiselect(
+            "Notice Types",
+            list(ptype_map.keys()),
+            default=["Solicitation", "Combined Synopsis/Solicitation", "Sources Sought"],
+            key=ns("sam", "types")
+        )
+
+        g1, g2 = st.columns([2, 2])
+        with g1:
+            limit = st.number_input("Results per page", min_value=1, max_value=1000, value=100, step=50, key=ns("sam", "limit"))
+        with g2:
+            max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3, key=ns("sam", "pages"))
+
+        cols = st.columns([2,2,2])
+        with cols[0]:
+            run = st.button("Run Search", type="primary", key=ns("sam", "run"))
+        with cols[1]:
+            save_q = st.text_input("Save this search as…", placeholder="e.g., IT services – TX – SB", key=ns("sam", "savename"))
+        with cols[2]:
+            do_save = st.button("Save Search", key=ns("sam", "savebtn"))
+
+    # Build params dict
+    def _build_params():
+        params: Dict[str, Any] = {
+            "api_key": api_key,
+            "limit": int(limit),
+            "offset": 0,
+            "_max_pages": int(max_pages),
+        }
+        if active_only:
+            params["status"] = "active"
+        if use_dates:
+            params["postedFrom"] = posted_from.strftime("%m/%d/%Y")
+            params["postedTo"] = posted_to.strftime("%m/%d/%Y")
+        else:
+            _today = datetime.now().date()
+            _from = _today - timedelta(days=30)
+            params["postedFrom"] = _from.strftime("%m/%d/%Y")
+            params["postedTo"] = _today.strftime("%m/%d/%Y")
+        if keywords:
+            params["title"] = keywords
+        if naics:
+            params["ncode"] = naics
+        if psc:
+            params["ccode"] = psc
+        if state:
+            params["state"] = state
+        if set_aside:
+            params["typeOfSetAside"] = set_aside
+        if org_name:
+            params["organizationName"] = org_name
+        if types:
+            params["ptype"] = ",".join(ptype_map[t] for t in types if t in ptype_map)
+        return params
+
+    if do_save:
+        _ensure_sam_x1_tables(conn)
+        name = (save_q or "").strip()
+        if not name:
+            st.warning("Enter a name to save this search.")
+        else:
+            params = _build_params()
+            params.pop("api_key", None)
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute(
+                        "INSERT INTO sam_searches(name, params_json, created_at) VALUES(?,?, datetime('now'));",
+                        (name, json.dumps(params))
+                    )
+                    conn.commit()
+                st.success("Saved search.")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+    results_df = st.session_state.get("sam_results_df", pd.DataFrame())
+
+    if run:
+        if not api_key:
+            st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
+        else:
+            with st.spinner("Searching SAM.gov…"):
+                out = sam_search_cached(_build_params())
+            if out.get("error"):
+                st.error(out["error"])
+            else:
+                recs = out.get("records", [])
+                results_df = flatten_records(recs)
+                st.session_state["sam_results_df"] = results_df
+                st.success(f"Fetched {len(results_df)} notices")
+
+    # Saved searches & watchlist
+    with st.expander("Saved Searches & Watchlist", expanded=False):
+        try:
+            df_ss = pd.read_sql_query("SELECT id, name, params_json, created_at FROM sam_searches ORDER BY id DESC;", conn, params=())
+        except Exception:
+            df_ss = pd.DataFrame()
+        if df_ss.empty:
+            st.caption("No saved searches yet.")
+        else:
+            st.dataframe(df_ss[["id","name","created_at"]], use_container_width=True, hide_index=True)
+            cid = st.selectbox("Run a saved search", options=[None]+df_ss["id"].tolist(), key=ns("sam","ss_pick"))
+            if cid:
+                row = df_ss[df_ss["id"]==cid].iloc[0]
+                params = json.loads(row["params_json"] or "{}")
+                params["api_key"] = api_key
+                with st.spinner(f"Running saved search: {row['name']}"):
+                    out = sam_search_cached(params)
+                if out.get("error"):
+                    st.error(out["error"])
+                else:
+                    recs = out.get("records", [])
+                    results_df = flatten_records(recs)
+                    st.session_state["sam_results_df"] = results_df
+                    st.success(f"Fetched {len(results_df)} notices")
+
+        st.markdown("---")
+        try:
+            df_watch = pd.read_sql_query("SELECT id, notice_id, title, solnum, ntype, due, set_aside, naics, psc, agency_path, sam_url, is_active, saved_at FROM sam_notices ORDER BY saved_at DESC;", conn, params=())
+        except Exception:
+            df_watch = pd.DataFrame()
+        st.subheader("Watchlist")
+        if df_watch.empty:
+            st.caption("Empty")
+        else:
+            st.dataframe(df_watch.drop(columns=["sam_url"]).rename(columns={"ntype":"Type","due":"Response Due"}), use_container_width=True, hide_index=True)
+            # toggles per row
+            for _, r in df_watch.head(50).iterrows():
+                c1, c2, c3 = st.columns([3,2,2])
+                with c1:
+                    st.caption(f"#{int(r['id'])}  {r.get('title') or ''}")
+                with c2:
+                    new_active = st.checkbox("Active", value=bool(r.get("is_active",1)), key=ns("sam","active_row", int(r["id"])))
+                with c3:
+                    if st.button("Remove", key=ns("sam","rm", int(r["id"]))):
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("DELETE FROM sam_notices WHERE id=?;", (int(r["id"]),))
+                            conn.commit()
+                        st.success("Removed"); st.rerun()
+                # Persist toggle
+                try:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("UPDATE sam_notices SET is_active=? WHERE id=?;", (1 if new_active else 0, int(r["id"])))
+                        conn.commit()
+                except Exception:
+                    pass
+
+    # Results grid
+    if (results_df is None or results_df.empty) and not run:
+        st.info("Set filters and click Run Search, or open Saved Searches.")
+        return
+
+    if results_df is not None and not results_df.empty:
+        st.dataframe(results_df, use_container_width=True, hide_index=True)
+        titles = [f"{row['Title']} [{row.get('Solicitation') or '—'}]" for _, row in results_df.iterrows()]
+        idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i], key=ns("sam","pick"))
+        row = results_df.iloc[idx]
+
+        with st.expander("Opportunity Details", expanded=True):
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.write(f"**Title:** {row['Title']}")
+                st.write(f"**Solicitation:** {row['Solicitation']}")
+                st.write(f"**Type:** {row['Type']}")
+                st.write(f"**Set-Aside:** {row['Set-Aside']} ({row['Set-Aside Code']})")
+                st.write(f"**NAICS:** {row['NAICS']}  **PSC:** {row['PSC']}")
+                st.write(f"**Agency Path:** {row['Agency Path']}")
+            with c2:
+                st.write(f"**Posted:** {row['Posted']}")
+                st.write(f"**Response Due:** {row['Response Due']}")
+                st.write(f"**Notice ID:** {row['Notice ID']}")
+                if row['SAM Link']:
+                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
+
+        b1, b2, b3 = st.columns([2,2,2])
+        with b1:
+            if st.button("Save Notice", key=ns("sam","save_notice", idx)):
+                ok, msg = _save_notice(conn, row.to_dict())
+                if ok: st.success("Saved to watchlist")
+                else: st.error(msg)
+        with b2:
+            if st.button("Add to Deals (dedupe-safe)", key=ns("sam","add_deal", idx)):
+                ok, msg, did = _upsert_deal_from_notice(conn, row.to_dict())
+                if ok: st.success(f"Ready in Deals (ID {did})")
+                else: st.error(msg)
+        with b3:
+            if st.button("Push to RFP Analyzer", key=ns("sam","push_rfp", idx)):
+                st.session_state["rfp_selected_notice"] = row.to_dict()
+                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+# ===================== End Phase X.1 — SAM Watch upgrades =====================
