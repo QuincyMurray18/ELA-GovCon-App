@@ -3382,83 +3382,13 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                                 pass
                             st.success("Deleted"); st.rerun()
 
-    # --- Submission Kit (ZIP) ---
-    st.subheader("Submission Kit (ZIP)")
-    df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn)
-    if df_rf_all.empty:
-        st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
-        return
 
-    kit_rfp = st.selectbox("RFP", options=df_rf_all["id"].tolist(),
-                           format_func=lambda rid: f"#{rid} — {df_rf_all.loc[df_rf_all['id']==rid,'title'].values[0]}",
-                           key="fm_kit_rfp")
+# --- Submission Kit (ZIP) ---
+st.subheader("Submission Kit (ZIP)")
+st.info("The ZIP builder has been disabled in this build. You can still upload and tag files above, and export individual docs from their modules.")
 
-    # Load files for this RFP
-    try:
-        df_kit = pd.read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(kit_rfp),))
-    except Exception:
-        _ensure_files_table(conn)
-        df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
-    st.caption("Select attachments to include")
-    selected = []
-    if df_kit.empty:
-        st.write("No attachments linked to this RFP yet.")
-    else:
-        for _, r in df_kit.iterrows():
-            if st.checkbox(f"{r['filename']}  {('['+r['tags']+']') if r.get('tags') else ''}", key=f"fm_ck_{int(r['id'])}"):
-                selected.append(int(r["id"]))
 
-    # Optional: include generated docs if they exist
-    st.markdown("**Optional generated docs to include (if found):**")
-    gen_paths = []
-    # Proposal doc
-    prop_path = str(Path(DATA_DIR) / f"Proposal_RFP_{int(kit_rfp)}.docx")
-    if Path(prop_path).exists():
-        if st.checkbox("Include Proposal DOCX", key="fm_inc_prop"):
-            gen_paths.append(prop_path)
-    # Past Performance writeups
-    pp_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
-    if Path(pp_path).exists():
-        if st.checkbox("Include Past Performance DOCX", key="fm_inc_pp"):
-            gen_paths.append(pp_path)
-    # White papers (include any)
-    
-white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
-if white_candidates:
-    wp_paths = [str(p) for p in white_candidates]
-    inc_wp = st.multiselect("Include White Papers", options=wp_paths, format_func=lambda p: os.path.basename(p))
-    for p in inc_wp:
-        if os.path.exists(p):
-            gen_paths.append(p)
 
-# Build the ZIP
-build = st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}")
-if build:
-    sel_paths = []
-    if not df_kit.empty and selected:
-        for fid in selected:
-            row = df_kit[df_kit["id"]==fid].iloc[0]
-            p = row.get("path"); fname = row.get("filename") or os.path.basename(p or "")
-            if p and os.path.exists(p):
-                sel_paths.append((p, fname))
-    # include generated docs
-    for p in gen_paths:
-        if os.path.exists(p):
-            sel_paths.append((p, os.path.basename(p)))
-
-    if not sel_paths:
-        st.warning("Nothing selected to include.")
-    else:
-        zpath = str(Path(DATA_DIR) / f"submission_kit_rfp_{int(kit_rfp)}.zip")
-        import zipfile
-        with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            for p, arc in sel_paths:
-                try:
-                    z.write(p, arcname=arc)
-                except Exception:
-                    pass
-        st.success("Submission kit built.")
-        st.markdown(f"[Download ZIP]({zpath})")
 
 
 def _rfq_lines(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
@@ -4279,19 +4209,19 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
     prop_path = str(Path(DATA_DIR) / f"Proposal_RFP_{int(kit_rfp)}.docx")
     if Path(prop_path).exists():
         if st.checkbox("Include Proposal DOCX", key="fm_inc_prop"):
-            gen_paths.append(prop_path)
+# (ZIP disabled)             gen_paths.append(prop_path)
     pp_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
     if Path(pp_path).exists():
         if st.checkbox("Include Past Performance DOCX", key="fm_inc_pp"):
-            gen_paths.append(pp_path)
-    white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
-    if white_candidates:
-        wp_paths = [str(p) for p in white_candidates]
-        inc_wp = st.multiselect("Include White Papers", options=wp_paths,
+# (ZIP disabled)             gen_paths.append(pp_path)
+# (ZIP disabled)     white_candidates = sorted(Path(DATA_DIR).glob("White_Paper_*.docx"))
+# (ZIP disabled)     if white_candidates:
+# (ZIP disabled)         wp_paths = [str(p) for p in white_candidates]
+# (ZIP disabled)         inc_wp = st.multiselect("Include White Papers", options=wp_paths,
                                 format_func=lambda p: os.path.basename(p), key="fm_wp")
-        for p in inc_wp:
-            if os.path.exists(p):
-                gen_paths.append(p)
+# (ZIP disabled)         for p in inc_wp:
+# (ZIP disabled)             if os.path.exists(p):
+# (ZIP disabled)                 gen_paths.append(p)
 
 # ---- Build ZIP (robust against empty selections) ----
 if 'df_kit' not in locals():
@@ -4319,14 +4249,14 @@ if st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}"):
         # Optional generated docs chosen by user
         gen_paths = []
         prop_path = os.path.join(DATA_DIR, f"Proposal_RFP_{int(kit_rfp)}.docx")
-        if os.path.exists(prop_path) and st.session_state.get("fm_inc_prop"):
-            gen_paths.append(prop_path)
+# (ZIP disabled)         if os.path.exists(prop_path) and st.session_state.get("fm_inc_prop"):
+# (ZIP disabled)             gen_paths.append(prop_path)
         pp_path = os.path.join(DATA_DIR, "Past_Performance_Writeups.docx")
-        if os.path.exists(pp_path) and st.session_state.get("fm_inc_pp"):
-            gen_paths.append(pp_path)
+# (ZIP disabled)         if os.path.exists(pp_path) and st.session_state.get("fm_inc_pp"):
+# (ZIP disabled)             gen_paths.append(pp_path)
         for p in (st.session_state.get("fm_wp") or []):
             if p and os.path.exists(p):
-                gen_paths.append(p)
+# (ZIP disabled)                 gen_paths.append(p)
         for p in gen_paths:
             paths.append((p, os.path.basename(p)))
 
