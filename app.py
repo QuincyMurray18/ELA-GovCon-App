@@ -4091,7 +4091,7 @@ def ns(scope: str, key: str) -> str:
 def run_lm_checklist(conn: sqlite3.Connection) -> None:
     # Safety shim for _red_flags_for_rfp (local fallback)
     if '_red_flags_for_rfp' not in globals():
-        def _red_flags_for_rfp(ctx: dict | None, df_items: "pd.DataFrame" | None):
+        def _red_flags_for_rfp(ctx, df_items):
             import pandas as pd
             rows = []
             if df_items is not None and not df_items.empty:
