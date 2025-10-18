@@ -16,6 +16,34 @@ def get_sam_api_key():
         pass
     return os.getenv("SAM_API_KEY") or ""
 
+
+
+# --- SAM Watch safe fallbacks (only used if app doesn't already define them) ---
+if 'sam_search_cached' not in globals():
+    def sam_search_cached(params: dict):
+        # Placeholder: real SAM integration not wired in this build
+        return {"error": "SAM search engine not wired in this build.", "records": []}
+
+if 'flatten_records' not in globals():
+    def flatten_records(records):
+        rows = []
+        for r in records or []:
+            rows.append({
+                "Title": r.get("title") or r.get("Title") or "",
+                "Solicitation": r.get("solicitationNumber") or r.get("Solicitation") or "",
+                "Type": r.get("noticeType") or r.get("Type") or "",
+                "Set-Aside": r.get("typeOfSetAsideDescription") or r.get("setAside") or r.get("Set-Aside") or "",
+                "Set-Aside Code": r.get("typeOfSetAside") or r.get("setAsideCode") or r.get("Set-Aside Code") or "",
+                "NAICS": (r.get("naics") or r.get("naicsCode") or r.get("NAICS") or ""),
+                "PSC": r.get("psc") or r.get("PSC") or "",
+                "Agency Path": r.get("organizationHierarchy") or r.get("Agency Path") or r.get("agency") or "",
+                "Posted": r.get("postedDate") or r.get("Posted") or r.get("date") or "",
+                "Response Due": r.get("responseDate") or r.get("Response Due") or r.get("dueDate") or "",
+                "Notice ID": r.get("noticeId") or r.get("Notice ID") or r.get("id") or "",
+                "SAM Link": r.get("samLink") or r.get("SAM Link") or r.get("link") or "",
+            })
+        return pd.DataFrame(rows)
+
 import pandas as pd
 import io
 import streamlit as st
