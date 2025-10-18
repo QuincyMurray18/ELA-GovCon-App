@@ -1119,8 +1119,8 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             return (m.group(1).upper() + "-" + m.group(2))[:60]
         return ""
 # ---------------- PARSE & SAVE ----------------
-    tab_parse, tab_checklist, tab_clinss = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
-    with tab_parse:
+    tab_parse, tab_checklist, tab_clins = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
+    with st.container():
         colA, colB = st.columns([3,2])
         with colA:
             ups = st.file_uploader(
