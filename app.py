@@ -1088,6 +1088,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 # -------- L&M section extractor (failsafe) --------
 # -------- L&M section extractor (failsafe) --------
+# -------- L&M section extractor (failsafe) --------
 def extract_sections_L_M(text: str) -> dict:
     """
     Heuristic splitter for Section L / Section M (and common aliases).
@@ -1123,18 +1124,18 @@ def extract_sections_L_M(text: str) -> dict:
         chunk = text[pos:end].strip()
         if not chunk:
             continue
-        out[label] = out.get(label, "")
-        out[label] += ("\n\n" if out[label] else "") + chunk
+        prev = out.get(label, "")
+        out[label] = prev + (("\n\n" + chunk) if prev else chunk)
 
     # Short alias keys for downstream compatibility
     for k in list(out.keys()):
         lk = k.lower()
         if lk.startswith("section l") or "instructions" in lk:
             prev = out.get("L", "")
-            out["L"] = (prev + ("\n\n" if prev else "") + out[k])
+            out["L"] = prev + (("\n\n" + out[k]) if prev else out[k])
         if lk.startswith("section m") or "evaluation" in lk or "basis for award" in lk:
             prev = out.get("M", "")
-            out["M"] = (prev + ("\n\n" if prev else "") + out[k])
+            out["M"] = prev + (("\n\n" + out[k]) if prev else out[k])
 
     return out
 
@@ -1147,68 +1148,188 @@ def derive_lm_items(text: str) -> list[str]:
     import re
     if not text:
         return []
-    # Split on bullet markers / numbering
     parts = re.split(r"(?m)^\s*(?:[-*•]\s+|\d+[)\.]\s+|[A-Z]\)\s+)", text)
     out = []
     seen = set()
     for p in parts:
         s = re.sub(r"\s+", " ", p.strip())
         if 8 <= len(s) <= 280:
-            # Prefer lines that look like instructions/requirements
             if re.search(r"(?i)shall|must|required|submit|provide|include|no later than|will", s) or s.endswith(('.', ';')):
                 if s not in seen:
                     seen.add(s)
                     out.append(s)
     return out[:200]
+# -------- CLIN extractor (heuristic) --------
+def extract_clins(text: str) -> list[dict]:
+    """
+    Heuristic CLIN parser. Returns list of dicts with keys:
+    clin, desc, qty, unit, unit_price, extended_price
+    """
+    import re
+    out: list[dict] = []
+    if not text:
+        return out
 
-    # Candidate anchors (case-insensitive, line-start)
-    anchors = [
-        (r"(?im)^\s*section\s+l[\.:\-\s]", "Section L"),
-        (r"(?im)^\s*section\s+m[\.:\-\s]", "Section M"),
-        (r"(?im)^\s*instructions\s+to\s+offerors", "Section L (Instructions)"),
-        (r"(?im)^\s*evaluation\s+criteria", "Section M (Evaluation)"),
-        (r"(?im)^\s*proposal\s+instructions", "Section L (Instructions)"),
-        (r"(?im)^\s*basis\s+for\s+award", "Section M (Evaluation)"),
+    # Split into lines and scan for CLIN-like rows
+    lines = text.splitlines()
+    clin_pat = re.compile(r"(?i)^\s*(?:CLIN|Item)\s*([A-Z0-9\-]{1,12})\s*[:\-]?\s*(.*)$")
+    simple_pat = re.compile(r"(?i)^\s*([A-Z0-9]{4,6})\s+CLIN\b[:\-]?\s*(.*)$")
+
+    for ln in lines:
+        m = clin_pat.match(ln) or simple_pat.match(ln)
+        if m:
+            clin = m.group(1).strip()
+            desc = (m.group(2) or "").strip()
+            if not clin:
+                continue
+            out.append({
+                "clin": clin[:16],
+                "desc": desc[:500],
+                "qty": None,
+                "unit": None,
+                "unit_price": None,
+                "extended_price": None,
+            })
+
+    # Deduplicate by (clin,desc)
+    seen = set()
+    uniq = []
+    for r in out:
+        key = (r["clin"], r["desc"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    return uniq[:400]
+
+
+# -------- Key dates extractor (heuristic) --------
+def extract_dates(text: str) -> list[dict]:
+    """
+    Pull common milestone dates (questions due, proposals due, site visit) and
+    return list of dicts: {label, date_text, date_iso}
+    """
+    import re
+    from datetime import datetime
+    out: list[dict] = []
+    if not text:
+        return out
+
+    # Patterns
+    date_patterns = [
+        r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|"
+        r"Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},\s*\d{4})",
+        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+    ]
+    # Labels
+    label_map = [
+        (r"(?i)questions? due|Q&A due|RFI due", "Questions Due"),
+        (r"(?i)proposal(s)? due|response(s)? due|closing date|offers due|quote(s)? due", "Proposals Due"),
+        (r"(?i)site (?:visit|walk|inspection)", "Site Visit"),
+        (r"(?i)pre[- ]proposal (?:conference|meeting)", "Pre-proposal Conference"),
+        (r"(?i)amendment|modification", "Amendment"),
     ]
 
-    marks = []
-    for pat, label in anchors:
-        for m in re.finditer(pat, text):
-            marks.append((m.start(), label))
-    marks.sort(key=lambda x: x[0])
+    def to_iso(s: str) -> str | None:
+        fmts = ["%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y"]
+        for f in fmts:
+            try:
+                return datetime.strptime(s, f).date().isoformat()
+            except Exception:
+                pass
+        return None
 
-    if not marks:
-        # Fallback: return the full text under a generic key
-        out["Full Text"] = text
-        # Add short aliases for downstream compatibility
-    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
-    for k in list(out.keys()):
-        lk = k.lower()
-        if lk.startswith('section l') or 'instructions' in lk:
-            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
-        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
-            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
-    return out
-
-    for i, (pos, label) in enumerate(marks):
-        end = marks[i+1][0] if i + 1 < len(marks) else len(text)
-        chunk = text[pos:end].strip()
-        if not chunk:
+    lines = text.splitlines()
+    for ln in lines:
+        matched_label = None
+        for pat, label in label_map:
+            if re.search(pat, ln):
+                matched_label = label
+                break
+        if not matched_label:
             continue
-        if label in out:
-            out[label] += "\n\n" + chunk
-        else:
-            out[label] = chunk
+        # find a date token in the same line
+        dtxt = None
+        for dp in date_patterns:
+            m = re.search(dp, ln)
+            if m:
+                dtxt = m.group(0)
+                break
+        if not dtxt:
+            # sometimes date spills to next line
+            idx = lines.index(ln)
+            if idx + 1 < len(lines):
+                nxt = lines[idx+1]
+                for dp in date_patterns:
+                    m = re.search(dp, nxt)
+                    if m:
+                        dtxt = m.group(0); break
+        out.append({"label": matched_label, "date_text": dtxt or ln.strip()[:80], "date_iso": to_iso(dtxt) if dtxt else None})
 
-    # Add short aliases for downstream compatibility
-    # Map any 'Section L' labels to 'L' and any 'Section M' to 'M'
-    for k in list(out.keys()):
-        lk = k.lower()
-        if lk.startswith('section l') or 'instructions' in lk:
-            out['L'] = out.get('L', '') + ('\n\n' if out.get('L') else '') + out[k]
-        if lk.startswith('section m') or 'evaluation' in lk or 'basis for award' in lk:
-            out['M'] = out.get('M', '') + ('\n\n' if out.get('M') else '') + out[k]
-    return out
+    # Deduplicate by (label,date_text)
+    seen = set(); uniq = []
+    for r in out:
+        key = (r["label"], r["date_text"])
+        if key in seen:
+            continue
+        seen.add(key); uniq.append(r)
+    return uniq[:200]
+
+
+# -------- POC/CO extractor (heuristic) --------
+def extract_pocs(text: str) -> list[dict]:
+    """
+    Extract POC/CO contacts by scanning for emails and nearby names/phones.
+    Returns list of dicts: {name, role, email, phone}
+    """
+    import re
+    out: list[dict] = []
+    if not text:
+        return out
+
+    email_re = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+    phone_re = re.compile(r"(?:(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}))")
+
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        emails = email_re.findall(ln)
+        if not emails:
+            continue
+        phone = None
+        mphone = phone_re.search(ln) or (phone_re.search(lines[i+1]) if i+1 < len(lines) else None)
+        if mphone:
+            phone = mphone.group(0)
+
+        # Guess name as leading capitalized words before email
+        name = None
+        parts = re.split(email_re, ln, maxsplit=1)
+        if parts and parts[0].strip():
+            # grab last 2-3 tokens
+            toks = [t for t in parts[0].strip().split() if t.istitle()]
+            name = " ".join(toks[-3:]) if toks else None
+
+        role = None
+        if re.search(r"(?i)contract(ing)?\s*(?:officer|specialist|off\.)", ln):
+            role = "CO/CS"
+        elif re.search(r"(?i)point\s+of\s+contact|POC", ln):
+            role = "POC"
+
+        for em in emails:
+            out.append({
+                "name": (name or "").strip()[:120] or None,
+                "role": role,
+                "email": em.lower(),
+                "phone": phone,
+            })
+
+    # De-dupe by email
+    seen = set(); uniq = []
+    for r in out:
+        k = r["email"]
+        if k in seen:
+            continue
+        seen.add(k); uniq.append(r)
+    return uniq[:100]
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
