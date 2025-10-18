@@ -3432,7 +3432,10 @@ if white_candidates:
             gen_paths.append(p)
 
 # Build the ZIP
-build = st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}")
+build = (
+    (locals().get("kit_rfp") or st.session_state.get("fm_rfp") or 0),
+    st.button("Build ZIP", key=f"fm_build_zip_{int(locals().get('kit_rfp', st.session_state.get('fm_rfp', 0)))}")
+)[1]
 if build:
     sel_paths = []
     if not df_kit.empty and selected:
@@ -3449,7 +3452,7 @@ if build:
     if not sel_paths:
         st.warning("Nothing selected to include.")
     else:
-        zpath = str(Path(DATA_DIR) / f"submission_kit_rfp_{int(kit_rfp)}.zip")
+        zpath = str(Path(DATA_DIR) / f"submission_kit_rfp_{int(locals().get('kit_rfp', st.session_state.get('fm_rfp', 0)))}.zip")
         import zipfile
         with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
             for p, arc in sel_paths:
@@ -4302,7 +4305,10 @@ if 'df_kit' not in locals():
 if 'selected' not in locals():
     selected = []
 
-if st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}"):
+if (
+    (locals().get("kit_rfp") or st.session_state.get("fm_rfp") or 0),
+    st.button("Build ZIP", key=f"fm_build_zip_{int(locals().get('kit_rfp', st.session_state.get('fm_rfp', 0)))}")
+)[1]:
     try:
         import os, zipfile
         paths = []
@@ -4333,7 +4339,7 @@ if st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}"):
         if not paths:
             st.warning("No files selected.")
         else:
-            zip_path = os.path.join(DATA_DIR, f"submission_kit_rfp_{int(kit_rfp)}.zip")
+            zip_path = os.path.join(DATA_DIR, f"submission_kit_rfp_{int(locals().get('kit_rfp', st.session_state.get('fm_rfp', 0)))}.zip")
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
                 for p, arc in paths:
                     z.write(p, arcname=arc)
