@@ -4533,6 +4533,85 @@ def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
 
+
+# ---- Deals: table ensure ----
+def _ensure_deals_tables(conn):
+    with closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS deals_t(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER,
+            sam_notice_id TEXT,
+            name TEXT,
+            stage TEXT DEFAULT 'New',
+            amount REAL,
+            close_date TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT
+        );
+        """)
+    conn.commit()
+
+
+# ---- Deals: minimal working stub ----
+def run_deals(conn):
+    import streamlit as st, pandas as pd
+    _ensure_deals_tables(conn)
+    st.subheader("Deals")
+    with st.form("deal_new"):
+        c1, c2 = st.columns([3,2])
+        with c1:
+            name = st.text_input("Deal name", key="deal_name")
+        with c2:
+            amount = st.number_input("Amount ($)", min_value=0.0, step=100.0, key="deal_amount")
+        c3, c4 = st.columns([2,2])
+        with c3:
+            close_date = st.date_input("Close date", key="deal_close")
+        with c4:
+            sam_notice_id = st.text_input("SAM Notice ID (optional)", key="deal_samid")
+        add = st.form_submit_button("Add deal")
+    if add and name.strip():
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO deals_t(name, amount, close_date, sam_notice_id, updated_at) "
+                "VALUES (?,?,?,?, datetime('now'));",
+                (name.strip(), float(amount), close_date.isoformat(), sam_notice_id.strip() or None),
+            )
+        conn.commit()
+        st.success("Deal added.")
+
+    df = pd.read_sql_query(
+        "SELECT id, name, stage, amount, close_date, sam_notice_id, created_at "
+        "FROM deals_t ORDER BY created_at DESC;",
+        conn
+    )
+    if df.empty:
+        st.info("No deals yet.")
+        return
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    stages = ["New", "Qualify", "Bid", "Submitted", "Won", "Lost"]
+    for _, row in df.iterrows():
+        col1, col2 = st.columns([4,3])
+        with col1:
+            st.caption(f"#{int(row['id'])} — {row['name']}")
+        with col2:
+            current = row["stage"] if row["stage"] in stages else "New"
+            new_stage = st.selectbox(
+                "Stage",
+                stages,
+                index=stages.index(current),
+                key=f"deal_stage_{int(row['id'])}"
+            )
+            if new_stage != current:
+                with closing(conn.cursor()) as cur:
+                    cur.execute(
+                        "UPDATE deals_t SET stage=?, updated_at=datetime('now') WHERE id=?;",
+                        (new_stage, int(row["id"]))
+                    )
+                conn.commit()
+                st.toast(f"Stage updated for deal #{int(row['id'])}")
+
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
         run_sam_watch(conn)
