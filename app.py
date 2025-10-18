@@ -6,73 +6,6 @@ from typing import Optional, Any, Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# --- Safe SAM API key helper (in-file fallback) ---
-def get_sam_api_key():
-    try:
-        import streamlit as st  # will exist in runtime
-        if hasattr(st, "secrets") and "SAM_API_KEY" in st.secrets:
-            return st.secrets["SAM_API_KEY"]
-    except Exception:
-        pass
-    return os.getenv("SAM_API_KEY") or ""
-
-
-
-# --- SAM Watch safe fallbacks (only used if app doesn't already define them) ---
-
-if 'sam_search_cached' not in globals():
-    def sam_search_cached(params: dict):
-        """Wired to SAM.gov search; expects api_key, limit, offset, postedFrom/postedTo (mm/dd/YYYY), optional status/title/ncode/ccode/state/typeOfSetAside/ptype"""
-        api_key = params.pop("api_key", None)
-        if not api_key:
-            return {"error": "Missing SAM API key.", "records": []}
-        q = {k: v for k, v in params.items() if v not in (None, "", [])}
-        q["api_key"] = api_key
-        endpoints = [
-            "https://api.sam.gov/opportunities/v2/search",
-            "https://api.sam.gov/prod/opportunities/v2/search"
-        ]
-        last_err = None
-        for url in endpoints:
-            try:
-                r = requests.get(url, params=q, timeout=20)
-                if r.status_code == 200:
-                    data = r.json()
-                    if isinstance(data, dict):
-                        if "opportunitiesData" in data:
-                            recs = data.get("opportunitiesData") or []
-                        elif "data" in data:
-                            recs = data.get("data") or []
-                        else:
-                            recs = data.get("results") or data.get("records") or []
-                    else:
-                        recs = []
-                    return {"records": recs, "endpoint": url, "count": len(recs)}
-                else:
-                    last_err = f"HTTP {r.status_code}: {r.text[:400]}"
-            except Exception as e:
-                last_err = str(e)
-        return {"error": last_err or "SAM API call failed.", "records": []}
-if 'flatten_records' not in globals():
-    def flatten_records(records):
-        rows = []
-        for r in records or []:
-            rows.append({
-                "Title": r.get("title") or r.get("Title") or "",
-                "Solicitation": r.get("solicitationNumber") or r.get("Solicitation") or "",
-                "Type": r.get("noticeType") or r.get("Type") or "",
-                "Set-Aside": r.get("typeOfSetAsideDescription") or r.get("setAside") or r.get("Set-Aside") or "",
-                "Set-Aside Code": r.get("typeOfSetAside") or r.get("setAsideCode") or r.get("Set-Aside Code") or "",
-                "NAICS": (r.get("naics") or r.get("naicsCode") or r.get("NAICS") or ""),
-                "PSC": r.get("psc") or r.get("PSC") or "",
-                "Agency Path": r.get("organizationHierarchy") or r.get("Agency Path") or r.get("agency") or "",
-                "Posted": r.get("postedDate") or r.get("Posted") or r.get("date") or "",
-                "Response Due": r.get("responseDate") or r.get("Response Due") or r.get("dueDate") or "",
-                "Notice ID": r.get("noticeId") or r.get("Notice ID") or r.get("id") or "",
-                "SAM Link": r.get("samLink") or r.get("SAM Link") or r.get("link") or "",
-            })
-        return pd.DataFrame(rows)
-
 import pandas as pd
 import io
 import streamlit as st
@@ -583,8 +516,354 @@ def save_uploaded_file(uploaded_file, subdir: str = "") -> Optional[str]:
     return path
 
 
-# ---------- SAM Watch (Phase A) ----------
-def run_sam_watch(conn: sqlite3.Connection) -> None:
+# -------------------- SAM Watch helpers (Phase A) --------------------
+def get_sam_api_key() -> Optional[str]:
+    key = st.session_state.get("temp_sam_key")
+    if key:
+        return key
+    try:
+        key = st.secrets.get("sam", {}).get("api_key")
+        if key:
+            return key
+    except Exception:
+        pass
+    try:
+        key = st.secrets.get("SAM_API_KEY")
+        if key:
+            return key
+    except Exception:
+        pass
+    return os.getenv("SAM_API_KEY")
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
+    api_key = params.get("api_key")
+    if not api_key:
+        return {"totalRecords": 0, "records": [], "error": "Missing API key"}
+
+    limit = int(params.get("limit", 100))
+    max_pages = int(params.pop("_max_pages", 3))
+    params["limit"] = min(max(1, limit), 1000)
+
+    all_records: List[Dict[str, Any]] = []
+    offset = int(params.get("offset", 0))
+
+    for _ in range(max_pages):
+        q = {**params, "offset": offset}
+        try:
+            resp = requests.get(SAM_ENDPOINT, params=q, headers={"X-Api-Key": api_key}, timeout=30)
+        except Exception as ex:
+            return {"totalRecords": 0, "records": [], "error": f"Request error: {ex}"}
+
+        if resp.status_code != 200:
+            try:
+                j = resp.json()
+                msg = j.get("message") or j.get("error") or str(j)
+            except Exception:
+                msg = resp.text
+            return {"totalRecords": 0, "records": [], "error": f"HTTP {resp.status_code}: {msg}", "status": resp.status_code, "body": msg}
+
+        data = resp.json() or {}
+        records = data.get("opportunitiesData", data.get("data", []))
+        if not isinstance(records, list):
+            records = []
+        all_records.extend(records)
+
+        total = data.get("totalRecords", len(all_records))
+        if len(all_records) >= total:
+            break
+        offset += params["limit"]
+
+    return {"totalRecords": len(all_records), "records": all_records, "error": None}
+
+
+def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for r in records:
+        title = r.get("title") or ""
+        solnum = r.get("solicitationNumber") or r.get("solnum") or ""
+        posted = r.get("postedDate") or ""
+        ptype = r.get("type") or r.get("baseType") or ""
+        set_aside = r.get("setAside") or ""
+        set_aside_code = r.get("setAsideCode") or ""
+        naics = r.get("naicsCode") or r.get("ncode") or ""
+        psc = r.get("classificationCode") or r.get("ccode") or ""
+        deadline = r.get("reponseDeadLine") or r.get("responseDeadline") or ""
+        org_path = r.get("fullParentPathName") or r.get("organizationName") or ""
+        notice_id = r.get("noticeId") or r.get("noticeid") or r.get("id") or ""
+        sam_url = f"https://sam.gov/opp/{notice_id}/view" if notice_id else ""
+        rows.append(
+            {
+                "Title": title,
+                "Solicitation": solnum,
+                "Type": ptype,
+                "Posted": posted,
+                "Response Due": deadline,
+                "Set-Aside": set_aside,
+                "Set-Aside Code": set_aside_code,
+                "NAICS": naics,
+                "PSC": psc,
+                "Agency Path": org_path,
+                "Notice ID": notice_id,
+                "SAM Link": sam_url,
+            }
+        )
+    df = pd.DataFrame(rows)
+    wanted = [
+        "Title", "Solicitation", "Type", "Posted", "Response Due",
+        "Set-Aside", "Set-Aside Code", "NAICS", "PSC",
+        "Agency Path", "Notice ID", "SAM Link",
+    ]
+    return df[wanted] if not df.empty else df
+
+
+# ---------------------- Phase B: RFP parsing helpers ----------------------
+def _safe_import_pdf_extractors():
+    pdf_lib = None
+    try:
+        import PyPDF2  # type: ignore
+        pdf_lib = ('pypdf2', PyPDF2)
+    except Exception:
+        try:
+            import pdfplumber  # type: ignore
+            pdf_lib = ('pdfplumber', pdfplumber)
+        except Exception:
+            pdf_lib = None
+    return pdf_lib
+
+
+def extract_text_from_file(path: str) -> str:
+    path_lower = path.lower()
+    if path_lower.endswith('.pdf'):
+        lib = _safe_import_pdf_extractors()
+        if lib and lib[0] == 'pypdf2':
+            PyPDF2 = lib[1]
+            try:
+                with open(path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    pages = []
+                    for page in reader.pages[:50]:
+                        try:
+                            pages.append(page.extract_text() or '')
+                        except Exception:
+                            pages.append('')
+                    return '\n'.join(pages)
+            except Exception:
+                return ''
+        elif lib and lib[0] == 'pdfplumber':
+            pdfplumber = lib[1]
+            try:
+                with pdfplumber.open(path) as pdf:
+                    texts = []
+                    for pg in pdf.pages[:50]:
+                        try:
+                            texts.append(pg.extract_text() or '')
+                        except Exception:
+                            texts.append('')
+                    return '\n'.join(texts)
+            except Exception:
+                return ''
+        else:
+            return ''
+    elif path_lower.endswith('.docx'):
+        try:
+            import docx  # python-docx
+            doc = docx.Document(path)
+            return '\n'.join(p.text for p in doc.paragraphs)
+        except Exception:
+            return ''
+    elif path_lower.endswith('.txt'):
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
+        except Exception:
+            return ''
+    else:
+        return ''
+
+
+import re
+def extract_sections_L_M(text: str) -> dict:
+    out = {}
+    if not text:
+        return out
+    mL = re.search(r'(SECTION\s+L[\s\S]*?)(?=SECTION\s+[A-Z]|\Z)', text, re.IGNORECASE)
+    if mL:
+        out['L'] = mL.group(1)
+    mM = re.search(r'(SECTION\s+M[\s\S]*?)(?=SECTION\s+[A-Z]|\Z)', text, re.IGNORECASE)
+    if mM:
+        out['M'] = mM.group(1)
+    return out
+
+
+def derive_lm_items(section_text: str) -> list:
+    if not section_text:
+        return []
+    items = []
+    for line in section_text.splitlines():
+        s = line.strip()
+        if len(s) < 4:
+            continue
+        if re.match(r'^([\-\u2022\*]|\(?[a-zA-Z0-9]\)|[0-9]+\.)\s+', s):
+            items.append(s)
+    seen = set()
+    uniq = []
+    for it in items:
+        if it not in seen:
+            uniq.append(it)
+            seen.add(it)
+    return uniq[:500]
+
+
+def extract_clins(text: str) -> list:
+    if not text:
+        return []
+    lines = text.splitlines()
+    rows = []
+    for i, ln in enumerate(lines):
+        m = re.search(r'\bCLIN\s*([A-Z0-9\-]+)', ln, re.IGNORECASE)
+        if m:
+            clin = m.group(1)
+            desc = lines[i+1].strip() if i+1 < len(lines) else ''
+            mqty = re.search(r'\b(QTY|Quantity)[:\s]*([0-9,.]+)', ln + ' ' + desc, re.IGNORECASE)
+            qty = mqty.group(2) if mqty else ''
+            munit = re.search(r'\b(UNIT|Units?)[:\s]*([A-Za-z/]+)', ln + ' ' + desc, re.IGNORECASE)
+            unit = munit.group(2) if munit else ''
+            rows.append({
+                'clin': clin,
+                'description': desc[:300],
+                'qty': qty,
+                'unit': unit,
+                'unit_price': '',
+                'extended_price': ''
+            })
+    seen = set()
+    uniq = []
+    for r in rows:
+        if r['clin'] not in seen:
+            uniq.append(r)
+            seen.add(r['clin'])
+    return uniq[:500]
+
+
+def extract_dates(text: str) -> list:
+    if not text:
+        return []
+    patterns = [
+        r'(Questions(?:\s+Due)?|Q&A(?:\s+Due)?|Inquiry Deadline)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})',
+        r'(Proposals?\s+Due|Offers?\s+Due|Closing Date)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})',
+        r'(Site\s+Visit)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})',
+        r'(Period\s+of\s+Performance|POP)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})',
+    ]
+    out = []
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            out.append({'label': m.group(1).strip(), 'date_text': m.group(2).strip(), 'date_iso': ''})
+    return out[:200]
+
+
+def extract_pocs(text: str) -> list:
+    if not text:
+        return []
+    emails = list(set(re.findall(r'[\w\.-]+@[\w\.-]+\.[A-Za-z]{2,}', text)))
+    phones = list(set(re.findall(r'(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s\-]?\d{3}[\s\-]?\d{4}', text)))
+    poc_blocks = re.findall(r'(Contracting Officer|Contract Specialist|Point of Contact|POC).*?(?:\n\n|$)', text, re.IGNORECASE|re.DOTALL)
+    names = []
+    for blk in poc_blocks:
+        for nm in re.findall(r'([A-Z][a-zA-Z\-]+\s+[A-Z][a-zA-Z\-]+)', blk):
+            names.append(nm)
+    out = []
+    for i in range(max(len(names), len(emails), len(phones))):
+        out.append({
+            'name': names[i] if i < len(names) else '',
+            'role': 'POC',
+            'email': emails[i] if i < len(emails) else '',
+            'phone': phones[i] if i < len(phones) else '',
+        })
+    return out[:100]
+
+
+# -------------------- Modules --------------------
+def run_contacts(conn: sqlite3.Connection) -> None:
+    st.header("Contacts")
+    with st.form("add_contact", clear_on_submit=True):
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            name = st.text_input("Name")
+        with c2:
+            email = st.text_input("Email")
+        with c3:
+            org = st.text_input("Organization")
+        submitted = st.form_submit_button("Add Contact")
+    if submitted:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO contacts(name, email, org) VALUES (?, ?, ?);",
+                    (name.strip(), email.strip(), org.strip()),
+                )
+                conn.commit()
+            st.success(f"Added contact {name}")
+        except Exception as e:
+            st.error(f"Error saving contact {e}")
+
+    try:
+        df = pd.read_sql_query(
+            "SELECT name, email, org FROM contacts_t ORDER BY name;", conn
+        )
+        st.subheader("Contact List")
+        if df.empty:
+            st.write("No contacts yet")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Failed to load contacts {e}")
+
+
+def run_deals(conn: sqlite3.Connection) -> None:
+    st.header("Deals")
+    with st.form("add_deal", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+        with c1:
+            title = st.text_input("Title")
+        with c2:
+            agency = st.text_input("Agency")
+        with c3:
+            status = st.selectbox(
+                "Status",
+                ["New", "Qualifying", "Bidding", "Submitted", "Awarded", "Lost"],
+            )
+        with c4:
+            value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
+        submitted = st.form_submit_button("Add Deal")
+    if submitted:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO deals(title, agency, status, value) VALUES (?, ?, ?, ?);",
+                    (title.strip(), agency.strip(), status, float(value)),
+                )
+                conn.commit()
+            st.success(f"Added deal {title}")
+        except Exception as e:
+            st.error(f"Error saving deal {e}")
+
+    try:
+        df = pd.read_sql_query(
+            "SELECT title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+            conn,
+        )
+        st.subheader("Pipeline")
+        if df.empty:
+            st.write("No deals yet")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Failed to load deals {e}")
+
+
+# ---------- SAM Watch (Phase A) ----------def run_sam_watch(conn: sqlite3.Connection) -> None:
     st.header("SAM Watch")
     st.caption("Broader filters, pagination, and de-dupe guards. (Dates hidden: default last 365 days)")
 
@@ -838,8 +1117,11 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with c4:
             if st.button("Push to RFP Analyzer", key="sam_push_to_rfp"):
                 st.session_state["rfp_selected_notice"] = row.to_dict()
+                st.session_state["rfp_title"] = row.get("Title") or ""
+                st.session_state["rfp_solnum"] = str(row.get("Solicitation") or "")
+                st.session_state["rfp_sam"] = row.get("SAM Link") or ""
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-        with c5:
+with c5:
             st.caption("Use Open in SAM for attachments and full details")
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
