@@ -17,6 +17,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+import json
+
 
 APP_TITLE = "ELA GovCon Suite"
 BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
@@ -4240,6 +4242,12 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
                 st.warning("Enter a name")
 
 
+
+# --- Phase U helper: namespaced keys for Streamlit ---
+def ns(scope: str, key: str) -> str:
+    """Generate stable, unique Streamlit widget keys."""
+    return f"{scope}::{key}"
+
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
         run_sam_watch(conn)
@@ -4249,6 +4257,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_lm_checklist(conn)
     elif page == "Proposal Builder":
         run_proposal_builder(conn)
+        # Phase V panel
+        pb_phase_v_section_library(conn)
     elif page == "File Manager":
         run_file_manager(conn)
     elif page == "Past Performance":
@@ -4292,3 +4302,71 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
+def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
+    import streamlit as st
+    st.markdown("### Section Library (Phase V)")
+    cols = st.columns([3,2,2])
+    with cols[0]:
+        title = st.text_input("Title", key=ns("pbv","title"))
+    with cols[1]:
+        tags = st.text_input("Tags (comma-separated)", key=ns("pbv","tags"))
+    with cols[2]:
+        add_btn = st.button("Add / Update", key=ns("pbv","add"))
+    body = st.text_area("Body (Markdown supported)", height=180, key=ns("pbv","body"))
+
+    sel_id = st.session_state.get(ns("pbv","sel_id"))
+    if add_btn:
+        with closing(conn.cursor()) as cur:
+            if sel_id:
+                cur.execute("UPDATE pb_sections_t SET title=?, body=?, tags=?, updated_at=datetime('now') WHERE id=?;",
+                            (title.strip(), body, tags.strip(), sel_id))
+            else:
+                cur.execute("INSERT INTO pb_sections_t(title, body, tags) VALUES (?,?,?);",
+                            (title.strip(), body, tags.strip()))
+            conn.commit()
+            st.success("Saved")
+            st.session_state.pop(ns("pbv","sel_id"), None)
+
+    # Table of existing sections
+    import pandas as pd
+    df = pd.read_sql_query("SELECT id, title, tags, created_at, updated_at FROM pb_sections_t ORDER BY updated_at DESC;", conn)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        sel = st.number_input("Select ID to edit", min_value=0, step=1, key=ns("pbv","pick_id"))
+        if st.button("Load", key=ns("pbv","load")) and sel:
+            row = pd.read_sql_query("SELECT id, title, body, tags FROM pb_sections_t WHERE id=?;", conn, params=(int(sel),))
+            if not row.empty:
+                st.session_state[ns("pbv","sel_id")] = int(row.at[0,"id"])
+                st.session_state[ns("pbv","title")] = row.at[0,"title"] or ""
+                st.session_state[ns("pbv","body")] = row.at[0,"body"] or ""
+                st.session_state[ns("pbv","tags")] = row.at[0,"tags"] or ""
+                st.experimental_rerun()
+
+    with c2:
+        if st.button("Delete Selected", key=ns("pbv","del")) and sel:
+            with closing(conn.cursor()) as cur:
+                cur.execute("DELETE FROM pb_sections_t WHERE id=?;", (int(sel),))
+                conn.commit()
+            st.warning("Deleted")
+            st.experimental_rerun()
+
+    with c3:
+        if st.button("Insert into Proposal (Compose)", key=ns("pbv","insert")) and sel:
+            row = pd.read_sql_query("SELECT title, body FROM pb_sections_t WHERE id=?;", conn, params=(int(sel),))
+            if not row.empty:
+                # Use session 'pb_prefill' to hand off to Proposal Builder compose
+                pre = st.session_state.get('pb_prefill') or {}
+                pre = dict(pre)
+                t = (row.at[0,'title'] or 'Untitled').strip()
+                b = (row.at[0,'body'] or '').strip()
+                # put under a unique key
+                key_name = f"Section: {t}"
+                pre[key_name] = b
+                st.session_state['pb_prefill'] = pre
+                st.success("Added to compose. Open 'Proposal Builder' -> Import.")
+
