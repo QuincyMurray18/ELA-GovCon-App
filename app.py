@@ -4293,25 +4293,55 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             if os.path.exists(p):
                 gen_paths.append(p)
 
-    if st.button("Build Submission Kit ZIP", key="fm_zip"):
-        try:
-            import zipfile, os
-            paths = []
-            if df_kit is not None and not df_kit.empty and selected:
-                rows = df_kit[df_kit["id"].isin(selected)]
-                paths.extend([p for p in rows["path"].tolist() if p and os.path.exists(p)])
-            paths.extend([p for p in gen_paths if p and os.path.exists(p)])
-            if not paths:
-                st.warning("No files selected.")
-            else:
-                zip_path = os.path.join(DATA_DIR, f"submission_kit_rfp_{int(kit_rfp)}.zip")
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-                    for p in paths:
-                        z.write(p, arcname=os.path.basename(p))
-                st.success("ZIP built.")
-                st.markdown(f"[Download ZIP]({zip_path})")
-        except Exception as e:
-            st.error(f"Failed to build ZIP: {e}")
+# ---- Build ZIP (robust against empty selections) ----
+if 'df_kit' not in locals():
+    try:
+        df_kit = pd.DataFrame()
+    except Exception:
+        df_kit = None
+if 'selected' not in locals():
+    selected = []
+
+if st.button("Build ZIP", key="fm_build_zip"):
+    try:
+        import os, zipfile
+        paths = []
+
+        # Selected attachments for this RFP (if any)
+        if df_kit is not None and not df_kit.empty and selected:
+            rows = df_kit[df_kit["id"].isin(selected)]
+            for _, r in rows.iterrows():
+                p = r.get("path")
+                fname = r.get("name") or r.get("filename") or (os.path.basename(p) if p else None)
+                if p and os.path.exists(p):
+                    paths.append((p, fname or os.path.basename(p)))
+
+        # Optional generated docs chosen by user
+        gen_paths = []
+        prop_path = os.path.join(DATA_DIR, f"Proposal_RFP_{int(kit_rfp)}.docx")
+        if os.path.exists(prop_path) and st.session_state.get("fm_inc_prop"):
+            gen_paths.append(prop_path)
+        pp_path = os.path.join(DATA_DIR, "Past_Performance_Writeups.docx")
+        if os.path.exists(pp_path) and st.session_state.get("fm_inc_pp"):
+            gen_paths.append(pp_path)
+        for p in (st.session_state.get("fm_wp") or []):
+            if p and os.path.exists(p):
+                gen_paths.append(p)
+        for p in gen_paths:
+            paths.append((p, os.path.basename(p)))
+
+        if not paths:
+            st.warning("No files selected.")
+        else:
+            zip_path = os.path.join(DATA_DIR, f"submission_kit_rfp_{int(kit_rfp)}.zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+                for p, arc in paths:
+                    z.write(p, arcname=arc)
+            st.success("ZIP built.")
+            st.markdown(f"[Download ZIP]({zip_path})")
+    except Exception as e:
+        st.error(f"Failed to build ZIP: {e}")
+
 
 
 
