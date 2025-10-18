@@ -1058,8 +1058,20 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         return fallback
 
     def _guess_solnum(text: str) -> str:
-        if not text:
-            return ""
+def _guess_solnum(text: str) -> str:
+    if not text:
+        return ""
+    m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
+    if m:
+        return m.group(2)[:60]
+    m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
+    if m:
+        return m.group(1)[:60]
+    m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
+    if m:
+        return (m.group(1).upper() + "-" + m.group(2))[:60]
+    return ""
+
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
     def _extract_naics(text: str) -> str:
         if not text: return ""
@@ -1106,17 +1118,6 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             conn.commit()
     except Exception:
         pass
-
-        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
-        if m:
-            return m.group(2)[:60]
-        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
-        if m:
-            return m.group(1)[:60]
-        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
-        if m:
-            return (m.group(1).upper() + "-" + m.group(2))[:60]
-        return ""
 # ---------------- PARSE & SAVE ----------------
     with tab_parse:
         colA, colB = st.columns([3,2])
@@ -1642,9 +1643,28 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     with e4:
         evidence = st.text_input("Evidence/Link", value=rec.get("evidence",""), key=f"mx_evid_{pick}")
 
+
+csave, cexp = st.columns([2,2])
+with csave:
+    if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "UPDATE lm_meta SET owner=?, ref_page=?, ref_para=?, evidence=?, risk=?, notes=? WHERE lm_id=?;",
+                    (owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip(), int(pick))
+                )
+                if cur.rowcount == 0:
+                    cur.execute(
+                        "INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes) VALUES(?,?,?,?,?,?,?);",
+                        (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip())
+                    )
+                conn.commit()
+            st.success("Saved"); st.rerun()
+        except Exception as e2:
+            st.error(f"Save failed: {e2}")
     csave, cexp = st.columns([2,2])
     with csave:
-        
+    pass
     if st.button("Save Matrix Row", key=f"mx_save_{pick}"):
         try:
             with closing(conn.cursor()) as cur:
@@ -1663,13 +1683,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             st.success("Saved"); st.rerun()
         except Exception as e2:
             st.error(f"Save failed: {e2}")
-
-                    """, (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip()))
-                    conn.commit()
-                st.success("Saved"); st.rerun()
-            except Exception as e2:
-                st.error(f"Save failed: {e2}")
-    with cexp:
+with cexp:
         if st.button("Export Matrix CSV", key="mx_export"):
             out = view.copy()
             path = str(Path(DATA_DIR) / f"compliance_matrix_rfp_{int(rfp_id)}.csv")
@@ -1833,12 +1847,6 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             if exported:
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
-
-    
-                st.success(f"Exported to {exported}")
-                st.markdown(f"[Download DOCX]({exported})")
-
-
 # ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
