@@ -1085,6 +1085,52 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
 
+
+# -------- L&M section extractor (failsafe) --------
+def extract_sections_L_M(text: str) -> dict:
+    """
+    Heuristic splitter for Section L / Section M (and common aliases).
+    Returns a dict like {"Section L": "...", "Section M": "..."}.
+    Safe to call with any text.
+    """
+    import re
+    out: dict[str, str] = {}
+    if not text:
+        return out
+
+    # Candidate anchors (case-insensitive, line-start)
+    anchors = [
+        (r"(?im)^\s*section\s+l[\.:\-\s]", "Section L"),
+        (r"(?im)^\s*section\s+m[\.:\-\s]", "Section M"),
+        (r"(?im)^\s*instructions\s+to\s+offerors", "Section L (Instructions)"),
+        (r"(?im)^\s*evaluation\s+criteria", "Section M (Evaluation)"),
+        (r"(?im)^\s*proposal\s+instructions", "Section L (Instructions)"),
+        (r"(?im)^\s*basis\s+for\s+award", "Section M (Evaluation)"),
+    ]
+
+    marks = []
+    for pat, label in anchors:
+        for m in re.finditer(pat, text):
+            marks.append((m.start(), label))
+    marks.sort(key=lambda x: x[0])
+
+    if not marks:
+        # Fallback: return the full text under a generic key
+        out["Full Text"] = text
+        return out
+
+    for i, (pos, label) in enumerate(marks):
+        end = marks[i+1][0] if i + 1 < len(marks) else len(text)
+        chunk = text[pos:end].strip()
+        if not chunk:
+            continue
+        if label in out:
+            out[label] += "\n\n" + chunk
+        else:
+            out[label] = chunk
+
+    return out
+
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
