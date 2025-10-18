@@ -27,7 +27,7 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # --- key namespacing helper (Phase U) ---
 def ns(*parts) -> str:
-    \"\"\"Generate stable, unique Streamlit widget keys.\"\"\"
+    """Generate stable, unique Streamlit widget keys."""
     return "k_" + "_".join(str(p) for p in parts if p is not None)
 DATA_DIR = "data"
 DB_PATH = os.path.join(DATA_DIR, "govcon.db")
