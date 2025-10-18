@@ -1410,6 +1410,7 @@ def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFra
                       " lm_id INTEGER REFERENCES lm_items(id) ON DELETE CASCADE,\n"
                       " owner TEXT, ref_page TEXT, ref_para TEXT, evidence TEXT, risk TEXT, notes TEXT\n"
                       ");")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_lm_meta_lm ON lm_meta(lm_id);")
             conn.commit()
     except Exception:
         pass
