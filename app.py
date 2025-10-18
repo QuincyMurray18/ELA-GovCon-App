@@ -927,7 +927,10 @@ def _render_top_nav():
         ("library", "Library"),
         ("admin", "Admin"),
     ]
-    st.markdown("### Navigation")
+    
+    if ('capability','Capability Statement') not in pages:
+        pages.append(('capability','Capability Statement'))
+st.markdown("### Navigation")
     cols = st.columns(len(pages))
     route = get_route()
     for i, (pid, label) in enumerate(pages):
@@ -12570,6 +12573,9 @@ def _render_shell():
     elif page == "library":
         render_library()
     elif page == "admin":
+
+    elif page == "capability":
+        render_capability_statement()
         render_admin()
     elif page == "opportunity":
         # Use workspace if available
@@ -12588,6 +12594,239 @@ except Exception as ex:
 # === NAV + SHELL FIX END ===
 
 
+
+# === CAPABILITY STATEMENT FEATURE START ===
+import io as _io
+from typing import Dict as _Dict, Any as _Any, List as _List
+try:
+    import openai as _openai  # optional
+except Exception:
+    _openai = None
+try:
+    from docx import Document as _DocxDocument
+    from docx.shared import Pt as _Pt, Inches as _Inches
+except Exception:
+    _DocxDocument = None
+
+def _ensure_capability_tables():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS capability_outline(
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        data_json TEXT NOT NULL
+    )""")
+    row = cur.execute("SELECT COUNT(1) FROM capability_outline").fetchone()
+    if row and row[0] == 0:
+        cur.execute("INSERT INTO capability_outline(id, data_json) VALUES(1, ?)", (_json.dumps({}),))
+    conn.commit()
+
+def _capability_load_outline() -> dict:
+    _ensure_capability_tables()
+    row = get_db().cursor().execute("SELECT data_json FROM capability_outline WHERE id=1").fetchone()
+    return _json.loads(row[0]) if row and row[0] else {}
+
+def _capability_save_outline(data: dict):
+    _ensure_capability_tables()
+    get_db().cursor().execute("UPDATE capability_outline SET data_json=? WHERE id=1", (_json.dumps(data, ensure_ascii=False),))
+    get_db().commit()
+
+def _capability_build_prompt(d: dict) -> str:
+    core = "\\n".join([f"• {x.strip()}" for x in d.get("core_competencies", []) if str(x).strip()])
+    diff = "\\n".join([f"• {x.strip()}" for x in d.get("differentiators", []) if str(x).strip()])
+    past_lines = []
+    for p in d.get("past_performance", []) or []:
+        parts = []
+        if p.get("client"): parts.append("Client: " + p.get("client","").strip())
+        if p.get("contract_no"): parts.append("Contract: " + p.get("contract_no","").strip())
+        if p.get("scope"): parts.append("Scope: " + p.get("scope","").strip())
+        if p.get("result"): parts.append("Result: " + p.get("result","").strip())
+        if parts:
+            past_lines.append("• " + " | ".join(parts))
+    past = "\\n".join(past_lines)
+    contacts = []
+    for label in ["phone","email","website","address","city","state","zip","cage","uei"]:
+        val = d.get(label,"")
+        if val:
+            contacts.append(f"{label.upper()}: {val}")
+    codes = []
+    if d.get("naics"): codes.append("NAICS: " + ", ".join([str(x) for x in d["naics"]]))
+    if d.get("psc"):   codes.append("PSC: " + ", ".join([str(x) for x in d["psc"]]))
+    return f"""Write a concise federal capability statement for a prime contractor.
+
+Company: {d.get('company_name','')}
+Tagline: {d.get('tagline','')}
+
+Sections required in this order:
+1. SUMMARY
+2. CORE COMPETENCIES
+3. DIFFERENTIATORS
+4. PAST PERFORMANCE
+5. COMPANY DATA
+6. CONTACT
+
+Content to use
+Core Competencies:
+{core}
+
+Differentiators:
+{diff}
+
+Past Performance:
+{past}
+
+Company Data:
+{'; '.join(codes)}
+
+Contact:
+{'; '.join(contacts)}
+
+Tone: direct. government. no marketing language. headings in all caps. no extra commentary.""".strip()
+
+def _capability_ai_generate(prompt: str) -> str:
+    import os, streamlit as st
+    key = None
+    try:
+        key = st.secrets.get("openai_api_key")
+    except Exception:
+        key = None
+    key = key or os.environ.get("OPENAI_API_KEY")
+    if not key or _openai is None:
+        return "Missing OPENAI_API_KEY or openai package not installed."
+    try:
+        _openai.api_key = key
+        resp = _openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role":"system","content":"You write federal capability statements. Plain. Precise."},
+                {"role":"user","content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=900,
+        )
+        return resp["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return f"AI error: {e}"
+
+def _capability_docx(text: str, company_name: str = "Capability Statement") -> bytes:
+    if _DocxDocument is None:
+        return (text or "").encode("utf-8")
+    doc = _DocxDocument()
+    title = doc.add_heading(company_name.strip() or "Capability Statement", level=0)
+    for line in (text or "").splitlines():
+        if not line.strip():
+            doc.add_paragraph("")
+            continue
+        if line.strip().isupper() and len(line.strip()) < 60:
+            p = doc.add_paragraph()
+            run = p.add_run(line.strip())
+            run.bold = True
+            run.font.size = _Pt(12)
+        else:
+            p = doc.add_paragraph(line)
+            p.style = doc.styles["Normal"]
+            p.paragraph_format.space_after = 0
+    try:
+        sec = doc.sections[0]
+        sec.top_margin = _Inches(0.7)
+        sec.bottom_margin = _Inches(0.7)
+        sec.left_margin = _Inches(0.7)
+        sec.right_margin = _Inches(0.7)
+    except Exception:
+        pass
+    bio = _io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+def render_capability_statement():
+    import streamlit as st
+    _ensure_capability_tables()
+    d = _capability_load_outline()
+    d.setdefault("company_name","ELA Management LLC")
+    d.setdefault("tagline","Procurement advisor and prime contractor")
+    for k in ["phone","email","website","address","city","state","zip","cage","uei"]:
+        d.setdefault(k,"")
+    d.setdefault("naics", [])
+    d.setdefault("psc", [])
+    d.setdefault("core_competencies", [])
+    d.setdefault("differentiators", [])
+    d.setdefault("past_performance", [])
+
+    st.header("Capability Statement")
+    with st.form("cap_outline"):
+        c1, c2 = st.columns(2)
+        with c1:
+            d["company_name"] = st.text_input("Company name", d["company_name"])
+            d["tagline"] = st.text_input("Tagline", d["tagline"])
+            d["phone"] = st.text_input("Phone", d["phone"])
+            d["email"] = st.text_input("Email", d["email"])
+            d["website"] = st.text_input("Website", d["website"])
+            d["cage"] = st.text_input("CAGE", d["cage"])
+            d["uei"] = st.text_input("UEI", d["uei"])
+        with c2:
+            d["address"] = st.text_input("Address", d["address"])
+            d["city"] = st.text_input("City", d["city"])
+            d["state"] = st.text_input("State", d["state"])
+            d["zip"] = st.text_input("ZIP", d["zip"])
+            naics_raw = st.text_input("NAICS list comma separated", ", ".join([str(x) for x in d["naics"]]))
+            psc_raw = st.text_input("PSC list comma separated", ", ".join([str(x) for x in d["psc"]]))
+        st.markdown("Core Competencies")
+        core_text = st.text_area("One per line", "\\n".join([str(x) for x in d["core_competencies"]]), height=120)
+        st.markdown("Differentiators")
+        diff_text = st.text_area("One per line", "\\n".join([str(x) for x in d["differentiators"]]), height=120)
+        st.markdown("Past Performance")
+        pp = d.get("past_performance") or []
+        pp_count = st.number_input("Records", min_value=0, max_value=10, value=len(pp), step=1)
+        new_pp = []
+        for i in range(int(pp_count)):
+            st.caption(f"Record {i+1}")
+            base = pp[i] if i < len(pp) else {}
+            c3, c4 = st.columns(2)
+            with c3:
+                client = st.text_input(f"Client {i+1}", base.get("client",""))
+                contract_no = st.text_input(f"Contract {i+1}", base.get("contract_no",""))
+            with c4:
+                scope = st.text_input(f"Scope {i+1}", base.get("scope",""))
+                result = st.text_input(f"Result {i+1}", base.get("result",""))
+            new_pp.append({"client":client,"contract_no":contract_no,"scope":scope,"result":result})
+        saved = st.form_submit_button("Save outline")
+        if saved:
+            d["naics"] = [x.strip() for x in naics_raw.split(",") if x.strip()]
+            d["psc"] = [x.strip() for x in psc_raw.split(",") if x.strip()]
+            d["core_competencies"] = [x.strip() for x in core_text.splitlines() if x.strip()]
+            d["differentiators"] = [x.strip() for x in diff_text.splitlines() if x.strip()]
+            d["past_performance"] = new_pp
+            _capability_save_outline(d)
+            st.success("Saved")
+
+    st.subheader("Generate")
+    if "cap_gen_text" not in st.session_state:
+        st.session_state.cap_gen_text = ""
+    c5, c6 = st.columns(2)
+    with c5:
+        if st.button("Generate"):
+            prompt = _capability_build_prompt(_capability_load_outline())
+            st.session_state.cap_gen_text = _capability_ai_generate(prompt)
+    with c6:
+        if st.button("Clear"):
+            st.session_state.cap_gen_text = ""
+    txt = st.text_area("Output", st.session_state.cap_gen_text, height=420)
+
+    c7, c8 = st.columns(2)
+    with c7:
+        if st.button("Export DOCX"):
+            name = (d.get("company_name") or "Capability Statement").strip()
+            docx_bytes = _capability_docx(txt or "", name)
+            ts = _dt.datetime.now().strftime("%Y%m%d")
+            st.download_button(
+                label="Download",
+                data=docx_bytes,
+                file_name=f"{name.replace(' ','_')}_Capability_Statement_{ts}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+    with c8:
+        st.info("Set OPENAI_API_KEY in secrets to enable AI generation.")
+# === CAPABILITY STATEMENT FEATURE END ===
 # === RFP PHASE 1 START ===
 import datetime as _dt
 import json as _json
