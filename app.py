@@ -1661,7 +1661,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
 
 
-def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: int | None = None) -> float:
+def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Optional[int] = None) -> float:
     """Rough page estimate at common spacings for 11pt fonts."""
     if words_per_page is None:
         s = (spacing or "1.15").strip().lower()
@@ -1680,15 +1680,10 @@ def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: int
     return round((total_words or 0) / float(wpp), 2)
 
 
-def _export_docx(path: str,
-                 doc_title: str,
-                 sections: list[dict],
-                 clins: "pd.DataFrame" | None = None,
-                 checklist: "pd.DataFrame" | None = None,
-                 metadata: dict | None = None,
+def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optional[pd.DataFrame] = None, checklist: Optional[pd.DataFrame] = None, metadata: Optional[dict] = None,
                  font_name: str = "Times New Roman",
                  font_size_pt: int = 11,
-                 spacing: str = "1.15") -> str | None:
+                 spacing: str = "1.15") -> Optional[str]:
     try:
         from docx import Document  # type: ignore
         from docx.shared import Pt  # type: ignore
@@ -2776,7 +2771,7 @@ def _pp_writeup_block(rec: dict) -> str:
     return "\n\n".join(parts)
 
 
-def _export_past_perf_docx(path: str, records: list) -> str | None:
+def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
         from docx import Document  # type: ignore
         from docx.shared import Inches  # type: ignore
@@ -2988,7 +2983,7 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
         conn, params=(paper_id,)
     )
 
-def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> str | None:
+def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
         from docx import Document  # type: ignore
         from docx.shared import Inches  # type: ignore
@@ -3637,7 +3632,7 @@ def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
 def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
-def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> str | None:
+def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
     from zipfile import ZipFile, ZIP_DEFLATED
     pack = _rfq_pack_by_id(conn, pack_id)
     if not pack: 
@@ -3958,7 +3953,7 @@ def _current_tenant(conn: sqlite3.Connection) -> int:
 def _safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s or "")
 
-def _backup_db(conn: sqlite3.Connection) -> str | None:
+def _backup_db(conn: sqlite3.Connection) -> Optional[str]:
     # Prefer VACUUM INTO; fallback to file copy using sqlite3 backup API
     db_path = _db_path_from_conn(conn)
     ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -4002,7 +3997,7 @@ def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
         st.error(f"Restore failed: {e}")
         return False
 
-def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool = True) -> str | None:
+def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool = True) -> Optional[str]:
     name = table_or_view
     if scoped and not name.endswith("_t"):
         # if a view exists, prefer it
@@ -4291,4 +4286,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
