@@ -1094,53 +1094,47 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or '').splitlines():
             s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(('solicitation','request for','rfp','rfq','sources sought','combined synopsis')):
+            if len(s) >= 8 and not s.lower().startswith((
+                'solicitation','request for','rfp','rfq','sources sought','combined synopsis'
+            )):
                 return s[:200]
         return fallback
 
     def _guess_solnum(text: str) -> str:
         if not text:
             return ''
-        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)+\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
-        if m:
-            return m.group(2)[:60]
-        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
-        return m.group(1)[:60] if m else ''
 
-        except Exception as e:
-            st.warning(f"Details panel error: {e}")
     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
-        def _extract_naics(text: str) -> str:
-        if not text: return ""
-        m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
-        if m: return m.group(1)[:6]
-        m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
-        if m: return m.group(1)
-        m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
-        return m.group(1) if m else ""
-
-        def _extract_set_aside(text: str) -> str:
-        if not text: return ""
-        tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
-        for t in tags:
-        if re.search(rf'(?i)\b{re.escape(t)}\b', text):
-        norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
-        if norm == "8(A)": norm = "8A"
-        return norm
-        m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
+    def _extract_naics(text: str) -> str:
+        if not text:
+            return ''
+        m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{6})', text)
         if m:
-        v = m.group(1).strip()
-        v = re.sub(r'\s+', ' ', v)
-        return v[:80]
-        return ""
+            return m.group(1)[:6]
+        m = re.search(r'\b([0-9]{6})\b', text)
+        return m.group(1) if m else ''
 
-        def _extract_place(text: str) -> str:
-        if not text: return ""
+    def _extract_set_aside(text: str) -> str:
+        if not text:
+            return ''
+        tags = ['SDVOSB','WOSB','EDWOSB','8A','HUBZONE','SDB','VOSB','SMALL BUSINESS','TOTAL SMALL BUSINESS']
+        for t in tags:
+            if re.search(rf'(?i)\b{re.escape(t)}\b', text):
+                return '8A' if t in ('8(A)','8A') else t.upper()
+        m = re.search(r'(?i)Set[- ]Aside\s*[:\-]?\s*([A-Za-z0-9() \-]{3,40})', text)
+        if m:
+            v = re.sub(r'\s+', ' ', m.group(1).strip())
+            return v[:40].upper()
+        return ''
+
+    def _extract_place(text: str) -> str:
+        if not text:
+            return ''
         m = re.search(r'(?i)Place\s+of\s+Performance\s*[:\-]?\s*([^\n]{3,80})', text)
-        if m: return m.group(1).strip()
+        if m:
+            return m.group(1).strip()
         m = re.search(r'\b([A-Z][a-zA-Z]+,\s*(?:[A-Z]{2}|[A-Za-z\. ]{3,}))\b', text)
-        return m.group(1).strip() if m else ""
-
+        return m.group(1).strip() if m else ''
     # ensure rfp_meta exists
     try:
         with closing(conn.cursor()) as _c:
@@ -1156,16 +1150,6 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-        m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
-        if m:
-            return m.group(2)[:60]
-        m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', text)
-        if m:
-            return m.group(1)[:60]
-        m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', text, re.I)
-        if m:
-            return (m.group(1).upper() + "-" + m.group(2))[:60]
-        return ""
 # ---------------- PARSE & SAVE ----------------
     with tab_parse:
         colA, colB = st.columns([3,2])
