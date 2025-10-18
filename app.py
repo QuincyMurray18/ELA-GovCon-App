@@ -6,6 +6,16 @@ from typing import Optional, Any, Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
+# --- Safe SAM API key helper (in-file fallback) ---
+def get_sam_api_key():
+    try:
+        import streamlit as st  # will exist in runtime
+        if hasattr(st, "secrets") and "SAM_API_KEY" in st.secrets:
+            return st.secrets["SAM_API_KEY"]
+    except Exception:
+        pass
+    return os.getenv("SAM_API_KEY") or ""
+
 import pandas as pd
 import io
 import streamlit as st
