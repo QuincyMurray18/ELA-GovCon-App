@@ -29,8 +29,8 @@ if 'sam_search_cached' not in globals():
         q = {k: v for k, v in params.items() if v not in (None, "", [])}
         q["api_key"] = api_key
         endpoints = [
-            "https://api.sam.gov/prod/opportunities/v3/search",
-            "https://api.sam.gov/prod/opportunities/v1/search",
+            "https://api.sam.gov/opportunities/v2/search",
+            "https://api.sam.gov/prod/opportunities/v2/search"
         ]
         last_err = None
         for url in endpoints:
