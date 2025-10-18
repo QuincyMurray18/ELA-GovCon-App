@@ -3432,7 +3432,7 @@ if white_candidates:
             gen_paths.append(p)
 
 # Build the ZIP
-build = st.button("Build ZIP", key="fm_build_zip")
+build = st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}")
 if build:
     sel_paths = []
     if not df_kit.empty and selected:
@@ -4302,7 +4302,7 @@ if 'df_kit' not in locals():
 if 'selected' not in locals():
     selected = []
 
-if st.button("Build ZIP", key="fm_build_zip"):
+if st.button("Build ZIP", key=f"fm_build_zip_{int(kit_rfp)}"):
     try:
         import os, zipfile
         paths = []
