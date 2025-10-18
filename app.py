@@ -1278,6 +1278,92 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
             key="rfp_data_sel"
         )
+        # === Phase S: Manual Editors (LM / CLINs / Dates / POCs / Meta) ===
+        import pandas as _pd
+        from contextlib import closing as _closing_ed
+        with st.expander('Manual Editors', expanded=False):
+            tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
+            with tab_lm:
+                try:
+                    df_lm_e = _pd.read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
+                except Exception:
+                    df_lm_e = _pd.DataFrame(columns=['item_text','is_must','status'])
+                df_lm_e = df_lm_e.fillna('')
+                ed_lm = st.data_editor(df_lm_e, num_rows='dynamic', use_container_width=True, key=f'ed_lm_{rid}')
+                if st.button('Save L/M', key=f'save_lm_{rid}'):
+                    with _closing_ed(conn.cursor()) as cur:
+                        cur.execute('DELETE FROM lm_items WHERE rfp_id=?;', (int(rid),))
+                        for _, r in ed_lm.fillna('').iterrows():
+                            txt = str(r.get('item_text','')).strip()
+                            if not txt: continue
+                            cur.execute('INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);', (int(rid), txt, int(r.get('is_must') or 0), str(r.get('status') or 'Open')))
+                        conn.commit()
+                    st.success('L/M saved.')
+            with tab_clin:
+                try:
+                    df_c_e = _pd.read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
+                except Exception:
+                    df_c_e = _pd.DataFrame(columns=['clin','description','qty','unit','unit_price','extended_price'])
+                df_c_e = df_c_e.fillna('')
+                ed_c = st.data_editor(df_c_e, num_rows='dynamic', use_container_width=True, key=f'ed_clin_{rid}')
+                if st.button('Save CLINs', key=f'save_clin_{rid}'):
+                    with _closing_ed(conn.cursor()) as cur:
+                        cur.execute('DELETE FROM clin_lines WHERE rfp_id=?;', (int(rid),))
+                        for _, r in ed_c.fillna('').iterrows():
+                            if not any(str(r.get(col,'')).strip() for col in ['clin','description','qty','unit','unit_price','extended_price']):
+                                continue
+                            cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);', (int(rid), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
+                        conn.commit()
+                    st.success('CLINs saved.')
+            with tab_dates:
+                try:
+                    df_d_e = _pd.read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
+                except Exception:
+                    df_d_e = _pd.DataFrame(columns=['label','date_text','date_iso'])
+                df_d_e = df_d_e.fillna('')
+                ed_d = st.data_editor(df_d_e, num_rows='dynamic', use_container_width=True, key=f'ed_dates_{rid}')
+                if st.button('Save Dates', key=f'save_dates_{rid}'):
+                    with _closing_ed(conn.cursor()) as cur:
+                        cur.execute('DELETE FROM key_dates WHERE rfp_id=?;', (int(rid),))
+                        for _, r in ed_d.fillna('').iterrows():
+                            if not any(str(r.get(col,'')).strip() for col in ['label','date_text','date_iso']):
+                                continue
+                            cur.execute('INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);', (int(rid), str(r.get('label','')), str(r.get('date_text','')), str(r.get('date_iso',''))))
+                        conn.commit()
+                    st.success('Dates saved.')
+            with tab_pocs:
+                try:
+                    df_p_e = _pd.read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
+                except Exception:
+                    df_p_e = _pd.DataFrame(columns=['name','role','email','phone'])
+                df_p_e = df_p_e.fillna('')
+                ed_p = st.data_editor(df_p_e, num_rows='dynamic', use_container_width=True, key=f'ed_pocs_{rid}')
+                if st.button('Save POCs', key=f'save_pocs_{rid}'):
+                    with _closing_ed(conn.cursor()) as cur:
+                        cur.execute('DELETE FROM pocs WHERE rfp_id=?;', (int(rid),))
+                        for _, r in ed_p.fillna('').iterrows():
+                            if not any(str(r.get(col,'')).strip() for col in ['name','role','email','phone']):
+                                continue
+                            cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);', (int(rid), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
+                        conn.commit()
+                    st.success('POCs saved.')
+            with tab_meta:
+                try:
+                    df_m_e = _pd.read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
+                except Exception:
+                    df_m_e = _pd.DataFrame(columns=['key','value'])
+                df_m_e = df_m_e.fillna('')
+                ed_m = st.data_editor(df_m_e, num_rows='dynamic', use_container_width=True, key=f'ed_meta_{rid}')
+                if st.button('Save Meta', key=f'save_meta_{rid}'):
+                    with _closing_ed(conn.cursor()) as cur:
+                        cur.execute('DELETE FROM rfp_meta WHERE rfp_id=?;', (int(rid),))
+                        for _, r in ed_m.fillna('').iterrows():
+                            k = str(r.get('key','')).strip(); v = str(r.get('value','')).strip()
+                            if not k and not v: continue
+                            cur.execute('INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);', (int(rid), k, v))
+                        conn.commit()
+                    st.success('Meta saved.')
+        # === End Phase S ===
         col1, col2, col3 = st.columns(3)
         with col1:
             df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
