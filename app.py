@@ -12571,6 +12571,9 @@ def _render_shell():
         render_library()
     elif page == "admin":
         render_admin()
+
+    elif page == "capability":
+        render_capability_statement()
     elif page == "opportunity":
         # Use workspace if available
         try:
