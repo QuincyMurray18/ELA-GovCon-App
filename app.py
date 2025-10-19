@@ -1,6 +1,88 @@
 from __future__ import annotations
 
 
+# ===== Option A utilities and schema =====
+def samx_extract_notice_id(val: str) -> str:
+    import re as _re
+    s = str(val or "").strip()
+    m = _re.search(r"([0-9a-fA-F]{32})", s)
+    return m.group(1).lower() if m else ""
+
+def _safe_write(msg: str) -> None:
+    try:
+        import streamlit as st
+        st.write(msg)
+    except Exception:
+        print(msg)
+
+def ensure_docs_schema(conn):
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notice_docs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notice_id TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mime TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(notice_id, sha256)
+            );
+            """
+        )
+        conn.commit()
+
+def _doc_store_dir(notice_id: str) -> str:
+    import os
+    base = os.environ.get("DOC_STORE_DIR", "data/docs")
+    path = os.path.join(base, notice_id)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def _sha256_bytes(data: bytes) -> str:
+    import hashlib as _h
+    h = _h.sha256(); h.update(data); return h.hexdigest()
+
+def save_uploaded_doc(conn, notice_id: str, file) -> dict:
+    ensure_docs_schema(conn)
+    raw = file.read()
+    sha = _sha256_bytes(raw)
+    fname = getattr(file, "name", "upload.bin")
+    mime = getattr(file, "type", "application/octet-stream") or "application/octet-stream"
+    size = len(raw)
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT 1 FROM notice_docs WHERE notice_id=? AND sha256=?", (notice_id, sha))
+        if cur.fetchone():
+            return {"ok": True, "dedup": True, "sha256": sha, "filename": fname, "size": size, "mime": mime}
+    import os
+    path = os.path.join(_doc_store_dir(notice_id), f"{sha[:12]}__{fname}")
+    with open(path, "wb") as f: f.write(raw)
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO notice_docs(notice_id, sha256, filename, size, mime, source) VALUES(?,?,?,?,?,?)",
+            (notice_id, sha, fname, size, mime, "manual"),
+        )
+        conn.commit()
+    return {"ok": True, "sha256": sha, "filename": fname, "size": size, "mime": mime, "path": path}
+
+def list_notice_docs(conn, notice_id: str):
+    ensure_docs_schema(conn)
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "SELECT sha256, filename, size, mime, created_at FROM notice_docs WHERE notice_id=? ORDER BY created_at DESC",
+            (notice_id,),
+        )
+        rows = cur.fetchall()
+    return [{"sha256": r[0], "filename": r[1], "size": r[2], "mime": r[3], "created_at": r[4]} for r in rows]
+# ===== End Option A block =====
+
+
+
 # ---- Phase X: base ingest + rerun gate ----
 try:
     _INGEST_BASE = samx_ingest_notice_by_id  # concrete ingest
@@ -5389,3 +5471,135 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
         if st.button("Close", key="qv_close"):
             st.session_state["sam_quickview_open"] = False
             st.session_state["sam_quickview_notice_id"] = None
+
+
+# ========= PHASE X FINAL OVERRIDES (non-recursive, safe) =========
+def _rerun_once(tag: str) -> None:
+    import streamlit as st
+    k = "_last_rerun_tag"
+    if st.session_state.get(k) == tag:
+        return
+    st.session_state[k] = tag
+    try:
+        st.rerun()
+    except Exception:
+        pass
+
+def _do_ingest_open_qv(conn, client, qid):
+    import streamlit as st, traceback as tb
+    # Open Quickview and bump render sequence to avoid key collisions
+    st.session_state["sam_quickview_open"] = True
+    st.session_state["sam_quickview_notice_id"] = qid
+    st.session_state["sam_quickview_nid"] = qid
+    st.session_state["_qv_render_seq"] = st.session_state.get("_qv_render_seq", 0) + 1
+
+    res = {"ok": True, "source": "override", "ingested": False, "attachments": 0}
+    _ingest = globals().get("samx_ingest_notice_by_id")
+    if callable(_ingest):
+        try:
+            maybe = _ingest(conn, client, qid) or {}
+            if isinstance(maybe, dict):
+                res.update(maybe)
+        except Exception as _e:
+            st.session_state["sam_last_fetch_issue"] = {"ok": False, "step": "ingest_call", "error": repr(_e)}
+            try: st.write("Partial ingest from search. Attachments not pulled.")
+            except Exception: print("Partial ingest from search. Attachments not pulled.")
+
+    _rerun_once(f"qv:{qid}")
+    return res
+
+def render_sam_quickview(conn, nid: str = None):
+    import streamlit as st, pandas as pd
+    nid = nid or st.session_state.get("sam_quickview_nid") or st.session_state.get("sam_quickview_notice_id")
+    if not st.session_state.get("sam_quickview_open") or not nid:
+        return
+    seq = st.session_state.get("_qv_render_seq", 0)
+    with st.sidebar:
+        st.markdown("### Ask RFP Analyzer")
+        st.caption(f"Notice: {nid}")
+
+        # DB first, then search df fallback
+        title = agency = posted = due = url = ""
+        try:
+            import sqlite3
+            try:
+                df = pd.read_sql_query(
+                    "SELECT title, agency, posted_date, due_date, url FROM sam_notices WHERE notice_id = ? LIMIT 1",
+                    conn, params=(nid,)
+                )
+                if df is not None and not df.empty:
+                    r = df.iloc[0]
+                    title = str(r.get("title") or "")
+                    agency = str(r.get("agency") or "")
+                    posted = str(r.get("posted_date") or "")
+                    due = str(r.get("due_date") or "")
+                    url = str(r.get("url") or "")
+            except Exception:
+                pass
+            if not title:
+                _df = st.session_state.get("sam_results_df", pd.DataFrame())
+                if isinstance(_df, pd.DataFrame) and not _df.empty and ("Notice ID" in _df.columns):
+                    _hit = _df[_df["Notice ID"].astype(str).str.lower() == str(nid).lower()]
+                    if not _hit.empty:
+                        rec = _hit.iloc[0].to_dict()
+                        title = rec.get("Title") or title
+                        agency = rec.get("Agency Path") or rec.get("Agency") or agency
+                        posted = rec.get("Posted") or rec.get("Posted Date") or posted
+                        due = rec.get("Response Due") or rec.get("Due") or due
+                        url = rec.get("SAM Link") or url
+        except Exception as e:
+            _safe_write(f"Quickview data error: {e}")
+
+        if title: st.write(f"**{title}**")
+        meta = " | ".join([p for p in [f"Agency: {agency}" if agency else "", f"Posted: {posted}" if posted else "", f"Due: {due}" if due else ""] if p])
+        if meta: _safe_write(meta)
+        if url: st.markdown(f"[Open in SAM]({url})")
+
+        st.markdown("#### Documents")
+        try:
+            ensure_docs_schema(conn)
+            docs = list_notice_docs(conn, nid)
+        except Exception as e:
+            docs = []
+            _safe_write(f"Docs error: {e}")
+        if docs:
+            for d in docs:
+                st.write(f"• {d['filename']} ({d['mime']}, {d['size']} bytes) — {d['sha256'][:8]}…")
+        else:
+            _safe_write("No documents in app yet.")
+        up = st.file_uploader("Upload files from SAM", key=f"doc_up_{nid}_{seq}", accept_multiple_files=True)
+        if up:
+            for f in up:
+                try:
+                    res = save_uploaded_doc(conn, nid, f)
+                    if not res.get("ok"): _safe_write(f"Upload failed: {res}")
+                except Exception as e:
+                    _safe_write(f"Upload error: {e}")
+            try: st.rerun()
+            except Exception: pass
+
+        # Unique close key to avoid clashes
+        if st.button("Close Quickview", key=f"qv_close_{nid}_{seq}"):
+            st.session_state["sam_quickview_open"] = False
+            st.session_state["sam_quickview_notice_id"] = ""
+            st.session_state["sam_quickview_nid"] = ""
+
+def qv_bootstrap(conn):
+    import streamlit as st
+    if st.session_state.get("sam_quickview_open") and (st.session_state.get("sam_quickview_nid") or st.session_state.get("sam_quickview_notice_id")):
+        try:
+            render_sam_quickview(conn)
+        except Exception as e:
+            try: st.write(f"Quickview render error: {e}")
+            except Exception: print(f"Quickview render error: {e}")
+
+def qv_row_actions(conn, row: dict):
+    import streamlit as st
+    qid = samx_extract_notice_id(row.get("Notice ID") or row.get("SAM Link") or "")
+    if st.button("Quickview", key=f"qv_btn_{qid}"):
+        st.session_state["sam_quickview_open"] = True
+        st.session_state["sam_quickview_notice_id"] = qid
+        st.session_state["sam_quickview_nid"] = qid
+        try: st.rerun()
+        except Exception: pass
+# ========= END OVERRIDES =========
