@@ -4769,18 +4769,60 @@ def _samx_get_detail_base() -> str:
         pass
     return base or "https://api.sam.gov/prod/opportunities/v2/opportunities"
 
-def samx_fetch_detail(client: "SamXClient", notice_id: str) -> dict:
-    import requests
-    url = f"{_samx_get_detail_base().rstrip('/')}/{notice_id}"
-    q = {"api_key": client.api_key or ""}
-    try:
-        r = requests.get(url, params=q, timeout=client.timeout)
-        if r.status_code != 200:
-            return {"ok": False, "status": r.status_code, "data": {}}
-        return {"ok": True, "status": 200, "data": r.json()}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "data": {}}
 
+def samx_fetch_detail(client: "SamXClient", notice_id: str) -> dict:
+    import requests, os
+    nid = (notice_id or "").strip()
+    if not nid:
+        return {"ok": False, "status": 400, "error": "empty id", "data": {}}
+    # Candidate bases to try
+    bases = []
+    try:
+        cfg = _samx_get_detail_base().rstrip("/")
+    except Exception:
+        cfg = ""
+    if cfg:
+        bases.append(cfg)
+    bases.extend([
+        "https://api.sam.gov/prod/opportunities/v2/opportunities",
+        "https://api.sam.gov/prod/opportunities/v1/opportunities",
+        "https://sam.gov/api/prod/opps/v3/opportunities"
+    ])
+    headers = {"Accept": "application/json"}
+    for base in bases:
+        url = f"{base}/{nid}"
+        q = {"api_key": client.api_key or os.environ.get("SAM_API_KEY","")}
+        try:
+            r = requests.get(url, params=q, headers=headers, timeout=client.timeout)
+            if r.status_code == 200:
+                try:
+                    return {"ok": True, "status": 200, "data": r.json()}
+                except Exception:
+                    return {"ok": True, "status": 200, "data": {}}
+            last_status = r.status_code
+        except Exception as e:
+            last_status = f"err:{e}"
+    # 404 or other: attempt to resolve canonical id via search
+    try:
+        sr = client.search({"noticeId": nid, "limit": 1, "page": 0})
+        data = sr.get("data") or {}
+        arr = data.get("opportunitiesData") or data.get("opportunity") or []
+        if isinstance(arr, dict):
+            arr = [arr]
+        nid2 = arr and (arr[0].get("noticeId") or arr[0].get("id"))
+        if nid2 and nid2 != nid:
+            for base in bases:
+                url = f"{base}/{nid2}"
+                q = {"api_key": client.api_key or os.environ.get("SAM_API_KEY","")}
+                try:
+                    r = requests.get(url, params=q, headers=headers, timeout=client.timeout)
+                    if r.status_code == 200:
+                        return {"ok": True, "status": 200, "data": r.json()}
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return {"ok": False, "status": 404, "error": 404, "data": {}}
 def _samx_get_list(obj, key, default=None):
     v = obj.get(key) if isinstance(obj, dict) else None
     if v is None:
