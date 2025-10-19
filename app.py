@@ -1082,7 +1082,18 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                 if not client:
                                     st.error("SamXClient missing. Ensure Phase X1 is applied and SAM_API_KEY is set.")
                                 else:
-                                    _res = samx_ingest_notice_by_id(conn, client, str(row["Notice ID"]))
+                                    import sys, importlib
+                                    _mod = sys.modules.get("__main__")
+                                    _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
+                                    if _ingest is None:
+                                        try:
+                                            _ingest = importlib.import_module("app").samx_ingest_notice_by_id
+                                        except Exception:
+                                            _ingest = globals().get("samx_ingest_notice_by_id")
+                                    if not _ingest:
+                                        st.error("Ingest function missing. Ensure Phase X2 is applied.")
+                                    else:
+                                        _res = _ingest(conn, client, str(row["Notice ID"]))
                                     if _res.get("ok"):
                                         st.success("Detail and documents pulled")
                                         st.session_state["sam_quickview_open"] = True
