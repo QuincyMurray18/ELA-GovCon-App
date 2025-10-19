@@ -1,6 +1,48 @@
 from __future__ import annotations
 import pandas as pd  # early import to avoid NameError before main()
 
+def ensure_sam_schema(conn: sqlite3.Connection) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS sam_notices (
+            notice_id TEXT PRIMARY KEY,
+            title TEXT,
+            agency TEXT,
+            office TEXT,
+            naics TEXT,
+            psc TEXT,
+            set_aside TEXT,
+            place_state TEXT,
+            place_city TEXT,
+            pop_zip TEXT,
+            posted_date TEXT,
+            due_date TEXT,
+            status TEXT,
+            url TEXT,
+            raw_json TEXT,
+            first_seen TEXT,
+            last_seen TEXT,
+            inactive INTEGER DEFAULT 0
+        )""")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sam_notices_id ON sam_notices(notice_id)")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS sam_docs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notice_id TEXT,
+            url TEXT,
+            filename TEXT,
+            sha256 TEXT,
+            size INTEGER,
+            mime TEXT,
+            fetched_at TEXT,
+            text_indexed INTEGER DEFAULT 0,
+            error TEXT,
+            local_path TEXT,
+            UNIQUE (notice_id, url)
+        )""")
+        conn.commit()
+
 import os
 import sqlite3
 from contextlib import closing
@@ -70,7 +112,7 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
             for did, fn in docs:
                 c1, c2 = st.columns([3,1])
                 c1.write(fn or f"doc {did}")
-                if c2.button("Summarize", key=f"sum_doc_{did}"):
+                if c2.button("Summarize", key=f"sum_doc_{nid}_{did}"):
                     try:
                         ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require text indexing."
                     except Exception as e:
@@ -80,7 +122,7 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
         if ds:
             st.markdown("**Document Summary**")
             st.write(ds)
-        if st.button("Close", key="qv_close"):
+        if st.button("Close", key=f"qv_close_{nid}"):
             st.session_state["sam_quickview_open"] = False
             st.session_state["sam_quickview_notice_id"] = ""
 
