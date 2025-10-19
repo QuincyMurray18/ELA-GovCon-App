@@ -1060,28 +1060,24 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
-                    # Phase X3: Quickview and Ingest
+                    # Quickview + Ingest
                     qid = ""
                     try:
                         qid = str(row.get("Notice ID") or "").strip()
                     except Exception:
                         qid = ""
                     if not qid:
-                        try:
-                            import re as _re
-                            _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
-                            qid = _m.group(1) if _m else ""
-                        except Exception:
-                            pass
+                        import re as _re
+                        _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
+                        qid = _m.group(1) if _m else ""
                     col_qv1, col_qv2 = st.columns([1,1])
                     if qid:
                         with col_qv1:
-                            if st.button("Quickview", key=f"qv_open_btn_{qid}"):
+                            if st.button("Quickview", key=f"qv_open_btn_{{qid}}"):
                                 st.session_state["sam_quickview_open"] = True
                                 st.session_state["sam_quickview_notice_id"] = qid
-                                st.rerun()
                         with col_qv2:
-                            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
+                            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{{qid}}"):
                                 try:
                                     from importlib import import_module as _imp
                                     _SamX = globals().get("SamXClient")
@@ -1106,8 +1102,8 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                             st.error("Ingest function missing.")
                                         else:
                                             _res = _ingest(conn, client, qid)
-                                            # Search-only fallback on 404
                                             if (not _res.get("ok")) and str(_res.get("error")) == "404":
+                                                # Search-only fallback
                                                 _title = str(row.get("Title") or "")
                                                 _agency = str(row.get("Agency") or "")
                                                 _office = str(row.get("Office") or "")
@@ -1124,46 +1120,44 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                                 _due = str(row.get("Due") or row.get("Response Due") or "")
                                                 _status = str(row.get("Status") or "")
                                                 _link = str(row.get("SAM Link") or "")
-                                                _detail = {
-                                                    "opportunitiesData": {
+                                                _detail = {{
+                                                    "opportunitiesData": {{
                                                         "noticeId": qid,
                                                         "noticeTitle": _title,
                                                         "noticeType": str(row.get("Type") or ""),
-                                                        "agency": {"name": _agency},
-                                                        "office": {"name": _office},
+                                                        "agency": {{"name": _agency}},
+                                                        "office": {{"name": _office}},
                                                         "naicsCode": _naics,
                                                         "pscCode": _psc,
                                                         "typeOfSetAside": _setaside,
-                                                        "placeOfPerformance": {"city": _city, "state": _state},
+                                                        "placeOfPerformance": {{"city": _city, "state": _state}},
                                                         "publishDate": _posted,
                                                         "responseDate": _due,
                                                         "status": _status,
                                                         "uiLink": _link
-                                                    }
-                                                }
-                                                try:
-                                                    _ing = globals().get("samx_ingest_detail")
-                                                    if _ing is None:
-                                                        _ing = getattr(_imp("app"), "samx_ingest_detail", None)
-                                                    _nid = _ing(conn, _detail) if _ing else None
+                                                    }}
+                                                }}
+                                                _ing = globals().get("samx_ingest_detail") or getattr(_imp("app"), "samx_ingest_detail", None)
+                                                if _ing:
+                                                    _nid = _ing(conn, _detail)
                                                     if _nid:
                                                         st.info("Partial ingest from search. Attachments not pulled.")
                                                         st.session_state["sam_quickview_open"] = True
                                                         st.session_state["sam_quickview_notice_id"] = qid
-                                                        st.rerun()
-                                                except Exception as _e2:
-                                                    st.warning(f"Search-only fallback failed: {_e2}")
                                             if _res.get("ok"):
                                                 st.success("Detail and documents pulled")
                                                 st.session_state["sam_quickview_open"] = True
                                                 st.session_state["sam_quickview_notice_id"] = qid
-                                                st.rerun()
-                                            else:
-                                                st.warning(f"Fetch issue: {_res}")
                                 except Exception as _e:
-                                    st.error(f"Ingest failed: {_e}")
+                                    st.error("Ingest failed: {{_e}}")
                     else:
                         st.caption("Select a notice to enable Quickview.")
+                    
+                    # Force sidebar draw on this run
+                    try:
+                        render_sam_quickview(conn)
+                    except Exception as _e:
+                        st.caption("Quickview render error: {{_e}}")
 
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
@@ -4826,45 +4820,36 @@ def _samx_get(obj, *keys, default=None):
         else:
             return default
     return cur
+
 def samx_extract_fields(detail: dict) -> dict:
-    import json, datetime as _d
     d = detail or {}
+    # Try multiple possible paths to be resilient
     core = d.get("opportunity", d.get("opportunitiesData", d))
-
-    def _g(obj, *ks, default=""):
-        cur = obj
-        for k in ks:
-            if isinstance(cur, dict) and k in cur:
-                cur = cur[k]
-            else:
-                return default
-        return cur
-
-    notice_id = str(_g(core, "noticeId", default=_g(core, "notice_id", default="")))
-    info = {
-        "notice_id": notice_id,
-        "type": _g(core, "type", default=_g(core, "noticeType", default="")),
-        "title": (_g(core, "title", default=_g(core, "noticeTitle", default="")) or "").strip(),
-        "agency": _g(core, "agency", "name", default=_g(core, "agency", default="")),
-        "office": _g(core, "office", "name", default=_g(core, "office", default="")),
-        "naics": _g(core, "naics", default=_g(core, "naicsCode", default="")),
-        "psc": _g(core, "psc", default=_g(core, "pscCode", default="")),
-        "set_aside": _g(core, "setAside", default=_g(core, "typeOfSetAside", default="")),
-        "place_state": _g(core, "placeOfPerformance", "state", default=""),
-        "place_city": _g(core, "placeOfPerformance", "city", default=""),
-        "pop_zip": _g(core, "placeOfPerformance", "zip", default=""),
-        "posted_date": _g(core, "postedDate", default=_g(core, "publishDate", default="")),
-        "due_date": _g(core, "responseDate", default=_g(core, "closeDate", default="")),
-        "status": str(_g(core, "status", default=_g(core, "active", default=""))),
-        "url": _g(core, "uiLink", default=_g(core, "url", default="")),
+    notice_id = str(_samx_get(core, "noticeId", default=_samx_get(core, "notice_id", default="")))
+    title = _samx_get(core, "title", default=_samx_get(core, "noticeTitle", default="")).strip()
+    ntype = _samx_get(core, "type", default=_samx_get(core, "noticeType", default=""))
+    agency = _samx_get(core, "agency", "name", default=_samx_get(core, "agency", default=""))
+    office = _samx_get(core, "office", "name", default=_samx_get(core, "office", default=""))
+    naics = _samx_get(core, "naics", default=_samx_get(core, "naicsCode", default=""))
+    psc = _samx_get(core, "psc", default=_samx_get(core, "pscCode", default=""))
+    set_aside = _samx_get(core, "setAside", default=_samx_get(core, "typeOfSetAside", default=""))
+    place = _samx_get(core, "placeOfPerformance", default={})
+    place_state = _samx_get(place, "state", default="")
+    place_city = _samx_get(place, "city", default="")
+    pop_zip = _samx_get(place, "zip", default="")
+    posted = _samx_get(core, "postedDate", default=_samx_get(core, "publishDate", default=""))
+    due = _samx_get(core, "responseDate", default=_samx_get(core, "archiveDate", default=_samx_get(core, "closeDate", default="")))
+    status = _samx_get(core, "status", default=_samx_get(core, "active", default=""))
+    url = _samx_get(core, "uiLink", default=_samx_get(core, "url", default=""))
+    raw_json = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    return {
+        "notice_id": notice_id, "type": ntype, "title": title, "agency": agency, "office": office,
+        "naics": naics, "psc": psc, "set_aside": set_aside,
+        "place_state": place_state, "place_city": place_city, "pop_zip": pop_zip,
+        "posted_date": posted, "due_date": due, "status": str(status),
+        "url": url, "raw_json": raw_json, "first_seen": now, "last_seen": now, "inactive": 0
     }
-    info["raw_json"] = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
-    now = _d.datetime.utcnow().isoformat() + "Z"
-    info["first_seen"] = now
-    info["last_seen"] = now
-    info["inactive"] = 0
-    return info
-
 
 def samx_extract_pocs(detail: dict) -> list[dict]:
     d = detail or {}
