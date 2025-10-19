@@ -8,21 +8,12 @@ import os
 import re
 import sqlite3
 
-# ---------------------- Phase X1: hashing helper ----------------------
-def compute_sha256(b: bytes) -> str:
-    try:
-        return hashlib.sha256(b or b"").hexdigest()
-    except Exception:
-        import hashlib as _h
-        return _h.sha256(b or b"").hexdigest()
-
-
-
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import pandas as pd
+import docx  # for DOCX reading in _read_file
 import requests
 import smtplib
 import streamlit as st
@@ -40,6 +31,16 @@ except Exception:
     except Exception:
         _pypdf = None
 
+
+
+
+# --- hashing helper ---
+def compute_sha256(b: bytes) -> str:
+    try:
+        return hashlib.sha256(b or b"").hexdigest()
+    except Exception:
+        import hashlib as _h
+        return _h.sha256(b or b"").hexdigest()
 
 # Phase X unified settings
 from types import SimpleNamespace as _NS
@@ -1331,7 +1332,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_parse:
 
         # --- X1 Ingest: File Library + Health ---
-        if flag('x_ingest', False):
+        if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
                 st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available.")
                 ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
