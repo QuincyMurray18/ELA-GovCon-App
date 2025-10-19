@@ -1158,14 +1158,15 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 except Exception as _e:
                     import traceback
                     st.exception(_e)
-        _fn = globals().get("render_sam_quickview")
-        if _fn:
+        import sys
+        _fn = globals().get('render_sam_quickview') or getattr(sys.modules.get('__main__'), 'render_sam_quickview', None)
+        if callable(_fn):
             try:
                 _fn(conn)
             except Exception as _e:
                 st.caption(f"Quickview render error: {_e}")
         else:
-            st.caption("Quickview render missing")
+            st.caption("Quickview render missing (no function)")
 
         with st.expander("Opportunity Details", expanded=True):
             c1, c2 = st.columns([3, 2])
