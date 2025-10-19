@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+
+def samx_extract_notice_id(val: str) -> str:
+    """Return 32-hex notice id from raw id or any SAM URL variant."""
+    import re as _re
+    s = str(val or "").strip()
+    m = _re.search(r"([0-9a-fA-F]{32})", s)
+    return m.group(1).lower() if m else ""
 
 import os
 import sqlite3
@@ -536,13 +545,6 @@ def get_db() -> sqlite3.Connection:
                 if "tenant_id" not in cols["name"].tolist():
                     cur.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER;")
                     conn.commit()
-
-
-def samx_extract_notice_id(val: str) -> str:
-    import re as _re
-    s = str(val or "").strip()
-    m = _re.search(r"([0-9a-fA-F]{32})", s)
-    return m.group(1).lower() if m else ""
             except Exception:
                 pass
             try:
@@ -1105,7 +1107,15 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         row = results_df.iloc[idx]
 
         # --- SAM Watch Actions ---
-        qid = samx_extract_notice_id(row.get("Notice ID") or row.get("SAM Link") or "")
+        qid = ""
+        try:
+            qid = str(row.get("Notice ID") or "").strip()
+        except Exception:
+            qid = ""
+        if not qid:
+            import re as _re
+            _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
+            qid = _m.group(1) if _m else ""
         c1, c2 = st.columns([1,1])
         with c1:
             if st.button("Quickview", key=f"qv_open_btn_{qid}"):
@@ -1157,21 +1167,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 except Exception as _e:
                     import traceback
                     st.exception(_e)
-        # SAM detail endpoint self-test
-        try:
-            _ok, _msg = False, ''
-            _SamX = globals().get('SamXClient')
-            if _SamX:
-                _client = _SamX.from_env()
-                if _client and qid:
-                    _res_test = _client.fetch_detail(qid)
-                    _ok = bool(getattr(_res_test, 'ok', False) or (_res_test.get('ok') if isinstance(_res_test, dict) else False))
-                    _msg = getattr(_res_test, 'status', None) or (_res_test.get('status') if isinstance(_res_test, dict) else None) or (_res_test.get('error') if isinstance(_res_test, dict) else '')
-            if qid:
-                st.caption(f"SAM detail self-test: ok={_ok} msg={_msg}")
-        except Exception as _e:
-            st.caption(f"SAM detail self-test error: {_e}")
-
         import sys
         _fn = globals().get('render_sam_quickview') or getattr(sys.modules.get('__main__'), 'render_sam_quickview', None)
         if callable(_fn):
