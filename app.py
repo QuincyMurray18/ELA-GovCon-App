@@ -4826,36 +4826,45 @@ def _samx_get(obj, *keys, default=None):
         else:
             return default
     return cur
-
 def samx_extract_fields(detail: dict) -> dict:
+    import json, datetime as _d
     d = detail or {}
-    # Try multiple possible paths to be resilient
     core = d.get("opportunity", d.get("opportunitiesData", d))
-    notice_id = str(_samx_get(core, "noticeId", default=_samx_get(core, "notice_id", default="")))
-    title = _samx_get(core, "title", default=_samx_get(core, "noticeTitle", default="")).strip()
-    ntype = _samx_get(core, "type", default=_samx_get(core, "noticeType", default=""))
-    agency = _samx_get(core, "agency", "name", default=_samx_get(core, "agency", default=""))
-    office = _samx_get(core, "office", "name", default=_samx_get(core, "office", default=""))
-    naics = _samx_get(core, "naics", default=_samx_get(core, "naicsCode", default=""))
-    psc = _samx_get(core, "psc", default=_samx_get(core, "pscCode", default=""))
-    set_aside = _samx_get(core, "setAside", default=_samx_get(core, "typeOfSetAside", default=""))
-    place = _samx_get(core, "placeOfPerformance", default={})
-    place_state = _samx_get(place, "state", default="")
-    place_city = _samx_get(place, "city", default="")
-    pop_zip = _samx_get(place, "zip", default="")
-    posted = _samx_get(core, "postedDate", default=_samx_get(core, "publishDate", default=""))
-    due = _samx_get(core, "responseDate", default=_samx_get(core, "archiveDate", default=_samx_get(core, "closeDate", default="")))
-    status = _samx_get(core, "status", default=_samx_get(core, "active", default=""))
-    url = _samx_get(core, "uiLink", default=_samx_get(core, "url", default=""))
-    raw_json = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
-    now = _dt.utcnow().isoformat() + "Z"
-    return {
-        "notice_id": notice_id, "type": ntype, "title": title, "agency": agency, "office": office,
-        "naics": naics, "psc": psc, "set_aside": set_aside,
-        "place_state": place_state, "place_city": place_city, "pop_zip": pop_zip,
-        "posted_date": posted, "due_date": due, "status": str(status),
-        "url": url, "raw_json": raw_json, "first_seen": now, "last_seen": now, "inactive": 0
+
+    def _g(obj, *ks, default=""):
+        cur = obj
+        for k in ks:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            else:
+                return default
+        return cur
+
+    notice_id = str(_g(core, "noticeId", default=_g(core, "notice_id", default="")))
+    info = {
+        "notice_id": notice_id,
+        "type": _g(core, "type", default=_g(core, "noticeType", default="")),
+        "title": (_g(core, "title", default=_g(core, "noticeTitle", default="")) or "").strip(),
+        "agency": _g(core, "agency", "name", default=_g(core, "agency", default="")),
+        "office": _g(core, "office", "name", default=_g(core, "office", default="")),
+        "naics": _g(core, "naics", default=_g(core, "naicsCode", default="")),
+        "psc": _g(core, "psc", default=_g(core, "pscCode", default="")),
+        "set_aside": _g(core, "setAside", default=_g(core, "typeOfSetAside", default="")),
+        "place_state": _g(core, "placeOfPerformance", "state", default=""),
+        "place_city": _g(core, "placeOfPerformance", "city", default=""),
+        "pop_zip": _g(core, "placeOfPerformance", "zip", default=""),
+        "posted_date": _g(core, "postedDate", default=_g(core, "publishDate", default="")),
+        "due_date": _g(core, "responseDate", default=_g(core, "closeDate", default="")),
+        "status": str(_g(core, "status", default=_g(core, "active", default=""))),
+        "url": _g(core, "uiLink", default=_g(core, "url", default="")),
     }
+    info["raw_json"] = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
+    now = _d.datetime.utcnow().isoformat() + "Z"
+    info["first_seen"] = now
+    info["last_seen"] = now
+    info["inactive"] = 0
+    return info
+
 
 def samx_extract_pocs(detail: dict) -> list[dict]:
     d = detail or {}
