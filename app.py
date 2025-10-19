@@ -5,17 +5,51 @@ from contextlib import closing
 from typing import Optional, Any, Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
-def _safe_rerun(tag: str) -> None:
-    import streamlit as st
-    key = "_last_rerun_tag"
-    if st.session_state.get(key) == tag:
-        return
-    st.session_state[key] = tag
-    try:
-        st.rerun()
-    except Exception:
-        pass
 
+def render_sam_quickview(conn: sqlite3.Connection) -> None:
+    import streamlit as st
+    from contextlib import closing
+    nid = st.session_state.get("sam_quickview_notice_id")
+    if not st.session_state.get("sam_quickview_open") or not nid:
+        return
+    with st.sidebar:
+        st.markdown("### Ask RFP Analyzer")
+        st.caption(f"Notice: {nid}")
+        try:
+            with closing(conn.cursor()) as cur:
+                row = cur.execute(
+                    "SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status "
+                    "FROM sam_notices WHERE notice_id=?", (nid,)
+                ).fetchone()
+        except Exception as _e:
+            row = None
+            st.caption(f"Quickview DB error: {_e}")
+        if row:
+            keys = ["Title","Agency","Office","NAICS","PSC","Set-Aside","State","City","Posted","Due","Status"]
+            st.write("\n".join(f"{k}: {v or ''}" for k,v in zip(keys,row)))
+        try:
+            with closing(conn.cursor()) as cur:
+                docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+        except Exception:
+            docs = []
+        if docs:
+            st.markdown("**Documents**")
+            for did, fn in docs:
+                c1, c2 = st.columns([3,1])
+                c1.write(fn or f"doc {did}")
+                if c2.button("Summarize", key=f"sum_doc_{did}"):
+                    try:
+                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require text indexing."
+                    except Exception as e:
+                        ds = f"Summary error: {e}"
+                    st.session_state["sam_quickview_doc_summary"] = ds
+        ds = st.session_state.get("sam_quickview_doc_summary")
+        if ds:
+            st.markdown("**Document Summary**")
+            st.write(ds)
+        if st.button("Close", key="qv_close"):
+            st.session_state["sam_quickview_open"] = False
+            st.session_state["sam_quickview_notice_id"] = ""
 
 import pandas as pd
 import io
@@ -1070,113 +1104,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.write(f"**Notice ID:** {row['Notice ID']}")
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
-
-                    # Quickview + Ingest
-                    qid = ""
-                    try:
-                        qid = str(row.get("Notice ID") or "").strip()
-                    except Exception:
-                        qid = ""
-                    if not qid:
-                        import re as _re
-                        _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
-                        qid = _m.group(1) if _m else ""
-                    col_qv1, col_qv2 = st.columns([1,1])
-                    if qid:
-                        with col_qv1:
-                            if st.button("Quickview", key=f"qv_open_btn_{qid}"):
-                                st.session_state["sam_quickview_open"] = True
-                                st.session_state["sam_quickview_notice_id"] = qid
-                            _safe_rerun(f"qv_open:{qid}")
-                        with col_qv2:
-                            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
-                                try:
-                                    from importlib import import_module as _imp
-                                    _SamX = globals().get("SamXClient")
-                                    if _SamX is None:
-                                        try:
-                                            _SamX = _imp("app").SamXClient
-                                        except Exception:
-                                            _SamX = None
-                                    client = _SamX.from_env() if _SamX else None
-                                    if not client:
-                                        st.error("SamXClient missing. Set SAM_API_KEY.")
-                                    else:
-                                        import sys
-                                        _mod = sys.modules.get("__main__")
-                                        _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
-                                        if _ingest is None:
-                                            try:
-                                                _ingest = _imp("app").samx_ingest_notice_by_id
-                                            except Exception:
-                                                _ingest = globals().get("samx_ingest_notice_by_id")
-                                        if not _ingest:
-                                            st.error("Ingest function missing.")
-                                        else:
-                                            _res = _ingest(conn, client, qid)
-                                            if (not _res.get("ok")) and str(_res.get("error")) == "404":
-                                                # Search-only fallback
-                                                _title = str(row.get("Title") or "")
-                                                _agency = str(row.get("Agency") or "")
-                                                _office = str(row.get("Office") or "")
-                                                _naics = str(row.get("NAICS") or "")
-                                                _psc = str(row.get("PSC") or "")
-                                                _setaside = str(row.get("Set-Aside") or "")
-                                                _pop = str(row.get("Place of Performance") or "")
-                                                _city, _state = "", ""
-                                                if "," in _pop:
-                                                    parts = [p.strip() for p in _pop.split(",")]
-                                                    if len(parts) >= 2:
-                                                        _city, _state = parts[0], parts[1]
-                                                _posted = str(row.get("Posted") or row.get("Posted Date") or "")
-                                                _due = str(row.get("Due") or row.get("Response Due") or "")
-                                                _status = str(row.get("Status") or "")
-                                                _link = str(row.get("SAM Link") or "")
-                                                _detail = {{
-                                                    "opportunitiesData": {{
-                                                        "noticeId": qid,
-                                                        "noticeTitle": _title,
-                                                        "noticeType": str(row.get("Type") or ""),
-                                                        "agency": {{"name": _agency}},
-                                                        "office": {{"name": _office}},
-                                                        "naicsCode": _naics,
-                                                        "pscCode": _psc,
-                                                        "typeOfSetAside": _setaside,
-                                                        "placeOfPerformance": {{"city": _city, "state": _state}},
-                                                        "publishDate": _posted,
-                                                        "responseDate": _due,
-                                                        "status": _status,
-                                                        "uiLink": _link
-                                                    }}
-                                                }}
-                                                _ing = globals().get("samx_ingest_detail") or getattr(_imp("app"), "samx_ingest_detail", None)
-                                                if _ing:
-                                                    _nid = _ing(conn, _detail)
-                                                    if _nid:
-                                                        st.info("Partial ingest from search. Attachments not pulled.")
-                                                        st.session_state["sam_quickview_open"] = True
-                                                        st.session_state["sam_quickview_notice_id"] = qid
-                                            if _res.get("ok"):
-                                                st.success("Detail and documents pulled")
-                                                st.session_state["sam_quickview_open"] = True
-                                                st.session_state["sam_quickview_notice_id"] = qid
-                                except Exception as _e:
-                                    st.error(f"Ingest failed: {_e}")
-                    else:
-                        st.caption("Select a notice to enable Quickview.")
-                    
-                    # Force sidebar draw on this run
-                    try:
-                        _fn = globals().get("render_sam_quickview")
-                        if _fn:
-                            try:
-                                _fn(conn)
-                            except Exception as _e:
-                                st.caption(f"Quickview render error: {_e}")
-                        else:
-                            st.caption("Quickview render missing")
-                    except Exception as _e:
-                        st.caption(f"Quickview render error: {_e}")
 
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
@@ -4749,39 +4676,24 @@ def samx_upsert_notice(conn: sqlite3.Connection, notice: dict) -> None:
             inactive=excluded.inactive
         ;""", vals)
         conn.commit()
+
 def samx_upsert_doc(conn: sqlite3.Connection, notice_id: str, doc: dict) -> None:
-    ensure_sam_schema(conn)
-    url = str(doc.get("url") or "")
-    filename = doc.get("filename")
-    sha256 = doc.get("sha256")
-    sz = doc.get("size")
-    try:
-        size = int(sz) if str(sz).isdigit() else sz
-    except Exception:
-        size = None
-    mime = doc.get("mime")
-    fetched_at = doc.get("fetched_at")
-    text_indexed = int(bool(doc.get("text_indexed")))
-    error = doc.get("error")
-    local_path = doc.get("local_path")
-    cols = ["notice_id","url","filename","sha256","size","mime","fetched_at","text_indexed","error","local_path"]
-    vals = [notice_id, url, filename, sha256, size, mime, fetched_at, text_indexed, error, local_path]
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            """INSERT INTO sam_docs(notice_id,url,filename,sha256,size,mime,fetched_at,text_indexed,error,local_path)
-               VALUES(?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(notice_id, url) DO UPDATE SET
-                   filename=COALESCE(excluded.filename, sam_docs.filename),
-                   sha256=COALESCE(excluded.sha256, sam_docs.sha256),
-                   size=COALESCE(excluded.size, sam_docs.size),
-                   mime=COALESCE(excluded.mime, sam_docs.mime),
-                   fetched_at=COALESCE(excluded.fetched_at, sam_docs.fetched_at),
-                   text_indexed=COALESCE(excluded.text_indexed, sam_docs.text_indexed),
-                   error=COALESCE(excluded.error, sam_docs.error),
-                   local_path=COALESCE(excluded.local_path, sam_docs.local_path)""",
-            vals
-        )
+    cols = ["notice_id","url","filename","sha256","size","mime","fetched_at","text_indexed","error"]
+    vals = [notice_id,
+            doc.get("url"), doc.get("filename"), doc.get("sha256"), doc.get("size"),
+            doc.get("mime"), doc.get("fetched_at"), int(bool(doc.get("text_indexed"))), doc.get("error")]
+    with closing(conn.cursor()) as cur:
+        cur.execute("""INSERT INTO sam_docs(notice_id,url,filename,sha256,size,mime,fetched_at,text_indexed,error)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(notice_id, url) DO UPDATE SET
+            filename=COALESCE(excluded.filename, sam_docs.filename),
+            sha256=COALESCE(excluded.sha256, sam_docs.sha256),
+            size=COALESCE(excluded.size, sam_docs.size),
+            mime=COALESCE(excluded.mime, sam_docs.mime),
+            fetched_at=COALESCE(excluded.fetched_at, sam_docs.fetched_at),
+            text_indexed=COALESCE(excluded.text_indexed, sam_docs.text_indexed),
+            error=COALESCE(excluded.error, sam_docs.error)
+        ;""", vals)
         conn.commit()
 
 def samx_upsert_poc(conn: sqlite3.Connection, notice_id: str, poc: dict) -> None:
@@ -4907,41 +4819,32 @@ def samx_extract_pocs(detail: dict) -> list[dict]:
         if key not in uniq:
             uniq[key] = c
     return list(uniq.values())
+
 def samx_extract_docs(detail: dict) -> list[dict]:
     d = detail or {}
     core = d.get("opportunity", d.get("opportunitiesData", d))
-    out: list[dict] = []
+    docs = []
     for k in ["attachments", "documents", "files"]:
-        v = core.get(k) if isinstance(core, dict) else None
-        items = v if isinstance(v, list) else ([v] if v else [])
-        for a in items:
+        for a in _samx_get_list(core, k, default=[]):
             if not isinstance(a, dict):
                 continue
-            u = a.get("url") or a.get("href") or a.get("downloadUrl")
-            if isinstance(u, dict):
-                u = u.get("url") or u.get("href") or u.get("uri") or u.get("value")
-            u = str(u or "")
-            if not u:
+            url = a.get("url") or a.get("href") or a.get("downloadUrl")
+            if not url:
                 continue
-            fn = a.get("fileName") or a.get("name")
-            sz = a.get("size") or a.get("fileSize")
-            if isinstance(sz, dict):
-                sz = sz.get("value") or sz.get("bytes")
-            try:
-                szv = int(sz) if str(sz).isdigit() else sz
-            except Exception:
-                szv = sz
-            mime = a.get("mime") or a.get("contentType")
-            out.append({"url": u, "filename": fn, "size": szv, "mime": mime})
-    seen = set()
-    dedup: list[dict] = []
-    for d1 in out:
-        u = d1.get("url") or ""
-        if not u or u in seen:
+            docs.append({
+                "url": url,
+                "filename": a.get("fileName") or a.get("name"),
+                "size": a.get("size") or a.get("fileSize"),
+                "mime": a.get("mime") or a.get("contentType")
+            })
+    # de-dup by url
+    seen = set(); out = []
+    for d1 in docs:
+        u = d1.get("url")
+        if u in seen:
             continue
-        seen.add(u)
-        dedup.append(d1)
-    return dedup
+        seen.add(u); out.append(d1)
+    return out
 
 def samx_ingest_detail(conn: sqlite3.Connection, detail: dict) -> str | None:
     info = samx_extract_fields(detail)
@@ -5012,21 +4915,24 @@ def samx_index_doc_text(conn: sqlite3.Connection, notice_id: str) -> dict:
                 cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (str(e), did)); conn.commit()
             errs += 1
     return {"indexed": done, "errors": errs}
-
 def samx_ingest_notice_by_id(conn: sqlite3.Connection, client: "SamXClient", notice_id: str) -> dict:
-    """Fetch detail then ingest, download docs, index text. Returns a summary dict."""
-    res = samx_fetch_detail(client, notice_id)
+    # Header-only ingest to avoid doc/POC paths while debugging
+    ensure_sam_schema(conn)
+    try:
+        res = samx_fetch_detail(client, notice_id)
+    except Exception as e:
+        return {"ok": False, "step": "fetch_detail_call", "error": repr(e)}
     if not res.get("ok"):
         return {"ok": False, "step": "fetch_detail", "error": res.get("error") or res.get("status")}
-    nid = samx_ingest_detail(conn, res.get("data") or {})
-    if not nid:
-        return {"ok": False, "step": "ingest_detail", "error": "no notice_id"}
-    dl = samx_download_missing_docs(conn, nid)
-    ix = samx_index_doc_text(conn, nid)
-    return {"ok": True, "notice_id": nid, "downloads": dl, "index": ix}
-
-
-# Phase X3: Quickview and Summaries
+    try:
+        info = samx_extract_fields(res.get("data") or {})
+        nid = info.get("notice_id")
+        if not nid:
+            return {"ok": False, "step": "extract_fields", "error": "no notice_id"}
+        samx_upsert_notice(conn, info)
+    except Exception as e:
+        return {"ok": False, "step": "upsert_notice", "error": repr(e)}
+    return {"ok": True, "notice_id": nid, "downloads": [], "index": {"indexed": 0, "errors": 0}, "skipped_docs": True}
 def _ai_summarize(text: str, system: str = "Summarize for a GovCon capture team. Be concise.") -> str:
     """
     Tries OpenAI if configured. Falls back to extractive summary.
@@ -5124,47 +5030,3 @@ def _simple_qa(texts: list[str], question: str) -> str:
         return "\n\n".join(hits[:5])[:2000]
     # fallback
     return _ai_summarize("\n\n".join(texts)[:12000], system="Answer the user's question from the provided text.")
-def render_sam_quickview(conn: sqlite3.Connection) -> None:
-    import streamlit as st
-    from contextlib import closing
-    nid = st.session_state.get("sam_quickview_notice_id")
-    if not st.session_state.get("sam_quickview_open") or not nid:
-        return
-    with st.sidebar:
-        st.markdown("### Ask RFP Analyzer")
-        st.caption(f"Notice: {nid}")
-        try:
-            with closing(conn.cursor()) as cur:
-                row = cur.execute(
-                    "SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status "
-                    "FROM sam_notices WHERE notice_id=?", (nid,)
-                ).fetchone()
-        except Exception as _e:
-            row = None
-            st.caption(f"Quickview DB error: {_e}")
-        if row:
-            keys = ["Title","Agency","Office","NAICS","PSC","Set-Aside","State","City","Posted","Due","Status"]
-            st.write("\n".join(f"{k}: {v or ''}" for k,v in zip(keys,row)))
-        try:
-            with closing(conn.cursor()) as cur:
-                docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
-        except Exception:
-            docs = []
-        if docs:
-            st.markdown("**Documents**")
-            for did, fn in docs:
-                c1, c2 = st.columns([3,1])
-                c1.write(fn or f"doc {did}")
-                if c2.button("Summarize", key=f"sum_doc_{did}"):
-                    try:
-                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require text indexing."
-                    except Exception as e:
-                        ds = f"Summary error: {e}"
-                    st.session_state["sam_quickview_doc_summary"] = ds
-        ds = st.session_state.get("sam_quickview_doc_summary")
-        if ds:
-            st.markdown("**Document Summary**")
-            st.write(ds)
-        if st.button("Close", key="qv_close"):
-            st.session_state["sam_quickview_open"] = False
-            st.session_state["sam_quickview_notice_id"] = ""
