@@ -1,400 +1,86 @@
-from __future__ import annotations
-
-
-# ===== Option A utilities and schema =====
-def samx_extract_notice_id(val: str) -> str:
-    import re as _re
-    s = str(val or "").strip()
-    m = _re.search(r"([0-9a-fA-F]{32})", s)
-    return m.group(1).lower() if m else ""
-
-def _safe_write(msg: str) -> None:
-    try:
-        import streamlit as st
-        st.write(msg)
-    except Exception:
-        print(msg)
-
-def ensure_docs_schema(conn):
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notice_docs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                notice_id TEXT NOT NULL,
-                sha256 TEXT NOT NULL,
-                filename TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                mime TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'manual',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(notice_id, sha256)
-            );
-            """
-        )
-        conn.commit()
-
-def _doc_store_dir(notice_id: str) -> str:
-    import os
-    base = os.environ.get("DOC_STORE_DIR", "data/docs")
-    path = os.path.join(base, notice_id)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-def _sha256_bytes(data: bytes) -> str:
-    import hashlib as _h
-    h = _h.sha256(); h.update(data); return h.hexdigest()
-
-def save_uploaded_doc(conn, notice_id: str, file) -> dict:
-    ensure_docs_schema(conn)
-    raw = file.read()
-    sha = _sha256_bytes(raw)
-    fname = getattr(file, "name", "upload.bin")
-    mime = getattr(file, "type", "application/octet-stream") or "application/octet-stream"
-    size = len(raw)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT 1 FROM notice_docs WHERE notice_id=? AND sha256=?", (notice_id, sha))
-        if cur.fetchone():
-            return {"ok": True, "dedup": True, "sha256": sha, "filename": fname, "size": size, "mime": mime}
-    import os
-    path = os.path.join(_doc_store_dir(notice_id), f"{sha[:12]}__{fname}")
-    with open(path, "wb") as f: f.write(raw)
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT OR IGNORE INTO notice_docs(notice_id, sha256, filename, size, mime, source) VALUES(?,?,?,?,?,?)",
-            (notice_id, sha, fname, size, mime, "manual"),
-        )
-        conn.commit()
-    return {"ok": True, "sha256": sha, "filename": fname, "size": size, "mime": mime, "path": path}
-
-def list_notice_docs(conn, notice_id: str):
-    ensure_docs_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "SELECT sha256, filename, size, mime, created_at FROM notice_docs WHERE notice_id=? ORDER BY created_at DESC",
-            (notice_id,),
-        )
-        rows = cur.fetchall()
-    return [{"sha256": r[0], "filename": r[1], "size": r[2], "mime": r[3], "created_at": r[4]} for r in rows]
-# ===== End Option A block =====
-
-
-
-# ---- Phase X: base ingest + rerun gate ----
-try:
-    _INGEST_BASE = samx_ingest_notice_by_id  # concrete ingest
-except NameError:  # fallback if not defined yet
-    def _INGEST_BASE(conn, client, qid):
-        return {"ok": False, "step": "ingest_call", "error": "samx_ingest_notice_by_id missing"}
-
-def _rerun_once(tag: str) -> None:
-    import streamlit as st
-    k = "_last_rerun_tag"
-    if st.session_state.get(k) == tag:
-        return
-    st.session_state[k] = tag
-    try:
-        st.rerun()
-    except Exception:
-        pass
-# -------------------------------------------
-
-
-import streamlit as st
-
-# ==== Streamlit safe shims ====
-def _st_safe_writer():
-    import streamlit as st
-    def _mk(name):
-        fn = getattr(st, name, None)
-        if not callable(fn):
-            try:
-                import streamlit as _s
-                real = getattr(_s, name, None)
-                if callable(real):
-                    setattr(st, name, real)
-                    return real
-            except Exception:
-                pass
-            def _noop(*a, **k):
-                try:
-                    print(f"st.{name}:", a[0] if a else "")
-                except Exception:
-                    pass
-            setattr(st, name, _noop)
-            return _noop
-        return fn
-    return {
-        "warning": _mk("warning"),
-        "caption": _mk("caption"),
-        "info": _mk("info"),
-        "write": _mk("write"),
-        "text": _mk("text"),
-    }
-_ST = _st_safe_writer()
-# =================================
-# Repair shadowed Streamlit callables if any
-def _st_repair_callables():
-    try:
-        import streamlit as _st
-        _mod = __import__("streamlit")
-        for _n in ("caption", "warning", "info", "write", "text"):
-            _v = getattr(_st, _n, None)
-            if not callable(_v):
-                try:
-                    _fn = getattr(_mod, _n, None)
-                    if callable(_fn):
-                        setattr(_st, _n, _fn)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-_st_repair_callables()
-
-def _do_ingest_open_qv_core(conn, client, qid):
-    import streamlit as st
-    try:
-        _res = _INGEST_BASE(conn, client, qid)
-    except Exception as _e:
-        try:
-            import traceback as tb
-            msg = "".join(tb.format_exception(type(_e), _e, _e.__traceback__))
-        except Exception:
-            msg = repr(_e)
-        print("Ingest exception:\n" + msg[-4000:])
-        return {"ok": False, "step": "ingest_call", "error": msg}
-
-    if _res.get("ok"):
-        st.session_state["sam_quickview_open"] = True
-        st.session_state["sam_quickview_notice_id"] = qid
-        return _res
-
-    if str(_res.get("error")) == "404":
-        try:
-            st.write("Partial ingest from search. Attachments not pulled.")
-        except Exception:
-            print("Partial ingest from search. Attachments not pulled.")
-        st.session_state["sam_quickview_open"] = True
-        st.session_state["sam_quickview_notice_id"] = qid
-        _rerun_once(f"qv:{qid}")
-        return _res
-
-    try:
-        st.write(f"Fetch issue: {_res}")
-    except Exception:
-        print(f"Fetch issue: {_res}")
-    return _res
-
-def _do_ingest_open_qv_core(conn, client, qid):
-    import streamlit as st
-    try:
-        _res = _do_ingest_open_qv_core(conn, client, qid)
-    except Exception as _e:
-        _safe_write(f"Ingest exception: {_e}")
-        return {"ok": False, "step": "ingest_call", "error": repr(_e)}
-    if _res.get("ok"):
-        st.session_state["sam_quickview_open"] = True
-        st.session_state["sam_quickview_notice_id"] = qid
-        return _res
-    if str(_res.get("error")) == "404":
-        _safe_write("Partial ingest from search. Attachments not pulled.")
-        st.session_state["sam_quickview_open"] = True
-        st.session_state["sam_quickview_notice_id"] = qid
-        try:
-            _rerun_once("px")
-        except Exception:
-            pass
-        return _res
-    # other errors
-    _safe_write(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
-    return _res
-
-# --- Early shim to ensure Quickview renderer exists before UI code ---
-RENDER_QV_EARLY = True
-def render_sam_quickview(conn):
-    import streamlit as st
-    from contextlib import closing as _closing
-    seq = st.session_state.get("_qv_render_seq", 0) + 1
-    st.session_state["_qv_render_seq"] = seq
-    nid = st.session_state.get("sam_quickview_notice_id")
-    if not st.session_state.get("sam_quickview_open") or not nid:
-        return
-    with st.sidebar:
-        st.markdown("### Ask RFP Analyzer")
-        _safe_write(f"Notice: {nid}")
-        # Header
-        try:
-            with _closing(conn.cursor()) as cur:
-                cur.execute("SELECT title, agency, posted_date, due_date, url FROM sam_notices WHERE notice_id=?;", (str(nid).lower(),))
-                row = cur.fetchone()
-            if row:
-                t, a, p, d, url = [x or "" for x in row]
-                st.write(f"**{t}**")
-                _safe_write(" | ".join(filter(None, [f"Agency: {a}", f"Posted: {p}", f"Due: {d}"])))
-                if url:
-                    st.markdown(f"[Open in SAM]({url})")
-        except Exception as _e:
-            _safe_write(f"Quickview DB error: {_e}")
-
-        # Attachments panel (Option A)
-        try:
-            docs = list_notice_docs(conn, str(nid).lower())
-            if docs:
-                st.markdown("**Attachments (manual)**")
-                for d in docs:
-                    name = d.get("filename") or d.get("sha256", "")[:12]
-                    size = d.get("size") or 0
-                    mime = d.get("mime") or ""
-                    _safe_write(f"- {name} ({size} bytes) {mime}")
-            up = st.file_uploader("Add attachment", key=f"qv_up_{nid}_{seq}", accept_multiple_files=True)
-            if up:
-                for f in up:
-                    try:
-                        res = save_uploaded_doc(conn, str(nid).lower(), f)
-                        if res.get("ok"):
-                            _safe_write(f"Saved {res.get('filename')}")
-                    except Exception as _e:
-                        _safe_write(f"Upload failed: {_e}")
-        except Exception as _e:
-            _safe_write(f"Attachments panel error: {_e}")
-
-        if st.button("Close", key=f"qv_close_{nid}_{seq}"):
-            st.session_state["sam_quickview_open"] = False
-            st.session_state["sam_quickview_notice_id"] = ""
-def samx_extract_notice_id(val: str) -> str:
-    """Return 32-hex notice id from raw id or any SAM URL variant."""
-    import re as _re
-    s = str(val or "").strip()
-    m = _re.search(r"([0-9a-fA-F]{32})", s)
-    return m.group(1).lower() if m else ""
-
-import os
-import sqlite3
 from contextlib import closing
-from typing import Optional, Any, Dict, List, Tuple
-from pathlib import Path
 from datetime import datetime, timedelta
-
-def _safe_rerun(tag: str) -> None:
-    import streamlit as st
-    k = "_last_rerun_tag"
-    if st.session_state.get(k) == tag:
-        return
-    st.session_state[k] = tag
-    try:
-        st.rerun()
-    except Exception:
-        pass
-
-def ensure_sam_schema(conn: sqlite3.Connection) -> None:
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS sam_notices (
-            notice_id TEXT PRIMARY KEY,
-            title TEXT,
-            agency TEXT,
-            office TEXT,
-            naics TEXT,
-            psc TEXT,
-            set_aside TEXT,
-            place_state TEXT,
-            place_city TEXT,
-            pop_zip TEXT,
-            posted_date TEXT,
-            due_date TEXT,
-            status TEXT,
-            url TEXT,
-            raw_json TEXT,
-            first_seen TEXT,
-            last_seen TEXT,
-            inactive INTEGER DEFAULT 0
-        )""")
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sam_notices_id ON sam_notices(notice_id)")
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS sam_docs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            notice_id TEXT,
-            url TEXT,
-            filename TEXT,
-            sha256 TEXT,
-            size INTEGER,
-            mime TEXT,
-            fetched_at TEXT,
-            text_indexed INTEGER DEFAULT 0,
-            error TEXT,
-            local_path TEXT,
-            UNIQUE (notice_id, url)
-        )""")
-        conn.commit()
-
-import pandas as pd
+from pathlib import Path
+from typing import Optional, Any, Dict, List, Tuple
 import io
+import json
+import os
+import re
+import sqlite3
+
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import pandas as pd
+import requests
+import smtplib
 import streamlit as st
-
-
-def feature_flag(name: str, default: bool=False) -> bool:
-    try:
-        import os as _os
-        env_key = f"FEATURE_{name.upper()}"
-        if env_key in _os.environ:
-            v = _os.environ[env_key]
-            if isinstance(v, str):
-                return v.lower() in {"1","true","yes","on"}
-            return bool(v)
-    except Exception:
-        pass
-    try:
-        import streamlit as _st
-        sec = _st.secrets.get("features", {})
-        if isinstance(sec, dict) and name in sec:
-            v = sec.get(name)
-            if isinstance(v, str):
-                return v.lower() in {"1","true","yes","on"}
-            return bool(v)
-    except Exception:
-        pass
-    return bool(default)
 
 # Phase X unified settings
 from types import SimpleNamespace as _NS
-import os as _os_x
 
-def _getenv_int(name: str, default: int) -> int:
+def getenv_int(name: str, default: int) -> int:
     try:
-        return int(_os_x.environ.get(name, default))
+        return int(os.environ.get(name, default))
     except Exception:
         return default
 
 SETTINGS = _NS(
-    APP_NAME=_os_x.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
-    APP_VERSION=_os_x.environ.get("ELA_APP_VERSION", "X-Base"),
-    DATA_DIR=_os_x.environ.get("ELA_DATA_DIR", "data"),
-    UPLOADS_SUBDIR=_os_x.environ.get("ELA_UPLOADS_SUBDIR", "uploads"),
-    DEFAULT_PAGE_SIZE=_getenv_int("ELA_PAGE_SIZE", 50),
+    APP_NAME=os.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
+    APP_VERSION=os.environ.get("ELA_APP_VERSION", "X-Base"),
+    DATA_DIR=os.environ.get("ELA_DATA_DIR", "data"),
+    UPLOADS_SUBDIR=os.environ.get("ELA_UPLOADS_SUBDIR", "uploads"),
+    DEFAULT_PAGE_SIZE=getenv_int("ELA_PAGE_SIZE", 50),
 )
-SETTINGS.UPLOADS_DIR = _os_x.path.join(SETTINGS.DATA_DIR, SETTINGS.UPLOADS_SUBDIR)
+
+SETTINGS.UPLOADS_DIR = os.path.join(SETTINGS.DATA_DIR, SETTINGS.UPLOADS_SUBDIR)
+
+# Ensure directories exist
 try:
-    _os_x.makedirs(SETTINGS.DATA_DIR, exist_ok=True)
-    _os_x.makedirs(SETTINGS.UPLOADS_DIR, exist_ok=True)
+    os.makedirs(SETTINGS.DATA_DIR, exist_ok=True)
+    os.makedirs(SETTINGS.UPLOADS_DIR, exist_ok=True)
 except Exception:
     pass
+
+# Back-compat constants
 DATA_DIR = SETTINGS.DATA_DIR
 UPLOADS_DIR = SETTINGS.UPLOADS_DIR
+
+# Feature flag alias
 def flag(name: str, default: bool=False) -> bool:
     return feature_flag(name, default)
 
+def feature_flag(name: str, default: bool=False) -> bool:
+    """
+    Read a feature flag from environment or Streamlit secrets.
+    Precedence: os.environ["FEATURE_<NAME>"] then st.secrets["features"][name] then default.
+    Does not raise if Streamlit is absent.
+    """
+    val = None
+    try:
+        import os as _os
+        env_key = f"FEATURE_{name.upper()}"
+        if env_key in _os.environ:
+            val = _os.environ[env_key]
+    except Exception:
+        pass
+    if val is None:
+        try:
+            import streamlit as _st  # type: ignore
+            sec = _st.secrets.get("features", {})
+            if isinstance(sec, dict) and name in sec:
+                val = sec.get(name)
+        except Exception:
+            pass
+    if isinstance(val, str):
+        return val.lower() in {"1","true","yes","on"}
+    if isinstance(val, bool):
+        return val
+    return bool(val) if val is not None else bool(default)
+
+
 # External
-import requests
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-import json
 
 
 APP_TITLE = "ELA GovCon Suite"
@@ -499,7 +185,21 @@ def get_db() -> sqlite3.Connection:
                 section TEXT,
                 content TEXT
             );
-        """)
+        
+
+-- Phase X1 (Ingest core)
+CREATE TABLE IF NOT EXISTS rfp_files(
+    id INTEGER PRIMARY KEY,
+    rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
+    filename TEXT,
+    mime TEXT,
+    sha256 TEXT UNIQUE,
+    pages INTEGER,
+    bytes BLOB,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rfp_files_rfp ON rfp_files(rfp_id);
+""")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS lm_items(
                 id INTEGER PRIMARY KEY,
@@ -1060,7 +760,145 @@ def extract_text_from_file(path: str) -> str:
         return ''
 
 
-import re
+# ---------------------- Phase X1: Ingest helpers (feature-flag: x_ingest) ----------------------
+def compute_sha256(b: bytes) -> str:
+    try:
+        return hashlib.sha256(b).hexdigest()
+    except Exception:
+        import hashlib as _h
+        return _h.sha256(b or b"").hexdigest()
+
+def _detect_mime_light(name: str) -> str:
+    n = (name or "").lower()
+    if n.endswith(".pdf"): return "application/pdf"
+    if n.endswith(".docx"): return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if n.endswith(".xlsx"): return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if n.endswith(".txt"): return "text/plain"
+    return "application/octet-stream"
+
+def _tesseract_ok() -> bool:
+    try:
+        import pytesseract  # type: ignore
+        return True
+    except Exception:
+        return False
+
+def extract_text_pages(file_bytes: bytes, mime: str) -> list:
+    """Return a list of page texts. Best-effort. Up to 100 pages to keep fast."""
+    out = []
+    m = (mime or "").lower()
+    if "pdf" in m:
+        try:
+            import pdfplumber  # type: ignore
+            import io as _io
+            with pdfplumber.open(_io.BytesIO(file_bytes)) as pdf:
+                for i, pg in enumerate(pdf.pages[:100]):
+                    try:
+                        txt = pg.extract_text() or ""
+                    except Exception:
+                        txt = ""
+                    out.append(txt)
+        except Exception:
+            try:
+                import PyPDF2  # type: ignore
+                import io as _io
+                reader = PyPDF2.PdfReader(_io.BytesIO(file_bytes))
+                for i, p in enumerate(reader.pages[:100]):
+                    try:
+                        out.append(p.extract_text() or "")
+                    except Exception:
+                        out.append("")
+            except Exception:
+                pass
+    elif "wordprocessingml" in m or (mime == "" and file_bytes[:4] == b"PK\x03\x04"):
+        try:
+            import io as _io, docx  # type: ignore
+            doc = docx.Document(_io.BytesIO(file_bytes))
+            txt = "\n".join(p.text or "" for p in doc.paragraphs)
+            out = [txt] if txt else []
+        except Exception:
+            out = []
+    elif "spreadsheetml" in m:
+        try:
+            import io as _io, pandas as _pd  # type: ignore
+            # Read each sheet as TSV-like text. Treat each sheet as a page.
+            x = _pd.read_excel(_io.BytesIO(file_bytes), sheet_name=None, dtype=str)
+            for sname, df in list(x.items())[:10]:
+                txt = sname + "\n" + df.fillna("").astype(str).to_csv(sep="\t", index=False)
+                out.append(txt)
+        except Exception:
+            out = []
+    elif "text/plain" in m:
+        try:
+            out = [file_bytes.decode("utf-8", errors="ignore")]
+        except Exception:
+            out = [file_bytes.decode("latin-1", errors="ignore")]
+    return out
+
+def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
+    """Run OCR on empty PDF pages if pytesseract available. Returns (new_pages, ocr_count)."""
+    if "pdf" not in (mime or "").lower():
+        return pages_text, 0
+    if not _tesseract_ok():
+        return pages_text, 0
+    try:
+        import io as _io, pdfplumber  # type: ignore
+        import pytesseract  # type: ignore
+        from PIL import Image  # type: ignore
+        new_pages = list(pages_text)
+        ocr_count = 0
+        with pdfplumber.open(_io.BytesIO(file_bytes)) as pdf:
+            for i, pg in enumerate(pdf.pages[:min(len(new_pages) or 100, 100)]):
+                if i >= len(new_pages): new_pages.append("")
+                if (new_pages[i] or "").strip():
+                    continue
+                try:
+                    img = pg.to_image(resolution=200).original
+                    if img is None:
+                        continue
+                    if not isinstance(img, Image.Image):
+                        img = Image.fromarray(img)
+                    txt = pytesseract.image_to_string(img) or ""
+                    if txt.strip():
+                        new_pages[i] = txt
+                        ocr_count += 1
+                except Exception:
+                    pass
+        return new_pages, ocr_count
+    except Exception:
+        return pages_text, 0
+
+def save_rfp_file_db(conn: sqlite3.Connection, rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
+    """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
+    mime = _detect_mime_light(name)
+    sha = compute_sha256(file_bytes)
+    with closing(conn.cursor()) as cur:
+        # Dedup
+        cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+        row = cur.fetchone()
+        if row:
+            rid = int(row[0]); pages = int(row[1]) if row[1] is not None else None
+            # if not linked to RFP yet, link now
+            if rfp_id is not None:
+                try:
+                    cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+                    conn.commit()
+                except Exception:
+                    pass
+            return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
+        # New insert
+        pages_text = extract_text_pages(file_bytes, mime)
+        pages_before = len(pages_text)
+        pages_text, ocr_count = ocr_pages_if_empty(file_bytes, mime, pages_text)
+        pages = len(pages_text) if pages_text else None
+        cur.execute(
+            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+            (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+        )
+        rid = cur.lastrowid
+        conn.commit()
+        return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+
 def extract_sections_L_M(text: str) -> dict:
     out = {}
     if not text:
@@ -1243,14 +1081,8 @@ def run_deals(conn: sqlite3.Connection) -> None:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
-    import streamlit as st
-    if st.session_state.get('sam_quickview_open') and st.session_state.get('sam_quickview_notice_id'):
-        try:
-            render_sam_quickview(conn)
-        except Exception as _e:
-            st.sidebar.caption(f'Quickview render error: {_e}')
     st.header("SAM Watch")
-    _safe_write("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
+    st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
     api_key = get_sam_api_key()
 
@@ -1367,118 +1199,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         st.success(f"Fetched {len(results_df)} notices")
 
     if (results_df is None or results_df.empty) and not run:
-        _safe_write("Set filters and click Run Search")
+        st.info("Set filters and click Run Search")
 
     if results_df is not None and not results_df.empty:
         st.dataframe(results_df, use_container_width=True, hide_index=True)
         titles = [f"{row['Title']} [{row.get('Solicitation') or '—'}]" for _, row in results_df.iterrows()]
         idx = st.selectbox("Select a notice", options=list(range(len(titles))), format_func=lambda i: titles[i])
         row = results_df.iloc[idx]
-
-        # --- SAM Watch Actions ---
-        qid = ""
-        try:
-            qid = str(row.get("Notice ID") or "").strip()
-        except Exception:
-            qid = ""
-        if not qid:
-            import re as _re
-            _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
-            qid = _m.group(1) if _m else ""
-        c1, c2 = st.columns([1,1])
-        with c1:
-            if st.button("Quickview", key=f"qv_open_btn_{qid}"):
-                st.session_state['sam_quickview_open'] = True
-                st.session_state['sam_quickview_notice_id'] = qid
-                try:
-                    _rerun_once("px")
-                except Exception:
-                    pass
-
-                st.session_state['sam_quickview_open'] = True
-                st.session_state['sam_quickview_notice_id'] = qid
-                try:
-                    _rerun_once("px")
-                except Exception:
-                    pass
-
-                st.session_state['sam_quickview_open'] = True
-                st.session_state['sam_quickview_notice_id'] = qid
-                try:
-                    _safe_rerun(f"qv_open:{qid}")
-                except Exception:
-                    pass
-                import sys
-                _fn = globals().get('render_sam_quickview') or getattr(sys.modules.get('__main__'), 'render_sam_quickview', None)
-                if callable(_fn):
-                    try:
-                        _fn(conn)
-                    except Exception as _e:
-                        try:
-                            st.write(f"Quickview render error: {_e}")
-                        except Exception:
-                            print(f"Quickview render error: {_e}")
-                st.session_state["sam_quickview_open"] = True
-                st.session_state["sam_quickview_notice_id"] = qid
-                try:
-                    _safe_rerun(f"qv_open:{qid}")
-                except Exception:
-                    pass
-        with c2:
-            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
-                try:
-                    from importlib import import_module as _imp
-                    _SamX = globals().get("SamXClient")
-                    if _SamX is None:
-                        try:
-                            _SamX = _imp("app").SamXClient
-                        except Exception:
-                            _SamX = None
-                    client = _SamX.from_env() if _SamX else None
-                    if not client:
-                        st.error("SamXClient missing. Set SAM_API_KEY.")
-                    else:
-                        import sys
-                        _mod = sys.modules.get("__main__")
-                        _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
-                        if _ingest is None:
-                            try:
-                                _ingest = _imp("app").samx_ingest_notice_by_id
-                            except Exception:
-                                _ingest = globals().get("samx_ingest_notice_by_id")
-                        if not _ingest:
-                            st.error("Ingest function missing.")
-                        else:
-                            _res = _do_ingest_open_qv(conn, client, qid)
-                            if _res.get("ok"):
-                                st.success("Details pulled")
-                                st.session_state["sam_quickview_open"] = True
-                                st.session_state["sam_quickview_notice_id"] = qid
-                                try:
-                                    _safe_rerun(f"ingested:{qid}")
-                                except Exception:
-                                    pass
-                            else:
-                                if str(_res.get("error")) == "404":
-                                    _safe_write("Partial ingest from search. Attachments not pulled.")
-                                else:
-                                    _safe_write(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
-                except Exception as _e:
-                    import traceback
-                    st.exception(_e)
-        import sys
-        import sys
-        _fn = globals().get('render_sam_quickview') or getattr(sys.modules.get('__main__'), 'render_sam_quickview', None)
-        if callable(_fn):
-            try:
-                _fn(conn)
-            except Exception as _e:
-                try:
-                    st.write(f"Quickview render error: {_e}")
-                except Exception:
-                    print(f"Quickview render error: {_e}")
-        else:
-            _safe_write("Quickview render missing (no function)")
 
         with st.expander("Opportunity Details", expanded=True):
             c1, c2 = st.columns([3, 2])
@@ -1529,7 +1256,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.session_state["rfp_selected_notice"] = row.to_dict()
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
-            _safe_write("Use Open in SAM for attachments and full details")
+            st.caption("Use Open in SAM for attachments and full details")
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
@@ -1607,11 +1334,42 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         return ""
 # ---------------- PARSE & SAVE ----------------
     with tab_parse:
+
+# --- X1 Ingest: File Library + Health ---
+if flag('x_ingest', False):
+    with st.expander("X1 Ingest: File Library + Health", expanded=False):
+        st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available.")
+        ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
+        link_to_rfp = st.checkbox("Link ingested files to a new RFP record created below (if any)", value=True)
+        if st.button("Ingest Files", key="x1_ingest_btn"):
+            if not ing_files:
+                st.warning("No files selected")
+            else:
+                rows = []
+                for f in ing_files:
+                    try:
+                        b = f.getbuffer().tobytes()
+                    except Exception:
+                        b = f.read()
+                    rec = save_rfp_file_db(conn, None, f.name, b)
+                    rows.append({
+                        "Filename": rec["filename"],
+                        "SHA256": rec["sha256"][:12],
+                        "MIME": rec["mime"],
+                        "Pages": rec["pages"],
+                        "OCR pages": rec.get("ocr_pages", 0),
+                        "Dedup?": "Yes" if rec.get("dedup") else "No",
+                        "rfp_file_id": rec["id"],
+                    })
+                import pandas as _pd
+                df_ing = _pd.DataFrame(rows)
+                st.dataframe(df_ing, use_container_width=True, hide_index=True)
+                st.success(f"Ingested {len(rows)} file(s).")
         colA, colB = st.columns([3,2])
         with colA:
             ups = st.file_uploader(
                 "Upload RFP(s) (PDF/DOCX/TXT)",
-                type=["pdf","docx","txt"],
+                type=["pdf","docx","xlsx","txt"],
                 accept_multiple_files=True,
                 key="rfp_ups"
             )
@@ -1624,7 +1382,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         with colB:
             st.markdown("**Parse Controls**")
             run = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
-            _safe_write("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
+            st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
             name = file.name.lower()
@@ -1636,21 +1394,19 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".pdf"):
                 try:
-                    import PyPDF2  # type: ignore
                     reader = PyPDF2.PdfReader(io.BytesIO(data))
                     pages = [(p.extract_text() or "") for p in reader.pages]
                     return "\\n".join(pages)
                 except Exception as e:
-                    _safe_write(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
+                    st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".docx"):
                 try:
-                    import docx  # python-docx
                     f = io.BytesIO(data)
                     doc = docx.Document(f)
                     return "\\n".join([p.text for p in doc.paragraphs])
                 except Exception as e:
-                    _safe_write(f"DOCX parse failed for {file.name}: {e}.")
+                    st.warning(f"DOCX parse failed for {file.name}: {e}.")
                     return ""
             st.error(f"Unsupported file type: {file.name}")
             return ""
@@ -1738,11 +1494,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_checklist:
         df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
-            _safe_write("No RFPs yet. Parse one on the first tab.")
+            st.info("No RFPs yet. Parse one on the first tab.")
         else:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
-            _safe_write(f"{len(df_lm)} checklist items")
+            st.caption(f"{len(df_lm)} checklist items")
             # Inline status editor
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
             new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
@@ -1766,7 +1522,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_data:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
-            _safe_write("No RFPs yet.")
+            st.info("No RFPs yet.")
             return
         rid = st.selectbox(
             "RFP for data views",
@@ -2027,21 +1783,21 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             st.error(f"Failed to load RFPs: {e}")
             return
         if df_rf.empty:
-            _safe_write("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
+            st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
             return
         opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(),
                            format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
         st.session_state['current_rfp_id'] = rfp_id
 
-    _safe_write(f"Working RFP ID: {rfp_id}")
+    st.caption(f"Working RFP ID: {rfp_id}")
     try:
         df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
         return
     if df_items.empty:
-        _safe_write("No L/M items found for this RFP.")
+        st.info("No L/M items found for this RFP.")
         return
 
     pct = _compliance_progress(df_items)
@@ -2095,7 +1851,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     st.subheader("Compliance Matrix")
     df_mx = _load_compliance_matrix(conn, int(rfp_id))
     if df_mx.empty:
-        _safe_write("No items to show.")
+        st.info("No items to show.")
         return
 
     view = df_mx.rename(columns={
@@ -2234,7 +1990,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
-        _safe_write("No RFP context found. Use RFP Analyzer first to parse and save.")
+        st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
     rfp_id = st.selectbox(
         "RFP context",
@@ -2270,11 +2026,11 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         if not items.empty:
             st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
-            _safe_write("No checklist items found for this RFP")
+            st.caption("No checklist items found for this RFP")
 
         total_words = sum(len((content_map.get(k) or "").split()) for k in selected)
         est_pages = _estimate_pages(total_words, spacing)
-        _safe_write(f"Current word count {total_words}  Estimated pages {est_pages}")
+        st.info(f"Current word count {total_words}  Estimated pages {est_pages}")
         if est_pages > page_limit:
             st.error("Content likely exceeds page limit. Consider trimming or tighter formatting")
 
@@ -2304,7 +2060,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
 # ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
-    _safe_write("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
+    st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
     ctx = st.session_state.get("rfp_selected_notice", {})
     default_naics = ctx.get("NAICS") or ""
@@ -2320,10 +2076,10 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
             f_city = st.text_input("City contains", key="filter_city")
         with c4:
             f_kw = st.text_input("Keyword in name/notes", key="filter_kw")
-        _safe_write("Use CSV import or add vendors manually. Internet seeding can be added later.")
+        st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
     with st.expander("Import Vendors (CSV)", expanded=False):
-        _safe_write("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
+        st.caption("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
         up = st.file_uploader("Upload vendor CSV", type=["csv"], key="vendor_csv")
         if up and st.button("Import CSV"):
             try:
@@ -2430,7 +2186,7 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 st.session_state['rfq_vendor_ids'] = selected_ids
                 st.success(f"Queued {len(selected_ids)} vendors for Outreach")
         with c2:
-            _safe_write("Selections are stored in session and available in Outreach tab")
+            st.caption("Selections are stored in session and available in Outreach tab")
 
 
 # ---------- Outreach (Phase D) ----------
@@ -2507,7 +2263,7 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 def run_outreach(conn: sqlite3.Connection) -> None:
     st.header("Outreach")
-    _safe_write("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
+    st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
     notice = st.session_state.get("rfp_selected_notice", {})
     vendor_ids: List[int] = st.session_state.get("rfq_vendor_ids", [])
@@ -2520,7 +2276,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             params=vendor_ids,
         )
     else:
-        _safe_write("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
+        st.info("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
         f_naics = st.text_input("NAICS filter")
         f_state = st.text_input("State filter")
         q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
@@ -2569,7 +2325,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     with c1:
         if st.button("Preview first merge"):
             v0 = df_sel.iloc[0].to_dict()
-            _safe_write(f"Subject → {_merge_text(subj, v0, notice)}")
+            st.info(f"Subject → {_merge_text(subj, v0, notice)}")
             st.write(_merge_text(body, v0, notice), unsafe_allow_html=True)
     with c2:
         if st.button("Export recipients CSV"):
@@ -2620,13 +2376,13 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.header("Quote Comparison")
     df = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
-        _safe_write("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
+        st.info("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0] or 'Untitled'}")
 
     st.subheader("Upload / Add Quotes")
     with st.expander("CSV Import", expanded=False):
-        _safe_write("Columns: vendor, clin, qty, unit_price, description (optional). One row = one CLIN line.")
+        st.caption("Columns: vendor, clin, qty, unit_price, description (optional). One row = one CLIN line.")
         up = st.file_uploader("Quotes CSV", type=["csv"], key="quotes_csv")
         if up and st.button("Import Quotes CSV"):
             try:
@@ -2707,7 +2463,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
         WHERE q.rfp_id=?
     """, conn, params=(rfp_id,))
     if df_lines.empty:
-        _safe_write("No quote lines yet.")
+        st.info("No quote lines yet.")
         return
 
     mat = df_lines.pivot_table(index="clin", columns="vendor", values="extended_price", aggfunc="sum").fillna(0.0)
@@ -2715,7 +2471,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.dataframe(mat.style.format("{:,.2f}"), use_container_width=True)
 
     best_vendor_by_clin = mat.replace(0, float("inf")).idxmin(axis=1).to_frame("Best Vendor")
-    _safe_write("Best vendor per CLIN")
+    st.caption("Best vendor per CLIN")
     st.dataframe(best_vendor_by_clin, use_container_width=True, hide_index=False)
 
     totals = df_lines.groupby("vendor")["extended_price"].sum().to_frame("Total").sort_values("Total")
@@ -2769,7 +2525,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
     st.header("Pricing Calculator")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
-        _safe_write("No RFP context. Use RFP Analyzer (parse & save) first.")
+        st.info("No RFP context. Use RFP Analyzer (parse & save) first.")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0]}")
 
@@ -2799,7 +2555,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
         return
     else:
         if df_sc.empty:
-            _safe_write("No scenarios yet. Switch to 'Create new'.")
+            st.info("No scenarios yet. Switch to 'Create new'.")
             return
         scenario_id = st.selectbox("Pick a scenario", options=df_sc["id"].tolist(), format_func=lambda sid: df_sc.loc[df_sc["id"]==sid, "name"].values[0])
 
@@ -2849,7 +2605,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
     st.subheader("Summary")
     s = _scenario_summary(conn, int(scenario_id))
     if not s:
-        _safe_write("Add labor/ODCs to see a summary.")
+        st.info("Add labor/ODCs to see a summary.")
         return
     df_sum = pd.DataFrame(list(s.items()), columns=["Component", "Amount"])
     st.dataframe(df_sum.style.format({"Amount": "{:,.2f}"}), use_container_width=True, hide_index=True)
@@ -2889,7 +2645,7 @@ def run_win_probability(conn: sqlite3.Connection) -> None:
     st.header("Win Probability")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
-        _safe_write("No RFP context. Use RFP Analyzer first.")
+        st.info("No RFP context. Use RFP Analyzer first.")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0]}")
 
@@ -3037,7 +2793,7 @@ def _kb_search(conn: sqlite3.Connection, rfp_id: Optional[int], query: str) -> D
 
 def run_chat_assistant(conn: sqlite3.Connection) -> None:
     st.header("Chat Assistant (DB-aware)")
-    _safe_write("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
+    st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     rfp_opt = None
@@ -3048,7 +2804,7 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
     q = st.text_input("Ask a question (e.g., 'When are proposals due?', 'Show POCs', 'Which vendor is lowest?')")
     ask = st.button("Ask", type="primary")
     if not ask:
-        _safe_write("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
+        st.caption("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
         return
 
     res = _kb_search(conn, rfp_opt, q or "")
@@ -3076,13 +2832,13 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
             st.dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
         meta = res.get("meta", {})
         if meta:
-            _safe_write(f"Compliance completion: {meta.get('compliance_pct',0)}%")
+            st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
     if any(w in ql for w in ["quote", "price", "vendor", "lowest"]):
         st.subheader("Quote Totals by Vendor")
         df = res.get("quotes", pd.DataFrame())
         if df is not None and not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
-            _safe_write("Lowest total appears at the top.")
+            st.caption("Lowest total appears at the top.")
 
     # Generic best-matches
     sec = res.get("sections", pd.DataFrame())
@@ -3096,7 +2852,6 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
 # ---------- Phase F: Capability Statement ----------
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
-        from docx import Document  # type: ignore
         from docx.shared import Pt, Inches  # type: ignore
     except Exception:
         st.error("python-docx is required. pip install python-docx")
@@ -3151,7 +2906,7 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
 
 def run_capability_statement(conn: sqlite3.Connection) -> None:
     st.header("Capability Statement")
-    _safe_write("Store your company profile and export a polished 1-page DOCX capability statement.")
+    st.caption("Store your company profile and export a polished 1-page DOCX capability statement.")
 
     # Load existing (id=1)
     df = pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
@@ -3270,7 +3025,6 @@ def _pp_writeup_block(rec: dict) -> str:
 
 def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
-        from docx import Document  # type: ignore
         from docx.shared import Inches  # type: ignore
     except Exception:
         st.error("python-docx is required. pip install python-docx")
@@ -3290,11 +3044,11 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 def run_past_performance(conn: sqlite3.Connection) -> None:
     st.header("Past Performance Library")
-    _safe_write("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
+    st.caption("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
 
     # CSV Import
     with st.expander("Import CSV", expanded=False):
-        _safe_write("Columns: project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes")
+        st.caption("Columns: project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes")
         up = st.file_uploader("Upload CSV", type=["csv"], key="pp_csv")
         if up and st.button("Import", key="pp_do_import"):
             try:
@@ -3395,7 +3149,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         params.append(f"%{f_role}%")
     df = pd.read_sql_query(q + " ORDER BY id DESC;", conn, params=params)
     if df.empty:
-        _safe_write("No projects found.")
+        st.info("No projects found.")
         return
 
     st.subheader("Projects")
@@ -3482,8 +3236,8 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
 
 def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
-        from docx import Document  # type: ignore
-        from docx.shared import Inches  # type: ignore
+        from docx import Document
+        from docx.shared import Inches
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
@@ -3508,7 +3262,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
 
 def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     st.header("White Paper Builder")
-    _safe_write("Templates → Drafts → DOCX export. Can include images per section.")
+    st.caption("Templates → Drafts → DOCX export. Can include images per section.")
 
     # --- Templates ---
     with st.expander("Templates", expanded=False):
@@ -3528,7 +3282,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     st.success("Template saved"); st.rerun()
         with t_col2:
             if df_t.empty:
-                _safe_write("No templates yet.")
+                st.info("No templates yet.")
             else:
                 st.subheader("Edit Template Sections")
                 t_sel = st.selectbox("Choose template", options=df_t["id"].tolist(), format_func=lambda tid: df_t.loc[df_t["id"]==tid, "name"].values[0], key="wp_t_sel")
@@ -3576,7 +3330,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
         d_title = st.text_input("Draft title", key="wp_d_title")
         d_sub = st.text_input("Subtitle (optional)", key="wp_d_sub")
         if df_t.empty:
-            _safe_write("No templates available")
+            st.caption("No templates available")
             t_sel2 = None
         else:
             t_sel2 = st.selectbox("Template", options=[None] + df_t["id"].tolist(),
@@ -3599,7 +3353,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                 st.success("Draft created"); st.rerun()
     with c2:
         if df_p.empty:
-            _safe_write("No drafts yet.")
+            st.info("No drafts yet.")
         else:
             st.markdown("**Open a draft**")
             p_sel = st.selectbox("Draft", options=df_p["id"].tolist(), format_func=lambda pid: df_p.loc[df_p["id"]==pid, "title"].values[0], key="wp_d_sel")
@@ -3627,7 +3381,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
 
         # Section list
         if df_sec.empty:
-            _safe_write("No sections yet.")
+            st.info("No sections yet.")
         else:
             for _, r in df_sec.iterrows():
                 st.markdown(f"**Section #{int(r['position'])}: {r.get('title') or 'Untitled'}**")
@@ -3648,7 +3402,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
                     if st.button("Save image", key=f"wp_sec_img_save_{int(r['id'])}"):
                         if up_img is None:
-                            _safe_write("Choose an image first")
+                            st.warning("Choose an image first")
                         else:
                             img_path = save_uploaded_file(up_img, subdir="whitepapers")
                             with closing(conn.cursor()) as cur:
@@ -3833,7 +3587,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         st.subheader("Weighted Pipeline")
         df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
-            _safe_write("No deals")
+            st.info("No deals")
         else:
             df["prob_%"] = df["status"].apply(_stage_probability)
             df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
@@ -3904,7 +3658,7 @@ def _detect_mime(name: str) -> str:
 def run_file_manager(conn: sqlite3.Connection) -> None:
     _ensure_files_table(conn)
     st.header("File Manager")
-    _safe_write("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
+    st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
 
     # --- Attach uploader ---
     with st.expander("Upload & Attach", expanded=True):
@@ -3938,7 +3692,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         ups = st.file_uploader("Select files", type=None, accept_multiple_files=True, key="fm_files")
         if st.button("Upload", key="fm_upload"):
             if not ups:
-                _safe_write("Pick at least one file")
+                st.warning("Pick at least one file")
             else:
                 saved = 0
                 for f in ups:
@@ -3996,7 +3750,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             for _, r in df_files.iterrows():
                 c1, c2, c3, c4 = st.columns([3,2,2,2])
                 with c1:
-                    _safe_write(f"#{int(r['id'])} — {r['filename']} ({r['owner_type']} {int(r['owner_id']) if r['owner_id'] else ''})")
+                    st.caption(f"#{int(r['id'])} — {r['filename']} ({r['owner_type']} {int(r['owner_id']) if r['owner_id'] else ''})")
                 with c2:
                     new_tags = st.text_input("Tags", value=r.get("tags") or "", key=f"fm_row_tags_{int(r['id'])}")
                 with c3:
@@ -4015,7 +3769,6 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                                 cur.execute("DELETE FROM files_t WHERE id=?;", (int(r["id"]),))
                                 conn.commit()
                             try:
-                                import os
                                 if r.get("path") and os.path.exists(r["path"]):
                                     os.remove(r["path"])
                             except Exception:
@@ -4026,7 +3779,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
     st.subheader("Submission Kit (ZIP)")
     df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf_all.empty:
-        _safe_write("Create an RFP in RFP Analyzer first (Parse → Save).")
+        st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
         return
 
     kit_rfp = st.selectbox("RFP", options=df_rf_all["id"].tolist(),
@@ -4039,7 +3792,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
     except Exception:
         _ensure_files_table(conn)
         df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
-    _safe_write("Select attachments to include")
+    st.caption("Select attachments to include")
     selected = []
     if df_kit.empty:
         st.write("No attachments linked to this RFP yet.")
@@ -4070,7 +3823,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
     if st.button("Build ZIP", type="primary", key="fm_build_zip"):
         if not selected and not gen_paths:
-            _safe_write("Select at least one attachment or generated document.")
+            st.warning("Select at least one attachment or generated document.")
         else:
             # Collect paths
             rows = []
@@ -4130,7 +3883,6 @@ def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
-    from zipfile import ZipFile, ZIP_DEFLATED
     pack = _rfq_pack_by_id(conn, pack_id)
     if not pack: 
         st.error("Pack not found"); return None
@@ -4192,7 +3944,7 @@ def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
 
 def run_rfq_pack(conn: sqlite3.Connection) -> None:
     st.header("RFQ Pack")
-    _safe_write("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
+    st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
 
     # -- Create / open
     left, right = st.columns([2,2])
@@ -4220,7 +3972,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         st.subheader("Open")
         df_pk = pd.read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs_t ORDER BY id DESC;", conn, params=())
         if df_pk.empty:
-            _safe_write("No RFQ packs yet")
+            st.info("No RFQ packs yet")
             return
         pk_sel = st.selectbox("RFQ Pack", options=df_pk["id"].tolist(),
                               format_func=lambda pid: f"#{pid} — {df_pk.loc[df_pk['id']==pid,'title'].values[0]} (due {df_pk.loc[df_pk['id']==pid,'due_date'].values[0] or '—'})",
@@ -4294,7 +4046,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
                             key="rfq_att_file")
     if st.button("Add Attachment", key="rfq_att_add"):
         if add_file is None:
-            _safe_write("Pick a file")
+            st.warning("Pick a file")
         else:
             df_one = pd.read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(add_file),))
             if df_one.empty:
@@ -4310,7 +4062,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         for _, r in df_att.iterrows():
             dc1, dc2 = st.columns([3,1])
             with dc1:
-                _safe_write(f"#{int(r['id'])} — {r['name'] or Path(r['path']).name}")
+                st.caption(f"#{int(r['id'])} — {r['name'] or Path(r['path']).name}")
             with dc2:
                 if st.button("Remove", key=f"rfq_att_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
@@ -4325,7 +4077,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     try:
         df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors_t ORDER BY name;", conn, params=())
     except Exception as e:
-        _safe_write("No vendors table yet. Use Subcontractor Finder to add vendors.")
+        st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
     df_rv = _rfq_vendors(conn, int(pk_sel))
     st.dataframe(df_rv[["name","email","phone"]] if not df_rv.empty else pd.DataFrame(), use_container_width=True, hide_index=True)
@@ -4347,7 +4099,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         for _, r in df_rv.iterrows():
             vc1, vc2 = st.columns([3,1])
             with vc1:
-                _safe_write(f"{r['name']} — {r.get('email') or ''}")
+                st.caption(f"{r['name']} — {r.get('email') or ''}")
             with vc2:
                 if st.button("Remove", key=f"rfq_vendor_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
@@ -4370,7 +4122,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if st.button("Export Vendors Mail-Merge CSV", key="rfq_mail_csv"):
             df_v = _rfq_vendors(conn, int(pk_sel))
             if df_v.empty:
-                _safe_write("No vendors selected")
+                st.warning("No vendors selected")
             else:
                 out = df_v.rename(columns={"name":"VendorName","email":"VendorEmail","phone":"VendorPhone"})[["VendorName","VendorEmail","VendorPhone"]]
                 out["Subject"] = f"Request for Quote – {_rfq_pack_by_id(conn, int(pk_sel)).get('title')}"
@@ -4383,7 +4135,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if st.button("Export CLINs CSV", key="rfq_clins_csv"):
             df = _rfq_lines(conn, int(pk_sel))
             if df.empty:
-                _safe_write("No CLINs yet")
+                st.warning("No CLINs yet")
             else:
                 path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_CLINs.csv")
                 df.to_csv(path, index=False)
@@ -4438,129 +4190,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             cur.execute("UPDATE schema_version SET ver=3 WHERE id=1;")
             conn.commit()
 
-        # v4: SAM X schema
-        if ver < 4:
-            try:
-                cur.execute("""CREATE TABLE IF NOT EXISTS sam_notices(
-                    id INTEGER PRIMARY KEY,
-                    notice_id TEXT NOT NULL UNIQUE,
-                    type TEXT,
-                    title TEXT,
-                    agency TEXT,
-                    office TEXT,
-                    naics TEXT,
-                    psc TEXT,
-                    set_aside TEXT,
-                    place_state TEXT,
-                    place_city TEXT,
-                    pop_zip TEXT,
-                    posted_date TEXT,
-                    due_date TEXT,
-                    status TEXT,
-                    url TEXT,
-                    raw_json TEXT,
-                    first_seen TEXT,
-                    last_seen TEXT,
-                    inactive INTEGER DEFAULT 0
-                );""")
-                cur.execute("""CREATE TABLE IF NOT EXISTS sam_docs(
-                    id INTEGER PRIMARY KEY,
-                    notice_id TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    filename TEXT,
-                    sha256 TEXT,
-                    size INTEGER,
-                    mime TEXT,
-                    fetched_at TEXT,
-                    text_indexed INTEGER DEFAULT 0,
-                    error TEXT,
-                    UNIQUE(notice_id, url)
-                );""")
-                cur.execute("""CREATE TABLE IF NOT EXISTS sam_pocs(
-                    id INTEGER PRIMARY KEY,
-                    notice_id TEXT NOT NULL,
-                    name TEXT,
-                    role TEXT,
-                    email TEXT,
-                    phone TEXT,
-                    office TEXT,
-                    UNIQUE(notice_id, email, phone)
-                );""")
-                cur.execute("""CREATE TABLE IF NOT EXISTS sam_watchlist(
-                    id INTEGER PRIMARY KEY,
-                    user TEXT NOT NULL,
-                    notice_id TEXT NOT NULL,
-                    created_at TEXT,
-                    alert_freq TEXT DEFAULT 'daily',
-                    active INTEGER DEFAULT 1,
-                    UNIQUE(user, notice_id)
-                );""")
-                cur.execute("""CREATE TABLE IF NOT EXISTS sam_changes(
-                    id INTEGER PRIMARY KEY,
-                    notice_id TEXT NOT NULL,
-                    changed_at TEXT NOT NULL,
-                    field TEXT NOT NULL,
-                    old TEXT,
-                    new TEXT
-                );""")
-                cur.execute("""CREATE TABLE IF NOT EXISTS notice_tags(
-                    id INTEGER PRIMARY KEY,
-                    notice_id TEXT NOT NULL,
-                    tag TEXT
-                );""")
-                cur.execute("""CREATE TABLE IF NOT EXISTS notice_cache(
-                    id INTEGER PRIMARY KEY,
-                    query_hash TEXT NOT NULL,
-                    page INTEGER NOT NULL,
-                    created_at TEXT NOT NULL,
-                    results_json TEXT NOT NULL,
-                    UNIQUE(query_hash, page)
-                );""")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_notices_notice_id ON sam_notices(notice_id);")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_notices_due ON sam_notices(due_date);")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_notices_type ON sam_notices(type);")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_docs_notice ON sam_docs(notice_id);")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_notice_cache_q ON notice_cache(query_hash);")
-            except Exception as _e:
-                import streamlit as _st
-                _st.error(f"Migration v4 failed: {_e}")
-                raise
-            cur.execute("UPDATE schema_version SET ver=4 WHERE id=1;")
-            conn.commit()
 
-        # v5: SAM X docs local_path and text table
-        if ver < 5:
-            try:
-                cur.execute("ALTER TABLE sam_docs ADD COLUMN local_path TEXT")
-            except Exception:
-                pass
-            try:
-                cur.execute("""CREATE TABLE IF NOT EXISTS sam_doc_text(
-                    id INTEGER PRIMARY KEY,
-                    doc_id INTEGER NOT NULL,
-                    notice_id TEXT NOT NULL,
-                    sha256 TEXT,
-                    text LONGTEXT
-                );""")
-            except Exception:
-                # SQLite doesn't know LONGTEXT; fall back to TEXT
-                try:
-                    cur.execute("""CREATE TABLE IF NOT EXISTS sam_doc_text(
-                        id INTEGER PRIMARY KEY,
-                        doc_id INTEGER NOT NULL,
-                        notice_id TEXT NOT NULL,
-                        sha256 TEXT,
-                        text TEXT
-                    );""")
-                except Exception:
-                    pass
-            try:
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_doc_text_doc ON sam_doc_text(doc_id)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_doc_text_notice ON sam_doc_text(notice_id)")
-            except Exception:
-                pass
-            cur.execute("UPDATE schema_version SET ver=5 WHERE id=1;")
-            conn.commit()
 
 # ---------- Phase N: Backup & Data ----------
 def _current_tenant(conn: sqlite3.Connection) -> int:
@@ -4605,7 +4235,6 @@ def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
         st.error(f"Could not write uploaded file: {e}")
         return False
     try:
-        import sqlite3 as _sq
         src = _sq.connect(str(tmp))
         dst = _sq.connect(db_path)
         with dst:
@@ -4629,7 +4258,7 @@ def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool
     try:
         df = pd.read_sql_query(f"SELECT * FROM {name};", conn)
         if df.empty:
-            _safe_write("No rows to export.")
+            st.info("No rows to export.")
         path = Path(DATA_DIR) / f"export_{name}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         df.to_csv(path, index=False)
         return str(path)
@@ -4639,7 +4268,6 @@ def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool
 
 def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scoped_to_current: bool=True) -> int:
     # Read CSV and insert rows. If tenant_id missing and scoped, stamp with current tenant.
-    import io
     try:
         df = pd.read_csv(io.BytesIO(csv_file.getbuffer()))
     except Exception as e:
@@ -4676,7 +4304,7 @@ def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scope
 
 def run_backup_and_data(conn: sqlite3.Connection) -> None:
     st.header("Backup & Data")
-    _safe_write("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
+    st.caption("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
 
     st.subheader("Database Info")
     dbp = _db_path_from_conn(conn)
@@ -4850,7 +4478,7 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
                     conn.commit()
                 st.success("Workspace created"); st.rerun()
             else:
-                _safe_write("Enter a name")
+                st.warning("Enter a name")
 
 
 
@@ -4858,14 +4486,6 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
 def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
-# Phase X3 hook: render quickview if open
-try:
-    if "run_sam_watch" in globals():
-        render_sam_quickview(globals().get("_last_conn_for_sam", None) or get_db())
-except Exception:
-    pass
-
-
 
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
@@ -4915,7 +4535,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
 def main() -> None:
     conn = get_db()
     st.title(APP_TITLE)
-    _safe_write(BUILD_LABEL)
+    st.caption(BUILD_LABEL)
     router(nav(), conn)
 
 
@@ -4925,7 +4545,6 @@ if __name__ == "__main__":
 
 # -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
-    import streamlit as st
     st.markdown("### Section Library (Phase V)")
     cols = st.columns([3,2,2])
     with cols[0]:
@@ -4950,7 +4569,6 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
             st.session_state.pop(ns("pbv","sel_id"), None)
 
     # Table of existing sections
-    import pandas as pd
     df = pd.read_sql_query("SELECT id, title, tags, created_at, updated_at FROM pb_sections_t ORDER BY updated_at DESC;", conn, params=())
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -4971,7 +4589,7 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
             with closing(conn.cursor()) as cur:
                 cur.execute("DELETE FROM pb_sections_t WHERE id=?;", (int(sel),))
                 conn.commit()
-            _safe_write("Deleted")
+            st.warning("Deleted")
             st.rerun()
 
     with c3:
@@ -4989,623 +4607,3 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
 
-
-
-# Phase X1: SAM X lightweight API client and ingest helpers
-class SamXClient:
-    def __init__(self, api_key: str | None = None, base_url: str | None = None, timeout: int = 20):
-        self.api_key = api_key
-        self.base_url = base_url or "https://api.sam.gov/prod/opportunities/v2/search"
-        self.timeout = timeout
-
-    @staticmethod
-    def from_env():
-        api_key = None
-        base_url = None
-        try:
-            import os
-            api_key = os.environ.get("SAM_API_KEY")
-            base_url = os.environ.get("SAM_API_BASE")
-        except Exception:
-            pass
-        try:
-            import streamlit as st
-            api_key = api_key or st.secrets.get("sam", {}).get("api_key")
-            base_url = base_url or st.secrets.get("sam", {}).get("base_url")
-        except Exception:
-            pass
-        return SamXClient(api_key=api_key, base_url=base_url)
-
-    def enabled(self) -> bool:
-        return bool(self.api_key and self.base_url)
-
-    def search(self, params: dict) -> dict:
-        """Safe GET wrapper. Returns JSON or empty result. Does not raise on network errors."""
-        import requests
-        headers = {"Accept": "application/json"}
-        q = dict(params)
-        q["api_key"] = self.api_key or ""
-        try:
-            resp = requests.get(self.base_url, params=q, headers=headers, timeout=self.timeout)
-            if resp.status_code != 200:
-                return {"ok": False, "status": resp.status_code, "data": {}}
-            return {"ok": True, "status": 200, "data": resp.json()}
-        except Exception as e:
-            return {"ok": False, "error": str(e), "data": {}}
-
-def samx_query_hash(filters: dict) -> str:
-    import hashlib, json
-    serial = json.dumps(filters, sort_keys=True, separators=(",",":"))
-    return hashlib.sha256(serial.encode("utf-8")).hexdigest()
-
-def samx_upsert_notice(conn: sqlite3.Connection, notice: dict) -> None:
-    cols = ["notice_id","type","title","agency","office","naics","psc","set_aside","place_state","place_city","pop_zip",
-            "posted_date","due_date","status","url","raw_json","first_seen","last_seen","inactive"]
-    vals = [notice.get(k) for k in cols]
-    with closing(conn.cursor()) as cur:
-        cur.execute("""INSERT INTO sam_notices(
-            notice_id,type,title,agency,office,naics,psc,set_aside,place_state,place_city,pop_zip,
-            posted_date,due_date,status,url,raw_json,first_seen,last_seen,inactive
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(notice_id) DO UPDATE SET
-            type=excluded.type,
-            title=COALESCE(excluded.title, sam_notices.title),
-            agency=COALESCE(excluded.agency, sam_notices.agency),
-            office=COALESCE(excluded.office, sam_notices.office),
-            naics=COALESCE(excluded.naics, sam_notices.naics),
-            psc=COALESCE(excluded.psc, sam_notices.psc),
-            set_aside=COALESCE(excluded.set_aside, sam_notices.set_aside),
-            place_state=COALESCE(excluded.place_state, sam_notices.place_state),
-            place_city=COALESCE(excluded.place_city, sam_notices.place_city),
-            pop_zip=COALESCE(excluded.pop_zip, sam_notices.pop_zip),
-            posted_date=COALESCE(excluded.posted_date, sam_notices.posted_date),
-            due_date=COALESCE(excluded.due_date, sam_notices.due_date),
-            status=COALESCE(excluded.status, sam_notices.status),
-            url=COALESCE(excluded.url, sam_notices.url),
-            raw_json=COALESCE(excluded.raw_json, sam_notices.raw_json),
-            last_seen=excluded.last_seen,
-            inactive=excluded.inactive
-        ;""", vals)
-        conn.commit()
-
-def samx_upsert_doc(conn: sqlite3.Connection, notice_id: str, doc: dict) -> None:
-    cols = ["notice_id","url","filename","sha256","size","mime","fetched_at","text_indexed","error"]
-    vals = [notice_id,
-            doc.get("url"), doc.get("filename"), doc.get("sha256"), doc.get("size"),
-            doc.get("mime"), doc.get("fetched_at"), int(bool(doc.get("text_indexed"))), doc.get("error")]
-    with closing(conn.cursor()) as cur:
-        cur.execute("""INSERT INTO sam_docs(notice_id,url,filename,sha256,size,mime,fetched_at,text_indexed,error)
-        VALUES(?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(notice_id, url) DO UPDATE SET
-            filename=COALESCE(excluded.filename, sam_docs.filename),
-            sha256=COALESCE(excluded.sha256, sam_docs.sha256),
-            size=COALESCE(excluded.size, sam_docs.size),
-            mime=COALESCE(excluded.mime, sam_docs.mime),
-            fetched_at=COALESCE(excluded.fetched_at, sam_docs.fetched_at),
-            text_indexed=COALESCE(excluded.text_indexed, sam_docs.text_indexed),
-            error=COALESCE(excluded.error, sam_docs.error)
-        ;""", vals)
-        conn.commit()
-
-def samx_upsert_poc(conn: sqlite3.Connection, notice_id: str, poc: dict) -> None:
-    cols = ["notice_id","name","role","email","phone","office"]
-    vals = [notice_id, poc.get("name"), poc.get("role"), poc.get("email"), poc.get("phone"), poc.get("office")]
-    with closing(conn.cursor()) as cur:
-        cur.execute("""INSERT INTO sam_pocs(notice_id,name,role,email,phone,office)
-        VALUES(?,?,?,?,?,?)
-        ON CONFLICT(notice_id,email,phone) DO UPDATE SET
-            name=COALESCE(excluded.name, sam_pocs.name),
-            role=COALESCE(excluded.role, sam_pocs.role),
-            office=COALESCE(excluded.office, sam_pocs.office)
-        ;""", vals)
-        conn.commit()
-
-def samx_cache_page(conn: sqlite3.Connection, query_hash: str, page: int, results_json: str) -> None:
-    import datetime as _dt
-    now = _dt.datetime.utcnow().isoformat() + "Z"
-    with closing(conn.cursor()) as cur:
-        cur.execute("""INSERT INTO notice_cache(query_hash,page,created_at,results_json)
-        VALUES(?,?,?,?)
-        ON CONFLICT(query_hash,page) DO UPDATE SET
-            created_at=excluded.created_at,
-            results_json=excluded.results_json
-        ;""", (query_hash, int(page), now, results_json))
-        conn.commit()
-
-
-# Phase X2: Detail and Docs helpers
-def _samx_get_detail_base() -> str:
-    # Allow override via secrets or env
-    base = None
-    try:
-        import os
-        base = os.environ.get("SAM_API_DETAIL_BASE")
-    except Exception:
-        pass
-    try:
-        import streamlit as st
-        base = base or st.secrets.get("sam", {}).get("detail_base")
-    except Exception:
-        pass
-    return base or "https://api.sam.gov/prod/opportunities/v2/opportunities"
-
-def samx_fetch_detail(client: "SamXClient", notice_id: str) -> dict:
-    import requests
-    url = f"{_samx_get_detail_base().rstrip('/')}/{notice_id}"
-    q = {"api_key": client.api_key or ""}
-    try:
-        r = requests.get(url, params=q, timeout=client.timeout)
-        if r.status_code != 200:
-            return {"ok": False, "status": r.status_code, "data": {}}
-        return {"ok": True, "status": 200, "data": r.json()}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "data": {}}
-
-def _samx_get_list(obj, key, default=None):
-    v = obj.get(key) if isinstance(obj, dict) else None
-    if v is None:
-        return default or []
-    if isinstance(v, list):
-        return v
-    return [v]
-
-def _samx_get(obj, *keys, default=None):
-    cur = obj
-    for k in keys:
-        if isinstance(cur, dict) and k in cur:
-            cur = cur[k]
-        else:
-            return default
-    return cur
-
-def samx_extract_fields(detail: dict) -> dict:
-    d = detail or {}
-    # Try multiple possible paths to be resilient
-    core = d.get("opportunity", d.get("opportunitiesData", d))
-    notice_id = str(_samx_get(core, "noticeId", default=_samx_get(core, "notice_id", default="")))
-    title = _samx_get(core, "title", default=_samx_get(core, "noticeTitle", default="")).strip()
-    ntype = _samx_get(core, "type", default=_samx_get(core, "noticeType", default=""))
-    agency = _samx_get(core, "agency", "name", default=_samx_get(core, "agency", default=""))
-    office = _samx_get(core, "office", "name", default=_samx_get(core, "office", default=""))
-    naics = _samx_get(core, "naics", default=_samx_get(core, "naicsCode", default=""))
-    psc = _samx_get(core, "psc", default=_samx_get(core, "pscCode", default=""))
-    set_aside = _samx_get(core, "setAside", default=_samx_get(core, "typeOfSetAside", default=""))
-    place = _samx_get(core, "placeOfPerformance", default={})
-    place_state = _samx_get(place, "state", default="")
-    place_city = _samx_get(place, "city", default="")
-    pop_zip = _samx_get(place, "zip", default="")
-    posted = _samx_get(core, "postedDate", default=_samx_get(core, "publishDate", default=""))
-    due = _samx_get(core, "responseDate", default=_samx_get(core, "archiveDate", default=_samx_get(core, "closeDate", default="")))
-    status = _samx_get(core, "status", default=_samx_get(core, "active", default=""))
-    url = _samx_get(core, "uiLink", default=_samx_get(core, "url", default=""))
-    raw_json = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
-    now = datetime.datetime.utcnow().isoformat() + "Z"
-    return {
-        "notice_id": notice_id, "type": ntype, "title": title, "agency": agency, "office": office,
-        "naics": naics, "psc": psc, "set_aside": set_aside,
-        "place_state": place_state, "place_city": place_city, "pop_zip": pop_zip,
-        "posted_date": posted, "due_date": due, "status": str(status),
-        "url": url, "raw_json": raw_json, "first_seen": now, "last_seen": now, "inactive": 0
-    }
-
-def samx_extract_pocs(detail: dict) -> list[dict]:
-    d = detail or {}
-    core = d.get("opportunity", d.get("opportunitiesData", d))
-    contacts = []
-    for k in ["contacts", "contact", "pointsOfContact", "pointOfContact"]:
-        for c in _samx_get_list(core, k, default=[]):
-            if not isinstance(c, dict):
-                continue
-            contacts.append({
-                "name": c.get("name") or c.get("fullName"),
-                "role": c.get("role") or c.get("type"),
-                "email": c.get("email") or c.get("emailAddress"),
-                "phone": c.get("phone") or c.get("phoneNumber"),
-                "office": c.get("office") or c.get("department")
-            })
-    # de-dup by (email,phone,name)
-    uniq = {}
-    for c in contacts:
-        key = (c.get("email"), c.get("phone"), c.get("name"))
-        if key not in uniq:
-            uniq[key] = c
-    return list(uniq.values())
-
-def samx_extract_docs(detail: dict) -> list[dict]:
-    d = detail or {}
-    core = d.get("opportunity", d.get("opportunitiesData", d))
-    docs = []
-    for k in ["attachments", "documents", "files"]:
-        for a in _samx_get_list(core, k, default=[]):
-            if not isinstance(a, dict):
-                continue
-            url = a.get("url") or a.get("href") or a.get("downloadUrl")
-            if not url:
-                continue
-            docs.append({
-                "url": url,
-                "filename": a.get("fileName") or a.get("name"),
-                "size": a.get("size") or a.get("fileSize"),
-                "mime": a.get("mime") or a.get("contentType")
-            })
-    # de-dup by url
-    seen = set(); out = []
-    for d1 in docs:
-        u = d1.get("url")
-        if u in seen:
-            continue
-        seen.add(u); out.append(d1)
-    return out
-
-def samx_ingest_detail(conn: sqlite3.Connection, detail: dict) -> str | None:
-    info = samx_extract_fields(detail)
-    nid = info.get("notice_id") or None
-    if not nid:
-        return None
-    samx_upsert_notice(conn, info)
-    for poc in samx_extract_pocs(detail):
-        samx_upsert_poc(conn, info["notice_id"], poc)
-    for doc in samx_extract_docs(detail):
-        samx_upsert_doc(conn, info["notice_id"], doc)
-    return info["notice_id"]
-
-def _samx_doc_save_path(notice_id: str, filename: str) -> str:
-    import os
-    from pathlib import Path
-    safe_name = re.sub(r'[^a-zA-Z0-9._-]+', '_', filename or 'file')
-    dest_dir = Path(UPLOADS_DIR) / "sam" / notice_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    return str(dest_dir / safe_name)
-
-def samx_download_missing_docs(conn: sqlite3.Connection, notice_id: str, timeout: int = 30) -> list[dict]:
-    """Download docs without local_path. Compute sha256 and size. Idempotent."""
-    import requests, hashlib, mimetypes, os
-    out = []
-    with closing(conn.cursor()) as cur:
-        rows = cur.execute("SELECT id, url, filename FROM sam_docs WHERE notice_id=? AND (local_path IS NULL OR local_path='')", (notice_id,)).fetchall()
-    for rid, url, fn in rows:
-        path = _samx_doc_save_path(notice_id, fn or "file")
-        try:
-            r = requests.get(url, timeout=timeout, allow_redirects=True)
-            if r.status_code != 200:
-                err = f"HTTP {r.status_code}"
-                with closing(conn.cursor()) as cur:
-                    cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (err, rid)); conn.commit()
-                out.append({"id": rid, "status": err}); continue
-            data = r.content
-            sha = hashlib.sha256(data).hexdigest()
-            with open(path, "wb") as f:
-                f.write(data)
-            size = len(data)
-            mime = r.headers.get("Content-Type") or (mimetypes.guess_type(path)[0] or "application/octet-stream")
-            with closing(conn.cursor()) as cur:
-                cur.execute("UPDATE sam_docs SET local_path=?, sha256=?, size=?, mime=?, fetched_at=datetime('now') WHERE id=?", (path, sha, size, mime, rid))
-                conn.commit()
-            out.append({"id": rid, "status": "saved", "path": path, "sha256": sha, "size": size})
-        except Exception as e:
-            with closing(conn.cursor()) as cur:
-                cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (str(e), rid)); conn.commit()
-            out.append({"id": rid, "status": f"error {e}"})
-    return out
-
-def samx_index_doc_text(conn: sqlite3.Connection, notice_id: str) -> dict:
-    """Extract text for downloaded docs where not yet indexed. Uses existing extract_text_from_file()."""
-    with closing(conn.cursor()) as cur:
-        docs = cur.execute("SELECT id, local_path, sha256 FROM sam_docs WHERE notice_id=? AND local_path IS NOT NULL AND local_path!='' AND (text_indexed IS NULL OR text_indexed=0)", (notice_id,)).fetchall()
-    done = 0; errs = 0
-    for did, path, sha in docs:
-        try:
-            txt = extract_text_from_file(path) or ""
-            with closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO sam_doc_text(doc_id, notice_id, sha256, text) VALUES(?,?,?,?)", (did, notice_id, sha, txt))
-                cur.execute("UPDATE sam_docs SET text_indexed=1 WHERE id=?", (did,))
-                conn.commit()
-            done += 1
-        except Exception as e:
-            with closing(conn.cursor()) as cur:
-                cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (str(e), did)); conn.commit()
-            errs += 1
-    return {"indexed": done, "errors": errs}
-def samx_ingest_notice_by_id(conn: sqlite3.Connection, client: "SamXClient", notice_id: str) -> dict:
-    import os
-    ensure_sam_schema(conn)
-    try:
-        res = samx_fetch_detail(client, notice_id)
-    except Exception as e:
-        return {"ok": False, "step": "fetch_detail_call", "error": repr(e)}
-    if not res.get("ok"):
-        return {"ok": False, "step": "fetch_detail", "error": res.get("error") or res.get("status")}
-    # Always upsert header
-    try:
-        nid = samx_ingest_detail(conn, res.get("data") or {})
-    except Exception as e:
-        return {"ok": False, "step": "ingest_detail", "error": repr(e)}
-    if not nid:
-        return {"ok": False, "step": "ingest_detail", "error": "no notice_id"}
-    # Feature flag for docs and indexing
-    if os.environ.get("SAM_FEATURE_DOCS", "0").lower() in ("1","true","yes"):
-        try:
-            dl = samx_download_missing_docs(conn, nid)
-        except Exception as e:
-            return {"ok": False, "step": "download_docs", "error": repr(e)}
-        try:
-            ix = samx_index_doc_text(conn, nid)
-        except Exception as e:
-            return {"ok": False, "step": "index_text", "error": repr(e)}
-        return {"ok": True, "notice_id": nid, "downloads": dl, "index": ix}
-    else:
-        return {"ok": True, "notice_id": nid, "downloads": [], "index": {"indexed": 0, "errors": 0}, "skipped_docs": True}
-def _ai_summarize(text: str, system: str = "Summarize for a GovCon capture team. Be concise.") -> str:
-    """
-    Tries OpenAI if configured. Falls back to extractive summary.
-    Set OPENAI_API_KEY (and optional OPENAI_MODEL) in env or secrets.
-    """
-    text = (text or "").strip()
-    if not text:
-        return ""
-    # Try OpenAI SDK v1 style
-    try:
-        import os
-        model = os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if api_key:
-            try:
-                from openai import OpenAI  # new SDK
-                client = OpenAI(api_key=api_key)
-                msg = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role":"system","content":system},
-                        {"role":"user","content":text[:12000]}
-                    ],
-                    temperature=0.2,
-                    max_tokens=400
-                )
-                return msg.choices[0].message.content.strip()
-            except Exception:
-                pass
-    except Exception:
-        pass
-    # Fallback extractive
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    # take top-N informative lines
-    out = []
-    for ln in lines:
-        if len(out) >= 12: break
-        if len(ln) > 60 and not ln.lower().startswith(("attachment","page ","table of contents")):
-            out.append(ln)
-    return "\n".join(out)[:3000]
-
-def _notice_text_blob(conn: sqlite3.Connection, notice_id: str) -> str:
-    parts = []
-    with closing(conn.cursor()) as cur:
-        # basic fields
-        row = cur.execute("SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status FROM sam_notices WHERE notice_id=?", (notice_id,)).fetchone()
-        if row:
-            keys = ["Title","Agency","Office","NAICS","PSC","Set-Aside","State","City","Posted","Due","Status"]
-            parts.append("\n".join(f"{k}: {v or ''}" for k,v in zip(keys, row)))
-        # doc text
-        docs = cur.execute("SELECT sdt.text FROM sam_doc_text sdt JOIN sam_docs sd ON sd.id=sdt.doc_id WHERE sd.notice_id=? ORDER BY sdt.id ASC LIMIT 8", (notice_id,)).fetchall()
-        for (t,) in docs:
-            if t:
-                parts.append(t)
-    return "\n\n".join(parts)
-
-def build_notice_summary(conn: sqlite3.Connection, notice_id: str) -> str:
-    blob = _notice_text_blob(conn, notice_id)
-    if not blob:
-        return "No detail or document text available yet."
-    prompt = "Summarize the opportunity for capture. Include Requirement, Key Dates, Set-Aside, NAICS/PSC, Place of Performance, and Submission specifics."
-    return _ai_summarize(blob, system=prompt)
-
-def build_doc_summary(conn: sqlite3.Connection, doc_id: int) -> str:
-    with closing(conn.cursor()) as cur:
-        row = cur.execute("SELECT text FROM sam_doc_text WHERE doc_id=?", (int(doc_id),)).fetchone()
-    text = row[0] if row else ""
-    if not text:
-        # try to read file and extract immediately
-        row2 = None
-        with closing(conn.cursor()) as cur:
-            row2 = cur.execute("SELECT local_path FROM sam_docs WHERE id=?", (int(doc_id),)).fetchone()
-        if row2 and row2[0]:
-            try:
-                text = extract_text_from_file(row2[0]) or ""
-            except Exception:
-                text = ""
-    if not text:
-        return "No text available for this document yet."
-    prompt = "Summarize this procurement document. Focus on scope, deliverables, eligibility, evaluation, and submission requirements."
-    return _ai_summarize(text[:16000], system=prompt)
-
-def _simple_qa(texts: list[str], question: str) -> str:
-    q = question.strip().lower()
-    if not q:
-        return ""
-    hits = []
-    for t in texts:
-        for para in t.split("\n\n"):
-            if all(tok in para.lower() for tok in q.split()[:5]):
-                hits.append(para.strip())
-                if len(hits) >= 5: break
-        if len(hits) >= 5: break
-    if hits:
-        return "\n\n".join(hits[:5])[:2000]
-    # fallback
-    return _ai_summarize("\n\n".join(texts)[:12000], system="Answer the user's question from the provided text.")
-
-def render_sam_quickview(conn: sqlite3.Connection) -> None:
-    seq = st.session_state.get("_qv_render_seq", 0) + 1
-    st.session_state["_qv_render_seq"] = seq
-    import streamlit as st
-    if not flag("quickview", True):
-        return
-    nid = st.session_state.get("sam_quickview_notice_id")
-    open_ = st.session_state.get("sam_quickview_open", False) and bool(nid)
-    if not open_:
-        return
-    with st.sidebar:
-        st.markdown("### Ask RFP Analyzer")
-        _safe_write(f"Notice: {nid}")
-        # Summary
-        if st.button("Refresh summary", key="qv_refresh"):
-            st.session_state.pop("sam_quickview_summary", None)
-        summary = st.session_state.get("sam_quickview_summary")
-        if not summary:
-            try:
-                summary = build_notice_summary(conn, nid)
-            except Exception as e:
-                summary = f"Summary unavailable: {e}"
-            st.session_state["sam_quickview_summary"] = summary
-        st.write(summary)
-        # Document list
-        with closing(conn.cursor()) as cur:
-            docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
-        if docs:
-            st.markdown("**Documents**")
-            for did, fn in docs:
-                cols = st.columns([3,1])
-                with cols[0]:
-                    st.write(fn or f"doc {did}")
-                with cols[1]:
-                    if st.button("Summarize", key=f"sum_doc_{did}"):
-                        st.session_state["sam_quickview_doc_summary"] = build_doc_summary(conn, did)
-        docsum = st.session_state.get("sam_quickview_doc_summary")
-        if docsum:
-            st.markdown("**Document Summary**")
-            st.write(docsum)
-        # QA
-        st.markdown("---")
-        q = st.text_input("Ask about this notice", key="qv_q")
-        if st.button("Ask", key="qv_ask"):
-            # assemble texts
-            texts = []
-            with closing(conn.cursor()) as cur:
-                rows = cur.execute("SELECT text FROM sam_doc_text WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
-            texts = [r[0] for r in rows if r and r[0]]
-            if not texts:
-                blob = _notice_text_blob(conn, nid)
-                texts = [blob] if blob else []
-            st.session_state["sam_quickview_answer"] = _simple_qa(texts, q)
-        ans = st.session_state.get("sam_quickview_answer")
-        if ans:
-            st.markdown("**Answer**")
-            st.write(ans)
-        if st.button("Close", key="qv_close"):
-            st.session_state["sam_quickview_open"] = False
-            st.session_state["sam_quickview_notice_id"] = None
-
-
-# ========= PHASE X FINAL OVERRIDES (non-recursive, safe) =========
-def _rerun_once(tag: str) -> None:
-    import streamlit as st
-    k = "_last_rerun_tag"
-    if st.session_state.get(k) == tag:
-        return
-    st.session_state[k] = tag
-    try:
-        st.rerun()
-    except Exception:
-        pass
-
-
-def _do_ingest_open_qv(conn, client, qid):
-    import streamlit as st
-    st.session_state["sam_quickview_open"] = True
-    st.session_state["sam_quickview_notice_id"] = qid
-    return {"ok": True, "source": "manual", "ingested": False}
-
-def render_sam_quickview(conn, nid: str = None):
-    import streamlit as st, pandas as pd
-    nid = nid or st.session_state.get("sam_quickview_nid") or st.session_state.get("sam_quickview_notice_id")
-    if not st.session_state.get("sam_quickview_open") or not nid:
-        return
-    seq = st.session_state.get("_qv_render_seq", 0)
-    with st.sidebar:
-        st.markdown("### Ask RFP Analyzer")
-        _safe_write(f"Notice: {nid}")
-
-        # DB first, then search df fallback
-        title = agency = posted = due = url = ""
-        try:
-            import sqlite3
-            try:
-                df = pd.read_sql_query(
-                    "SELECT title, agency, posted_date, due_date, url FROM sam_notices WHERE notice_id = ? LIMIT 1",
-                    conn, params=(nid,)
-                )
-                if df is not None and not df.empty:
-                    r = df.iloc[0]
-                    title = str(r.get("title") or "")
-                    agency = str(r.get("agency") or "")
-                    posted = str(r.get("posted_date") or "")
-                    due = str(r.get("due_date") or "")
-                    url = str(r.get("url") or "")
-            except Exception:
-                pass
-            if not title:
-                _df = st.session_state.get("sam_results_df", pd.DataFrame())
-                if isinstance(_df, pd.DataFrame) and not _df.empty and ("Notice ID" in _df.columns):
-                    _hit = _df[_df["Notice ID"].astype(str).str.lower() == str(nid).lower()]
-                    if not _hit.empty:
-                        rec = _hit.iloc[0].to_dict()
-                        title = rec.get("Title") or title
-                        agency = rec.get("Agency Path") or rec.get("Agency") or agency
-                        posted = rec.get("Posted") or rec.get("Posted Date") or posted
-                        due = rec.get("Response Due") or rec.get("Due") or due
-                        url = rec.get("SAM Link") or url
-        except Exception as e:
-            _safe_write(f"Quickview data error: {e}")
-
-        if title: st.write(f"**{title}**")
-        meta = " | ".join([p for p in [f"Agency: {agency}" if agency else "", f"Posted: {posted}" if posted else "", f"Due: {due}" if due else ""] if p])
-        if meta: _safe_write(meta)
-        if url: st.markdown(f"[Open in SAM]({url})")
-
-        st.markdown("#### Documents")
-        try:
-            ensure_docs_schema(conn)
-            docs = list_notice_docs(conn, nid)
-        except Exception as e:
-            docs = []
-            _safe_write(f"Docs error: {e}")
-        if docs:
-            for d in docs:
-                st.write(f"• {d['filename']} ({d['mime']}, {d['size']} bytes) — {d['sha256'][:8]}…")
-        else:
-            _safe_write("No documents in app yet.")
-        up = st.file_uploader("Upload files from SAM", key=f"doc_up_{nid}_{seq}", accept_multiple_files=True)
-        if up:
-            for f in up:
-                try:
-                    res = save_uploaded_doc(conn, nid, f)
-                    if not res.get("ok"): _safe_write(f"Upload failed: {res}")
-                except Exception as e:
-                    _safe_write(f"Upload error: {e}")
-            try: st.rerun()
-            except Exception: pass
-
-        # Unique close key to avoid clashes
-        if st.button("Close Quickview", key=f"qv_close_{nid}_{seq}"):
-            st.session_state["sam_quickview_open"] = False
-            st.session_state["sam_quickview_notice_id"] = ""
-            st.session_state["sam_quickview_nid"] = ""
-
-def qv_bootstrap(conn):
-    import streamlit as st
-    if st.session_state.get("sam_quickview_open") and (st.session_state.get("sam_quickview_nid") or st.session_state.get("sam_quickview_notice_id")):
-        try:
-            render_sam_quickview(conn)
-        except Exception as e:
-            try: st.write(f"Quickview render error: {e}")
-            except Exception: print(f"Quickview render error: {e}")
-
-def qv_row_actions(conn, row: dict):
-    import streamlit as st
-    qid = samx_extract_notice_id(row.get("Notice ID") or row.get("SAM Link") or "")
-    if st.button("Quickview", key=f"qv_btn_{qid}"):
-        st.session_state["sam_quickview_open"] = True
-        st.session_state["sam_quickview_notice_id"] = qid
-        st.session_state["sam_quickview_nid"] = qid
-        try: st.rerun()
-        except Exception: pass
-# ========= END OVERRIDES =========
