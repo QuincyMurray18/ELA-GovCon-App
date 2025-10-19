@@ -1060,65 +1060,110 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
-            # Phase X3: Quickview and Ingest
-            qid = ""
-            try:
-                qid = str(row.get("Notice ID") or "").strip()
-            except Exception:
-                qid = ""
-            if not qid:
-                try:
-                    import re as _re
-                    _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
-                    qid = _m.group(1) if _m else ""
-                except Exception:
-                    pass
-            col_qv1, col_qv2 = st.columns([1,1])
-            if not qid:
-                col_qv1.caption("Select a notice to enable Quickview.")
-            else:
-                with col_qv1:
-                    if st.button("Quickview", key=f"qv_open_btn_{qid}"):
-                        st.session_state["sam_quickview_open"] = True
-                        st.session_state["sam_quickview_notice_id"] = qid
-                        st.rerun()
-                with col_qv2:
-                    if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
+                    # Phase X3: Quickview and Ingest
+                    qid = ""
+                    try:
+                        qid = str(row.get("Notice ID") or "").strip()
+                    except Exception:
+                        qid = ""
+                    if not qid:
                         try:
-                            from importlib import import_module
-                            _SamX = globals().get("SamXClient")
-                            if _SamX is None:
+                            import re as _re
+                            _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
+                            qid = _m.group(1) if _m else ""
+                        except Exception:
+                            pass
+                    col_qv1, col_qv2 = st.columns([1,1])
+                    if qid:
+                        with col_qv1:
+                            if st.button("Quickview", key=f"qv_open_btn_{qid}"):
+                                st.session_state["sam_quickview_open"] = True
+                                st.session_state["sam_quickview_notice_id"] = qid
+                                st.rerun()
+                        with col_qv2:
+                            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
                                 try:
-                                    _SamX = import_module("app").SamXClient
-                                except Exception:
-                                    _SamX = None
-                            client = _SamX.from_env() if _SamX else None
-                            if not client:
-                                st.error("SamXClient missing. Set SAM_API_KEY.")
-                            else:
-                                import sys
-                                _mod = sys.modules.get("__main__")
-                                _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
-                                if _ingest is None:
-                                    try:
-                                        _ingest = import_module("app").samx_ingest_notice_by_id
-                                    except Exception:
-                                        _ingest = globals().get("samx_ingest_notice_by_id")
-                                if not _ingest:
-                                    st.error("Ingest function missing.")
-                                else:
-                                    _res = _ingest(conn, client, qid)
-                                    if _res.get("ok"):
-                                        st.success("Detail and documents pulled")
-                                        st.session_state["sam_quickview_open"] = True
-                                        st.session_state["sam_quickview_notice_id"] = qid
-                                        st.rerun()
+                                    from importlib import import_module as _imp
+                                    _SamX = globals().get("SamXClient")
+                                    if _SamX is None:
+                                        try:
+                                            _SamX = _imp("app").SamXClient
+                                        except Exception:
+                                            _SamX = None
+                                    client = _SamX.from_env() if _SamX else None
+                                    if not client:
+                                        st.error("SamXClient missing. Set SAM_API_KEY.")
                                     else:
-                                        st.warning(f"Fetch issue: {_res}")
-                        except Exception as _e:
-                            st.error(f"Ingest failed: {_e}")
-
-
+                                        import sys
+                                        _mod = sys.modules.get("__main__")
+                                        _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
+                                        if _ingest is None:
+                                            try:
+                                                _ingest = _imp("app").samx_ingest_notice_by_id
+                                            except Exception:
+                                                _ingest = globals().get("samx_ingest_notice_by_id")
+                                        if not _ingest:
+                                            st.error("Ingest function missing.")
+                                        else:
+                                            _res = _ingest(conn, client, qid)
+                                            # Search-only fallback on 404
+                                            if (not _res.get("ok")) and str(_res.get("error")) == "404":
+                                                _title = str(row.get("Title") or "")
+                                                _agency = str(row.get("Agency") or "")
+                                                _office = str(row.get("Office") or "")
+                                                _naics = str(row.get("NAICS") or "")
+                                                _psc = str(row.get("PSC") or "")
+                                                _setaside = str(row.get("Set-Aside") or "")
+                                                _pop = str(row.get("Place of Performance") or "")
+                                                _city, _state = "", ""
+                                                if "," in _pop:
+                                                    parts = [p.strip() for p in _pop.split(",")]
+                                                    if len(parts) >= 2:
+                                                        _city, _state = parts[0], parts[1]
+                                                _posted = str(row.get("Posted") or row.get("Posted Date") or "")
+                                                _due = str(row.get("Due") or row.get("Response Due") or "")
+                                                _status = str(row.get("Status") or "")
+                                                _link = str(row.get("SAM Link") or "")
+                                                _detail = {
+                                                    "opportunitiesData": {
+                                                        "noticeId": qid,
+                                                        "noticeTitle": _title,
+                                                        "noticeType": str(row.get("Type") or ""),
+                                                        "agency": {"name": _agency},
+                                                        "office": {"name": _office},
+                                                        "naicsCode": _naics,
+                                                        "pscCode": _psc,
+                                                        "typeOfSetAside": _setaside,
+                                                        "placeOfPerformance": {"city": _city, "state": _state},
+                                                        "publishDate": _posted,
+                                                        "responseDate": _due,
+                                                        "status": _status,
+                                                        "uiLink": _link
+                                                    }
+                                                }
+                                                try:
+                                                    _ing = globals().get("samx_ingest_detail")
+                                                    if _ing is None:
+                                                        _ing = getattr(_imp("app"), "samx_ingest_detail", None)
+                                                    _nid = _ing(conn, _detail) if _ing else None
+                                                    if _nid:
+                                                        st.info("Partial ingest from search. Attachments not pulled.")
+                                                        st.session_state["sam_quickview_open"] = True
+                                                        st.session_state["sam_quickview_notice_id"] = qid
+                                                        st.rerun()
+                                                except Exception as _e2:
+                                                    st.warning(f"Search-only fallback failed: {_e2}")
+                                            if _res.get("ok"):
+                                                st.success("Detail and documents pulled")
+                                                st.session_state["sam_quickview_open"] = True
+                                                st.session_state["sam_quickview_notice_id"] = qid
+                                                st.rerun()
+                                            else:
+                                                st.warning(f"Fetch issue: {_res}")
+                                except Exception as _e:
+                                    st.error(f"Ingest failed: {_e}")
+                    else:
+                        st.caption("Select a notice to enable Quickview.")
 
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
@@ -1154,13 +1199,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
-
-
-# Phase X3 sidebar render
-try:
-    render_sam_quickview(get_db())
-except Exception:
-    pass
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
@@ -5108,14 +5146,3 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
         if st.button("Close", key="qv_close"):
             st.session_state["sam_quickview_open"] = False
             st.session_state["sam_quickview_notice_id"] = None
-
-
-
-# Phase X - SAM schema ensure (idempotent, safe at runtime)
-def ensure_sam_schema(conn: sqlite3.Connection) -> None:
-    with closing(conn.cursor()) as cur:
-        cur.execute("CREATE TABLE IF NOT EXISTS sam_notices(id INTEGER PRIMARY KEY, notice_id TEXT UNIQUE, type TEXT, title TEXT, agency TEXT, office TEXT, naics TEXT, psc TEXT, set_aside TEXT, place_state TEXT, place_city TEXT, pop_zip TEXT, posted_date TEXT, due_date TEXT, status TEXT, url TEXT, raw_json TEXT, first_seen TEXT, last_seen TEXT, inactive INTEGER DEFAULT 0)")
-        cur.execute("CREATE TABLE IF NOT EXISTS sam_docs(id INTEGER PRIMARY KEY, notice_id TEXT NOT NULL, url TEXT NOT NULL, filename TEXT, sha256 TEXT, size INTEGER, mime TEXT, fetched_at TEXT, text_indexed INTEGER DEFAULT 0, error TEXT, local_path TEXT, UNIQUE(notice_id,url))")
-        cur.execute("CREATE TABLE IF NOT EXISTS sam_pocs(id INTEGER PRIMARY KEY, notice_id TEXT NOT NULL, name TEXT, role TEXT, email TEXT, phone TEXT, office TEXT, UNIQUE(notice_id,email,phone))")
-        cur.execute("CREATE TABLE IF NOT EXISTS sam_doc_text(id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL, notice_id TEXT NOT NULL, sha256 TEXT, text TEXT)")
-        conn.commit()
