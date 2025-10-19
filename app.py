@@ -4749,24 +4749,39 @@ def samx_upsert_notice(conn: sqlite3.Connection, notice: dict) -> None:
             inactive=excluded.inactive
         ;""", vals)
         conn.commit()
-
 def samx_upsert_doc(conn: sqlite3.Connection, notice_id: str, doc: dict) -> None:
-    cols = ["notice_id","url","filename","sha256","size","mime","fetched_at","text_indexed","error"]
-    vals = [notice_id,
-            doc.get("url"), doc.get("filename"), doc.get("sha256"), doc.get("size"),
-            doc.get("mime"), doc.get("fetched_at"), int(bool(doc.get("text_indexed"))), doc.get("error")]
-    with closing(conn.cursor()) as cur:
-        cur.execute("""INSERT INTO sam_docs(notice_id,url,filename,sha256,size,mime,fetched_at,text_indexed,error)
-        VALUES(?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(notice_id, url) DO UPDATE SET
-            filename=COALESCE(excluded.filename, sam_docs.filename),
-            sha256=COALESCE(excluded.sha256, sam_docs.sha256),
-            size=COALESCE(excluded.size, sam_docs.size),
-            mime=COALESCE(excluded.mime, sam_docs.mime),
-            fetched_at=COALESCE(excluded.fetched_at, sam_docs.fetched_at),
-            text_indexed=COALESCE(excluded.text_indexed, sam_docs.text_indexed),
-            error=COALESCE(excluded.error, sam_docs.error)
-        ;""", vals)
+    ensure_sam_schema(conn)
+    url = str(doc.get("url") or "")
+    filename = doc.get("filename")
+    sha256 = doc.get("sha256")
+    sz = doc.get("size")
+    try:
+        size = int(sz) if str(sz).isdigit() else sz
+    except Exception:
+        size = None
+    mime = doc.get("mime")
+    fetched_at = doc.get("fetched_at")
+    text_indexed = int(bool(doc.get("text_indexed")))
+    error = doc.get("error")
+    local_path = doc.get("local_path")
+    cols = ["notice_id","url","filename","sha256","size","mime","fetched_at","text_indexed","error","local_path"]
+    vals = [notice_id, url, filename, sha256, size, mime, fetched_at, text_indexed, error, local_path]
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            """INSERT INTO sam_docs(notice_id,url,filename,sha256,size,mime,fetched_at,text_indexed,error,local_path)
+               VALUES(?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(notice_id, url) DO UPDATE SET
+                   filename=COALESCE(excluded.filename, sam_docs.filename),
+                   sha256=COALESCE(excluded.sha256, sam_docs.sha256),
+                   size=COALESCE(excluded.size, sam_docs.size),
+                   mime=COALESCE(excluded.mime, sam_docs.mime),
+                   fetched_at=COALESCE(excluded.fetched_at, sam_docs.fetched_at),
+                   text_indexed=COALESCE(excluded.text_indexed, sam_docs.text_indexed),
+                   error=COALESCE(excluded.error, sam_docs.error),
+                   local_path=COALESCE(excluded.local_path, sam_docs.local_path)""",
+            vals
+        )
         conn.commit()
 
 def samx_upsert_poc(conn: sqlite3.Connection, notice_id: str, poc: dict) -> None:
@@ -4895,9 +4910,8 @@ def samx_extract_pocs(detail: dict) -> list[dict]:
 def samx_extract_docs(detail: dict) -> list[dict]:
     d = detail or {}
     core = d.get("opportunity", d.get("opportunitiesData", d))
-    out = []
-    cand = ["attachments", "documents", "files"]
-    for k in cand:
+    out: list[dict] = []
+    for k in ["attachments", "documents", "files"]:
         v = core.get(k) if isinstance(core, dict) else None
         items = v if isinstance(v, list) else ([v] if v else [])
         for a in items:
@@ -4906,7 +4920,8 @@ def samx_extract_docs(detail: dict) -> list[dict]:
             u = a.get("url") or a.get("href") or a.get("downloadUrl")
             if isinstance(u, dict):
                 u = u.get("url") or u.get("href") or u.get("uri") or u.get("value")
-            if not isinstance(u, (str, bytes)) or not u:
+            u = str(u or "")
+            if not u:
                 continue
             fn = a.get("fileName") or a.get("name")
             sz = a.get("size") or a.get("fileSize")
@@ -4917,11 +4932,11 @@ def samx_extract_docs(detail: dict) -> list[dict]:
             except Exception:
                 szv = sz
             mime = a.get("mime") or a.get("contentType")
-            out.append({"url": str(u), "filename": fn, "size": szv, "mime": mime})
+            out.append({"url": u, "filename": fn, "size": szv, "mime": mime})
     seen = set()
-    dedup = []
+    dedup: list[dict] = []
     for d1 in out:
-        u = str(d1.get("url") or "")
+        u = d1.get("url") or ""
         if not u or u in seen:
             continue
         seen.add(u)
@@ -5142,7 +5157,7 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
                 c1.write(fn or f"doc {did}")
                 if c2.button("Summarize", key=f"sum_doc_{did}"):
                     try:
-                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require X2 text indexing."
+                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require text indexing."
                     except Exception as e:
                         ds = f"Summary error: {e}"
                     st.session_state["sam_quickview_doc_summary"] = ds
