@@ -1,11 +1,9 @@
 from __future__ import annotations
-
 def _do_ingest_open_qv(conn, client, qid):
     import streamlit as st
     try:
-        _res = _do_ingest_open_qv(conn, client, qid)
+        _res = _ingest(conn, client, qid)
     except Exception as _e:
-        # Avoid calling possibly-shadowed warning; show text instead
         try:
             import traceback as _tb
             _msg = "".join(_tb.format_exception(type(_e), _e, _e.__traceback__))
