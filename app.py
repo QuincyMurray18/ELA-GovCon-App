@@ -1060,7 +1060,26 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
-        c3, c4, c5 = st.columns([2, 2, 2])
+
+                # Phase X3: Quickview and Ingest
+                if flag("quickview", True):
+                    col_qv1, col_qv2 = st.columns([1,1])
+                    with col_qv1:
+                        if st.button("Quickview", key="qv_open_btn"):
+                            st.session_state["sam_quickview_open"] = True
+                            st.session_state["sam_quickview_notice_id"] = str(row["Notice ID"])
+                    with col_qv2:
+                        if st.button("Pull full detail + docs", key="qv_ingest_btn"):
+                            try:
+                                client = SamXClient.from_env()
+                                _res = samx_ingest_notice_by_id(conn, client, str(row["Notice ID"]))
+                                if _res.get("ok"):
+                                    st.success("Detail and documents pulled")
+                                else:
+                                    st.warning(f"Fetch issue: {_res}")
+                            except Exception as _e:
+                                st.error(f"Ingest failed: {_e}")
+            c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
             if st.button("Add to Deals", key="add_to_deals"):
                 try:
