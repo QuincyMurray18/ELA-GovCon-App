@@ -17,6 +17,20 @@ import requests
 import smtplib
 import streamlit as st
 
+# --- Optional PDF backends for Phase X1 ---
+try:
+    import pdfplumber as _pdfplumber  # type: ignore
+except Exception:
+    _pdfplumber = None
+try:
+    import PyPDF2 as _pypdf  # type: ignore
+except Exception:
+    try:
+        import pypdf as _pypdf  # type: ignore
+    except Exception:
+        _pypdf = None
+
+
 # Phase X unified settings
 from types import SimpleNamespace as _NS
 
@@ -784,26 +798,29 @@ def _tesseract_ok() -> bool:
     except Exception:
         return False
 
+
 def extract_text_pages(file_bytes: bytes, mime: str) -> list:
     """Return a list of page texts. Best-effort. Up to 100 pages to keep fast."""
     out = []
     m = (mime or "").lower()
     if "pdf" in m:
-        try:
-            import pdfplumber  # type: ignore
-            import io as _io
-            with pdfplumber.open(_io.BytesIO(file_bytes)) as pdf:
-                for i, pg in enumerate(pdf.pages[:100]):
-                    try:
-                        txt = pg.extract_text() or ""
-                    except Exception:
-                        txt = ""
-                    out.append(txt)
-        except Exception:
+        # Try vector: pdfplumber then pypdf. Never reference missing names.
+        if _pdfplumber is not None:
             try:
-                import PyPDF2  # type: ignore
                 import io as _io
-                reader = PyPDF2.PdfReader(_io.BytesIO(file_bytes))
+                with _pdfplumber.open(_io.BytesIO(file_bytes)) as pdf:
+                    for i, pg in enumerate(pdf.pages[:100]):
+                        try:
+                            txt = pg.extract_text() or ""
+                        except Exception:
+                            txt = ""
+                        out.append(txt)
+            except Exception:
+                pass
+        if not out and _pypdf is not None:
+            try:
+                import io as _io
+                reader = _pypdf.PdfReader(_io.BytesIO(file_bytes))
                 for i, p in enumerate(reader.pages[:100]):
                     try:
                         out.append(p.extract_text() or "")
@@ -811,6 +828,12 @@ def extract_text_pages(file_bytes: bytes, mime: str) -> list:
                         out.append("")
             except Exception:
                 pass
+        # As a very last resort, try a naive decode of bytes to avoid empty output.
+        if not out:
+            try:
+                out = [file_bytes.decode("utf-8", errors="ignore")]
+            except Exception:
+                out = []
     elif "wordprocessingml" in m or (mime == "" and file_bytes[:4] == b"PK\x03\x04"):
         try:
             import io as _io, docx  # type: ignore
@@ -822,7 +845,6 @@ def extract_text_pages(file_bytes: bytes, mime: str) -> list:
     elif "spreadsheetml" in m:
         try:
             import io as _io, pandas as _pd  # type: ignore
-            # Read each sheet as TSV-like text. Treat each sheet as a page.
             x = _pd.read_excel(_io.BytesIO(file_bytes), sheet_name=None, dtype=str)
             for sname, df in list(x.items())[:10]:
                 txt = sname + "\n" + df.fillna("").astype(str).to_csv(sep="\t", index=False)
@@ -843,11 +865,14 @@ def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
     if not _tesseract_ok():
         return pages_text, 0
     try:
-        import io as _io, pdfplumber  # type: ignore
+        import io as _io
+        pdfplumber = _pdfplumber  # type: ignore
         import pytesseract  # type: ignore
         from PIL import Image  # type: ignore
         new_pages = list(pages_text)
         ocr_count = 0
+        if pdfplumber is None:
+            return pages_text, 0
         with pdfplumber.open(_io.BytesIO(file_bytes)) as pdf:
             for i, pg in enumerate(pdf.pages[:min(len(new_pages) or 100, 100)]):
                 if i >= len(new_pages): new_pages.append("")
