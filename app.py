@@ -1613,7 +1613,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                                     (int(rfp_id), 'Ordering/POP', _pop['pop_structure'], ''))
                             except Exception:
                                 pass
-conn.commit()
+                            conn.commit()
                             # X2: auto-link any pending ingested files to this new RFP
                             try:
                                 if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids"):
