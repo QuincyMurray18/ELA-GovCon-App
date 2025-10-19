@@ -1,6 +1,6 @@
+from __future__ import annotations
 import sqlite3
 from contextlib import closing
-from __future__ import annotations
 import pandas as pd  # early import to avoid NameError before main()
 
 def ensure_sam_schema(conn: sqlite3.Connection) -> None:
