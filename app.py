@@ -5,6 +5,17 @@ from contextlib import closing
 from typing import Optional, Any, Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
+def _safe_rerun(tag: str) -> None:
+    import streamlit as st
+    key = "_last_rerun_tag"
+    if st.session_state.get(key) == tag:
+        return
+    st.session_state[key] = tag
+    try:
+        st.rerun()
+    except Exception:
+        pass
+
 
 import pandas as pd
 import io
@@ -1076,7 +1087,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                             if st.button("Quickview", key=f"qv_open_btn_{qid}"):
                                 st.session_state["sam_quickview_open"] = True
                                 st.session_state["sam_quickview_notice_id"] = qid
-                            st.rerun()
+                            _safe_rerun(f"qv_open:{qid}")
                         with col_qv2:
                             if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
                                 try:
