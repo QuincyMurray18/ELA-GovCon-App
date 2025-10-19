@@ -1,4 +1,5 @@
 from __future__ import annotations
+import pandas as pd  # early import to avoid NameError before main()
 
 import os
 import sqlite3
