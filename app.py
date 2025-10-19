@@ -1449,6 +1449,70 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                             st.error("Ingest function missing.")
                                         else:
                                             _res = _ingest(conn, client, qid)
+
+                                            # --- 404 fallback: build minimal record from visible row and upsert ---
+                                            if (not _res.get("ok")) and str(_res.get("error")) == "404":
+                                                try:
+                                                    ensure_sam_schema(conn)
+                                                    _title = str(row.get("Title") or "")
+                                                    _agency = str(row.get("Agency Path") or "")
+                                                    _office = ""
+                                                    _naics = str(row.get("NAICS") or "")
+                                                    _psc = str(row.get("PSC") or "")
+                                                    _setaside = str(row.get("Set-Aside") or "")
+                                                    _pop = ""
+                                                    _city, _state, _zip = "", "", ""
+                                                    _posted = str(row.get("Posted") or row.get("Posted Date") or "")
+                                                    _due = str(row.get("Response Due") or row.get("Due") or "")
+                                                    _status = ""
+                                                    _link = str(row.get("SAM Link") or "")
+                                                    _now = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+                                                    _info = {
+                                                        "notice_id": qid, "title": _title, "agency": _agency, "office": _office,
+                                                        "naics": _naics, "psc": _psc, "set_aside": _setaside,
+                                                        "place_state": _state, "place_city": _city, "pop_zip": _zip,
+                                                        "posted_date": _posted, "due_date": _due, "status": _status,
+                                                        "url": _link, "raw_json": "", "first_seen": _now, "last_seen": _now, "inactive": 0
+                                                    }
+                                                    from contextlib import closing as _closing_f
+                                                    with _closing_f(conn.cursor()) as _cur_f:
+                                                        _cur_f.execute(
+                                                            """INSERT INTO sam_notices(
+                                                                notice_id,title,agency,office,naics,psc,set_aside,place_state,place_city,pop_zip,
+                                                                posted_date,due_date,status,url,raw_json,first_seen,last_seen,inactive
+                                                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                                            ON CONFLICT(notice_id) DO UPDATE SET
+                                                                title=excluded.title,
+                                                                agency=excluded.agency,
+                                                                office=excluded.office,
+                                                                naics=excluded.naics,
+                                                                psc=excluded.psc,
+                                                                set_aside=excluded.set_aside,
+                                                                place_state=excluded.place_state,
+                                                                place_city=excluded.place_city,
+                                                                pop_zip=excluded.pop_zip,
+                                                                posted_date=excluded.posted_date,
+                                                                due_date=excluded.due_date,
+                                                                status=excluded.status,
+                                                                url=excluded.url,
+                                                                raw_json=COALESCE(NULLIF(excluded.raw_json,''), sam_notices.raw_json),
+                                                                last_seen=excluded.last_seen,
+                                                                inactive=0""",
+                                                            (
+                                                                _info["notice_id"], _info["title"], _info["agency"], _info["office"], _info["naics"], _info["psc"],
+                                                                _info["set_aside"], _info["place_state"], _info["place_city"], _info["pop_zip"],
+                                                                _info["posted_date"], _info["due_date"], _info["status"], _info["url"], _info["raw_json"],
+                                                                _info["first_seen"], _info["last_seen"], _info["inactive"]
+                                                            )
+                                                        )
+                                                        conn.commit()
+                                                    st.info("Partial ingest from search. Attachments not pulled.")
+                                                    st.session_state["sam_quickview_open"] = True
+                                                    st.session_state["sam_quickview_notice_id"] = qid
+                                                    _safe_rerun(f"fallback:{qid}")
+                                                except Exception as __fe:
+                                                    st.error(f"Search-only fallback failed: {__fe}")
+                                            # --- end 404 fallback ---
                                             if _res.get("ok"):
                                                 st.success("Detail pulled (header only)")
                                                 st.session_state["sam_quickview_open"] = True
@@ -5424,3 +5488,64 @@ def _simple_qa(texts: list[str], question: str) -> str:
         return "\n\n".join(hits[:5])[:2000]
     # fallback
     return _ai_summarize("\n\n".join(texts)[:12000], system="Answer the user's question from the provided text.")
+
+
+# === Final override: render_sam_quickview (ensures sidebar renders once) ===
+def render_sam_quickview(conn: sqlite3.Connection) -> None:
+    import streamlit as st
+    from contextlib import closing as _closing
+    nid = st.session_state.get("sam_quickview_notice_id")
+    if not st.session_state.get("sam_quickview_open") or not nid:
+        return
+    # Avoid duplicate render on same run
+    if st.session_state.get("_qv_rendered") == nid:
+        return
+    st.session_state["_qv_rendered"] = nid
+    with st.sidebar:
+        st.markdown("### Ask RFP Analyzer")
+        st.caption(f"Notice: {nid}")
+        # Header fields
+        title = agency = office = naics = psc = set_aside = state = city = posted = due = status = ""
+        try:
+            with _closing(conn.cursor()) as cur:
+                row = cur.execute(
+                    "SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status "
+                    "FROM sam_notices WHERE notice_id=?", (nid,)
+                ).fetchone()
+            if row:
+                (title, agency, office, naics, psc, set_aside, state, city, posted, due, status) = [x or "" for x in row]
+        except Exception as _e:
+            st.caption(f"Quickview DB error: {_e}")
+        if any([title, agency, naics, psc, posted, due]):
+            st.write(f"**Title:** {title}")
+            st.write(f"**Agency:** {agency}")
+            if office: st.write(f"**Office:** {office}")
+            st.write(f"**NAICS:** {naics}  **PSC:** {psc}")
+            st.write(f"**Posted:** {posted}  **Due:** {due}")
+            if state or city: st.write(f"**Place:** {city}, {state}".strip(", "))
+        # Documents
+        try:
+            with _closing(conn.cursor()) as cur:
+                docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+        except Exception:
+            docs = []
+        if docs:
+            st.markdown("**Documents**")
+            for did, fn in docs:
+                c1, c2 = st.columns([3,1])
+                c1.write(fn or f"doc {did}")
+                if c2.button("Summarize", key=f"sum_doc_{nid}_{did}"):
+                    try:
+                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require text indexing."
+                    except Exception as e:
+                        ds = f"Summary error: {e}"
+                    st.session_state["sam_quickview_doc_summary"] = ds
+        ds = st.session_state.get("sam_quickview_doc_summary")
+        if ds:
+            st.markdown("**Document Summary**")
+            st.write(ds)
+        # Unique close key per notice
+        if st.button("Close", key=f"qv_close_once_{nid}"):
+            st.session_state["sam_quickview_open"] = False
+            st.session_state["sam_quickview_notice_id"] = ""
+            st.session_state["_qv_rendered"] = None
