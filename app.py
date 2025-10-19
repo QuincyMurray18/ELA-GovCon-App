@@ -725,63 +725,28 @@ def _safe_import_pdf_extractors():
     return pdf_lib
 
 
+
 def extract_text_from_file(path: str) -> str:
-    path_lower = path.lower()
-    if path_lower.endswith('.pdf'):
-        lib = _safe_import_pdf_extractors()
-        if lib and lib[0] == 'pypdf2':
-            PyPDF2 = lib[1]
-            try:
-                with open(path, 'rb') as f:
-                    reader = PyPDF2.PdfReader(f)
-                    pages = []
-                    for page in reader.pages[:50]:
-                        try:
-                            pages.append(page.extract_text() or '')
-                        except Exception:
-                            pages.append('')
-                    return '\n'.join(pages)
-            except Exception:
-                return ''
-        elif lib and lib[0] == 'pdfplumber':
-            pdfplumber = lib[1]
-            try:
-                with pdfplumber.open(path) as pdf:
-                    texts = []
-                    for pg in pdf.pages[:50]:
-                        try:
-                            texts.append(pg.extract_text() or '')
-                        except Exception:
-                            texts.append('')
-                    return '\n'.join(texts)
-            except Exception:
-                return ''
-        else:
-            return ''
-    elif path_lower.endswith('.docx'):
-        try:
-            import docx  # python-docx
-            doc = docx.Document(path)
-            return '\n'.join(p.text for p in doc.paragraphs)
-        except Exception:
-            return ''
-    elif path_lower.endswith('.txt'):
-        try:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read()
-        except Exception:
-            return ''
-    else:
-        return ''
-
-
-# ---------------------- Phase X1: Ingest helpers (feature-flag: x_ingest) ----------------------
-def compute_sha256(b: bytes) -> str:
+    """Unified extractor. Uses Phase X1 backends. Safe on environments missing PDF libs."""
     try:
-        return hashlib.sha256(b).hexdigest()
+        with open(path, 'rb') as fh:
+            b = fh.read()
     except Exception:
-        import hashlib as _h
-        return _h.sha256(b or b"").hexdigest()
+        return ''
+    name = os.path.basename(path)
+    mime = _detect_mime_light(name)
+    pages = extract_text_pages(b, mime)
+    if not pages:
+        try:
+            return b.decode('utf-8', errors='ignore')
+        except Exception:
+            try:
+                return b.decode('latin-1', errors='ignore')
+            except Exception:
+                return ''
+    return "\n\n".join(pages)
+
+        
 
 def _detect_mime_light(name: str) -> str:
     n = (name or "").lower()
