@@ -1,22 +1,36 @@
 from __future__ import annotations
+
+import streamlit as st
+# Repair shadowed Streamlit callables if any
+def _st_repair_callables():
+    try:
+        import streamlit as _st
+        _mod = __import__("streamlit")
+        for _n in ("caption", "warning", "info", "write", "text"):
+            _v = getattr(_st, _n, None)
+            if not callable(_v):
+                try:
+                    _fn = getattr(_mod, _n, None)
+                    if callable(_fn):
+                        setattr(_st, _n, _fn)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+_st_repair_callables()
+
+
 def _do_ingest_open_qv(conn, client, qid):
     import streamlit as st
-    def _safe_call(name, *args, **kwargs):
-        fn = getattr(st, name, None)
-        if callable(fn):
-            try:
-                fn(*args, **kwargs)
-            except Exception:
-                pass
     try:
         _res = _ingest(conn, client, qid)
     except Exception as _e:
+        # Never call st.caption/info/warning here
         try:
             import traceback as tb
             msg = "".join(tb.format_exception(type(_e), _e, _e.__traceback__))
         except Exception:
             msg = repr(_e)
-        # Avoid any UI calls that could be shadowed
         try:
             print("Ingest exception:\n" + msg[-4000:])
         except Exception:
@@ -27,7 +41,10 @@ def _do_ingest_open_qv(conn, client, qid):
         st.session_state["sam_quickview_notice_id"] = qid
         return _res
     if str(_res.get("error")) == "404":
-        _safe_call("write", "Partial ingest from search. Attachments not pulled.")
+        try:
+            st.write("Partial ingest from search. Attachments not pulled.")
+        except Exception:
+            print("Partial ingest from search. Attachments not pulled.")
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
         try:
@@ -35,16 +52,18 @@ def _do_ingest_open_qv(conn, client, qid):
         except Exception:
             pass
         return _res
-    _safe_call("write", f"Fetch issue: {_res}")
+    try:
+        st.write(f"Fetch issue: {_res}")
+    except Exception:
+        print(f"Fetch issue: {_res}")
     return _res
-
 
 def _do_ingest_open_qv(conn, client, qid):
     import streamlit as st
     try:
         _res = _do_ingest_open_qv(conn, client, qid)
     except Exception as _e:
-        st.caption(f"Ingest exception: {_e}")
+        st.warning(f"Ingest exception: {_e}")
         return {"ok": False, "step": "ingest_call", "error": repr(_e)}
     if _res.get("ok"):
         st.session_state["sam_quickview_open"] = True
@@ -60,7 +79,7 @@ def _do_ingest_open_qv(conn, client, qid):
             pass
         return _res
     # other errors
-    st.caption(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
+    st.warning(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
     return _res
 
 # --- Early shim to ensure Quickview renderer exists before UI code ---
@@ -1243,8 +1262,10 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     try:
                         _fn(conn)
                     except Exception as _e:
-                        st.caption(f"Quickview render error: {_e}")
-
+                        try:
+                            st.write(f"Quickview render error: {_e}")
+                        except Exception:
+                            print(f"Quickview render error: {_e}")
                 st.session_state["sam_quickview_open"] = True
                 st.session_state["sam_quickview_notice_id"] = qid
                 try:
@@ -1289,7 +1310,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                 if str(_res.get("error")) == "404":
                                     st.info("Partial ingest from search. Attachments not pulled.")
                                 else:
-                                    st.caption(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
+                                    st.warning(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
                 except Exception as _e:
                     import traceback
                     st.exception(_e)
@@ -1300,7 +1321,10 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             try:
                 _fn(conn)
             except Exception as _e:
-                st.caption(f"Quickview render error: {_e}")
+                try:
+                    st.write(f"Quickview render error: {_e}")
+                except Exception:
+                    print(f"Quickview render error: {_e}")
         else:
             st.caption("Quickview render missing (no function)")
 
@@ -1465,7 +1489,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     pages = [(p.extract_text() or "") for p in reader.pages]
                     return "\\n".join(pages)
                 except Exception as e:
-                    st.caption(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
+                    st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".docx"):
                 try:
@@ -1474,7 +1498,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     doc = docx.Document(f)
                     return "\\n".join([p.text for p in doc.paragraphs])
                 except Exception as e:
-                    st.caption(f"DOCX parse failed for {file.name}: {e}.")
+                    st.warning(f"DOCX parse failed for {file.name}: {e}.")
                     return ""
             st.error(f"Unsupported file type: {file.name}")
             return ""
@@ -3472,7 +3496,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
                     if st.button("Save image", key=f"wp_sec_img_save_{int(r['id'])}"):
                         if up_img is None:
-                            st.caption("Choose an image first")
+                            st.warning("Choose an image first")
                         else:
                             img_path = save_uploaded_file(up_img, subdir="whitepapers")
                             with closing(conn.cursor()) as cur:
@@ -3762,7 +3786,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         ups = st.file_uploader("Select files", type=None, accept_multiple_files=True, key="fm_files")
         if st.button("Upload", key="fm_upload"):
             if not ups:
-                st.caption("Pick at least one file")
+                st.warning("Pick at least one file")
             else:
                 saved = 0
                 for f in ups:
@@ -3894,7 +3918,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
     if st.button("Build ZIP", type="primary", key="fm_build_zip"):
         if not selected and not gen_paths:
-            st.caption("Select at least one attachment or generated document.")
+            st.warning("Select at least one attachment or generated document.")
         else:
             # Collect paths
             rows = []
@@ -4118,7 +4142,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
                             key="rfq_att_file")
     if st.button("Add Attachment", key="rfq_att_add"):
         if add_file is None:
-            st.caption("Pick a file")
+            st.warning("Pick a file")
         else:
             df_one = pd.read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(add_file),))
             if df_one.empty:
@@ -4194,7 +4218,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if st.button("Export Vendors Mail-Merge CSV", key="rfq_mail_csv"):
             df_v = _rfq_vendors(conn, int(pk_sel))
             if df_v.empty:
-                st.caption("No vendors selected")
+                st.warning("No vendors selected")
             else:
                 out = df_v.rename(columns={"name":"VendorName","email":"VendorEmail","phone":"VendorPhone"})[["VendorName","VendorEmail","VendorPhone"]]
                 out["Subject"] = f"Request for Quote – {_rfq_pack_by_id(conn, int(pk_sel)).get('title')}"
@@ -4207,7 +4231,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if st.button("Export CLINs CSV", key="rfq_clins_csv"):
             df = _rfq_lines(conn, int(pk_sel))
             if df.empty:
-                st.caption("No CLINs yet")
+                st.warning("No CLINs yet")
             else:
                 path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_CLINs.csv")
                 df.to_csv(path, index=False)
@@ -4674,7 +4698,7 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
                     conn.commit()
                 st.success("Workspace created"); st.rerun()
             else:
-                st.caption("Enter a name")
+                st.warning("Enter a name")
 
 
 
@@ -4795,7 +4819,7 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
             with closing(conn.cursor()) as cur:
                 cur.execute("DELETE FROM pb_sections_t WHERE id=?;", (int(sel),))
                 conn.commit()
-            st.caption("Deleted")
+            st.warning("Deleted")
             st.rerun()
 
     with c3:
