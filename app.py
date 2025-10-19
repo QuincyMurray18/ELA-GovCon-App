@@ -90,6 +90,22 @@ def feature_flag(name: str, default: bool=False) -> bool:
             val = _os.environ[env_key]
     except Exception:
         pass
+
+
+def _guess_solnum(text: str) -> str:
+    if not text:
+        return ""
+    t = text
+    m = re.search(r'(?i)Solicitation\s*(?:Number|No\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', t)
+    if m:
+        return m.group(1)[:60]
+    m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', t)
+    if m:
+        return m.group(1)[:60]
+    m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', t, re.I)
+    if m:
+        return (m.group(1).upper() + "-" + m.group(2))[:60]
+    return ""
     if val is None:
         try:
             import streamlit as _st  # type: ignore
@@ -1430,7 +1446,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X3 applied")
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X4 applied")
                 try:
                     df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
                     opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
@@ -1571,7 +1587,15 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             'set_aside': _extract_set_aside(full_text),
                             'place_of_performance': _extract_place(full_text),
                         }
-                        with closing(conn.cursor()) as cur:
+                        
+                        # X4: persist meta to rfp_meta for combined RFP
+                        try:
+                            for _k, _v in (meta or {}).items():
+                                if _v:
+                                    cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(_k), str(_v)))
+                        except Exception:
+                            pass
+with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                                 (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",)
@@ -1648,7 +1672,15 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             'set_aside': _extract_set_aside(text),
                             'place_of_performance': _extract_place(text),
                         }
-                        with closing(conn.cursor()) as cur:
+                        
+                        # X4: persist meta to rfp_meta per-file
+                        try:
+                            for _k, _v in (meta or {}).items():
+                                if _v:
+                                    cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(_k), str(_v)))
+                        except Exception:
+                            pass
+with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                                 (_guess_title(text, f.name), _guess_solnum(text), "", "", "",)
@@ -1765,6 +1797,23 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             key="rfp_data_sel"
         )
         
+        
+        with st.expander("Acquisition Meta (X4)", expanded=False):
+            try:
+                df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+            except Exception:
+                df_meta_all = pd.DataFrame(columns=['key','value'])
+            if df_meta_all is None or df_meta_all.empty:
+                st.write("No meta extracted yet.")
+            else:
+                # Highlight common fields
+                want = ['naics','set_aside','place_of_performance','pop_structure','ordering_period_years','base_months']
+                show = df_meta_all[df_meta_all["key"].isin(want)]
+                if show.empty:
+                    st.dataframe(df_meta_all, use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(show, use_container_width=True, hide_index=True)
+
         with st.expander("Ordering / POP (X3)", expanded=False):
             try:
                 df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
