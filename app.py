@@ -5178,7 +5178,8 @@ def samx_index_doc_text(conn: sqlite3.Connection, notice_id: str) -> dict:
             errs += 1
     return {"indexed": done, "errors": errs}
 def samx_ingest_notice_by_id(conn: sqlite3.Connection, client: "SamXClient", notice_id: str) -> dict:
-    _ensure_sam_schema_safe(conn)
+    # Header-only ingest. Docs and people skipped for stability.
+    ensure_sam_schema(conn)
     try:
         res = samx_fetch_detail(client, notice_id)
     except Exception as e:
