@@ -1321,7 +1321,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_parse:
 
         # --- X1 Ingest: File Library + Health ---
-        if flag('x_ingest', False):
+        if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
                 st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available.")
                 ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
