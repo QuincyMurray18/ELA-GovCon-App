@@ -4092,6 +4092,40 @@ def migrate(conn: sqlite3.Connection) -> None:
             cur.execute("UPDATE schema_version SET ver=4 WHERE id=1;")
             conn.commit()
 
+        # v5: SAM X docs local_path and text table
+        if ver < 5:
+            try:
+                cur.execute("ALTER TABLE sam_docs ADD COLUMN local_path TEXT")
+            except Exception:
+                pass
+            try:
+                cur.execute("""CREATE TABLE IF NOT EXISTS sam_doc_text(
+                    id INTEGER PRIMARY KEY,
+                    doc_id INTEGER NOT NULL,
+                    notice_id TEXT NOT NULL,
+                    sha256 TEXT,
+                    text LONGTEXT
+                );""")
+            except Exception:
+                # SQLite doesn't know LONGTEXT; fall back to TEXT
+                try:
+                    cur.execute("""CREATE TABLE IF NOT EXISTS sam_doc_text(
+                        id INTEGER PRIMARY KEY,
+                        doc_id INTEGER NOT NULL,
+                        notice_id TEXT NOT NULL,
+                        sha256 TEXT,
+                        text TEXT
+                    );""")
+                except Exception:
+                    pass
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_doc_text_doc ON sam_doc_text(doc_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_doc_text_notice ON sam_doc_text(notice_id)")
+            except Exception:
+                pass
+            cur.execute("UPDATE schema_version SET ver=5 WHERE id=1;")
+            conn.commit()
+
 # ---------- Phase N: Backup & Data ----------
 def _current_tenant(conn: sqlite3.Connection) -> int:
     try:
@@ -4633,3 +4667,210 @@ def samx_cache_page(conn: sqlite3.Connection, query_hash: str, page: int, result
             results_json=excluded.results_json
         ;""", (query_hash, int(page), now, results_json))
         conn.commit()
+
+
+# Phase X2: Detail and Docs helpers
+def _samx_get_detail_base() -> str:
+    # Allow override via secrets or env
+    base = None
+    try:
+        import os
+        base = os.environ.get("SAM_API_DETAIL_BASE")
+    except Exception:
+        pass
+    try:
+        import streamlit as st
+        base = base or st.secrets.get("sam", {}).get("detail_base")
+    except Exception:
+        pass
+    return base or "https://api.sam.gov/prod/opportunities/v2/opportunities"
+
+def samx_fetch_detail(client: "SamXClient", notice_id: str) -> dict:
+    import requests
+    url = f"{_samx_get_detail_base().rstrip('/')}/{notice_id}"
+    q = {"api_key": client.api_key or ""}
+    try:
+        r = requests.get(url, params=q, timeout=client.timeout)
+        if r.status_code != 200:
+            return {"ok": False, "status": r.status_code, "data": {}}
+        return {"ok": True, "status": 200, "data": r.json()}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "data": {}}
+
+def _samx_get_list(obj, key, default=None):
+    v = obj.get(key) if isinstance(obj, dict) else None
+    if v is None:
+        return default or []
+    if isinstance(v, list):
+        return v
+    return [v]
+
+def _samx_get(obj, *keys, default=None):
+    cur = obj
+    for k in keys:
+        if isinstance(cur, dict) and k in cur:
+            cur = cur[k]
+        else:
+            return default
+    return cur
+
+def samx_extract_fields(detail: dict) -> dict:
+    d = detail or {}
+    # Try multiple possible paths to be resilient
+    core = d.get("opportunity", d.get("opportunitiesData", d))
+    notice_id = str(_samx_get(core, "noticeId", default=_samx_get(core, "notice_id", default="")))
+    title = _samx_get(core, "title", default=_samx_get(core, "noticeTitle", default="")).strip()
+    ntype = _samx_get(core, "type", default=_samx_get(core, "noticeType", default=""))
+    agency = _samx_get(core, "agency", "name", default=_samx_get(core, "agency", default=""))
+    office = _samx_get(core, "office", "name", default=_samx_get(core, "office", default=""))
+    naics = _samx_get(core, "naics", default=_samx_get(core, "naicsCode", default=""))
+    psc = _samx_get(core, "psc", default=_samx_get(core, "pscCode", default=""))
+    set_aside = _samx_get(core, "setAside", default=_samx_get(core, "typeOfSetAside", default=""))
+    place = _samx_get(core, "placeOfPerformance", default={})
+    place_state = _samx_get(place, "state", default="")
+    place_city = _samx_get(place, "city", default="")
+    pop_zip = _samx_get(place, "zip", default="")
+    posted = _samx_get(core, "postedDate", default=_samx_get(core, "publishDate", default=""))
+    due = _samx_get(core, "responseDate", default=_samx_get(core, "archiveDate", default=_samx_get(core, "closeDate", default="")))
+    status = _samx_get(core, "status", default=_samx_get(core, "active", default=""))
+    url = _samx_get(core, "uiLink", default=_samx_get(core, "url", default=""))
+    raw_json = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    return {
+        "notice_id": notice_id, "type": ntype, "title": title, "agency": agency, "office": office,
+        "naics": naics, "psc": psc, "set_aside": set_aside,
+        "place_state": place_state, "place_city": place_city, "pop_zip": pop_zip,
+        "posted_date": posted, "due_date": due, "status": str(status),
+        "url": url, "raw_json": raw_json, "first_seen": now, "last_seen": now, "inactive": 0
+    }
+
+def samx_extract_pocs(detail: dict) -> list[dict]:
+    d = detail or {}
+    core = d.get("opportunity", d.get("opportunitiesData", d))
+    contacts = []
+    for k in ["contacts", "contact", "pointsOfContact", "pointOfContact"]:
+        for c in _samx_get_list(core, k, default=[]):
+            if not isinstance(c, dict):
+                continue
+            contacts.append({
+                "name": c.get("name") or c.get("fullName"),
+                "role": c.get("role") or c.get("type"),
+                "email": c.get("email") or c.get("emailAddress"),
+                "phone": c.get("phone") or c.get("phoneNumber"),
+                "office": c.get("office") or c.get("department")
+            })
+    # de-dup by (email,phone,name)
+    uniq = {}
+    for c in contacts:
+        key = (c.get("email"), c.get("phone"), c.get("name"))
+        if key not in uniq:
+            uniq[key] = c
+    return list(uniq.values())
+
+def samx_extract_docs(detail: dict) -> list[dict]:
+    d = detail or {}
+    core = d.get("opportunity", d.get("opportunitiesData", d))
+    docs = []
+    for k in ["attachments", "documents", "files"]:
+        for a in _samx_get_list(core, k, default=[]):
+            if not isinstance(a, dict):
+                continue
+            url = a.get("url") or a.get("href") or a.get("downloadUrl")
+            if not url:
+                continue
+            docs.append({
+                "url": url,
+                "filename": a.get("fileName") or a.get("name"),
+                "size": a.get("size") or a.get("fileSize"),
+                "mime": a.get("mime") or a.get("contentType")
+            })
+    # de-dup by url
+    seen = set(); out = []
+    for d1 in docs:
+        u = d1.get("url")
+        if u in seen:
+            continue
+        seen.add(u); out.append(d1)
+    return out
+
+def samx_ingest_detail(conn: sqlite3.Connection, detail: dict) -> str | None:
+    info = samx_extract_fields(detail)
+    nid = info.get("notice_id") or None
+    if not nid:
+        return None
+    samx_upsert_notice(conn, info)
+    for poc in samx_extract_pocs(detail):
+        samx_upsert_poc(conn, info["notice_id"], poc)
+    for doc in samx_extract_docs(detail):
+        samx_upsert_doc(conn, info["notice_id"], doc)
+    return info["notice_id"]
+
+def _samx_doc_save_path(notice_id: str, filename: str) -> str:
+    import os
+    from pathlib import Path
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]+', '_', filename or 'file')
+    dest_dir = Path(UPLOADS_DIR) / "sam" / notice_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    return str(dest_dir / safe_name)
+
+def samx_download_missing_docs(conn: sqlite3.Connection, notice_id: str, timeout: int = 30) -> list[dict]:
+    """Download docs without local_path. Compute sha256 and size. Idempotent."""
+    import requests, hashlib, mimetypes, os
+    out = []
+    with closing(conn.cursor()) as cur:
+        rows = cur.execute("SELECT id, url, filename FROM sam_docs WHERE notice_id=? AND (local_path IS NULL OR local_path='')", (notice_id,)).fetchall()
+    for rid, url, fn in rows:
+        path = _samx_doc_save_path(notice_id, fn or "file")
+        try:
+            r = requests.get(url, timeout=timeout, allow_redirects=True)
+            if r.status_code != 200:
+                err = f"HTTP {r.status_code}"
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (err, rid)); conn.commit()
+                out.append({"id": rid, "status": err}); continue
+            data = r.content
+            sha = hashlib.sha256(data).hexdigest()
+            with open(path, "wb") as f:
+                f.write(data)
+            size = len(data)
+            mime = r.headers.get("Content-Type") or (mimetypes.guess_type(path)[0] or "application/octet-stream")
+            with closing(conn.cursor()) as cur:
+                cur.execute("UPDATE sam_docs SET local_path=?, sha256=?, size=?, mime=?, fetched_at=datetime('now') WHERE id=?", (path, sha, size, mime, rid))
+                conn.commit()
+            out.append({"id": rid, "status": "saved", "path": path, "sha256": sha, "size": size})
+        except Exception as e:
+            with closing(conn.cursor()) as cur:
+                cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (str(e), rid)); conn.commit()
+            out.append({"id": rid, "status": f"error {e}"})
+    return out
+
+def samx_index_doc_text(conn: sqlite3.Connection, notice_id: str) -> dict:
+    """Extract text for downloaded docs where not yet indexed. Uses existing extract_text_from_file()."""
+    with closing(conn.cursor()) as cur:
+        docs = cur.execute("SELECT id, local_path, sha256 FROM sam_docs WHERE notice_id=? AND local_path IS NOT NULL AND local_path!='' AND (text_indexed IS NULL OR text_indexed=0)", (notice_id,)).fetchall()
+    done = 0; errs = 0
+    for did, path, sha in docs:
+        try:
+            txt = extract_text_from_file(path) or ""
+            with closing(conn.cursor()) as cur:
+                cur.execute("INSERT INTO sam_doc_text(doc_id, notice_id, sha256, text) VALUES(?,?,?,?)", (did, notice_id, sha, txt))
+                cur.execute("UPDATE sam_docs SET text_indexed=1 WHERE id=?", (did,))
+                conn.commit()
+            done += 1
+        except Exception as e:
+            with closing(conn.cursor()) as cur:
+                cur.execute("UPDATE sam_docs SET error=? WHERE id=?", (str(e), did)); conn.commit()
+            errs += 1
+    return {"indexed": done, "errors": errs}
+
+def samx_ingest_notice_by_id(conn: sqlite3.Connection, client: "SamXClient", notice_id: str) -> dict:
+    """Fetch detail then ingest, download docs, index text. Returns a summary dict."""
+    res = samx_fetch_detail(client, notice_id)
+    if not res.get("ok"):
+        return {"ok": False, "step": "fetch_detail", "error": res.get("error") or res.get("status")}
+    nid = samx_ingest_detail(conn, res.get("data") or {})
+    if not nid:
+        return {"ok": False, "step": "ingest_detail", "error": "no notice_id"}
+    dl = samx_download_missing_docs(conn, nid)
+    ix = samx_index_doc_text(conn, nid)
+    return {"ok": True, "notice_id": nid, "downloads": dl, "index": ix}
