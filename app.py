@@ -1,5 +1,29 @@
 from __future__ import annotations
 
+def _do_ingest_open_qv(conn, client, qid):
+    import streamlit as st
+    try:
+        _res = _do_ingest_open_qv(conn, client, qid)
+    except Exception as _e:
+        st.warning(f"Ingest exception: {_e}")
+        return {"ok": False, "step": "ingest_call", "error": repr(_e)}
+    if _res.get("ok"):
+        st.session_state["sam_quickview_open"] = True
+        st.session_state["sam_quickview_notice_id"] = qid
+        return _res
+    if str(_res.get("error")) == "404":
+        st.info("Partial ingest from search. Attachments not pulled.")
+        st.session_state["sam_quickview_open"] = True
+        st.session_state["sam_quickview_notice_id"] = qid
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+        return _res
+    # other errors
+    st.warning(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
+    return _res
+
 # --- Early shim to ensure Quickview renderer exists before UI code ---
 RENDER_QV_EARLY = True
 def render_sam_quickview(conn):
@@ -1164,6 +1188,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.session_state['sam_quickview_open'] = True
                 st.session_state['sam_quickview_notice_id'] = qid
                 try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+
+                st.session_state['sam_quickview_open'] = True
+                st.session_state['sam_quickview_notice_id'] = qid
+                try:
                     _safe_rerun(f"qv_open:{qid}")
                 except Exception:
                     pass
@@ -1206,7 +1237,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                         if not _ingest:
                             st.error("Ingest function missing.")
                         else:
-                            _res = _ingest(conn, client, qid)
+                            _res = _do_ingest_open_qv(conn, client, qid)
                             if _res.get("ok"):
                                 st.success("Details pulled")
                                 st.session_state["sam_quickview_open"] = True
@@ -1219,7 +1250,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                 if str(_res.get("error")) == "404":
                                     st.info("Partial ingest from search. Attachments not pulled.")
                                 else:
-                                    st.warning(f"Fetch issue: {_res}")
+                                    st.warning(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
                 except Exception as _e:
                     import traceback
                     st.exception(_e)
