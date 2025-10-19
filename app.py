@@ -1072,35 +1072,61 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     with col_qv2:
                         if st.button("Pull full detail + docs", key="qv_ingest_btn"):
                             try:
+                                # Resolve SamXClient safely
                                 _SamX = globals().get("SamXClient")
                                 if _SamX is None:
                                     try:
-                                        from app import SamXClient as _SamX
+                                        from app import SamXClient as _SamX  # when running as app.py
                                     except Exception:
                                         _SamX = None
                                 client = _SamX.from_env() if _SamX else None
                                 if not client:
                                     st.error("SamXClient missing. Ensure Phase X1 is applied and SAM_API_KEY is set.")
                                 else:
-                                    import sys, importlib
-                                    _mod = sys.modules.get("__main__")
-                                    _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
-                                    if _ingest is None:
-                                        try:
-                                            _ingest = importlib.import_module("app").samx_ingest_notice_by_id
-                                        except Exception:
-                                            _ingest = globals().get("samx_ingest_notice_by_id")
-                                    if not _ingest:
-                                        st.error("Ingest function missing. Ensure Phase X2 is applied.")
+                                    # Derive a valid notice_id
+                                    import re as _re
+                                    _nid = str(row.get("Notice ID", "")).strip()
+                                    if len(_nid) < 20:
+                                        _link = str(row.get("SAM Link", ""))
+                                        _m = _re.search(r"/opp/([^/]+)/view", _link)
+                                        if _m:
+                                            _nid = _m.group(1)
+                                    if not _nid:
+                                        st.error("No Notice ID found on this row.")
                                     else:
-                                        _res = _ingest(conn, client, str(row["Notice ID"]))
-                                    if _res.get("ok"):
-                                        st.success("Detail and documents pulled")
-                                        st.session_state["sam_quickview_open"] = True
-                                        st.session_state["sam_quickview_notice_id"] = str(row["Notice ID"])
-                                        st.rerun()
-                                    else:
-                                        st.warning(f"Fetch issue: {_res}")
+                                        # Resolve ingest function
+                                        import sys, importlib
+                                        _mod = sys.modules.get("__main__")
+                                        _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
+                                        if _ingest is None:
+                                            try:
+                                                _ingest = importlib.import_module("app").samx_ingest_notice_by_id
+                                            except Exception:
+                                                _ingest = globals().get("samx_ingest_notice_by_id")
+                                        if not _ingest:
+                                            st.error("Ingest function missing. Ensure Phase X2 is applied.")
+                                        else:
+                                            _res = _ingest(conn, client, _nid)
+                                            # 404 fallback: try to resolve canonical noticeId via search
+                                            if not _res.get("ok") and str(_res.get("error")) == "404":
+                                                _sr = client.search({"noticeId": _nid, "page": 0, "limit": 1})
+                                                try:
+                                                    data = _sr.get("data") or {}
+                                                    arr = data.get("opportunitiesData") or data.get("opportunity") or []
+                                                    if isinstance(arr, dict):
+                                                        arr = [arr]
+                                                    _nid2 = arr and arr[0].get("noticeId")
+                                                except Exception:
+                                                    _nid2 = None
+                                                if _nid2 and _nid2 != _nid:
+                                                    _res = _ingest(conn, client, _nid2)
+                                            if _res.get("ok"):
+                                                st.success("Detail and documents pulled")
+                                                st.session_state["sam_quickview_open"] = True
+                                                st.session_state["sam_quickview_notice_id"] = _nid
+                                                st.rerun()
+                                            else:
+                                                st.warning(f"Fetch issue: {_res}")
                             except Exception as _e:
                                 st.error(f"Ingest failed: {_e}")
             c3, c4, c5 = st.columns([2, 2, 2])
