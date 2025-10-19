@@ -5,6 +5,46 @@ def _do_ingest_open_qv(conn, client, qid):
     try:
         _res = _do_ingest_open_qv(conn, client, qid)
     except Exception as _e:
+        # Avoid calling possibly-shadowed warning; show text instead
+        try:
+            import traceback as _tb
+            _msg = "".join(_tb.format_exception(type(_e), _e, _e.__traceback__))
+        except Exception:
+            _msg = repr(_e)
+        try:
+            st.caption("Ingest exception")
+            st.text(_msg[-4000:])
+        except Exception:
+            pass
+        return {"ok": False, "step": "ingest_call", "error": _msg}
+    if _res.get("ok"):
+        st.session_state["sam_quickview_open"] = True
+        st.session_state["sam_quickview_notice_id"] = qid
+        return _res
+    if str(_res.get("error")) == "404":
+        try:
+            st.info("Partial ingest from search. Attachments not pulled.")
+        except Exception:
+            pass
+        st.session_state["sam_quickview_open"] = True
+        st.session_state["sam_quickview_notice_id"] = qid
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+        return _res
+    try:
+        st.caption(f"Fetch issue: {_res}")
+    except Exception:
+        pass
+    return _res
+
+
+def _do_ingest_open_qv(conn, client, qid):
+    import streamlit as st
+    try:
+        _res = _do_ingest_open_qv(conn, client, qid)
+    except Exception as _e:
         st.warning(f"Ingest exception: {_e}")
         return {"ok": False, "step": "ingest_call", "error": repr(_e)}
     if _res.get("ok"):
