@@ -1068,19 +1068,28 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                         if st.button("Quickview", key="qv_open_btn"):
                             st.session_state["sam_quickview_open"] = True
                             st.session_state["sam_quickview_notice_id"] = str(row["Notice ID"])
+                            st.rerun()
                     with col_qv2:
                         if st.button("Pull full detail + docs", key="qv_ingest_btn"):
                             try:
-                                (_SamX := (globals().get("SamXClient") or __import__(__name__).__dict__.get("SamXClient") or __import__("app", fromlist=["SamXClient"]).__dict__.get("SamXClient", None) if "app" in __import__("sys").modules else None)) and _SamX.from_env()
-                                    
+                                _SamX = globals().get("SamXClient")
+                                if _SamX is None:
+                                    try:
+                                        from app import SamXClient as _SamX
+                                    except Exception:
+                                        _SamX = None
+                                client = _SamX.from_env() if _SamX else None
                                 if not client:
-                                    st.error("SamXClient missing. Ensure Phase X1 is applied.")
+                                    st.error("SamXClient missing. Ensure Phase X1 is applied and SAM_API_KEY is set.")
                                 else:
                                     _res = samx_ingest_notice_by_id(conn, client, str(row["Notice ID"]))
-                                if _res.get("ok"):
-                                    st.success("Detail and documents pulled")
-                                else:
-                                    st.warning(f"Fetch issue: {_res}")
+                                    if _res.get("ok"):
+                                        st.success("Detail and documents pulled")
+                                        st.session_state["sam_quickview_open"] = True
+                                        st.session_state["sam_quickview_notice_id"] = str(row["Notice ID"])
+                                        st.rerun()
+                                    else:
+                                        st.warning(f"Fetch issue: {_res}")
                             except Exception as _e:
                                 st.error(f"Ingest failed: {_e}")
             c3, c4, c5 = st.columns([2, 2, 2])
@@ -1117,6 +1126,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
+
+
+# Phase X3 sidebar render
+try:
+    render_sam_quickview(get_db())
+except Exception:
+    pass
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
