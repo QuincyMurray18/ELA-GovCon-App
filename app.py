@@ -1,32 +1,5 @@
 from __future__ import annotations
 
-# --- Early shim to ensure Quickview renderer exists before UI code ---
-RENDER_QV_EARLY = True
-def render_sam_quickview(conn):
-    import streamlit as st
-    from contextlib import closing as _closing
-    nid = st.session_state.get("sam_quickview_notice_id")
-    if not st.session_state.get("sam_quickview_open") or not nid:
-        return
-    with st.sidebar:
-        st.markdown("### Ask RFP Analyzer")
-        st.caption(f"Notice: {nid}")
-        # minimal header
-        try:
-            with _closing(conn.cursor()) as cur:
-                cur.execute("SELECT title, agency, posted_date, due_date FROM sam_notices WHERE notice_id=?;", (str(nid).lower(),))
-                row = cur.fetchone()
-            if row:
-                t, a, p, d = [x or "" for x in row]
-                st.write(f"**{t}**")
-                st.caption(" | ".join(filter(None, [f"Agency: {a}", f"Posted: {p}", f"Due: {d}"])))
-        except Exception as _e:
-            st.caption(f"Quickview DB error: {_e}")
-        if st.button("Close", key=f"qv_close_{nid}_{seq}"):
-            st.session_state["sam_quickview_open"] = False
-            st.session_state["sam_quickview_notice_id"] = ""
-# --- End shim ---
-
 
 def samx_extract_notice_id(val: str) -> str:
     """Return 32-hex notice id from raw id or any SAM URL variant."""
@@ -1146,20 +1119,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         c1, c2 = st.columns([1,1])
         with c1:
             if st.button("Quickview", key=f"qv_open_btn_{qid}"):
-                st.session_state['sam_quickview_open'] = True
-                st.session_state['sam_quickview_notice_id'] = qid
-                try:
-                    _safe_rerun(f"qv_open:{qid}")
-                except Exception:
-                    pass
-                import sys
-                _fn = globals().get('render_sam_quickview') or getattr(sys.modules.get('__main__'), 'render_sam_quickview', None)
-                if callable(_fn):
-                    try:
-                        _fn(conn)
-                    except Exception as _e:
-                        st.caption(f"Quickview render error: {_e}")
-
                 st.session_state["sam_quickview_open"] = True
                 st.session_state["sam_quickview_notice_id"] = qid
                 try:
@@ -1208,7 +1167,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 except Exception as _e:
                     import traceback
                     st.exception(_e)
-        import sys
         import sys
         _fn = globals().get('render_sam_quickview') or getattr(sys.modules.get('__main__'), 'render_sam_quickview', None)
         if callable(_fn):
