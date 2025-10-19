@@ -1,6 +1,51 @@
 from __future__ import annotations
 import pandas as pd  # early import to avoid NameError before main()
 
+def render_sam_quickview(conn: sqlite3.Connection) -> None:
+    import streamlit as st
+    from contextlib import closing
+    nid = st.session_state.get("sam_quickview_notice_id")
+    if not st.session_state.get("sam_quickview_open") or not nid:
+        return
+    with st.sidebar:
+        st.markdown("### Ask RFP Analyzer")
+        st.caption(f"Notice: {nid}")
+        try:
+            with closing(conn.cursor()) as cur:
+                row = cur.execute(
+                    "SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status "
+                    "FROM sam_notices WHERE notice_id=?", (nid,)
+                ).fetchone()
+        except Exception as _e:
+            row = None
+            st.caption(f"Quickview DB error: {_e}")
+        if row:
+            keys = ["Title","Agency","Office","NAICS","PSC","Set-Aside","State","City","Posted","Due","Status"]
+            st.write("\n".join(f"{k}: {v or ''}" for k,v in zip(keys,row)))
+        try:
+            with closing(conn.cursor()) as cur:
+                docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+        except Exception:
+            docs = []
+        if docs:
+            st.markdown("**Documents**")
+            for did, fn in docs:
+                c1, c2 = st.columns([3,1])
+                c1.write(fn or f"doc {did}")
+                if c2.button("Summarize", key=f"sum_doc_{nid}_{did}"):
+                    try:
+                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require text indexing."
+                    except Exception as e:
+                        ds = f"Summary error: {e}"
+                    st.session_state["sam_quickview_doc_summary"] = ds
+        ds = st.session_state.get("sam_quickview_doc_summary")
+        if ds:
+            st.markdown("**Document Summary**")
+            st.write(ds)
+        if st.button("Close", key=f"qv_close_{nid}"):
+            st.session_state["sam_quickview_open"] = False
+            st.session_state["sam_quickview_notice_id"] = ""
+
 def _ensure_sam_schema_safe(conn: sqlite3.Connection) -> None:
     try:
         ensure_sam_schema  # type: ignore[name-defined]
@@ -139,9 +184,10 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
     if st.session_state.get("_qv_rendered"):
         return
     st.session_state["_qv_rendered"] = True
-with st.sidebar:
+if False:
+    with st.sidebar:
         st.markdown("### Ask RFP Analyzer")
-        st.caption(f"Notice: {nid}")
+        st.caption("Quickview")  # patched stray nid caption
         try:
             with closing(conn.cursor()) as cur:
                 row = cur.execute(
