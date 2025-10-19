@@ -1595,7 +1595,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                     cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(_k), str(_v)))
                         except Exception:
                             pass
-with closing(conn.cursor()) as cur:
+                        with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                                 (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",)
@@ -1650,7 +1650,7 @@ with closing(conn.cursor()) as cur:
                                     st.session_state["x1_pending_link_after_create"] = False
                             except Exception:
                                 pass
-                        st.success(f"Combined and saved RFP #{rfp_id} (items: {len(l_items)}, CLINs: {len(clins)}, dates: {len(dates)}, POCs: {len(pocs)}).")
+                            st.success(f"Combined and saved RFP #{rfp_id} (items: {len(l_items)}, CLINs: {len(clins)}, dates: {len(dates)}, POCs: {len(pocs)}).")
                 else:
                     saved = 0
                     for f in ups or []:
@@ -1680,7 +1680,7 @@ with closing(conn.cursor()) as cur:
                                     cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(_k), str(_v)))
                         except Exception:
                             pass
-with closing(conn.cursor()) as cur:
+                        with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                                 (_guess_title(text, f.name), _guess_solnum(text), "", "", "",)
