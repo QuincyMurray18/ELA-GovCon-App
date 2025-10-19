@@ -4422,6 +4422,14 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
 def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
+# Phase X3 hook: render quickview if open
+try:
+    if "run_sam_watch" in globals():
+        render_sam_quickview(globals().get("_last_conn_for_sam", None) or get_db())
+except Exception:
+    pass
+
+
 
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
@@ -4874,3 +4882,162 @@ def samx_ingest_notice_by_id(conn: sqlite3.Connection, client: "SamXClient", not
     dl = samx_download_missing_docs(conn, nid)
     ix = samx_index_doc_text(conn, nid)
     return {"ok": True, "notice_id": nid, "downloads": dl, "index": ix}
+
+
+# Phase X3: Quickview and Summaries
+def _ai_summarize(text: str, system: str = "Summarize for a GovCon capture team. Be concise.") -> str:
+    """
+    Tries OpenAI if configured. Falls back to extractive summary.
+    Set OPENAI_API_KEY (and optional OPENAI_MODEL) in env or secrets.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    # Try OpenAI SDK v1 style
+    try:
+        import os
+        model = os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            try:
+                from openai import OpenAI  # new SDK
+                client = OpenAI(api_key=api_key)
+                msg = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role":"system","content":system},
+                        {"role":"user","content":text[:12000]}
+                    ],
+                    temperature=0.2,
+                    max_tokens=400
+                )
+                return msg.choices[0].message.content.strip()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Fallback extractive
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    # take top-N informative lines
+    out = []
+    for ln in lines:
+        if len(out) >= 12: break
+        if len(ln) > 60 and not ln.lower().startswith(("attachment","page ","table of contents")):
+            out.append(ln)
+    return "\n".join(out)[:3000]
+
+def _notice_text_blob(conn: sqlite3.Connection, notice_id: str) -> str:
+    parts = []
+    with closing(conn.cursor()) as cur:
+        # basic fields
+        row = cur.execute("SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status FROM sam_notices WHERE notice_id=?", (notice_id,)).fetchone()
+        if row:
+            keys = ["Title","Agency","Office","NAICS","PSC","Set-Aside","State","City","Posted","Due","Status"]
+            parts.append("\n".join(f"{k}: {v or ''}" for k,v in zip(keys, row)))
+        # doc text
+        docs = cur.execute("SELECT sdt.text FROM sam_doc_text sdt JOIN sam_docs sd ON sd.id=sdt.doc_id WHERE sd.notice_id=? ORDER BY sdt.id ASC LIMIT 8", (notice_id,)).fetchall()
+        for (t,) in docs:
+            if t:
+                parts.append(t)
+    return "\n\n".join(parts)
+
+def build_notice_summary(conn: sqlite3.Connection, notice_id: str) -> str:
+    blob = _notice_text_blob(conn, notice_id)
+    if not blob:
+        return "No detail or document text available yet."
+    prompt = "Summarize the opportunity for capture. Include Requirement, Key Dates, Set-Aside, NAICS/PSC, Place of Performance, and Submission specifics."
+    return _ai_summarize(blob, system=prompt)
+
+def build_doc_summary(conn: sqlite3.Connection, doc_id: int) -> str:
+    with closing(conn.cursor()) as cur:
+        row = cur.execute("SELECT text FROM sam_doc_text WHERE doc_id=?", (int(doc_id),)).fetchone()
+    text = row[0] if row else ""
+    if not text:
+        # try to read file and extract immediately
+        row2 = None
+        with closing(conn.cursor()) as cur:
+            row2 = cur.execute("SELECT local_path FROM sam_docs WHERE id=?", (int(doc_id),)).fetchone()
+        if row2 and row2[0]:
+            try:
+                text = extract_text_from_file(row2[0]) or ""
+            except Exception:
+                text = ""
+    if not text:
+        return "No text available for this document yet."
+    prompt = "Summarize this procurement document. Focus on scope, deliverables, eligibility, evaluation, and submission requirements."
+    return _ai_summarize(text[:16000], system=prompt)
+
+def _simple_qa(texts: list[str], question: str) -> str:
+    q = question.strip().lower()
+    if not q:
+        return ""
+    hits = []
+    for t in texts:
+        for para in t.split("\n\n"):
+            if all(tok in para.lower() for tok in q.split()[:5]):
+                hits.append(para.strip())
+                if len(hits) >= 5: break
+        if len(hits) >= 5: break
+    if hits:
+        return "\n\n".join(hits[:5])[:2000]
+    # fallback
+    return _ai_summarize("\n\n".join(texts)[:12000], system="Answer the user's question from the provided text.")
+
+def render_sam_quickview(conn: sqlite3.Connection) -> None:
+    import streamlit as st
+    if not flag("quickview", True):
+        return
+    nid = st.session_state.get("sam_quickview_notice_id")
+    open_ = st.session_state.get("sam_quickview_open", False) and bool(nid)
+    if not open_:
+        return
+    with st.sidebar:
+        st.markdown("### Ask RFP Analyzer")
+        st.caption(f"Notice: {nid}")
+        # Summary
+        if st.button("Refresh summary", key="qv_refresh"):
+            st.session_state.pop("sam_quickview_summary", None)
+        summary = st.session_state.get("sam_quickview_summary")
+        if not summary:
+            try:
+                summary = build_notice_summary(conn, nid)
+            except Exception as e:
+                summary = f"Summary unavailable: {e}"
+            st.session_state["sam_quickview_summary"] = summary
+        st.write(summary)
+        # Document list
+        with closing(conn.cursor()) as cur:
+            docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+        if docs:
+            st.markdown("**Documents**")
+            for did, fn in docs:
+                cols = st.columns([3,1])
+                with cols[0]:
+                    st.write(fn or f"doc {did}")
+                with cols[1]:
+                    if st.button("Summarize", key=f"sum_doc_{did}"):
+                        st.session_state["sam_quickview_doc_summary"] = build_doc_summary(conn, did)
+        docsum = st.session_state.get("sam_quickview_doc_summary")
+        if docsum:
+            st.markdown("**Document Summary**")
+            st.write(docsum)
+        # QA
+        st.markdown("---")
+        q = st.text_input("Ask about this notice", key="qv_q")
+        if st.button("Ask", key="qv_ask"):
+            # assemble texts
+            texts = []
+            with closing(conn.cursor()) as cur:
+                rows = cur.execute("SELECT text FROM sam_doc_text WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+            texts = [r[0] for r in rows if r and r[0]]
+            if not texts:
+                blob = _notice_text_blob(conn, nid)
+                texts = [blob] if blob else []
+            st.session_state["sam_quickview_answer"] = _simple_qa(texts, q)
+        ans = st.session_state.get("sam_quickview_answer")
+        if ans:
+            st.markdown("**Answer**")
+            st.write(ans)
+        if st.button("Close", key="qv_close"):
+            st.session_state["sam_quickview_open"] = False
+            st.session_state["sam_quickview_notice_id"] = None
