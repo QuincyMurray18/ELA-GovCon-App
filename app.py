@@ -712,17 +712,11 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
 
 # ---------------------- Phase B: RFP parsing helpers ----------------------
 def _safe_import_pdf_extractors():
-    pdf_lib = None
-    try:
-        import PyPDF2  # type: ignore
-        pdf_lib = ('pypdf2', PyPDF2)
-    except Exception:
-        try:
-            import pdfplumber  # type: ignore
-            pdf_lib = ('pdfplumber', pdfplumber)
-        except Exception:
-            pdf_lib = None
-    return pdf_lib
+    if _pypdf is not None:
+        return ('pypdf', _pypdf)
+    if _pdfplumber is not None:
+        return ('pdfplumber', _pdfplumber)
+    return None
 
 
 
@@ -1385,7 +1379,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".pdf"):
                 try:
-                    reader = PyPDF2.PdfReader(io.BytesIO(data))
+                    reader = _pypdf.PdfReader(io.BytesIO(data))
                     pages = [(p.extract_text() or "") for p in reader.pages]
                     return "\\n".join(pages)
                 except Exception as e:
