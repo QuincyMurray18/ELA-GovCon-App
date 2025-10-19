@@ -6,6 +6,26 @@ from typing import Optional, Any, Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
+# ---- App title fallback to avoid NameError before set_page_config ----
+import os as _os
+try:
+    import streamlit as st  # ensure available for secrets access
+except Exception:
+    import streamlit as st
+def _get_app_title_default():
+    try:
+        s = st.secrets
+        if isinstance(s, dict):
+            v = s.get("APP_TITLE") or (s.get("app", {}) or {}).get("title")
+            if v:
+                return str(v)
+    except Exception:
+        pass
+    return _os.environ.get("APP_TITLE") or "ELA GovCon"
+if "APP_TITLE" not in globals():
+    APP_TITLE = _get_app_title_default()
+# ---------------------------------------------------------------------
+
 def _safe_rerun(tag: str) -> None:
     import streamlit as st
     key = "_last_rerun_tag"
