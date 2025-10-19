@@ -1009,6 +1009,12 @@ def run_deals(conn: sqlite3.Connection) -> None:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
+    import streamlit as st
+    if st.session_state.get('sam_quickview_open') and st.session_state.get('sam_quickview_notice_id'):
+        try:
+            render_sam_quickview(conn)
+        except Exception as _e:
+            st.sidebar.caption(f'Quickview render error: {_e}')
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -1148,6 +1154,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         c1, c2 = st.columns([1,1])
         with c1:
             if st.button("Quickview", key=f"qv_open_btn_{qid}"):
+                st.session_state['sam_quickview_open'] = True
+                st.session_state['sam_quickview_notice_id'] = qid
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+
                 st.session_state['sam_quickview_open'] = True
                 st.session_state['sam_quickview_notice_id'] = qid
                 try:
