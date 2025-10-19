@@ -1,6 +1,38 @@
 from __future__ import annotations
 
 import streamlit as st
+
+# ==== Streamlit safe shims ====
+def _st_safe_writer():
+    import streamlit as st
+    def _mk(name):
+        fn = getattr(st, name, None)
+        if not callable(fn):
+            try:
+                import streamlit as _s
+                real = getattr(_s, name, None)
+                if callable(real):
+                    setattr(st, name, real)
+                    return real
+            except Exception:
+                pass
+            def _noop(*a, **k):
+                try:
+                    print(f"st.{name}:", a[0] if a else "")
+                except Exception:
+                    pass
+            setattr(st, name, _noop)
+            return _noop
+        return fn
+    return {
+        "warning": _mk("warning"),
+        "caption": _mk("caption"),
+        "info": _mk("info"),
+        "write": _mk("write"),
+        "text": _mk("text"),
+    }
+_ST = _st_safe_writer()
+# =================================
 # Repair shadowed Streamlit callables if any
 def _st_repair_callables():
     try:
@@ -19,13 +51,11 @@ def _st_repair_callables():
         pass
 _st_repair_callables()
 
-
 def _do_ingest_open_qv(conn, client, qid):
     import streamlit as st
     try:
         _res = _ingest(conn, client, qid)
     except Exception as _e:
-        # Never call st.caption/info/warning here
         try:
             import traceback as tb
             msg = "".join(tb.format_exception(type(_e), _e, _e.__traceback__))
@@ -41,10 +71,7 @@ def _do_ingest_open_qv(conn, client, qid):
         st.session_state["sam_quickview_notice_id"] = qid
         return _res
     if str(_res.get("error")) == "404":
-        try:
-            st.write("Partial ingest from search. Attachments not pulled.")
-        except Exception:
-            print("Partial ingest from search. Attachments not pulled.")
+        _ST["write"]("Partial ingest from search. Attachments not pulled.")
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
         try:
@@ -52,10 +79,7 @@ def _do_ingest_open_qv(conn, client, qid):
         except Exception:
             pass
         return _res
-    try:
-        st.write(f"Fetch issue: {_res}")
-    except Exception:
-        print(f"Fetch issue: {_res}")
+    _ST["write"](f"Fetch issue: {_res}")
     return _res
 
 def _do_ingest_open_qv(conn, client, qid):
@@ -63,14 +87,14 @@ def _do_ingest_open_qv(conn, client, qid):
     try:
         _res = _do_ingest_open_qv(conn, client, qid)
     except Exception as _e:
-        st.warning(f"Ingest exception: {_e}")
+        _ST["warning"](f"Ingest exception: {_e}")
         return {"ok": False, "step": "ingest_call", "error": repr(_e)}
     if _res.get("ok"):
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
         return _res
     if str(_res.get("error")) == "404":
-        st.info("Partial ingest from search. Attachments not pulled.")
+        _ST["info"]("Partial ingest from search. Attachments not pulled.")
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
         try:
@@ -79,7 +103,7 @@ def _do_ingest_open_qv(conn, client, qid):
             pass
         return _res
     # other errors
-    st.warning(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
+    _ST["warning"](f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
     return _res
 
 # --- Early shim to ensure Quickview renderer exists before UI code ---
@@ -94,7 +118,7 @@ def render_sam_quickview(conn):
         return
     with st.sidebar:
         st.markdown("### Ask RFP Analyzer")
-        st.caption(f"Notice: {nid}")
+        _ST["caption"](f"Notice: {nid}")
         # minimal header
         try:
             with _closing(conn.cursor()) as cur:
@@ -103,9 +127,9 @@ def render_sam_quickview(conn):
             if row:
                 t, a, p, d = [x or "" for x in row]
                 st.write(f"**{t}**")
-                st.caption(" | ".join(filter(None, [f"Agency: {a}", f"Posted: {p}", f"Due: {d}"])))
+                _ST["caption"](" | ".join(filter(None, [f"Agency: {a}", f"Posted: {p}", f"Due: {d}"])))
         except Exception as _e:
-            st.caption(f"Quickview DB error: {_e}")
+            _ST["caption"](f"Quickview DB error: {_e}")
         if st.button("Close", key=f"qv_close_{nid}_{seq}"):
             st.session_state["sam_quickview_open"] = False
             st.session_state["sam_quickview_notice_id"] = ""
@@ -1098,7 +1122,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         except Exception as _e:
             st.sidebar.caption(f'Quickview render error: {_e}')
     st.header("SAM Watch")
-    st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
+    _ST["caption"]("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
     api_key = get_sam_api_key()
 
@@ -1215,7 +1239,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         st.success(f"Fetched {len(results_df)} notices")
 
     if (results_df is None or results_df.empty) and not run:
-        st.info("Set filters and click Run Search")
+        _ST["info"]("Set filters and click Run Search")
 
     if results_df is not None and not results_df.empty:
         st.dataframe(results_df, use_container_width=True, hide_index=True)
@@ -1308,9 +1332,9 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                     pass
                             else:
                                 if str(_res.get("error")) == "404":
-                                    st.info("Partial ingest from search. Attachments not pulled.")
+                                    _ST["info"]("Partial ingest from search. Attachments not pulled.")
                                 else:
-                                    st.warning(f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
+                                    _ST["warning"](f"Fetch issue: {_res}") if str(_res.get("error")) != "404" else None
                 except Exception as _e:
                     import traceback
                     st.exception(_e)
@@ -1326,7 +1350,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 except Exception:
                     print(f"Quickview render error: {_e}")
         else:
-            st.caption("Quickview render missing (no function)")
+            _ST["caption"]("Quickview render missing (no function)")
 
         with st.expander("Opportunity Details", expanded=True):
             c1, c2 = st.columns([3, 2])
@@ -1377,7 +1401,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.session_state["rfp_selected_notice"] = row.to_dict()
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
-            st.caption("Use Open in SAM for attachments and full details")
+            _ST["caption"]("Use Open in SAM for attachments and full details")
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
@@ -1472,7 +1496,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         with colB:
             st.markdown("**Parse Controls**")
             run = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
-            st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
+            _ST["caption"]("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
             name = file.name.lower()
@@ -1489,7 +1513,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     pages = [(p.extract_text() or "") for p in reader.pages]
                     return "\\n".join(pages)
                 except Exception as e:
-                    st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
+                    _ST["warning"](f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".docx"):
                 try:
@@ -1498,7 +1522,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     doc = docx.Document(f)
                     return "\\n".join([p.text for p in doc.paragraphs])
                 except Exception as e:
-                    st.warning(f"DOCX parse failed for {file.name}: {e}.")
+                    _ST["warning"](f"DOCX parse failed for {file.name}: {e}.")
                     return ""
             st.error(f"Unsupported file type: {file.name}")
             return ""
@@ -1586,11 +1610,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_checklist:
         df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
-            st.info("No RFPs yet. Parse one on the first tab.")
+            _ST["info"]("No RFPs yet. Parse one on the first tab.")
         else:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
-            st.caption(f"{len(df_lm)} checklist items")
+            _ST["caption"](f"{len(df_lm)} checklist items")
             # Inline status editor
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
             new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
@@ -1614,7 +1638,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     with tab_data:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
-            st.info("No RFPs yet.")
+            _ST["info"]("No RFPs yet.")
             return
         rid = st.selectbox(
             "RFP for data views",
@@ -1875,21 +1899,21 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             st.error(f"Failed to load RFPs: {e}")
             return
         if df_rf.empty:
-            st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
+            _ST["info"]("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
             return
         opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(),
                            format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
         st.session_state['current_rfp_id'] = rfp_id
 
-    st.caption(f"Working RFP ID: {rfp_id}")
+    _ST["caption"](f"Working RFP ID: {rfp_id}")
     try:
         df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
         return
     if df_items.empty:
-        st.info("No L/M items found for this RFP.")
+        _ST["info"]("No L/M items found for this RFP.")
         return
 
     pct = _compliance_progress(df_items)
@@ -1943,7 +1967,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     st.subheader("Compliance Matrix")
     df_mx = _load_compliance_matrix(conn, int(rfp_id))
     if df_mx.empty:
-        st.info("No items to show.")
+        _ST["info"]("No items to show.")
         return
 
     view = df_mx.rename(columns={
@@ -2082,7 +2106,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
-        st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
+        _ST["info"]("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
     rfp_id = st.selectbox(
         "RFP context",
@@ -2118,11 +2142,11 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         if not items.empty:
             st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
-            st.caption("No checklist items found for this RFP")
+            _ST["caption"]("No checklist items found for this RFP")
 
         total_words = sum(len((content_map.get(k) or "").split()) for k in selected)
         est_pages = _estimate_pages(total_words, spacing)
-        st.info(f"Current word count {total_words}  Estimated pages {est_pages}")
+        _ST["info"](f"Current word count {total_words}  Estimated pages {est_pages}")
         if est_pages > page_limit:
             st.error("Content likely exceeds page limit. Consider trimming or tighter formatting")
 
@@ -2152,7 +2176,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
 # ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
-    st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
+    _ST["caption"]("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
     ctx = st.session_state.get("rfp_selected_notice", {})
     default_naics = ctx.get("NAICS") or ""
@@ -2168,10 +2192,10 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
             f_city = st.text_input("City contains", key="filter_city")
         with c4:
             f_kw = st.text_input("Keyword in name/notes", key="filter_kw")
-        st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
+        _ST["caption"]("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
     with st.expander("Import Vendors (CSV)", expanded=False):
-        st.caption("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
+        _ST["caption"]("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
         up = st.file_uploader("Upload vendor CSV", type=["csv"], key="vendor_csv")
         if up and st.button("Import CSV"):
             try:
@@ -2278,7 +2302,7 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
                 st.session_state['rfq_vendor_ids'] = selected_ids
                 st.success(f"Queued {len(selected_ids)} vendors for Outreach")
         with c2:
-            st.caption("Selections are stored in session and available in Outreach tab")
+            _ST["caption"]("Selections are stored in session and available in Outreach tab")
 
 
 # ---------- Outreach (Phase D) ----------
@@ -2355,7 +2379,7 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 def run_outreach(conn: sqlite3.Connection) -> None:
     st.header("Outreach")
-    st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
+    _ST["caption"]("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
     notice = st.session_state.get("rfp_selected_notice", {})
     vendor_ids: List[int] = st.session_state.get("rfq_vendor_ids", [])
@@ -2368,7 +2392,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             params=vendor_ids,
         )
     else:
-        st.info("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
+        _ST["info"]("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
         f_naics = st.text_input("NAICS filter")
         f_state = st.text_input("State filter")
         q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
@@ -2417,7 +2441,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     with c1:
         if st.button("Preview first merge"):
             v0 = df_sel.iloc[0].to_dict()
-            st.info(f"Subject → {_merge_text(subj, v0, notice)}")
+            _ST["info"](f"Subject → {_merge_text(subj, v0, notice)}")
             st.write(_merge_text(body, v0, notice), unsafe_allow_html=True)
     with c2:
         if st.button("Export recipients CSV"):
@@ -2468,13 +2492,13 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.header("Quote Comparison")
     df = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
-        st.info("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
+        _ST["info"]("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0] or 'Untitled'}")
 
     st.subheader("Upload / Add Quotes")
     with st.expander("CSV Import", expanded=False):
-        st.caption("Columns: vendor, clin, qty, unit_price, description (optional). One row = one CLIN line.")
+        _ST["caption"]("Columns: vendor, clin, qty, unit_price, description (optional). One row = one CLIN line.")
         up = st.file_uploader("Quotes CSV", type=["csv"], key="quotes_csv")
         if up and st.button("Import Quotes CSV"):
             try:
@@ -2555,7 +2579,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
         WHERE q.rfp_id=?
     """, conn, params=(rfp_id,))
     if df_lines.empty:
-        st.info("No quote lines yet.")
+        _ST["info"]("No quote lines yet.")
         return
 
     mat = df_lines.pivot_table(index="clin", columns="vendor", values="extended_price", aggfunc="sum").fillna(0.0)
@@ -2563,7 +2587,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.dataframe(mat.style.format("{:,.2f}"), use_container_width=True)
 
     best_vendor_by_clin = mat.replace(0, float("inf")).idxmin(axis=1).to_frame("Best Vendor")
-    st.caption("Best vendor per CLIN")
+    _ST["caption"]("Best vendor per CLIN")
     st.dataframe(best_vendor_by_clin, use_container_width=True, hide_index=False)
 
     totals = df_lines.groupby("vendor")["extended_price"].sum().to_frame("Total").sort_values("Total")
@@ -2617,7 +2641,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
     st.header("Pricing Calculator")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
-        st.info("No RFP context. Use RFP Analyzer (parse & save) first.")
+        _ST["info"]("No RFP context. Use RFP Analyzer (parse & save) first.")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0]}")
 
@@ -2647,7 +2671,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
         return
     else:
         if df_sc.empty:
-            st.info("No scenarios yet. Switch to 'Create new'.")
+            _ST["info"]("No scenarios yet. Switch to 'Create new'.")
             return
         scenario_id = st.selectbox("Pick a scenario", options=df_sc["id"].tolist(), format_func=lambda sid: df_sc.loc[df_sc["id"]==sid, "name"].values[0])
 
@@ -2697,7 +2721,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
     st.subheader("Summary")
     s = _scenario_summary(conn, int(scenario_id))
     if not s:
-        st.info("Add labor/ODCs to see a summary.")
+        _ST["info"]("Add labor/ODCs to see a summary.")
         return
     df_sum = pd.DataFrame(list(s.items()), columns=["Component", "Amount"])
     st.dataframe(df_sum.style.format({"Amount": "{:,.2f}"}), use_container_width=True, hide_index=True)
@@ -2737,7 +2761,7 @@ def run_win_probability(conn: sqlite3.Connection) -> None:
     st.header("Win Probability")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
-        st.info("No RFP context. Use RFP Analyzer first.")
+        _ST["info"]("No RFP context. Use RFP Analyzer first.")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0]}")
 
@@ -2885,7 +2909,7 @@ def _kb_search(conn: sqlite3.Connection, rfp_id: Optional[int], query: str) -> D
 
 def run_chat_assistant(conn: sqlite3.Connection) -> None:
     st.header("Chat Assistant (DB-aware)")
-    st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
+    _ST["caption"]("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     rfp_opt = None
@@ -2896,7 +2920,7 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
     q = st.text_input("Ask a question (e.g., 'When are proposals due?', 'Show POCs', 'Which vendor is lowest?')")
     ask = st.button("Ask", type="primary")
     if not ask:
-        st.caption("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
+        _ST["caption"]("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
         return
 
     res = _kb_search(conn, rfp_opt, q or "")
@@ -2924,13 +2948,13 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
             st.dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
         meta = res.get("meta", {})
         if meta:
-            st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
+            _ST["info"](f"Compliance completion: {meta.get('compliance_pct',0)}%")
     if any(w in ql for w in ["quote", "price", "vendor", "lowest"]):
         st.subheader("Quote Totals by Vendor")
         df = res.get("quotes", pd.DataFrame())
         if df is not None and not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
-            st.caption("Lowest total appears at the top.")
+            _ST["caption"]("Lowest total appears at the top.")
 
     # Generic best-matches
     sec = res.get("sections", pd.DataFrame())
@@ -2999,7 +3023,7 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
 
 def run_capability_statement(conn: sqlite3.Connection) -> None:
     st.header("Capability Statement")
-    st.caption("Store your company profile and export a polished 1-page DOCX capability statement.")
+    _ST["caption"]("Store your company profile and export a polished 1-page DOCX capability statement.")
 
     # Load existing (id=1)
     df = pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
@@ -3138,11 +3162,11 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 def run_past_performance(conn: sqlite3.Connection) -> None:
     st.header("Past Performance Library")
-    st.caption("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
+    _ST["caption"]("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
 
     # CSV Import
     with st.expander("Import CSV", expanded=False):
-        st.caption("Columns: project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes")
+        _ST["caption"]("Columns: project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes")
         up = st.file_uploader("Upload CSV", type=["csv"], key="pp_csv")
         if up and st.button("Import", key="pp_do_import"):
             try:
@@ -3243,7 +3267,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         params.append(f"%{f_role}%")
     df = pd.read_sql_query(q + " ORDER BY id DESC;", conn, params=params)
     if df.empty:
-        st.info("No projects found.")
+        _ST["info"]("No projects found.")
         return
 
     st.subheader("Projects")
@@ -3356,7 +3380,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
 
 def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     st.header("White Paper Builder")
-    st.caption("Templates → Drafts → DOCX export. Can include images per section.")
+    _ST["caption"]("Templates → Drafts → DOCX export. Can include images per section.")
 
     # --- Templates ---
     with st.expander("Templates", expanded=False):
@@ -3376,7 +3400,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     st.success("Template saved"); st.rerun()
         with t_col2:
             if df_t.empty:
-                st.info("No templates yet.")
+                _ST["info"]("No templates yet.")
             else:
                 st.subheader("Edit Template Sections")
                 t_sel = st.selectbox("Choose template", options=df_t["id"].tolist(), format_func=lambda tid: df_t.loc[df_t["id"]==tid, "name"].values[0], key="wp_t_sel")
@@ -3424,7 +3448,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
         d_title = st.text_input("Draft title", key="wp_d_title")
         d_sub = st.text_input("Subtitle (optional)", key="wp_d_sub")
         if df_t.empty:
-            st.caption("No templates available")
+            _ST["caption"]("No templates available")
             t_sel2 = None
         else:
             t_sel2 = st.selectbox("Template", options=[None] + df_t["id"].tolist(),
@@ -3447,7 +3471,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                 st.success("Draft created"); st.rerun()
     with c2:
         if df_p.empty:
-            st.info("No drafts yet.")
+            _ST["info"]("No drafts yet.")
         else:
             st.markdown("**Open a draft**")
             p_sel = st.selectbox("Draft", options=df_p["id"].tolist(), format_func=lambda pid: df_p.loc[df_p["id"]==pid, "title"].values[0], key="wp_d_sel")
@@ -3475,7 +3499,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
 
         # Section list
         if df_sec.empty:
-            st.info("No sections yet.")
+            _ST["info"]("No sections yet.")
         else:
             for _, r in df_sec.iterrows():
                 st.markdown(f"**Section #{int(r['position'])}: {r.get('title') or 'Untitled'}**")
@@ -3496,7 +3520,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
                     if st.button("Save image", key=f"wp_sec_img_save_{int(r['id'])}"):
                         if up_img is None:
-                            st.warning("Choose an image first")
+                            _ST["warning"]("Choose an image first")
                         else:
                             img_path = save_uploaded_file(up_img, subdir="whitepapers")
                             with closing(conn.cursor()) as cur:
@@ -3681,7 +3705,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         st.subheader("Weighted Pipeline")
         df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
-            st.info("No deals")
+            _ST["info"]("No deals")
         else:
             df["prob_%"] = df["status"].apply(_stage_probability)
             df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
@@ -3752,7 +3776,7 @@ def _detect_mime(name: str) -> str:
 def run_file_manager(conn: sqlite3.Connection) -> None:
     _ensure_files_table(conn)
     st.header("File Manager")
-    st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
+    _ST["caption"]("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
 
     # --- Attach uploader ---
     with st.expander("Upload & Attach", expanded=True):
@@ -3786,7 +3810,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         ups = st.file_uploader("Select files", type=None, accept_multiple_files=True, key="fm_files")
         if st.button("Upload", key="fm_upload"):
             if not ups:
-                st.warning("Pick at least one file")
+                _ST["warning"]("Pick at least one file")
             else:
                 saved = 0
                 for f in ups:
@@ -3844,7 +3868,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             for _, r in df_files.iterrows():
                 c1, c2, c3, c4 = st.columns([3,2,2,2])
                 with c1:
-                    st.caption(f"#{int(r['id'])} — {r['filename']} ({r['owner_type']} {int(r['owner_id']) if r['owner_id'] else ''})")
+                    _ST["caption"](f"#{int(r['id'])} — {r['filename']} ({r['owner_type']} {int(r['owner_id']) if r['owner_id'] else ''})")
                 with c2:
                     new_tags = st.text_input("Tags", value=r.get("tags") or "", key=f"fm_row_tags_{int(r['id'])}")
                 with c3:
@@ -3874,7 +3898,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
     st.subheader("Submission Kit (ZIP)")
     df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf_all.empty:
-        st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
+        _ST["info"]("Create an RFP in RFP Analyzer first (Parse → Save).")
         return
 
     kit_rfp = st.selectbox("RFP", options=df_rf_all["id"].tolist(),
@@ -3887,7 +3911,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
     except Exception:
         _ensure_files_table(conn)
         df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
-    st.caption("Select attachments to include")
+    _ST["caption"]("Select attachments to include")
     selected = []
     if df_kit.empty:
         st.write("No attachments linked to this RFP yet.")
@@ -3918,7 +3942,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
     if st.button("Build ZIP", type="primary", key="fm_build_zip"):
         if not selected and not gen_paths:
-            st.warning("Select at least one attachment or generated document.")
+            _ST["warning"]("Select at least one attachment or generated document.")
         else:
             # Collect paths
             rows = []
@@ -4040,7 +4064,7 @@ def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
 
 def run_rfq_pack(conn: sqlite3.Connection) -> None:
     st.header("RFQ Pack")
-    st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
+    _ST["caption"]("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
 
     # -- Create / open
     left, right = st.columns([2,2])
@@ -4068,7 +4092,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         st.subheader("Open")
         df_pk = pd.read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs_t ORDER BY id DESC;", conn, params=())
         if df_pk.empty:
-            st.info("No RFQ packs yet")
+            _ST["info"]("No RFQ packs yet")
             return
         pk_sel = st.selectbox("RFQ Pack", options=df_pk["id"].tolist(),
                               format_func=lambda pid: f"#{pid} — {df_pk.loc[df_pk['id']==pid,'title'].values[0]} (due {df_pk.loc[df_pk['id']==pid,'due_date'].values[0] or '—'})",
@@ -4142,7 +4166,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
                             key="rfq_att_file")
     if st.button("Add Attachment", key="rfq_att_add"):
         if add_file is None:
-            st.warning("Pick a file")
+            _ST["warning"]("Pick a file")
         else:
             df_one = pd.read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(add_file),))
             if df_one.empty:
@@ -4158,7 +4182,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         for _, r in df_att.iterrows():
             dc1, dc2 = st.columns([3,1])
             with dc1:
-                st.caption(f"#{int(r['id'])} — {r['name'] or Path(r['path']).name}")
+                _ST["caption"](f"#{int(r['id'])} — {r['name'] or Path(r['path']).name}")
             with dc2:
                 if st.button("Remove", key=f"rfq_att_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
@@ -4173,7 +4197,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     try:
         df_vendors = pd.read_sql_query("SELECT id, name, email FROM vendors_t ORDER BY name;", conn, params=())
     except Exception as e:
-        st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
+        _ST["info"]("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
     df_rv = _rfq_vendors(conn, int(pk_sel))
     st.dataframe(df_rv[["name","email","phone"]] if not df_rv.empty else pd.DataFrame(), use_container_width=True, hide_index=True)
@@ -4195,7 +4219,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         for _, r in df_rv.iterrows():
             vc1, vc2 = st.columns([3,1])
             with vc1:
-                st.caption(f"{r['name']} — {r.get('email') or ''}")
+                _ST["caption"](f"{r['name']} — {r.get('email') or ''}")
             with vc2:
                 if st.button("Remove", key=f"rfq_vendor_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
@@ -4218,7 +4242,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if st.button("Export Vendors Mail-Merge CSV", key="rfq_mail_csv"):
             df_v = _rfq_vendors(conn, int(pk_sel))
             if df_v.empty:
-                st.warning("No vendors selected")
+                _ST["warning"]("No vendors selected")
             else:
                 out = df_v.rename(columns={"name":"VendorName","email":"VendorEmail","phone":"VendorPhone"})[["VendorName","VendorEmail","VendorPhone"]]
                 out["Subject"] = f"Request for Quote – {_rfq_pack_by_id(conn, int(pk_sel)).get('title')}"
@@ -4231,7 +4255,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         if st.button("Export CLINs CSV", key="rfq_clins_csv"):
             df = _rfq_lines(conn, int(pk_sel))
             if df.empty:
-                st.warning("No CLINs yet")
+                _ST["warning"]("No CLINs yet")
             else:
                 path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_CLINs.csv")
                 df.to_csv(path, index=False)
@@ -4477,7 +4501,7 @@ def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool
     try:
         df = pd.read_sql_query(f"SELECT * FROM {name};", conn)
         if df.empty:
-            st.info("No rows to export.")
+            _ST["info"]("No rows to export.")
         path = Path(DATA_DIR) / f"export_{name}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         df.to_csv(path, index=False)
         return str(path)
@@ -4524,7 +4548,7 @@ def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scope
 
 def run_backup_and_data(conn: sqlite3.Connection) -> None:
     st.header("Backup & Data")
-    st.caption("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
+    _ST["caption"]("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
 
     st.subheader("Database Info")
     dbp = _db_path_from_conn(conn)
@@ -4698,7 +4722,7 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
                     conn.commit()
                 st.success("Workspace created"); st.rerun()
             else:
-                st.warning("Enter a name")
+                _ST["warning"]("Enter a name")
 
 
 
@@ -4763,7 +4787,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
 def main() -> None:
     conn = get_db()
     st.title(APP_TITLE)
-    st.caption(BUILD_LABEL)
+    _ST["caption"](BUILD_LABEL)
     router(nav(), conn)
 
 
@@ -4819,7 +4843,7 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
             with closing(conn.cursor()) as cur:
                 cur.execute("DELETE FROM pb_sections_t WHERE id=?;", (int(sel),))
                 conn.commit()
-            st.warning("Deleted")
+            _ST["warning"]("Deleted")
             st.rerun()
 
     with c3:
@@ -5293,7 +5317,7 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
         return
     with st.sidebar:
         st.markdown("### Ask RFP Analyzer")
-        st.caption(f"Notice: {nid}")
+        _ST["caption"](f"Notice: {nid}")
         # Summary
         if st.button("Refresh summary", key="qv_refresh"):
             st.session_state.pop("sam_quickview_summary", None)
