@@ -1060,6 +1060,54 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
+
+# Phase X3: Quickview and Ingest
+col_qv1, col_qv2 = st.columns([1,1])
+qid = str(row.get("Notice ID") or "").strip()
+if not qid:
+    import re as _re
+    _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
+    qid = _m.group(1) if _m else ""
+with col_qv1:
+    if st.button("Quickview", key=f"qv_open_btn_{qid}"):
+        st.session_state["sam_quickview_open"] = True
+        st.session_state["sam_quickview_notice_id"] = qid
+        st.rerun()
+with col_qv2:
+    if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
+        try:
+            # Resolve SamXClient safely
+            _SamX = globals().get("SamXClient")
+            if _SamX is None:
+                try:
+                    from app import SamXClient as _SamX  # when running as app.py
+                except Exception:
+                    _SamX = None
+            client = _SamX.from_env() if _SamX else None
+            if not client:
+                st.error("SamXClient missing. Set SAM_API_KEY.")
+            else:
+                import sys, importlib
+                _mod = sys.modules.get("__main__")
+                _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
+                if _ingest is None:
+                    try:
+                        _ingest = importlib.import_module("app").samx_ingest_notice_by_id
+                    except Exception:
+                        _ingest = globals().get("samx_ingest_notice_by_id")
+                if not _ingest:
+                    st.error("Ingest function missing.")
+                else:
+                    _res = _ingest(conn, client, qid)
+                    if _res.get("ok"):
+                        st.success("Detail and documents pulled")
+                        st.session_state["sam_quickview_open"] = True
+                        st.session_state["sam_quickview_notice_id"] = qid
+                        st.rerun()
+                    else:
+                        st.warning(f"Fetch issue: {_res}")
+        except Exception as _e:
+            st.error(f"Ingest failed: {_e}")
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
             if st.button("Add to Deals", key="add_to_deals"):
@@ -1094,6 +1142,13 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
+
+
+# Phase X3 sidebar render
+try:
+    render_sam_quickview(get_db())
+except Exception:
+    pass
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
@@ -5041,3 +5096,14 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
         if st.button("Close", key="qv_close"):
             st.session_state["sam_quickview_open"] = False
             st.session_state["sam_quickview_notice_id"] = None
+
+
+
+# Phase X - SAM schema ensure (idempotent, safe at runtime)
+def ensure_sam_schema(conn: sqlite3.Connection) -> None:
+    with closing(conn.cursor()) as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS sam_notices(id INTEGER PRIMARY KEY, notice_id TEXT UNIQUE, type TEXT, title TEXT, agency TEXT, office TEXT, naics TEXT, psc TEXT, set_aside TEXT, place_state TEXT, place_city TEXT, pop_zip TEXT, posted_date TEXT, due_date TEXT, status TEXT, url TEXT, raw_json TEXT, first_seen TEXT, last_seen TEXT, inactive INTEGER DEFAULT 0)")
+        cur.execute("CREATE TABLE IF NOT EXISTS sam_docs(id INTEGER PRIMARY KEY, notice_id TEXT NOT NULL, url TEXT NOT NULL, filename TEXT, sha256 TEXT, size INTEGER, mime TEXT, fetched_at TEXT, text_indexed INTEGER DEFAULT 0, error TEXT, local_path TEXT, UNIQUE(notice_id,url))")
+        cur.execute("CREATE TABLE IF NOT EXISTS sam_pocs(id INTEGER PRIMARY KEY, notice_id TEXT NOT NULL, name TEXT, role TEXT, email TEXT, phone TEXT, office TEXT, UNIQUE(notice_id,email,phone))")
+        cur.execute("CREATE TABLE IF NOT EXISTS sam_doc_text(id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL, notice_id TEXT NOT NULL, sha256 TEXT, text TEXT)")
+        conn.commit()
