@@ -1167,7 +1167,14 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     
                     # Force sidebar draw on this run
                     try:
-                        render_sam_quickview(conn)
+                        _fn = globals().get("render_sam_quickview")
+                        if _fn:
+                            try:
+                                _fn(conn)
+                            except Exception as _e:
+                                st.caption(f"Quickview render error: {_e}")
+                        else:
+                            st.caption("Quickview render missing")
                     except Exception as _e:
                         st.caption(f"Quickview render error: {_e}")
 
@@ -4885,32 +4892,41 @@ def samx_extract_pocs(detail: dict) -> list[dict]:
         if key not in uniq:
             uniq[key] = c
     return list(uniq.values())
-
 def samx_extract_docs(detail: dict) -> list[dict]:
     d = detail or {}
     core = d.get("opportunity", d.get("opportunitiesData", d))
-    docs = []
-    for k in ["attachments", "documents", "files"]:
-        for a in _samx_get_list(core, k, default=[]):
+    out = []
+    cand = ["attachments", "documents", "files"]
+    for k in cand:
+        v = core.get(k) if isinstance(core, dict) else None
+        items = v if isinstance(v, list) else ([v] if v else [])
+        for a in items:
             if not isinstance(a, dict):
                 continue
-            url = a.get("url") or a.get("href") or a.get("downloadUrl")
-            if not url:
+            u = a.get("url") or a.get("href") or a.get("downloadUrl")
+            if isinstance(u, dict):
+                u = u.get("url") or u.get("href") or u.get("uri") or u.get("value")
+            if not isinstance(u, (str, bytes)) or not u:
                 continue
-            docs.append({
-                "url": url,
-                "filename": a.get("fileName") or a.get("name"),
-                "size": a.get("size") or a.get("fileSize"),
-                "mime": a.get("mime") or a.get("contentType")
-            })
-    # de-dup by url
-    seen = set(); out = []
-    for d1 in docs:
-        u = d1.get("url")
-        if u in seen:
+            fn = a.get("fileName") or a.get("name")
+            sz = a.get("size") or a.get("fileSize")
+            if isinstance(sz, dict):
+                sz = sz.get("value") or sz.get("bytes")
+            try:
+                szv = int(sz) if str(sz).isdigit() else sz
+            except Exception:
+                szv = sz
+            mime = a.get("mime") or a.get("contentType")
+            out.append({"url": str(u), "filename": fn, "size": szv, "mime": mime})
+    seen = set()
+    dedup = []
+    for d1 in out:
+        u = str(d1.get("url") or "")
+        if not u or u in seen:
             continue
-        seen.add(u); out.append(d1)
-    return out
+        seen.add(u)
+        dedup.append(d1)
+    return dedup
 
 def samx_ingest_detail(conn: sqlite3.Connection, detail: dict) -> str | None:
     info = samx_extract_fields(detail)
@@ -5093,62 +5109,47 @@ def _simple_qa(texts: list[str], question: str) -> str:
         return "\n\n".join(hits[:5])[:2000]
     # fallback
     return _ai_summarize("\n\n".join(texts)[:12000], system="Answer the user's question from the provided text.")
-
 def render_sam_quickview(conn: sqlite3.Connection) -> None:
     import streamlit as st
-    if not flag("quickview", True):
-        return
+    from contextlib import closing
     nid = st.session_state.get("sam_quickview_notice_id")
-    open_ = st.session_state.get("sam_quickview_open", False) and bool(nid)
-    if not open_:
+    if not st.session_state.get("sam_quickview_open") or not nid:
         return
     with st.sidebar:
         st.markdown("### Ask RFP Analyzer")
         st.caption(f"Notice: {nid}")
-        # Summary
-        if st.button("Refresh summary", key="qv_refresh"):
-            st.session_state.pop("sam_quickview_summary", None)
-        summary = st.session_state.get("sam_quickview_summary")
-        if not summary:
-            try:
-                summary = build_notice_summary(conn, nid)
-            except Exception as e:
-                summary = f"Summary unavailable: {e}"
-            st.session_state["sam_quickview_summary"] = summary
-        st.write(summary)
-        # Document list
-        with closing(conn.cursor()) as cur:
-            docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+        try:
+            with closing(conn.cursor()) as cur:
+                row = cur.execute(
+                    "SELECT title, agency, office, naics, psc, set_aside, place_state, place_city, posted_date, due_date, status "
+                    "FROM sam_notices WHERE notice_id=?", (nid,)
+                ).fetchone()
+        except Exception as _e:
+            row = None
+            st.caption(f"Quickview DB error: {_e}")
+        if row:
+            keys = ["Title","Agency","Office","NAICS","PSC","Set-Aside","State","City","Posted","Due","Status"]
+            st.write("\n".join(f"{k}: {v or ''}" for k,v in zip(keys,row)))
+        try:
+            with closing(conn.cursor()) as cur:
+                docs = cur.execute("SELECT id, filename FROM sam_docs WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
+        except Exception:
+            docs = []
         if docs:
             st.markdown("**Documents**")
             for did, fn in docs:
-                cols = st.columns([3,1])
-                with cols[0]:
-                    st.write(fn or f"doc {did}")
-                with cols[1]:
-                    if st.button("Summarize", key=f"sum_doc_{did}"):
-                        st.session_state["sam_quickview_doc_summary"] = build_doc_summary(conn, did)
-        docsum = st.session_state.get("sam_quickview_doc_summary")
-        if docsum:
+                c1, c2 = st.columns([3,1])
+                c1.write(fn or f"doc {did}")
+                if c2.button("Summarize", key=f"sum_doc_{did}"):
+                    try:
+                        ds = build_doc_summary(conn, did) if "build_doc_summary" in globals() else "Summaries require X2 text indexing."
+                    except Exception as e:
+                        ds = f"Summary error: {e}"
+                    st.session_state["sam_quickview_doc_summary"] = ds
+        ds = st.session_state.get("sam_quickview_doc_summary")
+        if ds:
             st.markdown("**Document Summary**")
-            st.write(docsum)
-        # QA
-        st.markdown("---")
-        q = st.text_input("Ask about this notice", key="qv_q")
-        if st.button("Ask", key="qv_ask"):
-            # assemble texts
-            texts = []
-            with closing(conn.cursor()) as cur:
-                rows = cur.execute("SELECT text FROM sam_doc_text WHERE notice_id=? ORDER BY id", (nid,)).fetchall()
-            texts = [r[0] for r in rows if r and r[0]]
-            if not texts:
-                blob = _notice_text_blob(conn, nid)
-                texts = [blob] if blob else []
-            st.session_state["sam_quickview_answer"] = _simple_qa(texts, q)
-        ans = st.session_state.get("sam_quickview_answer")
-        if ans:
-            st.markdown("**Answer**")
-            st.write(ans)
+            st.write(ds)
         if st.button("Close", key="qv_close"):
             st.session_state["sam_quickview_open"] = False
-            st.session_state["sam_quickview_notice_id"] = None
+            st.session_state["sam_quickview_notice_id"] = ""
