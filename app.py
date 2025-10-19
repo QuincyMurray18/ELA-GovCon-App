@@ -1060,54 +1060,66 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
-
-# Phase X3: Quickview and Ingest
-col_qv1, col_qv2 = st.columns([1,1])
-qid = str(row.get("Notice ID") or "").strip()
-if not qid:
-    import re as _re
-    _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
-    qid = _m.group(1) if _m else ""
-with col_qv1:
-    if st.button("Quickview", key=f"qv_open_btn_{qid}"):
-        st.session_state["sam_quickview_open"] = True
-        st.session_state["sam_quickview_notice_id"] = qid
-        st.rerun()
-with col_qv2:
-    if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
-        try:
-            # Resolve SamXClient safely
-            _SamX = globals().get("SamXClient")
-            if _SamX is None:
+            # Phase X3: Quickview and Ingest
+            qid = ""
+            try:
+                qid = str(row.get("Notice ID") or "").strip()
+            except Exception:
+                qid = ""
+            if not qid:
                 try:
-                    from app import SamXClient as _SamX  # when running as app.py
+                    import re as _re
+                    _m = _re.search(r"/opp/([^/]+)/view", str(row.get("SAM Link") or ""))
+                    qid = _m.group(1) if _m else ""
                 except Exception:
-                    _SamX = None
-            client = _SamX.from_env() if _SamX else None
-            if not client:
-                st.error("SamXClient missing. Set SAM_API_KEY.")
+                    pass
+            col_qv1, col_qv2 = st.columns([1,1])
+            if not qid:
+                col_qv1.caption("Select a notice to enable Quickview.")
             else:
-                import sys, importlib
-                _mod = sys.modules.get("__main__")
-                _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
-                if _ingest is None:
-                    try:
-                        _ingest = importlib.import_module("app").samx_ingest_notice_by_id
-                    except Exception:
-                        _ingest = globals().get("samx_ingest_notice_by_id")
-                if not _ingest:
-                    st.error("Ingest function missing.")
-                else:
-                    _res = _ingest(conn, client, qid)
-                    if _res.get("ok"):
-                        st.success("Detail and documents pulled")
+                with col_qv1:
+                    if st.button("Quickview", key=f"qv_open_btn_{qid}"):
                         st.session_state["sam_quickview_open"] = True
                         st.session_state["sam_quickview_notice_id"] = qid
                         st.rerun()
-                    else:
-                        st.warning(f"Fetch issue: {_res}")
-        except Exception as _e:
-            st.error(f"Ingest failed: {_e}")
+                with col_qv2:
+                    if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
+                        try:
+                            from importlib import import_module
+                            _SamX = globals().get("SamXClient")
+                            if _SamX is None:
+                                try:
+                                    _SamX = import_module("app").SamXClient
+                                except Exception:
+                                    _SamX = None
+                            client = _SamX.from_env() if _SamX else None
+                            if not client:
+                                st.error("SamXClient missing. Set SAM_API_KEY.")
+                            else:
+                                import sys
+                                _mod = sys.modules.get("__main__")
+                                _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
+                                if _ingest is None:
+                                    try:
+                                        _ingest = import_module("app").samx_ingest_notice_by_id
+                                    except Exception:
+                                        _ingest = globals().get("samx_ingest_notice_by_id")
+                                if not _ingest:
+                                    st.error("Ingest function missing.")
+                                else:
+                                    _res = _ingest(conn, client, qid)
+                                    if _res.get("ok"):
+                                        st.success("Detail and documents pulled")
+                                        st.session_state["sam_quickview_open"] = True
+                                        st.session_state["sam_quickview_notice_id"] = qid
+                                        st.rerun()
+                                    else:
+                                        st.warning(f"Fetch issue: {_res}")
+                        except Exception as _e:
+                            st.error(f"Ingest failed: {_e}")
+
+
+
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
             if st.button("Add to Deals", key="add_to_deals"):
