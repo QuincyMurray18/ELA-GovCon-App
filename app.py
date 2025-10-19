@@ -1334,20 +1334,36 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available.")
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X2 applied")
+                try:
+                    df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+                    opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
+                except Exception:
+                    df_rf_list = pd.DataFrame()
+                    opt_rf = [None]
+                def _fmt_rfp(x):
+                    try:
+                        if x is None:
+                            return "None"
+                        ttl = df_rf_list.loc[df_rf_list["id"]==x,"title"]
+                        return f"#{x} — {ttl.values[0] if len(ttl) else ''}"
+                    except Exception:
+                        return str(x) if x is not None else "None"
+                link_now_rfp = st.selectbox("Link to existing RFP (optional)", options=opt_rf, format_func=_fmt_rfp, key="x1_link_now_rfp")
                 ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
-                link_to_rfp = st.checkbox("Link ingested files to a new RFP record created below (if any)", value=True)
+                link_to_rfp = st.checkbox("Also remember these to auto-link to the next new RFP created below", value=False)
                 if st.button("Ingest Files", key="x1_ingest_btn"):
                     if not ing_files:
                         st.warning("No files selected")
                     else:
                         rows = []
+                        ids = []
                         for f in ing_files:
                             try:
                                 b = f.getbuffer().tobytes()
                             except Exception:
                                 b = f.read()
-                            rec = save_rfp_file_db(conn, None, f.name, b)
+                            rec = save_rfp_file_db(conn, int(link_now_rfp) if link_now_rfp is not None else None, f.name, b)
                             rows.append({
                                 "Filename": rec["filename"],
                                 "SHA256": rec["sha256"][:12],
@@ -1356,11 +1372,18 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 "OCR pages": rec.get("ocr_pages", 0),
                                 "Dedup?": "Yes" if rec.get("dedup") else "No",
                                 "rfp_file_id": rec["id"],
+                                "Linked RFP": (int(link_now_rfp) if link_now_rfp is not None else None),
                             })
+                            ids.append(int(rec["id"]))
                         import pandas as _pd
                         df_ing = _pd.DataFrame(rows)
                         st.dataframe(df_ing, use_container_width=True, hide_index=True)
-                        st.success(f"Ingested {len(rows)} file(s).")
+                        st.session_state["x1_last_ingested_ids"] = ids
+                        st.session_state["x1_pending_link_after_create"] = bool(link_to_rfp)
+                        if link_now_rfp is not None:
+                            st.success(f"Ingested {len(rows)} file(s). Linked to RFP #{int(link_now_rfp)}.")
+                        else:
+                            st.success(f"Ingested {len(rows)} file(s).")
         colA, colB = st.columns([3,2])
         with colA:
             ups = st.file_uploader(
@@ -1457,6 +1480,18 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
                             conn.commit()
+                            # X2: auto-link any pending ingested files to this new RFP
+                            try:
+                                if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids"):
+                                    ids = tuple(int(i) for i in st.session_state.get("x1_last_ingested_ids") or [])
+                                    if ids:
+                                        ph = ",".join(["?"]*len(ids))
+                                        with closing(conn.cursor()) as _cur2:
+                                            _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(rfp_id), *ids))
+                                            conn.commit()
+                                    st.session_state["x1_pending_link_after_create"] = False
+                            except Exception:
+                                pass
                         st.success(f"Combined and saved RFP #{rfp_id} (items: {len(l_items)}, CLINs: {len(clins)}, dates: {len(dates)}, POCs: {len(pocs)}).")
                 else:
                     saved = 0
@@ -1491,7 +1526,20 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
                             conn.commit()
+                        last_rfp_id = rfp_id
                         saved += 1
+                    # X2: if pending, link last created RFP to recently ingested files
+                    try:
+                        if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids") and "last_rfp_id" in locals():
+                            ids = tuple(int(i) for i in st.session_state.get("x1_last_ingested_ids") or [])
+                            if ids:
+                                ph = ",".join(["?"]*len(ids))
+                                with closing(conn.cursor()) as _cur3:
+                                    _cur3.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(last_rfp_id), *ids))
+                                    conn.commit()
+                            st.session_state["x1_pending_link_after_create"] = False
+                    except Exception:
+                        pass
                     st.success(f"Saved {saved} RFP record(s).")
 
 
@@ -1525,6 +1573,46 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
     # ---------------- CLINs / Dates / POCs ----------------
     with tab_data:
+        # X2: Files for this RFP
+        with st.expander("Files for this RFP (X2)", expanded=False):
+            try:
+                df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+            except Exception as e:
+                df_files = pd.DataFrame()
+            st.caption("Linked files")
+            if df_files is None or df_files.empty:
+                st.write("No files linked.")
+            else:
+                st.dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
+                to_unlink = st.multiselect("Unlink file IDs", options=df_files["id"].tolist(), key=f"unlink_{rid}")
+                if st.button("Unlink selected", key=f"unlink_btn_{rid}") and to_unlink:
+                    try:
+                        ph = ",".join(["?"]*len(to_unlink))
+                        with closing(conn.cursor()) as _cur:
+                            _cur.execute(f"UPDATE rfp_files SET rfp_id=NULL WHERE id IN ({ph});", tuple(int(i) for i in to_unlink))
+                            conn.commit()
+                        st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
+                    except Exception as e:
+                        st.error(f"Unlink failed: {e}")
+            st.caption("Attach from library")
+            try:
+                df_pool = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
+            except Exception:
+                df_pool = pd.DataFrame()
+            if df_pool is None or df_pool.empty:
+                st.write("No unlinked files in library.")
+            else:
+                st.dataframe(df_pool, use_container_width=True, hide_index=True)
+                to_link = st.multiselect("Attach file IDs", options=df_pool["id"].tolist(), key=f"link_{rid}")
+                if st.button("Attach selected to this RFP", key=f"link_btn_{rid}") and to_link:
+                    try:
+                        ph = ",".join(["?"]*len(to_link))
+                        with closing(conn.cursor()) as _cur2:
+                            _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(rid), *[int(i) for i in to_link]))
+                            conn.commit()
+                        st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
+                    except Exception as e:
+                        st.error(f"Link failed: {e}")
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
