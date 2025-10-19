@@ -1071,8 +1071,12 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     with col_qv2:
                         if st.button("Pull full detail + docs", key="qv_ingest_btn"):
                             try:
-                                client = SamXClient.from_env()
-                                _res = samx_ingest_notice_by_id(conn, client, str(row["Notice ID"]))
+                                (_SamX := (globals().get("SamXClient") or __import__(__name__).__dict__.get("SamXClient") or __import__("app", fromlist=["SamXClient"]).__dict__.get("SamXClient", None) if "app" in __import__("sys").modules else None)) and _SamX.from_env()
+                                    
+                                if not client:
+                                    st.error("SamXClient missing. Ensure Phase X1 is applied.")
+                                else:
+                                    _res = samx_ingest_notice_by_id(conn, client, str(row["Notice ID"]))
                                 if _res.get("ok"):
                                     st.success("Detail and documents pulled")
                                 else:
