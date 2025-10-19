@@ -1060,76 +1060,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 if row['SAM Link']:
                     st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
-
-                # Phase X3: Quickview and Ingest
-                if flag("quickview", True):
-                    col_qv1, col_qv2 = st.columns([1,1])
-                    with col_qv1:
-                        if st.button("Quickview", key="qv_open_btn"):
-                            st.session_state["sam_quickview_open"] = True
-                            st.session_state["sam_quickview_notice_id"] = str(row["Notice ID"])
-                            st.rerun()
-                    with col_qv2:
-                        if st.button("Pull full detail + docs", key="qv_ingest_btn"):
-                            try:
-                                # Resolve SamXClient safely
-                                _SamX = globals().get("SamXClient")
-                                if _SamX is None:
-                                    try:
-                                        from app import SamXClient as _SamX  # when running as app.py
-                                    except Exception:
-                                        _SamX = None
-                                client = _SamX.from_env() if _SamX else None
-                                if not client:
-                                    st.error("SamXClient missing. Ensure Phase X1 is applied and SAM_API_KEY is set.")
-                                else:
-                                    # Derive a valid notice_id
-                                    import re as _re
-                                    _nid = str(row.get("Notice ID", "")).strip()
-                                    if len(_nid) < 20:
-                                        _link = str(row.get("SAM Link", ""))
-                                        _m = _re.search(r"/opp/([^/]+)/view", _link)
-                                        if _m:
-                                            _nid = _m.group(1)
-                                    if not _nid:
-                                        st.error("No Notice ID found on this row.")
-                                    else:
-                                        # Resolve ingest function
-                                        import sys, importlib
-                                        _mod = sys.modules.get("__main__")
-                                        _ingest = getattr(_mod, "samx_ingest_notice_by_id", None)
-                                        if _ingest is None:
-                                            try:
-                                                _ingest = importlib.import_module("app").samx_ingest_notice_by_id
-                                            except Exception:
-                                                _ingest = globals().get("samx_ingest_notice_by_id")
-                                        if not _ingest:
-                                            st.error("Ingest function missing. Ensure Phase X2 is applied.")
-                                        else:
-                                            _res = _ingest(conn, client, _nid)
-                                            # 404 fallback: try to resolve canonical noticeId via search
-                                            if not _res.get("ok") and str(_res.get("error")) == "404":
-                                                _sr = client.search({"noticeId": _nid, "page": 0, "limit": 1})
-                                                try:
-                                                    data = _sr.get("data") or {}
-                                                    arr = data.get("opportunitiesData") or data.get("opportunity") or []
-                                                    if isinstance(arr, dict):
-                                                        arr = [arr]
-                                                    _nid2 = arr and arr[0].get("noticeId")
-                                                except Exception:
-                                                    _nid2 = None
-                                                if _nid2 and _nid2 != _nid:
-                                                    _res = _ingest(conn, client, _nid2)
-                                            if _res.get("ok"):
-                                                st.success("Detail and documents pulled")
-                                                st.session_state["sam_quickview_open"] = True
-                                                st.session_state["sam_quickview_notice_id"] = _nid
-                                                st.rerun()
-                                            else:
-                                                st.warning(f"Fetch issue: {_res}")
-                            except Exception as _e:
-                                st.error(f"Ingest failed: {_e}")
-            c3, c4, c5 = st.columns([2, 2, 2])
+        c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
             if st.button("Add to Deals", key="add_to_deals"):
                 try:
@@ -1163,13 +1094,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
         with c5:
             st.caption("Use Open in SAM for attachments and full details")
-
-
-# Phase X3 sidebar render
-try:
-    render_sam_quickview(get_db())
-except Exception:
-    pass
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
@@ -4769,60 +4693,18 @@ def _samx_get_detail_base() -> str:
         pass
     return base or "https://api.sam.gov/prod/opportunities/v2/opportunities"
 
-
 def samx_fetch_detail(client: "SamXClient", notice_id: str) -> dict:
-    import requests, os
-    nid = (notice_id or "").strip()
-    if not nid:
-        return {"ok": False, "status": 400, "error": "empty id", "data": {}}
-    # Candidate bases to try
-    bases = []
+    import requests
+    url = f"{_samx_get_detail_base().rstrip('/')}/{notice_id}"
+    q = {"api_key": client.api_key or ""}
     try:
-        cfg = _samx_get_detail_base().rstrip("/")
-    except Exception:
-        cfg = ""
-    if cfg:
-        bases.append(cfg)
-    bases.extend([
-        "https://api.sam.gov/prod/opportunities/v2/opportunities",
-        "https://api.sam.gov/prod/opportunities/v1/opportunities",
-        "https://sam.gov/api/prod/opps/v3/opportunities"
-    ])
-    headers = {"Accept": "application/json"}
-    for base in bases:
-        url = f"{base}/{nid}"
-        q = {"api_key": client.api_key or os.environ.get("SAM_API_KEY","")}
-        try:
-            r = requests.get(url, params=q, headers=headers, timeout=client.timeout)
-            if r.status_code == 200:
-                try:
-                    return {"ok": True, "status": 200, "data": r.json()}
-                except Exception:
-                    return {"ok": True, "status": 200, "data": {}}
-            last_status = r.status_code
-        except Exception as e:
-            last_status = f"err:{e}"
-    # 404 or other: attempt to resolve canonical id via search
-    try:
-        sr = client.search({"noticeId": nid, "limit": 1, "page": 0})
-        data = sr.get("data") or {}
-        arr = data.get("opportunitiesData") or data.get("opportunity") or []
-        if isinstance(arr, dict):
-            arr = [arr]
-        nid2 = arr and (arr[0].get("noticeId") or arr[0].get("id"))
-        if nid2 and nid2 != nid:
-            for base in bases:
-                url = f"{base}/{nid2}"
-                q = {"api_key": client.api_key or os.environ.get("SAM_API_KEY","")}
-                try:
-                    r = requests.get(url, params=q, headers=headers, timeout=client.timeout)
-                    if r.status_code == 200:
-                        return {"ok": True, "status": 200, "data": r.json()}
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return {"ok": False, "status": 404, "error": 404, "data": {}}
+        r = requests.get(url, params=q, timeout=client.timeout)
+        if r.status_code != 200:
+            return {"ok": False, "status": r.status_code, "data": {}}
+        return {"ok": True, "status": 200, "data": r.json()}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "data": {}}
+
 def _samx_get_list(obj, key, default=None):
     v = obj.get(key) if isinstance(obj, dict) else None
     if v is None:
