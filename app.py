@@ -1393,6 +1393,15 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 except Exception as e:
                     st.warning(f"DOCX parse failed for {file.name}: {e}.")
                     return ""
+            if name.endswith(".xlsx"):
+                try:
+                    pages = extract_text_pages(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    if pages:
+                        return "\n\n".join(pages)
+                    return ""
+                except Exception as e:
+                    st.warning(f"XLSX parse failed for {file.name}: {e}.")
+                    return ""
             st.error(f"Unsupported file type: {file.name}")
             return ""
 
