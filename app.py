@@ -1,7 +1,54 @@
 from __future__ import annotations
 import pandas as pd  # early import to avoid NameError before main()
 
-def ensure_sam_schema(conn: sqlite3.Connection) -> None:
+def _ensure_sam_schema_safe(conn: sqlite3.Connection) -> None:
+    try:
+        ensure_sam_schema  # type: ignore[name-defined]
+        return _ensure_sam_schema_safe(conn)  # type: ignore[misc]
+    except Exception:
+        # minimal inline schema to avoid NameError or missing tables
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS sam_notices (
+                notice_id TEXT PRIMARY KEY,
+                title TEXT,
+                agency TEXT,
+                office TEXT,
+                naics TEXT,
+                psc TEXT,
+                set_aside TEXT,
+                place_state TEXT,
+                place_city TEXT,
+                pop_zip TEXT,
+                posted_date TEXT,
+                due_date TEXT,
+                status TEXT,
+                url TEXT,
+                raw_json TEXT,
+                first_seen TEXT,
+                last_seen TEXT,
+                inactive INTEGER DEFAULT 0
+            )""")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sam_notices_id ON sam_notices(notice_id)")
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS sam_docs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notice_id TEXT,
+                url TEXT,
+                filename TEXT,
+                sha256 TEXT,
+                size INTEGER,
+                mime TEXT,
+                fetched_at TEXT,
+                text_indexed INTEGER DEFAULT 0,
+                error TEXT,
+                local_path TEXT,
+                UNIQUE (notice_id, url)
+            )""")
+            conn.commit()
+
+def _ensure_sam_schema_safe(conn: sqlite3.Connection) -> None:
     from contextlib import closing as _closing
     with _closing(conn.cursor()) as cur:
         cur.execute("""
@@ -87,7 +134,12 @@ def render_sam_quickview(conn: sqlite3.Connection) -> None:
     nid = st.session_state.get("sam_quickview_notice_id")
     if not st.session_state.get("sam_quickview_open") or not nid:
         return
-    with st.sidebar:
+    
+    # render-once guard per script run
+    if st.session_state.get("_qv_rendered"):
+        return
+    st.session_state["_qv_rendered"] = True
+with st.sidebar:
         st.markdown("### Ask RFP Analyzer")
         st.caption(f"Notice: {nid}")
         try:
@@ -4815,7 +4867,7 @@ def samx_upsert_notice(conn: sqlite3.Connection, notice: dict) -> None:
         ;""", vals)
         conn.commit()
 def samx_upsert_doc(conn: sqlite3.Connection, notice_id: str, doc: dict) -> None:
-    ensure_sam_schema(conn)
+    _ensure_sam_schema_safe(conn)
     url = str(doc.get("url") or "")
     filename = doc.get("filename")
     sha256 = doc.get("sha256")
@@ -5080,7 +5132,7 @@ def samx_index_doc_text(conn: sqlite3.Connection, notice_id: str) -> dict:
             errs += 1
     return {"indexed": done, "errors": errs}
 def samx_ingest_notice_by_id(conn: sqlite3.Connection, client: "SamXClient", notice_id: str) -> dict:
-    ensure_sam_schema(conn)
+    _ensure_sam_schema_safe(conn)
     try:
         res = samx_fetch_detail(client, notice_id)
     except Exception as e:
