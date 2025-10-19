@@ -1,5 +1,26 @@
 from __future__ import annotations
 
+
+# ---- Phase X: base ingest + rerun gate ----
+try:
+    _INGEST_BASE = samx_ingest_notice_by_id  # concrete ingest
+except NameError:  # fallback if not defined yet
+    def _INGEST_BASE(conn, client, qid):
+        return {"ok": False, "step": "ingest_call", "error": "samx_ingest_notice_by_id missing"}
+
+def _rerun_once(tag: str) -> None:
+    import streamlit as st
+    k = "_last_rerun_tag"
+    if st.session_state.get(k) == tag:
+        return
+    st.session_state[k] = tag
+    try:
+        _rerun_once("px")
+    except Exception:
+        pass
+# -------------------------------------------
+
+
 import streamlit as st
 
 # ==== Streamlit safe shims ====
@@ -54,32 +75,35 @@ _st_repair_callables()
 def _do_ingest_open_qv(conn, client, qid):
     import streamlit as st
     try:
-        _res = _ingest(conn, client, qid)
+        _res = _INGEST_BASE(conn, client, qid)
     except Exception as _e:
         try:
             import traceback as tb
             msg = "".join(tb.format_exception(type(_e), _e, _e.__traceback__))
         except Exception:
             msg = repr(_e)
-        try:
-            print("Ingest exception:\n" + msg[-4000:])
-        except Exception:
-            pass
+        print("Ingest exception:\n" + msg[-4000:])
         return {"ok": False, "step": "ingest_call", "error": msg}
+
     if _res.get("ok"):
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
         return _res
+
     if str(_res.get("error")) == "404":
-        _ST["write"]("Partial ingest from search. Attachments not pulled.")
+        try:
+            st.write("Partial ingest from search. Attachments not pulled.")
+        except Exception:
+            print("Partial ingest from search. Attachments not pulled.")
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
-        try:
-            st.experimental_rerun()
-        except Exception:
-            pass
+        _rerun_once(f"qv:{qid}")
         return _res
-    _ST["write"](f"Fetch issue: {_res}")
+
+    try:
+        st.write(f"Fetch issue: {_res}")
+    except Exception:
+        print(f"Fetch issue: {_res}")
     return _res
 
 def _do_ingest_open_qv(conn, client, qid):
@@ -98,7 +122,7 @@ def _do_ingest_open_qv(conn, client, qid):
         st.session_state["sam_quickview_open"] = True
         st.session_state["sam_quickview_notice_id"] = qid
         try:
-            st.experimental_rerun()
+            _rerun_once("px")
         except Exception:
             pass
         return _res
@@ -1263,14 +1287,14 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                 st.session_state['sam_quickview_open'] = True
                 st.session_state['sam_quickview_notice_id'] = qid
                 try:
-                    st.experimental_rerun()
+                    _rerun_once("px")
                 except Exception:
                     pass
 
                 st.session_state['sam_quickview_open'] = True
                 st.session_state['sam_quickview_notice_id'] = qid
                 try:
-                    st.experimental_rerun()
+                    _rerun_once("px")
                 except Exception:
                     pass
 
