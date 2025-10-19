@@ -1073,11 +1073,12 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     col_qv1, col_qv2 = st.columns([1,1])
                     if qid:
                         with col_qv1:
-                            if st.button("Quickview", key=f"qv_open_btn_{{qid}}"):
+                            if st.button("Quickview", key=f"qv_open_btn_{qid}"):
                                 st.session_state["sam_quickview_open"] = True
                                 st.session_state["sam_quickview_notice_id"] = qid
+                            st.rerun()
                         with col_qv2:
-                            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{{qid}}"):
+                            if st.button("Pull full detail + docs", key=f"qv_ingest_btn_{qid}"):
                                 try:
                                     from importlib import import_module as _imp
                                     _SamX = globals().get("SamXClient")
@@ -1149,7 +1150,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                                                 st.session_state["sam_quickview_open"] = True
                                                 st.session_state["sam_quickview_notice_id"] = qid
                                 except Exception as _e:
-                                    st.error("Ingest failed: {{_e}}")
+                                    st.error(f"Ingest failed: {_e}")
                     else:
                         st.caption("Select a notice to enable Quickview.")
                     
@@ -1157,7 +1158,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
                     try:
                         render_sam_quickview(conn)
                     except Exception as _e:
-                        st.caption("Quickview render error: {{_e}}")
+                        st.caption(f"Quickview render error: {_e}")
 
         c3, c4, c5 = st.columns([2, 2, 2])
         with c3:
