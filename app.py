@@ -1,86 +1,75 @@
-from contextlib import closing
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional, Any, Dict, List, Tuple
-import io
-import json
-import os
-import re
-import sqlite3
 
-from email import encoders
-from email.mime.base import MIMEBase
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import os
+import sqlite3
+from contextlib import closing
+from typing import Optional, Any, Dict, List, Tuple
+from pathlib import Path
+from datetime import datetime, timedelta
+
 import pandas as pd
-import requests
-import smtplib
+import io
 import streamlit as st
 
-# Phase X unified settings
-from types import SimpleNamespace as _NS
-
-def getenv_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except Exception:
-        return default
-
-SETTINGS = _NS(
-    APP_NAME=os.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
-    APP_VERSION=os.environ.get("ELA_APP_VERSION", "X-Base"),
-    DATA_DIR=os.environ.get("ELA_DATA_DIR", "data"),
-    UPLOADS_SUBDIR=os.environ.get("ELA_UPLOADS_SUBDIR", "uploads"),
-    DEFAULT_PAGE_SIZE=getenv_int("ELA_PAGE_SIZE", 50),
-)
-
-SETTINGS.UPLOADS_DIR = os.path.join(SETTINGS.DATA_DIR, SETTINGS.UPLOADS_SUBDIR)
-
-# Ensure directories exist
-try:
-    os.makedirs(SETTINGS.DATA_DIR, exist_ok=True)
-    os.makedirs(SETTINGS.UPLOADS_DIR, exist_ok=True)
-except Exception:
-    pass
-
-# Back-compat constants
-DATA_DIR = SETTINGS.DATA_DIR
-UPLOADS_DIR = SETTINGS.UPLOADS_DIR
-
-# Feature flag alias
-def flag(name: str, default: bool=False) -> bool:
-    return feature_flag(name, default)
 
 def feature_flag(name: str, default: bool=False) -> bool:
-    """
-    Read a feature flag from environment or Streamlit secrets.
-    Precedence: os.environ["FEATURE_<NAME>"] then st.secrets["features"][name] then default.
-    Does not raise if Streamlit is absent.
-    """
-    val = None
     try:
         import os as _os
         env_key = f"FEATURE_{name.upper()}"
         if env_key in _os.environ:
-            val = _os.environ[env_key]
+            v = _os.environ[env_key]
+            if isinstance(v, str):
+                return v.lower() in {"1","true","yes","on"}
+            return bool(v)
     except Exception:
         pass
-    if val is None:
-        try:
-            import streamlit as _st  # type: ignore
-            sec = _st.secrets.get("features", {})
-            if isinstance(sec, dict) and name in sec:
-                val = sec.get(name)
-        except Exception:
-            pass
-    if isinstance(val, str):
-        return val.lower() in {"1","true","yes","on"}
-    if isinstance(val, bool):
-        return val
-    return bool(val) if val is not None else bool(default)
+    try:
+        import streamlit as _st
+        sec = _st.secrets.get("features", {})
+        if isinstance(sec, dict) and name in sec:
+            v = sec.get(name)
+            if isinstance(v, str):
+                return v.lower() in {"1","true","yes","on"}
+            return bool(v)
+    except Exception:
+        pass
+    return bool(default)
 
+# Phase X unified settings
+from types import SimpleNamespace as _NS
+import os as _os_x
+
+def _getenv_int(name: str, default: int) -> int:
+    try:
+        return int(_os_x.environ.get(name, default))
+    except Exception:
+        return default
+
+SETTINGS = _NS(
+    APP_NAME=_os_x.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
+    APP_VERSION=_os_x.environ.get("ELA_APP_VERSION", "X-Base"),
+    DATA_DIR=_os_x.environ.get("ELA_DATA_DIR", "data"),
+    UPLOADS_SUBDIR=_os_x.environ.get("ELA_UPLOADS_SUBDIR", "uploads"),
+    DEFAULT_PAGE_SIZE=_getenv_int("ELA_PAGE_SIZE", 50),
+)
+SETTINGS.UPLOADS_DIR = _os_x.path.join(SETTINGS.DATA_DIR, SETTINGS.UPLOADS_SUBDIR)
+try:
+    _os_x.makedirs(SETTINGS.DATA_DIR, exist_ok=True)
+    _os_x.makedirs(SETTINGS.UPLOADS_DIR, exist_ok=True)
+except Exception:
+    pass
+DATA_DIR = SETTINGS.DATA_DIR
+UPLOADS_DIR = SETTINGS.UPLOADS_DIR
+def flag(name: str, default: bool=False) -> bool:
+    return feature_flag(name, default)
 
 # External
+import requests
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import json
 
 
 APP_TITLE = "ELA GovCon Suite"
@@ -746,6 +735,7 @@ def extract_text_from_file(path: str) -> str:
         return ''
 
 
+import re
 def extract_sections_L_M(text: str) -> dict:
     out = {}
     if not text:
@@ -1210,6 +1200,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".pdf"):
                 try:
+                    import PyPDF2  # type: ignore
                     reader = PyPDF2.PdfReader(io.BytesIO(data))
                     pages = [(p.extract_text() or "") for p in reader.pages]
                     return "\\n".join(pages)
@@ -1218,6 +1209,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     return data.decode("latin-1", errors="ignore")
             if name.endswith(".docx"):
                 try:
+                    import docx  # python-docx
                     f = io.BytesIO(data)
                     doc = docx.Document(f)
                     return "\\n".join([p.text for p in doc.paragraphs])
@@ -2668,6 +2660,7 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
 # ---------- Phase F: Capability Statement ----------
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
+        from docx import Document  # type: ignore
         from docx.shared import Pt, Inches  # type: ignore
     except Exception:
         st.error("python-docx is required. pip install python-docx")
@@ -2841,6 +2834,7 @@ def _pp_writeup_block(rec: dict) -> str:
 
 def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
+        from docx import Document  # type: ignore
         from docx.shared import Inches  # type: ignore
     except Exception:
         st.error("python-docx is required. pip install python-docx")
@@ -3052,8 +3046,8 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
 
 def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
-        from docx import Document
-        from docx.shared import Inches
+        from docx import Document  # type: ignore
+        from docx.shared import Inches  # type: ignore
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
@@ -3585,6 +3579,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                                 cur.execute("DELETE FROM files_t WHERE id=?;", (int(r["id"]),))
                                 conn.commit()
                             try:
+                                import os
                                 if r.get("path") and os.path.exists(r["path"]):
                                     os.remove(r["path"])
                             except Exception:
@@ -3699,6 +3694,7 @@ def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
+    from zipfile import ZipFile, ZIP_DEFLATED
     pack = _rfq_pack_by_id(conn, pack_id)
     if not pack: 
         st.error("Pack not found"); return None
@@ -4006,7 +4002,95 @@ def migrate(conn: sqlite3.Connection) -> None:
             cur.execute("UPDATE schema_version SET ver=3 WHERE id=1;")
             conn.commit()
 
-
+        # v4: SAM X schema
+        if ver < 4:
+            try:
+                cur.execute("""CREATE TABLE IF NOT EXISTS sam_notices(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT NOT NULL UNIQUE,
+                    type TEXT,
+                    title TEXT,
+                    agency TEXT,
+                    office TEXT,
+                    naics TEXT,
+                    psc TEXT,
+                    set_aside TEXT,
+                    place_state TEXT,
+                    place_city TEXT,
+                    pop_zip TEXT,
+                    posted_date TEXT,
+                    due_date TEXT,
+                    status TEXT,
+                    url TEXT,
+                    raw_json TEXT,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    inactive INTEGER DEFAULT 0
+                );""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS sam_docs(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    filename TEXT,
+                    sha256 TEXT,
+                    size INTEGER,
+                    mime TEXT,
+                    fetched_at TEXT,
+                    text_indexed INTEGER DEFAULT 0,
+                    error TEXT,
+                    UNIQUE(notice_id, url)
+                );""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS sam_pocs(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT NOT NULL,
+                    name TEXT,
+                    role TEXT,
+                    email TEXT,
+                    phone TEXT,
+                    office TEXT,
+                    UNIQUE(notice_id, email, phone)
+                );""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS sam_watchlist(
+                    id INTEGER PRIMARY KEY,
+                    user TEXT NOT NULL,
+                    notice_id TEXT NOT NULL,
+                    created_at TEXT,
+                    alert_freq TEXT DEFAULT 'daily',
+                    active INTEGER DEFAULT 1,
+                    UNIQUE(user, notice_id)
+                );""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS sam_changes(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    field TEXT NOT NULL,
+                    old TEXT,
+                    new TEXT
+                );""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS notice_tags(
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT NOT NULL,
+                    tag TEXT
+                );""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS notice_cache(
+                    id INTEGER PRIMARY KEY,
+                    query_hash TEXT NOT NULL,
+                    page INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    results_json TEXT NOT NULL,
+                    UNIQUE(query_hash, page)
+                );""")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_notices_notice_id ON sam_notices(notice_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_notices_due ON sam_notices(due_date);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_notices_type ON sam_notices(type);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_docs_notice ON sam_docs(notice_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_notice_cache_q ON notice_cache(query_hash);")
+            except Exception as _e:
+                import streamlit as _st
+                _st.error(f"Migration v4 failed: {_e}")
+                raise
+            cur.execute("UPDATE schema_version SET ver=4 WHERE id=1;")
+            conn.commit()
 
 # ---------- Phase N: Backup & Data ----------
 def _current_tenant(conn: sqlite3.Connection) -> int:
@@ -4051,6 +4135,7 @@ def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
         st.error(f"Could not write uploaded file: {e}")
         return False
     try:
+        import sqlite3 as _sq
         src = _sq.connect(str(tmp))
         dst = _sq.connect(db_path)
         with dst:
@@ -4084,6 +4169,7 @@ def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool
 
 def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scoped_to_current: bool=True) -> int:
     # Read CSV and insert rows. If tenant_id missing and scoped, stamp with current tenant.
+    import io
     try:
         df = pd.read_csv(io.BytesIO(csv_file.getbuffer()))
     except Exception as e:
@@ -4361,6 +4447,7 @@ if __name__ == "__main__":
 
 # -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
+    import streamlit as st
     st.markdown("### Section Library (Phase V)")
     cols = st.columns([3,2,2])
     with cols[0]:
@@ -4385,6 +4472,7 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
             st.session_state.pop(ns("pbv","sel_id"), None)
 
     # Table of existing sections
+    import pandas as pd
     df = pd.read_sql_query("SELECT id, title, tags, created_at, updated_at FROM pb_sections_t ORDER BY updated_at DESC;", conn, params=())
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -4423,3 +4511,125 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
 
+
+
+# Phase X1: SAM X lightweight API client and ingest helpers
+class SamXClient:
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, timeout: int = 20):
+        self.api_key = api_key
+        self.base_url = base_url or "https://api.sam.gov/prod/opportunities/v2/search"
+        self.timeout = timeout
+
+    @staticmethod
+    def from_env():
+        api_key = None
+        base_url = None
+        try:
+            import os
+            api_key = os.environ.get("SAM_API_KEY")
+            base_url = os.environ.get("SAM_API_BASE")
+        except Exception:
+            pass
+        try:
+            import streamlit as st
+            api_key = api_key or st.secrets.get("sam", {}).get("api_key")
+            base_url = base_url or st.secrets.get("sam", {}).get("base_url")
+        except Exception:
+            pass
+        return SamXClient(api_key=api_key, base_url=base_url)
+
+    def enabled(self) -> bool:
+        return bool(self.api_key and self.base_url)
+
+    def search(self, params: dict) -> dict:
+        """Safe GET wrapper. Returns JSON or empty result. Does not raise on network errors."""
+        import requests
+        headers = {"Accept": "application/json"}
+        q = dict(params)
+        q["api_key"] = self.api_key or ""
+        try:
+            resp = requests.get(self.base_url, params=q, headers=headers, timeout=self.timeout)
+            if resp.status_code != 200:
+                return {"ok": False, "status": resp.status_code, "data": {}}
+            return {"ok": True, "status": 200, "data": resp.json()}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "data": {}}
+
+def samx_query_hash(filters: dict) -> str:
+    import hashlib, json
+    serial = json.dumps(filters, sort_keys=True, separators=(",",":"))
+    return hashlib.sha256(serial.encode("utf-8")).hexdigest()
+
+def samx_upsert_notice(conn: sqlite3.Connection, notice: dict) -> None:
+    cols = ["notice_id","type","title","agency","office","naics","psc","set_aside","place_state","place_city","pop_zip",
+            "posted_date","due_date","status","url","raw_json","first_seen","last_seen","inactive"]
+    vals = [notice.get(k) for k in cols]
+    with closing(conn.cursor()) as cur:
+        cur.execute("""INSERT INTO sam_notices(
+            notice_id,type,title,agency,office,naics,psc,set_aside,place_state,place_city,pop_zip,
+            posted_date,due_date,status,url,raw_json,first_seen,last_seen,inactive
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(notice_id) DO UPDATE SET
+            type=excluded.type,
+            title=COALESCE(excluded.title, sam_notices.title),
+            agency=COALESCE(excluded.agency, sam_notices.agency),
+            office=COALESCE(excluded.office, sam_notices.office),
+            naics=COALESCE(excluded.naics, sam_notices.naics),
+            psc=COALESCE(excluded.psc, sam_notices.psc),
+            set_aside=COALESCE(excluded.set_aside, sam_notices.set_aside),
+            place_state=COALESCE(excluded.place_state, sam_notices.place_state),
+            place_city=COALESCE(excluded.place_city, sam_notices.place_city),
+            pop_zip=COALESCE(excluded.pop_zip, sam_notices.pop_zip),
+            posted_date=COALESCE(excluded.posted_date, sam_notices.posted_date),
+            due_date=COALESCE(excluded.due_date, sam_notices.due_date),
+            status=COALESCE(excluded.status, sam_notices.status),
+            url=COALESCE(excluded.url, sam_notices.url),
+            raw_json=COALESCE(excluded.raw_json, sam_notices.raw_json),
+            last_seen=excluded.last_seen,
+            inactive=excluded.inactive
+        ;""", vals)
+        conn.commit()
+
+def samx_upsert_doc(conn: sqlite3.Connection, notice_id: str, doc: dict) -> None:
+    cols = ["notice_id","url","filename","sha256","size","mime","fetched_at","text_indexed","error"]
+    vals = [notice_id,
+            doc.get("url"), doc.get("filename"), doc.get("sha256"), doc.get("size"),
+            doc.get("mime"), doc.get("fetched_at"), int(bool(doc.get("text_indexed"))), doc.get("error")]
+    with closing(conn.cursor()) as cur:
+        cur.execute("""INSERT INTO sam_docs(notice_id,url,filename,sha256,size,mime,fetched_at,text_indexed,error)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(notice_id, url) DO UPDATE SET
+            filename=COALESCE(excluded.filename, sam_docs.filename),
+            sha256=COALESCE(excluded.sha256, sam_docs.sha256),
+            size=COALESCE(excluded.size, sam_docs.size),
+            mime=COALESCE(excluded.mime, sam_docs.mime),
+            fetched_at=COALESCE(excluded.fetched_at, sam_docs.fetched_at),
+            text_indexed=COALESCE(excluded.text_indexed, sam_docs.text_indexed),
+            error=COALESCE(excluded.error, sam_docs.error)
+        ;""", vals)
+        conn.commit()
+
+def samx_upsert_poc(conn: sqlite3.Connection, notice_id: str, poc: dict) -> None:
+    cols = ["notice_id","name","role","email","phone","office"]
+    vals = [notice_id, poc.get("name"), poc.get("role"), poc.get("email"), poc.get("phone"), poc.get("office")]
+    with closing(conn.cursor()) as cur:
+        cur.execute("""INSERT INTO sam_pocs(notice_id,name,role,email,phone,office)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(notice_id,email,phone) DO UPDATE SET
+            name=COALESCE(excluded.name, sam_pocs.name),
+            role=COALESCE(excluded.role, sam_pocs.role),
+            office=COALESCE(excluded.office, sam_pocs.office)
+        ;""", vals)
+        conn.commit()
+
+def samx_cache_page(conn: sqlite3.Connection, query_hash: str, page: int, results_json: str) -> None:
+    import datetime as _dt
+    now = _dt.datetime.utcnow().isoformat() + "Z"
+    with closing(conn.cursor()) as cur:
+        cur.execute("""INSERT INTO notice_cache(query_hash,page,created_at,results_json)
+        VALUES(?,?,?,?)
+        ON CONFLICT(query_hash,page) DO UPDATE SET
+            created_at=excluded.created_at,
+            results_json=excluded.results_json
+        ;""", (query_hash, int(page), now, results_json))
+        conn.commit()
