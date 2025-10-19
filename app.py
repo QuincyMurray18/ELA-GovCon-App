@@ -22,7 +22,7 @@ def render_sam_quickview(conn):
                 st.caption(" | ".join(filter(None, [f"Agency: {a}", f"Posted: {p}", f"Due: {d}"])))
         except Exception as _e:
             st.caption(f"Quickview DB error: {_e}")
-        if st.button("Close", key=f"qv_close_{nid}"):
+        if st.button("Close", key=f"qv_close_{nid}_{seq}"):
             st.session_state["sam_quickview_open"] = False
             st.session_state["sam_quickview_notice_id"] = ""
 # --- End shim ---
@@ -5173,6 +5173,8 @@ def _simple_qa(texts: list[str], question: str) -> str:
     return _ai_summarize("\n\n".join(texts)[:12000], system="Answer the user's question from the provided text.")
 
 def render_sam_quickview(conn: sqlite3.Connection) -> None:
+    seq = st.session_state.get("_qv_render_seq", 0) + 1
+    st.session_state["_qv_render_seq"] = seq
     import streamlit as st
     if not flag("quickview", True):
         return
