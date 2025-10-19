@@ -185,10 +185,11 @@ def get_db() -> sqlite3.Connection:
                 section TEXT,
                 content TEXT
             );
+        """)
         
 
--- Phase X1 (Ingest core)
-CREATE TABLE IF NOT EXISTS rfp_files(
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rfp_files(
     id INTEGER PRIMARY KEY,
     rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
     filename TEXT,
@@ -198,8 +199,8 @@ CREATE TABLE IF NOT EXISTS rfp_files(
     bytes BLOB,
     created_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_rfp_files_rfp ON rfp_files(rfp_id);
-""")
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfp_files_rfp ON rfp_files(rfp_id);")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS lm_items(
                 id INTEGER PRIMARY KEY,
@@ -1335,36 +1336,36 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 # ---------------- PARSE & SAVE ----------------
     with tab_parse:
 
-# --- X1 Ingest: File Library + Health ---
-if flag('x_ingest', False):
-    with st.expander("X1 Ingest: File Library + Health", expanded=False):
-        st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available.")
-        ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
-        link_to_rfp = st.checkbox("Link ingested files to a new RFP record created below (if any)", value=True)
-        if st.button("Ingest Files", key="x1_ingest_btn"):
-            if not ing_files:
-                st.warning("No files selected")
-            else:
-                rows = []
-                for f in ing_files:
-                    try:
-                        b = f.getbuffer().tobytes()
-                    except Exception:
-                        b = f.read()
-                    rec = save_rfp_file_db(conn, None, f.name, b)
-                    rows.append({
-                        "Filename": rec["filename"],
-                        "SHA256": rec["sha256"][:12],
-                        "MIME": rec["mime"],
-                        "Pages": rec["pages"],
-                        "OCR pages": rec.get("ocr_pages", 0),
-                        "Dedup?": "Yes" if rec.get("dedup") else "No",
-                        "rfp_file_id": rec["id"],
-                    })
-                import pandas as _pd
-                df_ing = _pd.DataFrame(rows)
-                st.dataframe(df_ing, use_container_width=True, hide_index=True)
-                st.success(f"Ingested {len(rows)} file(s).")
+        # --- X1 Ingest: File Library + Health ---
+        if flag('x_ingest', False):
+            with st.expander("X1 Ingest: File Library + Health", expanded=False):
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available.")
+                ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
+                link_to_rfp = st.checkbox("Link ingested files to a new RFP record created below (if any)", value=True)
+                if st.button("Ingest Files", key="x1_ingest_btn"):
+                    if not ing_files:
+                        st.warning("No files selected")
+                    else:
+                        rows = []
+                        for f in ing_files:
+                            try:
+                                b = f.getbuffer().tobytes()
+                            except Exception:
+                                b = f.read()
+                            rec = save_rfp_file_db(conn, None, f.name, b)
+                            rows.append({
+                                "Filename": rec["filename"],
+                                "SHA256": rec["sha256"][:12],
+                                "MIME": rec["mime"],
+                                "Pages": rec["pages"],
+                                "OCR pages": rec.get("ocr_pages", 0),
+                                "Dedup?": "Yes" if rec.get("dedup") else "No",
+                                "rfp_file_id": rec["id"],
+                            })
+                        import pandas as _pd
+                        df_ing = _pd.DataFrame(rows)
+                        st.dataframe(df_ing, use_container_width=True, hide_index=True)
+                        st.success(f"Ingested {len(rows)} file(s).")
         colA, colB = st.columns([3,2])
         with colA:
             ups = st.file_uploader(
@@ -4606,4 +4607,3 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 pre[key_name] = b
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
-
