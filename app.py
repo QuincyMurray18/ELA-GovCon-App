@@ -993,6 +993,102 @@ def extract_pocs(text: str) -> list:
             'phone': phones[i] if i < len(phones) else '',
         })
     return out[:100]
+def _num_from_words(s: str) -> int | None:
+    m = re.search(r'\d+', s or '')
+    if m:
+        return int(m.group(0))
+    words = {'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9,'ten':10,'eleven':11,'twelve':12}
+    t = (s or '').strip().lower()
+    return words.get(t)
+
+def extract_pop_structure(text: str) -> dict:
+    if not text:
+        return {}
+    tl = text.lower()
+    base = 1 if re.search(r'\bbase\s+(year|period)\b', tl) else 0
+    oy = 0
+    for pat in [r'(\d+)\s+option\s+(?:years?|periods?)',
+                r'(one|two|three|four|five|six|seven|eight|nine|ten)\s+option\s+(?:years?|periods?)',
+                r'option\s+years?\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s*(?:through|-|to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b']:
+        m = re.search(pat, tl)
+        if m:
+            if len(m.groups())==2 and m.group(2):
+                a = _num_from_words(m.group(1)) or 0
+                b = _num_from_words(m.group(2)) or 0
+                if b>=a and a>0:
+                    oy = max(oy, b - a + 1)
+            else:
+                oy = max(oy, _num_from_words(m.group(1)) or 0)
+    total_years = None
+    m = re.search(r'(ordering|contract)\s+period[^\d]{0,20}(\d+)\s+year', tl)
+    if m:
+        try:
+            total_years = int(m.group(2))
+        except Exception:
+            total_years = None
+    base_months = None
+    m = re.search(r'base\s+(?:year|period)[^\d]{0,12}(\d{1,2})\s+month', tl)
+    if m:
+        try:
+            base_months = int(m.group(1))
+        except Exception:
+            base_months = None
+    out = {}
+    if base or oy:
+        label = "Base" if base else ""
+        if oy:
+            if label:
+                label += " + "
+            label += f"{oy} Option Year{'s' if oy!=1 else ''}"
+        out['pop_structure'] = label.strip()
+    if total_years:
+        out['ordering_period_years'] = total_years
+    if base_months:
+        out['base_months'] = base_months
+    return out
+
+def extract_clins_xlsx(file_bytes: bytes) -> list:
+    try:
+        import io, pandas as _pd
+        wb = _pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
+    except Exception:
+        return []
+    rows = []
+    for sname, df in wb.items():
+        if df is None or df.empty:
+            continue
+        df2 = df.copy()
+        df2.columns = [str(c).strip() for c in df2.columns]
+        low = [c.lower() for c in df2.columns]
+        def _pick(fn):
+            for i,c in enumerate(low):
+                try:
+                    if fn(c):
+                        return df2.columns[i]
+                except Exception:
+                    continue
+            return None
+        col_clin = _pick(lambda c: 'clin' in c or 'line item' in c or c.startswith('clin') or c.startswith('line'))
+        col_desc = _pick(lambda c: 'desc' in c or c=='item' or 'description' in c)
+        col_qty  = _pick(lambda c: 'qty' in c or 'quantity' in c)
+        col_unit = _pick(lambda c: c in ('unit','u/i','uom') or 'unit ' in c or 'uom' in c)
+        col_upr  = _pick(lambda c: 'unit price' in c or (('unit' in c or 'price' in c) and 'total' not in c and 'ext' not in c and 'extended' not in c))
+        col_ext  = _pick(lambda c: 'extended' in c or 'amount' in c or c=='total' or 'total price' in c or 'ext price' in c)
+        if (col_clin or col_desc) and (col_qty or col_upr or col_ext):
+            for _, r in df2.iterrows():
+                def gv(col):
+                    return "" if col is None else str(r.get(col, "")).strip()
+                clin = gv(col_clin); desc = gv(col_desc); qty  = gv(col_qty)
+                unit = gv(col_unit); upr  = gv(col_upr);  ext  = gv(col_ext)
+                if any([clin, desc, qty, upr, ext]):
+                    rows.append({'clin': clin, 'description': desc[:300] if desc else "", 'qty': qty, 'unit': unit, 'unit_price': upr, 'extended_price': ext})
+    seen = set(); uniq = []
+    for r in rows:
+        key = (r['clin'], r['description'], r['qty'], r['unit_price'], r['extended_price'])
+        if key in seen: continue
+        seen.add(key); uniq.append(r)
+    return uniq[:2000]
+
 
 
 # -------------------- Modules --------------------
@@ -1334,7 +1430,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X2 applied")
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X3 applied")
                 try:
                     df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
                     opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
@@ -1450,12 +1546,26 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     if pasted:
                         text_parts.append(pasted)
                     full_text = "\\n\\n".join([t for t in text_parts if t]).strip()
+                    # X3: parse pricing matrices from any uploaded XLSX files
+                    x3_clins = []
+                    for _f in (ups or []):
+                        try:
+                            _name = (_f.name or "").lower()
+                            _b = _f.getbuffer().tobytes() if hasattr(_f, "getbuffer") else _f.read()
+                        except Exception:
+                            _name = (_f.name or "").lower()
+                            try:
+                                _b = _f.read()
+                            except Exception:
+                                _b = b""
+                        if _name.endswith(".xlsx") and _b:
+                            x3_clins.extend(extract_clins_xlsx(_b))
                     if not full_text:
                         st.error("Nothing readable found.")
                     else:
                         secs = extract_sections_L_M(full_text)
                         l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
-                        clins = extract_clins(full_text); dates = extract_dates(full_text); pocs = extract_pocs(full_text)
+                        clins = extract_clins(full_text) + (x3_clins or []); dates = extract_dates(full_text); pocs = extract_pocs(full_text)
                         meta = {
                             'naics': _extract_naics(full_text),
                             'set_aside': _extract_set_aside(full_text),
@@ -1479,7 +1589,31 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             for pc in pocs:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
-                            conn.commit()
+                            
+                            # X3: store POP / ordering period in meta and key_dates
+                            try:
+                                _pop = extract_pop_structure(full_text)
+                                if _pop:
+                                    for k,v in _pop.items():
+                                        cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(k), str(v)))
+                                    if _pop.get('pop_structure'):
+                                        cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                                    (int(rfp_id), 'Ordering/POP', _pop['pop_structure'], ''))
+                            except Exception:
+                                pass
+
+                            # X3: POP / ordering period from this file's text
+                            try:
+                                _pop = extract_pop_structure(text)
+                                if _pop:
+                                    for k,v in _pop.items():
+                                        cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(k), str(v)))
+                                    if _pop.get('pop_structure'):
+                                        cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
+                                                    (int(rfp_id), 'Ordering/POP', _pop['pop_structure'], ''))
+                            except Exception:
+                                pass
+conn.commit()
                             # X2: auto-link any pending ingested files to this new RFP
                             try:
                                 if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids"):
@@ -1496,12 +1630,19 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 else:
                     saved = 0
                     for f in ups or []:
-                        text = _read_file(f)
+                        try:
+                            _bytes = f.getbuffer().tobytes()
+                        except Exception:
+                            try:
+                                _bytes = f.read()
+                            except Exception:
+                                _bytes = b""
+                        text = _read_file(type('F', (), {'name': f.name, 'read': lambda self=None: _bytes})())
                         if not text.strip():
                             continue
                         secs = extract_sections_L_M(text)
                         l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
-                        clins = extract_clins(text); dates = extract_dates(text); pocs = extract_pocs(text)
+                        clins = extract_clins(text) + (extract_clins_xlsx(_bytes) if (f.name or '').lower().endswith('.xlsx') else []); dates = extract_dates(text); pocs = extract_pocs(text)
                         meta = {
                             'naics': _extract_naics(text),
                             'set_aside': _extract_set_aside(text),
@@ -1623,7 +1764,23 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
             key="rfp_data_sel"
         )
+        
+        with st.expander("Ordering / POP (X3)", expanded=False):
+            try:
+                df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+            except Exception:
+                df_meta = pd.DataFrame(columns=['key','value'])
+            if df_meta is None or df_meta.empty:
+                st.write("No POP metadata yet.")
+            else:
+                pop = df_meta[df_meta["key"].isin(["pop_structure","ordering_period_years","base_months"])]
+                if pop.empty:
+                    st.dataframe(df_meta, use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(pop, use_container_width=True, hide_index=True)
+
         # === Phase S: Manual Editors (LM / CLINs / Dates / POCs / Meta) ===
+
         import pandas as _pd
         from contextlib import closing as _closing_ed
         with st.expander('Manual Editors', expanded=False):
