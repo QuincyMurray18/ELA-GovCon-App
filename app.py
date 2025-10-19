@@ -4848,7 +4848,7 @@ def samx_extract_fields(detail: dict) -> dict:
     status = _samx_get(core, "status", default=_samx_get(core, "active", default=""))
     url = _samx_get(core, "uiLink", default=_samx_get(core, "url", default=""))
     raw_json = json.dumps(detail, separators=(",", ":"), ensure_ascii=False)
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    now = _dt.utcnow().isoformat() + "Z"
     return {
         "notice_id": notice_id, "type": ntype, "title": title, "agency": agency, "office": office,
         "naics": naics, "psc": psc, "set_aside": set_aside,
