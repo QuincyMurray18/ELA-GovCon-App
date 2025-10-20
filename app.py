@@ -1923,14 +1923,8 @@ def extract_pop_structure(text: str) -> dict:
     return out
 
 
-# === Y5.5: AI-assisted Parse & Save (always on) ===
+# === Y5.5: AI-assisted Parse & Save (safe indent) ===
 def y55_ai_parse(text: str) -> dict:
-    """
-    Use the configured OpenAI chat model to extract structured fields from RFP text.
-    Returns a dict with keys: title, solnum, meta{naics,set_aside,place_of_performance}, 
-    l_items[list of str], clins[list of dict], dates[list of dict], pocs[list of dict].
-    Robust to model unavailability and non-JSON outputs.
-    """
     out = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
     t = (text or "").strip()
     if not t:
@@ -1956,7 +1950,6 @@ def y55_ai_parse(text: str) -> dict:
                 temperature=0.0
             )
         except Exception as _e:
-            # fallback
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
@@ -1968,7 +1961,6 @@ def y55_ai_parse(text: str) -> dict:
         except Exception:
             raw = ""
         import json, re
-        # find first JSON object in the response
         m = re.search(r'\{.*\}', raw, re.S)
         data = {}
         if m:
@@ -1977,7 +1969,6 @@ def y55_ai_parse(text: str) -> dict:
             except Exception:
                 data = {}
         if not data and raw.strip():
-            # attempt simple repair
             raw2 = raw.strip().strip("`").strip()
             try:
                 data = json.loads(raw2)
@@ -1987,22 +1978,20 @@ def y55_ai_parse(text: str) -> dict:
             for k in out.keys():
                 if k in data and data[k]:
                     out[k] = data[k]
-        # Normalize shapes
         if not isinstance(out.get("l_items"), list): out["l_items"] = []
         if not isinstance(out.get("clins"), list): out["clins"] = []
         if not isinstance(out.get("dates"), list): out["dates"] = []
         if not isinstance(out.get("pocs"), list): out["pocs"] = []
         if not isinstance(out.get("meta"), dict): out["meta"] = {}
-        # Trim strings
         out["title"] = (out.get("title") or "").strip()[:200]
         out["solnum"] = (out.get("solnum") or "").strip()[:80]
         return out
     except Exception:
         return out
 
-def _y55_norm_str(x): 
+def _y55_norm_str(x):
     import re
-    try: 
+    try:
         return re.sub(r'\s+',' ', str(x or '')).strip()
     except Exception:
         return str(x)
@@ -2010,8 +1999,7 @@ def _y55_norm_str(x):
 def y55_merge_lm(base_list, ai_list):
     base = [_y55_norm_str(x) for x in (base_list or []) if _y55_norm_str(x)]
     ai = [_y55_norm_str(x) for x in (ai_list or []) if _y55_norm_str(x)]
-    seen = set()
-    out = []
+    seen = set(); out = []
     for it in base + ai:
         if it not in seen:
             seen.add(it); out.append(it)
@@ -2029,8 +2017,7 @@ def y55_merge_clins(base_rows, ai_rows):
         }
     base = [norm_row(r) for r in (base_rows or [])]
     ai = [norm_row(r) for r in (ai_rows or [])]
-    out = []
-    seen = set()
+    out = []; seen = set()
     for r in base + ai:
         key = (r["clin"], r["description"], r["qty"], r["unit_price"], r["extended_price"])
         if key in seen: 
@@ -2043,8 +2030,7 @@ def y55_merge_dates(base_rows, ai_rows):
         return {"label": _y55_norm_str((r or {}).get("label")), "date_text": _y55_norm_str((r or {}).get("date_text")), "date_iso": _y55_norm_str((r or {}).get("date_iso"))}
     base = [norm(r) for r in (base_rows or [])]
     ai = [norm(r) for r in (ai_rows or [])]
-    out = []
-    seen = set()
+    out = []; seen = set()
     for r in base + ai:
         key = (r["label"], r["date_text"])
         if key in seen: 
@@ -2058,8 +2044,7 @@ def y55_merge_pocs(base_rows, ai_rows):
                 "email": _y55_norm_str((r or {}).get("email")), "phone": _y55_norm_str((r or {}).get("phone"))}
     base = [norm(r) for r in (base_rows or [])]
     ai = [norm(r) for r in (ai_rows or [])]
-    out = []
-    seen = set()
+    out = []; seen = set()
     for r in base + ai:
         key = (r["name"], r["email"], r["phone"])
         if key in seen: 
@@ -2067,12 +2052,7 @@ def y55_merge_pocs(base_rows, ai_rows):
         seen.add(key); out.append(r)
     return out[:300]
 
-def y55_ai_enhance_parsed(text, l_items, clins, dates, pocs, meta, title, solnum):
-    """
-    Call y55_ai_parse and union the results with heuristic extraction.
-    Prefer AI meta values when non-empty.
-    Returns: (l_items, clins, dates, pocs, meta, title, solnum)
-    """
+def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum):
     ai = y55_ai_parse(text or "")
     l_items2 = y55_merge_lm(l_items, ai.get("l_items", []))
     clins2 = y55_merge_clins(clins, ai.get("clins", []))
@@ -2624,32 +2604,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         }
                         
                         
-# --- Y5.5 AI enhancement ---
-try:
-    _t55 = full_text
-except NameError:
-    try:
-        _t55 = text
-    except NameError:
-        _t55 = ""
-try:
-    _title0 = title
-except NameError:
-    _title0 = ""
-try:
-    _sol0 = solnum
-except NameError:
-    _sol0 = ""
-l_items, clins, dates, pocs, meta, _title_enh, _sol_enh = y55_ai_enhance_parsed(_t55, l_items, clins, dates, pocs, meta, _title0, _sol0)
-try:
-    title = _title_enh
-except Exception:
-    pass
-try:
-    solnum = _sol_enh
-except Exception:
-    pass
-# --- end Y5.5 ---
+                        l_items, clins, dates, pocs, meta, title, solnum = y55_apply_enhancement(full_text if 'full_text' in locals() else (text if 'text' in locals() else ''), l_items, clins, dates, pocs, meta, title if 'title' in locals() else '', solnum if 'solnum' in locals() else '')
 # X4: persist meta to rfp_meta for combined RFP
                         try:
                             for _k, _v in (meta or {}).items():
@@ -2736,32 +2691,7 @@ except Exception:
                         }
                         
                         
-# --- Y5.5 AI enhancement ---
-try:
-    _t55 = full_text
-except NameError:
-    try:
-        _t55 = text
-    except NameError:
-        _t55 = ""
-try:
-    _title0 = title
-except NameError:
-    _title0 = ""
-try:
-    _sol0 = solnum
-except NameError:
-    _sol0 = ""
-l_items, clins, dates, pocs, meta, _title_enh, _sol_enh = y55_ai_enhance_parsed(_t55, l_items, clins, dates, pocs, meta, _title0, _sol0)
-try:
-    title = _title_enh
-except Exception:
-    pass
-try:
-    solnum = _sol_enh
-except Exception:
-    pass
-# --- end Y5.5 ---
+                        l_items, clins, dates, pocs, meta, title, solnum = y55_apply_enhancement(full_text if 'full_text' in locals() else (text if 'text' in locals() else ''), l_items, clins, dates, pocs, meta, title if 'title' in locals() else '', solnum if 'solnum' in locals() else '')
 # X4: persist meta to rfp_meta per-file
                         try:
                             for _k, _v in (meta or {}).items():
