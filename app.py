@@ -659,6 +659,11 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
             if ans:
                 y2_append_message(conn, int(thread_id), "assistant", ans)
                 st.success("Saved to thread")
+                with st.expander("Add to Proposal Drafts", expanded=False):
+                    sec = st.text_input("Section label", value="CO Chat Notes", key="y5_sec_y2")
+                    if st.button("Add to drafts", key="y5_add_y2"):
+                        y5_save_snippet(conn, int(rfp_id), sec, ans, source="Y2 Chat")
+                        st.success("Saved to drafts")
 # === end Y2 ===
 
 
@@ -815,38 +820,154 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
     rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist(),
                           format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}",
                           key="y4_rfp_sel")
+    mode = st.radio("Mode", ["Paste", "Upload", "Use RFP files"], horizontal=True, key="y5_mode")
     st.subheader("Draft to review")
-    # Option to pull from Proposal Builder session state if present
-    draft_default = ""
-    try:
-        keys = [k for k in st.session_state.keys() if k.startswith("pb_section_")]
-        if keys:
-            with st.expander("Load from Proposal Builder session", expanded=False):
-                picks = st.multiselect("Sections", options=keys, format_func=lambda k: k.replace("pb_section_",""))
-                if st.button("Load selected sections", key="y4_load_pb"):
-                    draft_join = "\\n\\n".join([st.session_state.get(k,"") or "" for k in picks])
-                    st.session_state["y4_draft"] = draft_join.strip()
-            draft_default = st.session_state.get("y4_draft", "")
-    except Exception:
-        pass
-    draft = st.text_area("Paste your draft here", value=draft_default, height=260, key="y4_draft_ta")
-    k = y_auto_k(draft or "review")
+
+    draft_text = ""
+    uploaded = None
+    if mode == "Paste":
+        draft_text = st.text_area("Paste your draft here", value=st.session_state.get("y4_draft",""), height=260, key="y4_draft_ta")
+    elif mode == "Upload":
+        uploaded = st.file_uploader("Upload DOCX/PDF/TXT", type=["docx","pdf","txt"], accept_multiple_files=True, key="y5_up")
+        if uploaded:
+            with st.spinner("Extracting..."):
+                draft_text = y5_extract_from_uploads(uploaded)[:400000]
+            st.text_area("Preview", value=draft_text[:20000], height=240)
+    else:
+        if st.button("Assemble from linked RFP files", key="y5_from_rfp"):
+            with st.spinner("Collecting text from linked files..."):
+                draft_text = y5_extract_from_rfp(conn, int(rfp_id))[:400000]
+            st.session_state["y5_rfp_text"] = draft_text
+        draft_text = st.session_state.get("y5_rfp_text","")
+        if draft_text:
+            st.text_area("Preview", value=draft_text[:20000], height=240)
+
+    k = y_auto_k(draft_text or "review")
+    chunking = st.checkbox("Auto-chunk long text", value=True, key="y5_chunk_on")
     run = st.button("Run CO Review", type="primary", key="y4_go")
     if run:
-        if not (draft or "").strip():
-            st.warning("Paste a draft to review."); return
-        ph = st.empty(); acc = []
-        for tok in y4_stream_review(conn, int(rfp_id), draft.strip(), k=int(k)):
-            acc.append(tok); ph.markdown("".join(acc))
-        # Show sources used table
-        hits = y1_search(conn, int(rfp_id), f"Section L Section M compliance {draft[:200]}", k=int(k))
+        if not (draft_text or "").strip():
+            st.warning("Provide input text."); return
+        texts = y5_chunk_text(draft_text) if chunking else [draft_text]
+        ph = st.empty()
+        all_out = []
+        for idx, t in enumerate(texts, start=1):
+            acc = []
+            ph.caption(f"Reviewing chunk {idx}/{len(texts)}")
+            for tok in y4_stream_review(conn, int(rfp_id), t.strip(), k=int(k)):
+                acc.append(tok)
+                ph.markdown("".join(acc))
+            all_out.append("".join(acc))
+        final = "
+
+".join(all_out).strip()
+        st.session_state["y4_last_review"] = final
+        st.subheader("Combined result")
+        st.markdown(final or "_no output_")
+
+        # Sources table
+        hits = y1_search(conn, int(rfp_id), f"Section L Section M compliance {draft_text[:200]}", k=int(k))
         if hits:
             import pandas as _pd
             dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
             st.subheader("Sources used")
             st.dataframe(dfh, use_container_width=True, hide_index=True)
-# === end Y4 ===
 
+        with st.expander("Add to Proposal Drafts", expanded=True):
+            section = st.text_input("Section label", value="CO Review Notes", key="y5_sec_rev")
+            if st.button("Add review to drafts", key="y5_add_rev"):
+                y5_save_snippet(conn, int(rfp_id), section, final or draft_text, source="Y4 Review")
+                st.success("Saved to drafts")
+
+
+# === Y5: Upload Review + Drafts plumbing ===
+def ensure_y5_tables(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS draft_snippets(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
+                    section TEXT,
+                    source TEXT,
+                    text TEXT,
+                    created_at TEXT
+                );
+            """)
+            conn.commit()
+    except Exception:
+        pass
+
+def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> list[str]:
+    t = (text or "").strip()
+    if not t:
+        return []
+    if len(t) <= target_chars:
+        return [t]
+    out = []
+    i = 0
+    while i < len(t):
+        j = min(len(t), i + max(2000, target_chars))
+        chunk = t[i:j]
+        # try to break at sentence end near the end
+        k = chunk.rfind(". ")
+        if k > len(chunk) * 0.6:
+            chunk = chunk[:k+1]
+            j = i + k + 1
+        out.append(chunk)
+        i = max(j - overlap, j)
+    return out
+
+def y5_extract_from_uploads(files) -> str:
+    if not files:
+        return ""
+    parts = []
+    for f in files:
+        try:
+            try:
+                b = f.getbuffer().tobytes()
+            except Exception:
+                b = f.read()
+            mime = _detect_mime_light(f.name or "")
+            pages = extract_text_pages(b, mime) or []
+            if not pages and "pdf" in (mime or "").lower():
+                pages, _ = ocr_pages_if_empty(b, mime, pages or [])
+            parts.append("
+
+".join(pages))
+        except Exception:
+            continue
+    return "
+
+".join([p for p in parts if p]).strip()
+
+def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
+    try:
+        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty:
+        return ""
+    parts = []
+    for _, r in df.iterrows():
+        b = r.get("bytes"); mime = r.get("mime") or ""
+        pages = extract_text_pages(b, mime) or []
+        parts.append("
+
+".join(pages))
+    return "
+
+".join([p for p in parts if p]).strip()
+
+def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO draft_snippets(rfp_id, section, source, text, created_at) VALUES(?,?,?,?, datetime('now'));",
+                        (int(rfp_id), section.strip() or "General", source.strip() or "Y5", text.strip()))
+            conn.commit()
+    except Exception:
+        pass
+# === end Y5 ===
 
 
 def get_db() -> sqlite3.Connection:
@@ -1309,6 +1430,10 @@ def get_db() -> sqlite3.Connection:
         """)
         cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
         conn.commit()
+    try:
+        ensure_y5_tables(conn)
+    except Exception:
+        pass
     try:
         migrate(conn)
     except Exception:
@@ -2566,6 +2691,13 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
                         conn, params=(int(_rid),)
                     )
+
+                    with st.expander("Add to Proposal Drafts", expanded=False):
+                        sec = st.text_input("Section label", value="Research Notes", key="y5_sec_y1")
+                        ans_txt = "".join(acc).strip()
+                        if st.button("Add to drafts", key="y5_add_y1"):
+                            y5_save_snippet(conn, int(rid_y1), sec, ans_txt or q_y1.strip(), source="Y1 Q&A")
+                            st.success("Saved to drafts")
                 except Exception:
                     df_lm = pd.DataFrame(columns=['id','item_text','is_must','status'])
                 df_lm = df_lm.fillna("")
@@ -3302,6 +3434,25 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
 
+        with st.expander("Snippets Inbox (from Y1/Y2/Y4/Y5)", expanded=True):
+            try:
+                df_snip = pd.read_sql_query("SELECT id, section, source, text, created_at FROM draft_snippets WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
+            except Exception:
+                df_snip = pd.DataFrame()
+            if df_snip is None or df_snip.empty:
+                st.caption("No snippets saved yet")
+            else:
+                st.dataframe(df_snip[["id","section","source","created_at"]], use_container_width=True, hide_index=True, height=200)
+                sid = st.selectbox("Pick snippet ID", options=df_snip["id"].tolist())
+                sec_choice = st.selectbox("Insert into section", options=selected, index=min(len(selected)-1, 0))
+                if st.button("Insert snippet"):
+                    txt = df_snip[df_snip["id"]==sid].iloc[0]["text"]
+                    key = f"pb_ta_{sec_choice}"
+                    cur = st.session_state.get(key, "")
+                    st.session_state[key] = (cur + ("\n\n" if cur else "") + str(txt)).strip()
+                    st.session_state[f"pb_section_{sec_choice}"] = st.session_state[key]
+                    st.success("Inserted into section")
+    
 
 # ---------- Subcontractor Finder (Phase D) ----------
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
