@@ -23,6 +23,32 @@ except Exception:
 import smtplib
 import streamlit as st
 
+# --- safety guards for misplaced tab contexts ---
+try:
+    tab_y4
+except NameError:
+    tab_y4 = st.container()
+try:
+    tab_y2
+except NameError:
+    tab_y2 = st.container()
+try:
+    tab_y1
+except NameError:
+    tab_y1 = st.container()
+try:
+    tab_checklist
+except NameError:
+    tab_checklist = st.container()
+try:
+    tab_data
+except NameError:
+    tab_data = st.container()
+try:
+    tab_parse
+except NameError:
+    tab_parse = st.container()
+
 # --- Optional PDF backends for Phase X1 ---
 try:
     import pdfplumber as _pdfplumber  # type: ignore
