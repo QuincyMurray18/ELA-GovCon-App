@@ -1418,6 +1418,16 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # ensure rfp_meta exists
     try:
         with closing(conn.cursor()) as _c:
+
+            _c.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_chat(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
+                    ts TEXT,
+                    q TEXT,
+                    a TEXT
+                );
+            """)
             _c.execute("""
                 CREATE TABLE IF NOT EXISTS rfp_meta(
                     id INTEGER PRIMARY KEY,
@@ -1446,7 +1456,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X6 applied")
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X7 applied")
                 try:
                     df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
                     opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
@@ -1724,6 +1734,72 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         else:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+
+        with st.expander("Q&A Memory (X7)", expanded=False):
+            st.caption("Ask questions about this RFP. Answers are pulled from saved checklists, CLINs, dates, POCs, and linked file text. History is saved.")
+            q = st.text_input("Your question", key=f"x7_q_{rid}")
+            ask = st.button("Ask (store)", key=f"x7_ask_{rid}")
+            if ask and (q or "").strip():
+                try:
+                    ql = (q or "").lower()
+                    res = _kb_search(conn, int(rid), q or "")
+                    ans_parts = []
+                    if any(w in ql for w in ["due","deadline","close"]):
+                        df = res.get("dates")
+                        if df is not None and not df.empty:
+                            top = df.iloc[0]
+                            ans_parts.append(f"Due: {top.get('date_text','')} ({top.get('label','')})")
+                    if any(w in ql for w in ["poc","contact","officer","specialist"]):
+                        df = res.get("pocs")
+                        if df is not None and not df.empty:
+                            s = "; ".join([f"{r.get('name','')} ({r.get('email','')})" for _, r in df.head(3).iterrows()])
+                            if s: ans_parts.append("POCs: " + s)
+                    if "clin" in ql:
+                        df = res.get("clins")
+                        if df is not None and not df.empty:
+                            ans_parts.append(f"CLINs detected: {len(df)}; first: {df.iloc[0].get('clin','')}")
+                    if any(w in ql for w in ["checklist","compliance","shall","must"]):
+                        df = res.get("checklist")
+                        if df is not None and not df.empty:
+                            open_cnt = int((df['status']!='Complete').sum())
+                            ans_parts.append(f"Checklist items: {len(df)}. Open: {open_cnt}.")
+                    if not ans_parts:
+                        sec = res.get("sections")
+                        if sec is not None and not sec.empty:
+                            snip = (sec.iloc[0].get("content","") or "").strip().replace("\n"," ")
+                            ans_parts.append("Top section snippet: " + snip[:300])
+                    a = " | ".join(ans_parts) if ans_parts else "No direct answer found in saved data."
+                    from contextlib import closing as _closing_x7
+                    with _closing_x7(conn.cursor()) as cur:
+                        cur.execute("INSERT INTO rfp_chat(rfp_id, ts, q, a) VALUES(?,?,?,?);",
+                                    (int(rid), datetime.utcnow().isoformat(), q.strip(), a))
+                        conn.commit()
+                    st.success("Stored Q&A.")
+                except Exception as e:
+                    st.error(f"Q&A failed: {e}")
+            try:
+                df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(rid),))
+                if df_hist is not None and not df_hist.empty:
+                    st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                    c1, c2 = st.columns([1,1])
+                    with c1:
+                        if st.button("Export Q&A CSV", key=f"x7_export_{rid}"):
+                            csvb = df_hist.to_csv(index=False).encode("utf-8")
+                            st.download_button("Download Q&A CSV", data=csvb, file_name=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key=f"x7_dl_{rid}")
+                    with c2:
+                        if st.button("Clear history", key=f"x7_clear_{rid}"):
+                            try:
+                                with closing(conn.cursor()) as cur:
+                                    cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(rid),))
+                                    conn.commit()
+                                st.success("Cleared.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Clear failed: {e}")
+                else:
+                    st.caption("No Q&A yet for this RFP.")
+            except Exception as e:
+                st.info(f"No history available: {e}")
             st.caption(f"{len(df_lm)} checklist items")
             # Inline status editor
             st.dataframe(df_lm, use_container_width=True, hide_index=True)
