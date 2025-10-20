@@ -130,9 +130,9 @@ BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Su
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-# Y0 sidebar panel (always on)
+# Y0 main panel (always on)
 try:
-    y0_ai_sidebar()
+    y0_ai_panel()
 except Exception:
     pass
 
@@ -177,9 +177,9 @@ def ask_ai(messages, tools=None, temperature=0.2):
     except Exception as _ex:
         yield f"AI unavailable: {type(_ex).__name__}: {_ex}"
 
-def y0_ai_sidebar():
+def y0_ai_panel():
     import streamlit as st
-    with st.sidebar.expander("Ask the CO (AI)", expanded=False):
+    st.header("Ask the CO (AI)")
         q = st.text_area("Your question", key="y0_q", height=120)
         if st.button("Ask", key="y0_go"):
             if not (q or "").strip():
