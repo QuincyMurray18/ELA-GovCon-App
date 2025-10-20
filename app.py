@@ -145,6 +145,24 @@ except Exception:
 SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
              "Flag non-compliance. Be concise. If evidence is missing, say so.")
 
+# === helper: auto-select number of sources to cite (Y1–Y3) ===
+def y_auto_k(text: str) -> int:
+    t = (text or '').lower()
+    n = len(t)
+    broad = any(k in t for k in [
+        'overview','summary','summarize','list all','requirements','compliance',
+        'section l','section m','evaluation factors','factors','checklist',
+        'compare','differences','conflict','conflicts','crosswalk','matrix'
+    ])
+    if not t.strip():
+        return 4
+    base = 7 if broad else 4
+    if n > 500:
+        base += 1
+    if n > 1200:
+        base += 1
+    return max(3, min(8, base))
+
 import os
 
 def _resolve_model():
