@@ -5084,3 +5084,350 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 pre[key_name] = b
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
+
+# ========== X8 AI: CO Brief + Q&A (merged) ==========
+def _x8_get_openai_client():
+    try:
+        # New SDK
+        from openai import OpenAI  # type: ignore
+        key = None
+        try:
+            key = st.secrets.get("openai", {}).get("api_key") or st.secrets.get("OPENAI_API_KEY")
+        except Exception:
+            pass
+        import os as _os
+        key = key or _os.getenv("OPENAI_API_KEY")
+        if not key:
+            return None, "Missing OPENAI_API_KEY in secrets/env"
+        client = OpenAI(api_key=key)
+        return client, None
+    except Exception as e:
+        # Legacy fallback
+        try:
+            import openai  # type: ignore
+            key = None
+            try:
+                key = st.secrets.get("openai", {}).get("api_key") or st.secrets.get("OPENAI_API_KEY")
+            except Exception:
+                pass
+            import os as _os
+            key = key or _os.getenv("OPENAI_API_KEY")
+            if not key:
+                return None, "Missing OPENAI_API_KEY in secrets/env"
+            openai.api_key = key
+            return openai, None
+        except Exception as e2:
+            return None, f"OpenAI SDK not available: {e2}"
+
+def _x8_models():
+    # Returns dict with heavy, fast, embed
+    try:
+        m = st.secrets.get("models", {})
+        heavy = m.get("heavy") or "gpt-5"
+        fast = m.get("fast") or "gpt-5-mini"
+        embed = m.get("embed") or "text-embedding-3-small"
+        return {"heavy": heavy, "fast": fast, "embed": embed}
+    except Exception:
+        return {"heavy": "gpt-5", "fast": "gpt-5-mini", "embed": "text-embedding-3-small"}
+
+def _x8_chunk(text, max_chars=1600):
+    parts, buf = [], []
+    total = 0
+    for line in (text or "").splitlines():
+        if len("\n".join(buf)) + len(line) + 1 > max_chars:
+            if buf:
+                parts.append("\n".join(buf).strip())
+                buf = []
+        buf.append(line)
+    if buf:
+        parts.append("\n".join(buf).strip())
+    return [p for p in parts if p]
+
+def _x8_norm_source(filename, idx):
+    base = (filename or "RFP").replace("..","").replace("\\","/").split("/")[-1]
+    return f"{base}:{idx+1}"
+
+def _x8_np():
+    try:
+        import numpy as np  # type: ignore
+        return np, None
+    except Exception as e:
+        return None, f"numpy not available: {e}"
+
+def st_x8_panel(conn, rfp_id: int):
+    st.subheader("X8 AI: CO Brief + Q&A")
+    st.caption("Indexes linked files and saved artifacts. Answers with citations.")
+
+    # Ensure table exists
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS ai_index(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER NOT NULL,
+                    source TEXT,
+                    chunk_no INTEGER,
+                    text TEXT,
+                    embedding BLOB,
+                    dim INTEGER,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_index_rfp ON ai_index(rfp_id);")
+            conn.commit()
+    except Exception as e:
+        st.info(f"AI index unavailable: {e}")
+        return
+
+    c1, c2, c3 = st.columns([2,2,2])
+    with c1:
+        rebuild = st.button("Build AI Index", key=f"x8_build_{rfp_id}")
+    with c2:
+        ask = st.button("Ask", key=f"x8_askbtn_{rfp_id}")
+    with c3:
+        brief = st.button("Generate CO Executive Brief", key=f"x8_brief_{rfp_id}")
+    q = st.text_input("Your question", key=f"x8_q_{rfp_id}", placeholder="e.g., What are the submission requirements and due dates?")
+
+    models = _x8_models()
+
+    if rebuild:
+        client, err = _x8_get_openai_client()
+        if err or client is None:
+            st.error(err or "OpenAI client error")
+            return
+
+        import pandas as _pd
+        rows = []
+
+        # 1) Linked files
+        try:
+            df_files = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        except Exception:
+            df_files = pd.DataFrame()
+        for _, r in (df_files or []).iterrows():
+            fname = r.get("filename") or ""
+            mime = r.get("mime") or ""
+            b = r.get("bytes")
+            pages = extract_text_pages(b, mime)
+            text = ("\n\n".join(pages) if pages else "")
+            chunks = _x8_chunk(text, max_chars=1600)[:80]
+            for i, ch in enumerate(chunks):
+                rows.append({"source": _x8_norm_source(fname, i), "text": ch})
+
+        # 2) L/M checklist, CLINs, Dates, POCs
+        try:
+            dfL = pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            if dfL is not None and not dfL.empty:
+                txt = "\n".join(dfL["item_text"].astype(str).tolist())
+                for i, ch in enumerate(_x8_chunk("SECTION L/M\n"+txt, max_chars=1600)):
+                    rows.append({"source": "Checklist:"+str(i+1), "text": ch})
+        except Exception:
+            pass
+        try:
+            dfC = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            if dfC is not None and not dfC.empty:
+                txt = dfC.fillna("").astype(str).to_csv(sep="\t", index=False)
+                for i, ch in enumerate(_x8_chunk("CLIN TABLE\n"+txt, max_chars=1600)):
+                    rows.append({"source": "CLINs:"+str(i+1), "text": ch})
+        except Exception:
+            pass
+        try:
+            dfD = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            if dfD is not None and not dfD.empty:
+                txt = dfD.fillna("").astype(str).to_csv(sep="\t", index=False)
+                for i, ch in enumerate(_x8_chunk("KEY DATES\n"+txt, max_chars=1600)):
+                    rows.append({"source": "Dates:"+str(i+1), "text": ch})
+        except Exception:
+            pass
+        try:
+            dfP = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            if dfP is not None and not dfP.empty:
+                txt = dfP.fillna("").astype(str).to_csv(sep="\t", index=False)
+                for i, ch in enumerate(_x8_chunk("POCs\n"+txt, max_chars=1600)):
+                    rows.append({"source": "POCs:"+str(i+1), "text": ch})
+        except Exception:
+            pass
+
+        if not rows:
+            st.warning("Nothing to index. Link files or parse RFP first.")
+            return
+
+        # Embed
+        np, np_err = _x8_np()
+        if np is None:
+            st.error(np_err)
+            return
+
+        texts = [r["text"] for r in rows]
+        # New SDK embed call
+        try:
+            try:
+                from openai import OpenAI  # type: ignore
+                _ = OpenAI  # silence pyright
+                em = client.embeddings.create(model=models["embed"], input=texts)
+                vecs = [np.array(e.embedding, dtype=np.float32) for e in em.data]
+            except Exception:
+                # Legacy
+                import openai as _openai  # type: ignore
+                em = client.Embedding.create(model=models["embed"], input=texts)
+                vecs = [np.array(e["embedding"], dtype=np.float32) for e in em["data"]]
+        except Exception as e:
+            st.error(f"Embedding failed: {e}")
+            return
+
+        dim = int(vecs[0].shape[0]) if vecs else 0
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute("DELETE FROM ai_index WHERE rfp_id=?;", (int(rfp_id),))
+                for i, (row, v) in enumerate(zip(rows, vecs)):
+                    cur.execute(
+                        "INSERT INTO ai_index(rfp_id, source, chunk_no, text, embedding, dim, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+                        (int(rfp_id), row["source"].split(":")[0], int(row["source"].split(":")[-1]), row["text"], v.tobytes(), dim)
+                    )
+                conn.commit()
+            st.success(f"Indexed {len(vecs)} chunks using {models['embed']}.")
+        except Exception as e:
+            st.error(f"Index write failed: {e}")
+            return
+
+    if ask and (q or "").strip():
+        client, err = _x8_get_openai_client()
+        if err or client is None:
+            st.error(err or "OpenAI client error")
+            return
+        np, np_err = _x8_np()
+        if np is None:
+            st.error(np_err); return
+        try:
+            df = pd.read_sql_query("SELECT source, chunk_no, text, embedding, dim FROM ai_index WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        except Exception as e:
+            st.error(f"Index read failed: {e}")
+            return
+        if df is None or df.empty:
+            st.warning("No AI index for this RFP. Click Build AI Index first.")
+            return
+        # Embed query
+        try:
+            try:
+                from openai import OpenAI  # type: ignore
+                emq = client.embeddings.create(model=models["embed"], input=[q])
+                qvec = np.array(emq.data[0].embedding, dtype=np.float32)
+            except Exception:
+                emq = client.Embedding.create(model=models["embed"], input=[q])
+                qvec = np.array(emq["data"][0]["embedding"], dtype=np.float32)
+        except Exception as e:
+            st.error(f"Query embedding failed: {e}")
+            return
+        # Compute cosine sims
+        def _frombuf(b, dim):
+            try:
+                return np.frombuffer(b, dtype=np.float32, count=dim)
+            except Exception:
+                return None
+        emb = [_frombuf(b, int(d)) for b, d in zip(df["embedding"], df["dim"])]
+        mask = [v is not None for v in emb]
+        if not any(mask):
+            st.error("Embeddings unavailable. Rebuild the index.")
+            return
+        M = np.stack([v for v in emb if v is not None], axis=0)
+        df2 = df[mask].reset_index(drop=True)
+        # cosine similarity
+        qn = qvec / (np.linalg.norm(qvec) + 1e-9)
+        Mn = M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
+        sims = (Mn @ qn).astype(float)
+        topk = int(min(8, len(sims)))
+        idx = sims.argsort()[-topk:][::-1]
+        ctx_rows = df2.iloc[idx]
+        # Prompt
+        ctx_blocks = []
+        cites = []
+        for _, r in ctx_rows.iterrows():
+            tag = f"[{r['source']}:{int(r['chunk_no'])}]"
+            cites.append({"Source": r["source"], "Chunk": int(r["chunk_no"]), "Tag": tag, "Preview": (r["text"] or "")[:180].replace("\n"," ")})
+            ctx_blocks.append(tag + "\n" + (r["text"] or ""))
+        sys_prompt = (
+            "You are a U.S. government contracting officer level analyst. "
+            "Answer clearly in professional prose. Use only the provided context. "
+            "When you use a passage, cite it inline with its tag like [filename:chunk]. "
+            "If unknown, say so."
+        )
+        user_msg = "QUESTION:\n" + q + "\n\nCONTEXT:\n" + ("\n\n".join(ctx_blocks))
+        # Chat
+        try:
+            try:
+                from openai import OpenAI  # type: ignore
+                resp = client.chat.completions.create(
+                    model=models["heavy"],
+                    messages=[
+                        {"role":"system", "content": sys_prompt},
+                        {"role":"user", "content": user_msg},
+                    ],
+                    temperature=0.2,
+                )
+                answer = resp.choices[0].message.content
+            except Exception:
+                # Legacy
+                resp = client.ChatCompletion.create(
+                    model=models["heavy"],
+                    messages=[{"role":"system", "content": sys_prompt},
+                              {"role":"user", "content": user_msg}],
+                    temperature=0.2,
+                )
+                answer = resp["choices"][0]["message"]["content"]
+        except Exception as e:
+            st.error(f"Chat failed: {e}")
+            return
+        st.markdown(answer)
+        if cites:
+            import pandas as _pd
+            st.caption("Sources")
+            st.dataframe(_pd.DataFrame(cites), use_container_width=True, hide_index=True)
+
+    if brief:
+        client, err = _x8_get_openai_client()
+        if err or client is None:
+            st.error(err or "OpenAI client error")
+            return
+        try:
+            df = pd.read_sql_query("SELECT source, chunk_no, text FROM ai_index WHERE rfp_id=? ORDER BY id LIMIT 60;", conn, params=(int(rfp_id),))
+        except Exception as e:
+            st.error(f"Index read failed: {e}")
+            return
+        if df is None or df.empty:
+            st.warning("No AI index for this RFP. Click Build AI Index first.")
+            return
+        ctx = []
+        for _, r in df.iterrows():
+            tag = f"[{r['source']}:{int(r['chunk_no'])}]"
+            ctx.append(tag + "\n" + (r["text"] or ""))
+        sys_prompt = (
+            "Draft an executive brief for a proposal kickoff. Focus on compliance, volumes, page limits, "
+            "submission method, due dates, evaluation factors, POP/ordering period, CLIN summary, set-aside, NAICS, and POCs. "
+            "Bullet where helpful. Cite tags inline when asserting specifics like dates or requirements."
+        )
+        user_msg = "CONTEXT:\n" + ("\n\n".join(ctx))
+        try:
+            try:
+                from openai import OpenAI  # type: ignore
+                resp = client.chat.completions.create(
+                    model=models["heavy"],
+                    messages=[
+                        {"role":"system","content":sys_prompt},
+                        {"role":"user","content":user_msg},
+                    ],
+                    temperature=0.2,
+                )
+                brief_txt = resp.choices[0].message.content
+            except Exception:
+                resp = client.ChatCompletion.create(
+                    model=models["heavy"],
+                    messages=[{"role":"system","content":sys_prompt},
+                              {"role":"user","content":user_msg}],
+                    temperature=0.2,
+                )
+                brief_txt = resp["choices"][0]["message"]["content"]
+        except Exception as e:
+            st.error(f"Brief generation failed: {e}")
+            return
+        st.markdown(brief_txt)
+# ========== end X8 ==========
