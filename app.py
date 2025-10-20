@@ -16,7 +16,10 @@ from email.mime.text import MIMEText
 import pandas as pd
 import docx  # for DOCX reading in _read_file
 import re
-import mathquests
+try:
+    import mathquests  # optional plugin
+except Exception:
+    mathquests = None
 import smtplib
 import streamlit as st
 
