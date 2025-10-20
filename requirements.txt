@@ -11,3 +11,4 @@ pypdf
 openpyxl
 pillow
 pytesseract
+numpy
