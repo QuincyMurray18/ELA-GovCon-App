@@ -1019,28 +1019,19 @@ def get_db() -> sqlite3.Connection:
                 org TEXT
             );
         """)
+        
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deals(
                 id INTEGER PRIMARY KEY,
-def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("INSERT INTO draft_snippets(rfp_id, section, source, text, created_at) VALUES(?,?,?,?, datetime('now'));",
-                        (int(rfp_id), section.strip() or "General", source.strip() or "Y5", text.strip()))
-            conn.commit()
-    except Exception:
-        pass
                 title TEXT NOT NULL,
-                agency TEXT,
-                status TEXT,
-                value NUMERIC,
-                notice_id TEXT,
-                solnum TEXT,
-                posted_date TEXT,
-                rfp_deadline TEXT,
-                naics TEXT,
-                psc TEXT,
-                sam_url TEXT
+                rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
+                amount REAL,
+                stage TEXT,
+                status TEXT DEFAULT 'Open',
+                close_date TEXT,
+                owner TEXT,
+                created_at TEXT,
+                updated_at TEXT
             );
         """)
         cur.execute("""
