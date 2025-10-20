@@ -184,11 +184,11 @@ handled = False
 
 # ---- X8.2 deterministic POC/contact path ----
 if any(w in ql for w in ["poc","contact","contracting officer","cor","contract specialist","ko","co "]):
-    try:
+        try:
         df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rfp_id),))
-    except Exception:
+        except Exception:
         df_p = pd.DataFrame(columns=["name","role","email","phone"])
-    if df_p is not None and not df_p.empty:
+        if df_p is not None and not df_p.empty:
         def _domain(e):
             try: return (e or "").split("@",1)[1].lower()
             except Exception: return ""
@@ -218,10 +218,10 @@ Phone: {phone}")
 
 # ---- LLM path (with MMR context) ----
 if not handled:
-    order = _rank(q, 24)
-    if not order:
+        order = _rank(q, 24)
+        if not order:
         st.info("No matches. Rebuild index or try another query.")
-    else:
+        else:
         import numpy as _np
         sims_array = _np.array([sc for _, sc in order], dtype="float32")
         idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
@@ -358,20 +358,29 @@ def flag(name: str, default: bool=False) -> bool:
     return feature_flag(name, default)
 
 def feature_flag(name: str, default: bool=False) -> bool:
-    """
-    Read a feature flag from environment or Streamlit secrets.
-    Precedence: os.environ["FEATURE_<NAME>"] then st.secrets["features"][name] then default.
-    Does not raise if Streamlit is absent.
+    """Read a feature flag from environment or Streamlit secrets.
+    Precedence: os.environ[FEATURE_<NAME>] then st.secrets['features'][name] then default.
     """
     val = None
     try:
-        import os as _os
         env_key = f"FEATURE_{name.upper()}"
-        if env_key in _os.environ:
-            val = _os.environ[env_key]
+        if env_key in os.environ:
+            val = os.environ[env_key]
     except Exception:
         pass
-
+    if val is None:
+        try:
+            import streamlit as _st  # type: ignore
+            sec = _st.secrets.get("features", {})
+            if isinstance(sec, dict) and name in sec:
+                val = sec.get(name)
+        except Exception:
+            pass
+    if isinstance(val, str):
+        return val.strip().lower() in {"1","true","yes","on"}
+    if isinstance(val, bool):
+        return val
+    return bool(val) if val is not None else bool(default)
 
 def _guess_solnum(text: str) -> str:
     if not text:
