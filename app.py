@@ -23,120 +23,6 @@ except Exception:
 import smtplib
 import streamlit as st
 
-# === Y6 Embedded CO helper ===
-# Inline CO-style Q&A box, no sidebar. Uses Y1 context if available.
-def _y6_resolve_openai_client():
-    try:
-        if "get_ai" in globals():
-            return get_ai()
-        if "get_openai_client" in globals():
-            return get_openai_client()
-        if "get_ai_client" in globals():
-            return get_ai_client()
-    except Exception:
-        pass
-    from openai import OpenAI  # type: ignore
-    import os as _os
-    key = (
-        st.secrets.get("openai_api_key")
-        or st.secrets.get("OPENAI_API_KEY")
-        or _os.environ.get("OPENAI_API_KEY")
-    )
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
-    return OpenAI(api_key=key)
-
-def _y6_resolve_model() -> str:
-    return st.secrets.get("openai_model") or st.secrets.get("OPENAI_MODEL") or "gpt-4o-mini"
-
-def _y6_chat(messages):
-    client = _y6_resolve_openai_client()
-    model = _y6_resolve_model()
-    resp = client.chat.completions.create(model=model, messages=messages, temperature=0.2)
-    try:
-        return resp.choices[0].message.content.strip()
-    except Exception:
-        return "AI response unavailable."
-
-def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
-    if not (conn and rfp_id):
-        return None
-    y1 = globals().get("y1_search")
-    if not callable(y1):
-        return None
-    try:
-        k = 6
-        if callable(k_auto_fn):
-            try:
-                k = int(max(3, min(12, k_auto_fn(question))))
-            except Exception:
-                pass
-        hits = y1(conn, int(rfp_id), question or "", k=k) or []
-        if not hits:
-            return None
-        blocks = []
-        for i, h in enumerate(hits, start=1):
-            cid = h.get("chunk_id", i)
-            rid = h.get("rfp_id", rfp_id)
-            text = h.get("chunk") or h.get("text") or ""
-            tag = f"[RFP-{rid}:{cid}]"
-            blocks.append(f"{tag} {text}")
-        return "\n\n".join(blocks)
-    except Exception:
-        return None
-
-def y6_render_co_box(conn, rfp_id=None, *, key_prefix: str, title: str, help_text: str="Answers follow CO style. Uses RFP context when available.") -> None:
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.subheader(title)
-        q = st.text_area("Your question", key=f"{key_prefix}_q", height=120, help=help_text)
-    with c2:
-        st.caption("Phase Y6 CO helper")
-    if not st.button("Ask", key=f"{key_prefix}_ask") or not (q or "").strip():
-        return
-    with st.spinner("CO is analyzing..."):
-        ctx = _y6_fetch_y1_context(conn, rfp_id, q, globals().get("y_auto_k"))
-        CO_SYS = (
-            "You are a senior U.S. federal Contracting Officer (CO). "
-            "Answer with short, precise sentences or numbered bullets. "
-            "If RFP context is provided, cite it with [RFP-<id>:<chunk#>]. "
-            "Avoid raw JSON."
-        )
-        sys_prompt = CO_SYS + (f"\n\nRFP context follows. Cite it when relevant:\n{ctx}" if ctx else "")
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": q.strip()},
-        ]
-        ans = _y6_chat(messages)
-    st.markdown(ans)
-# === end Y6 helper ===
-
-# --- safety guards for misplaced tab contexts ---
-try:
-    tab_y4
-except NameError:
-    tab_y4 = st.container()
-try:
-    tab_y2
-except NameError:
-    tab_y2 = st.container()
-try:
-    tab_y1
-except NameError:
-    tab_y1 = st.container()
-try:
-    tab_checklist
-except NameError:
-    tab_checklist = st.container()
-try:
-    tab_data
-except NameError:
-    tab_data = st.container()
-try:
-    tab_parse
-except NameError:
-    tab_parse = st.container()
-
 # --- Optional PDF backends for Phase X1 ---
 try:
     import pdfplumber as _pdfplumber  # type: ignore
@@ -773,6 +659,11 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
             if ans:
                 y2_append_message(conn, int(thread_id), "assistant", ans)
                 st.success("Saved to thread")
+                with st.expander("Add to Proposal Drafts", expanded=False):
+                    sec = st.text_input("Section label", value="CO Chat Notes", key="y5_sec_y2")
+                    if st.button("Add to drafts", key="y5_add_y2"):
+                        y5_save_snippet(conn, int(rfp_id), sec, ans, source="Y2 Chat")
+                        st.success("Saved to drafts")
 # === end Y2 ===
 
 
@@ -868,55 +759,42 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
             pass
 # === end Y3 ===
 
-# === Y4: CO Review (Red Team) — score and gaps with citations ===
-def _y4_collect_lm(conn: sqlite3.Connection, rfp_id: int, max_items: int = 100) -> list[str]:
-    try:
-        df = pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-        return df["item_text"].astype(str).tolist()[:max_items] if df is not None and not df.empty else []
-    except Exception:
-        return []
-
-def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, focus: str = "", k: int = 6) -> list[dict]:
-    lm_list = _y4_collect_lm(conn, int(rfp_id))
-    # Evidence from local index
-    q = (focus or "") + " Section L Section M requirements evaluation factors compliance"
+# === Y4: CO Review (scored compliance with citations) ===
+def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
+    """
+    Build messages for a Contracting Officer style review.
+    Output must include: Score 0–100, Strengths, Gaps, Risks, Required fixes, and short Conclusion.
+    Use [C#] next to claims grounded in EVIDENCE.
+    """
+    # Reuse Section L/M + compliance as retrieval query
+    q = f"Section L Section M compliance checklist evaluation {draft_text[:400]}"
     hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
     ev_lines = []
     for i, h in enumerate(hits, start=1):
         tag = f"[C{i}]"
         src = f"{h['file']} p.{h['page']}"
-        snip = (h.get("text") or "").strip().replace("\n"," ")
+        snip = (h.get("text") or "").strip().replace("\\n"," ")
         ev_lines.append(f"{tag} {src} — {snip}")
-    evidence = "\n".join(ev_lines)
-    lm_bullets = "\n".join(f"- {it}" for it in (lm_list or []))
-    system = SYSTEM_CO + " Be blunt. Score compliance out of 100. Use [C#] for any claim tied to EVIDENCE."
-    user = f"""DRAFT TO REVIEW:
-{draft_text.strip() or 'n/a'}
+    evidence = "\\n".join(ev_lines)
 
-FOCUS: {focus or 'overall'}
+    system = (SYSTEM_CO
+              + " Score the draft 0-100 for compliance and clarity."
+              + " Use short, direct sentences. No fluff."
+              + " Structure exactly as:\\n"
+              + "Score: <0-100>\\n"
+              + "Strengths: <bullets>\\n"
+              + "Gaps: <bullets>\\n"
+              + "Risks: <bullets>\\n"
+              + "Required fixes: <bullets>\\n"
+              + "Conclusion: <2-3 lines>\\n"
+              + "Map factual or requirement statements to EVIDENCE using [C#]."
+             )
 
-SECTION L/M ITEMS (from checklist):
-{lm_bullets or '- n/a'}
+    user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
+    return [{"role":"system","content": system}, {"role":"user","content": user}]
 
-EVIDENCE:
-{evidence}
-
-Output in this structure:
-Score: <0-100 numeric>
-Strengths: <3-8 bullets with [C#] cites>
-Gaps/Weaknesses: <3-8 bullets; if no evidence exists say 'No cite'>
-Risks: <2-5 bullets>
-Required Fixes: <ordered list of concrete edits to reach compliance>
-Notes: <one short paragraph>
-
-Keep sentences short. No fluff."""
-    return [
-        {"role":"system","content": system},
-        {"role":"user","content": user},
-    ]
-
-def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, focus: str = "", k: int = 6, temperature: float = 0.1):
-    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", focus or "", k=int(k))
+def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
+    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", k=int(k))
     client = get_ai()
     model_name = _resolve_model()
     try:
@@ -933,8 +811,196 @@ def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, foc
                 yield delta.content
         except Exception:
             pass
-# === end Y4 ===
 
+def y4_ui_review(conn: sqlite3.Connection) -> None:
+    st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    if df_rf is None or df_rf.empty:
+        st.info("No RFPs yet. Parse & save first."); return
+    rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist(),
+                          format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}",
+                          key="y4_rfp_sel")
+    mode = st.radio("Mode", ["Paste", "Upload", "Use RFP files"], horizontal=True, key="y5_mode")
+    st.subheader("Draft to review")
+
+    draft_text = ""
+    uploaded = None
+    if mode == "Paste":
+        draft_text = st.text_area("Paste your draft here", value=st.session_state.get("y4_draft",""), height=260, key="y4_draft_ta")
+    elif mode == "Upload":
+        uploaded = st.file_uploader("Upload DOCX/PDF/TXT", type=["docx","pdf","txt"], accept_multiple_files=True, key="y5_up")
+        if uploaded:
+            with st.spinner("Extracting..."):
+                draft_text = y5_extract_from_uploads(uploaded)[:400000]
+            st.text_area("Preview", value=draft_text[:20000], height=240)
+    else:
+        if st.button("Assemble from linked RFP files", key="y5_from_rfp"):
+            with st.spinner("Collecting text from linked files..."):
+                draft_text = y5_extract_from_rfp(conn, int(rfp_id))[:400000]
+            st.session_state["y5_rfp_text"] = draft_text
+        draft_text = st.session_state.get("y5_rfp_text","")
+        if draft_text:
+            st.text_area("Preview", value=draft_text[:20000], height=240)
+
+    k = y_auto_k(draft_text or "review")
+    chunking = st.checkbox("Auto-chunk long text", value=True, key="y5_chunk_on")
+    run = st.button("Run CO Review", type="primary", key="y4_go")
+    if run:
+        if not (draft_text or "").strip():
+            st.warning("Provide input text."); return
+        texts = y5_chunk_text(draft_text) if chunking else [draft_text]
+        ph = st.empty()
+        all_out = []
+        for idx, t in enumerate(texts, start=1):
+            acc = []
+            ph.caption(f"Reviewing chunk {idx}/{len(texts)}")
+            for tok in y4_stream_review(conn, int(rfp_id), t.strip(), k=int(k)):
+                acc.append(tok)
+                ph.markdown("".join(acc))
+            all_out.append("".join(acc))
+        final = "\n\n".join(all_out).strip()
+        st.session_state["y4_last_review"] = final
+        st.subheader("Combined result")
+        st.markdown(final or "_no output_")
+
+        # Sources table
+        hits = y1_search(conn, int(rfp_id), f"Section L Section M compliance {draft_text[:200]}", k=int(k))
+        if hits:
+            import pandas as _pd
+            dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
+            st.subheader("Sources used")
+            st.dataframe(dfh, use_container_width=True, hide_index=True)
+
+        with st.expander("Add to Proposal Drafts", expanded=True):
+            section = st.text_input("Section label", value="CO Review Notes", key="y5_sec_rev")
+            if st.button("Add review to drafts", key="y5_add_rev"):
+                y5_save_snippet(conn, int(rfp_id), section, final or draft_text, source="Y4 Review")
+                st.success("Saved to drafts")
+
+
+# === Y5: Upload Review + Drafts plumbing ===
+from contextlib import closing
+import io
+
+def ensure_y5_tables(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS draft_snippets("
+                "id INTEGER PRIMARY KEY,"
+                "rfp_id INTEGER,"
+                "section TEXT,"
+                "source TEXT,"
+                "text TEXT,"
+                "created_at TEXT DEFAULT (datetime('now'))"
+                ");"
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> list[str]:
+    t = (text or "").strip()
+    if not t:
+        return []
+    if len(t) <= target_chars:
+        return [t]
+    out: list[str] = []
+    i = 0
+    n = len(t)
+    while i < n:
+        j = min(n, i + max(2000, target_chars))
+        chunk = t[i:j]
+        k = chunk.rfind(". ")
+        if k > len(chunk) * 0.6:
+            chunk = chunk[:k+1]
+            j = i + k + 1
+        out.append(chunk)
+        i = max(j - overlap, j)
+    return out
+
+def _extract_docx_bytes(data: bytes) -> str:
+    try:
+        import docx  # python-docx
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs)
+    except Exception:
+        return ""
+
+def _extract_pdf_bytes(data: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:
+        return ""
+
+def y5_extract_from_uploads(files) -> str:
+    if not files:
+        return ""
+    parts: list[str] = []
+    for f in files:
+        try:
+            try:
+                data = f.getbuffer().tobytes()
+            except Exception:
+                data = f.read()
+            name = (getattr(f, "name", "") or "").lower()
+            if name.endswith(".txt"):
+                try:
+                    parts.append(data.decode("utf-8", "ignore"))
+                except Exception:
+                    parts.append(str(data))
+            elif name.endswith(".docx"):
+                parts.append(_extract_docx_bytes(data))
+            elif name.endswith(".pdf"):
+                parts.append(_extract_pdf_bytes(data))
+        except Exception:
+            continue
+    return "\n\n".join([p for p in parts if p]).strip()
+
+def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
+    # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
+    try:
+        df = pd.read_sql_query(
+            "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            conn, params=(int(rfp_id),)
+        )
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty:
+        return ""
+    parts: list[str] = []
+    for _, r in df.iterrows():
+        data = r.get("bytes")
+        if data is None:
+            continue
+        name = (r.get("filename") or "").lower()
+        if name.endswith(".txt"):
+            if isinstance(data, (bytes, bytearray)):
+                try:
+                    parts.append(bytes(data).decode("utf-8", "ignore"))
+                except Exception:
+                    continue
+        elif name.endswith(".docx"):
+            parts.append(_extract_docx_bytes(bytes(data)))
+        elif name.endswith(".pdf"):
+            parts.append(_extract_pdf_bytes(bytes(data)))
+    return "\n\n".join([p for p in parts if p]).strip()
+
+def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
+    if not (text or "").strip():
+        return
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO draft_snippets(rfp_id, section, source, text) VALUES(?,?,?,?);",
+                (int(rfp_id), (section or "General").strip(), (source or "Y5").strip(), text.strip())
+            )
+            conn.commit()
+    except Exception:
+        pass
+# === end Y5 ===
 
 
 
@@ -953,20 +1019,19 @@ def get_db() -> sqlite3.Connection:
                 org TEXT
             );
         """)
+        
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deals(
                 id INTEGER PRIMARY KEY,
                 title TEXT NOT NULL,
-                agency TEXT,
-                status TEXT,
-                value NUMERIC,
-                notice_id TEXT,
-                solnum TEXT,
-                posted_date TEXT,
-                rfp_deadline TEXT,
-                naics TEXT,
-                psc TEXT,
-                sam_url TEXT
+                rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
+                amount REAL,
+                stage TEXT,
+                status TEXT DEFAULT 'Open',
+                close_date TEXT,
+                owner TEXT,
+                created_at TEXT,
+                updated_at TEXT
             );
         """)
         cur.execute("""
@@ -1398,6 +1463,10 @@ def get_db() -> sqlite3.Connection:
         """)
         cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
         conn.commit()
+    try:
+        ensure_y5_tables(conn)
+    except Exception:
+        pass
     try:
         migrate(conn)
     except Exception:
@@ -2157,12 +2226,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             st.caption("Use Open in SAM for attachments and full details")
 
 
-    try:
-        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn, _rid, key_prefix="sam_y6", title="Ask the CO about this opportunity")
-    except Exception:
-        pass
-
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"])
@@ -2172,7 +2235,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(("solicitation", "request for", "rfp", "rfq", "sources sought")):
+            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
                 return s[:200]
         return fallback
 
@@ -2567,42 +2630,13 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
 
     
-
-# ---------------- Y4: CO Review (Red Team) ----------------
-if False:
-    with tab_y4:
-        st.caption("CO-style compliance review of your draft. Uses local index and L/M checklist.")
-        df_rf_y4 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-        if df_rf_y4 is None or df_rf_y4.empty:
-            st.info("No RFPs yet. Parse & save first.")
-        else:
-            rid_y4 = st.selectbox("RFP context", options=df_rf_y4["id"].tolist(),
-                                  format_func=lambda i: f"#{i} — {df_rf_y4.loc[df_rf_y4['id']==i,'title'].values[0]}",
-                                  key="y4_rfp_sel")
-            c1, c2 = st.columns([3,2])
-            with c1:
-                draft = st.text_area("Paste the draft text to review", height=220, key="y4_draft")
-                focus = st.text_input("Focus (optional, e.g., Technical Approach, Page limits)", key="y4_focus")
-            with c2:
-                k = y_auto_k((focus or "") + " " + (draft or ""))
-                st.write(f"Auto sources: {k}")
-                if st.button("Run CO Review", type="primary", key="y4_go"):
-                    if not (draft or "").strip():
-                        st.warning("Paste some draft content first")
-                    else:
-                        ph = st.empty(); acc = []
-                        for tok in y4_stream_review(conn, int(rid_y4), draft.strip(), focus.strip(), k=int(k)):
-                            acc.append(tok); ph.markdown("".join(acc))
-                        hits = y1_search(conn, int(rid_y4), (focus or "Section L Section M requirements"), k=int(k))
-                        if hits:
-                            import pandas as _pd
-                            dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
-                            st.subheader("Sources used")
-                            st.dataframe(dfh, use_container_width=True, hide_index=True)
-
-        # ---------------- Y2: CO Chat with memory ----------------
+    # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
         y2_ui_threaded_chat(conn)
+
+    # ---------------- Y4: CO Review UI ----------------
+    with tab_y4:
+        y4_ui_review(conn)
 # ---------------- CHECKLIST ----------------
     with tab_checklist:
         df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
@@ -2690,6 +2724,13 @@ if False:
                         "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
                         conn, params=(int(_rid),)
                     )
+
+                    with st.expander("Add to Proposal Drafts", expanded=False):
+                        sec = st.text_input("Section label", value="Research Notes", key="y5_sec_y1")
+                        ans_txt = "".join(acc).strip()
+                        if st.button("Add to drafts", key="y5_add_y1"):
+                            y5_save_snippet(conn, int(rid_y1), sec, ans_txt or q_y1.strip(), source="Y1 Q&A")
+                            st.success("Saved to drafts")
                 except Exception:
                     df_lm = pd.DataFrame(columns=['id','item_text','is_must','status'])
                 df_lm = df_lm.fillna("")
@@ -2845,7 +2886,7 @@ if False:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
-            st.stop()  # replaced stray return
+            return
         rid = st.selectbox(
             "RFP for data views",
             options=df_rf["id"].tolist(),
@@ -3136,10 +3177,10 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             df_rf = pd.read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn, params=())
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
-            st.stop()  # replaced stray return
+            return
         if df_rf.empty:
             st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
-            st.stop()  # replaced stray return
+            return
         opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(),
                            format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
@@ -3150,10 +3191,10 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
-        st.stop()  # replaced stray return
+        return
     if df_items.empty:
         st.info("No L/M items found for this RFP.")
-        st.stop()  # replaced stray return
+        return
 
     pct = _compliance_progress(df_items)
     st.progress(pct/100.0, text=f"{pct}% complete")
@@ -3207,7 +3248,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     df_mx = _load_compliance_matrix(conn, int(rfp_id))
     if df_mx.empty:
         st.info("No items to show.")
-        st.stop()  # replaced stray return
+        return
 
     view = df_mx.rename(columns={
         "item_text":"Requirement","is_must":"Must?","status":"Status",
@@ -3268,12 +3309,6 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     
 
 
-
-    try:
-        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn, _rid, key_prefix="lm_y6", title="Ask the CO about L&M")
-    except Exception:
-        pass
 
 def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Optional[int] = None) -> float:
     """Rough page estimate at common spacings for 11pt fonts."""
@@ -3352,7 +3387,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
-    st.stop()
+        return
     rfp_id = st.selectbox(
         "RFP context",
         options=df_rf["id"].tolist(),
@@ -3432,14 +3467,27 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
 
+        with st.expander("Snippets Inbox (from Y1/Y2/Y4/Y5)", expanded=True):
+            try:
+                df_snip = pd.read_sql_query("SELECT id, section, source, text, created_at FROM draft_snippets WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
+            except Exception:
+                df_snip = pd.DataFrame()
+            if df_snip is None or df_snip.empty:
+                st.caption("No snippets saved yet")
+            else:
+                st.dataframe(df_snip[["id","section","source","created_at"]], use_container_width=True, hide_index=True, height=200)
+                sid = st.selectbox("Pick snippet ID", options=df_snip["id"].tolist())
+                sec_choice = st.selectbox("Insert into section", options=selected, index=min(len(selected)-1, 0))
+                if st.button("Insert snippet"):
+                    txt = df_snip[df_snip["id"]==sid].iloc[0]["text"]
+                    key = f"pb_ta_{sec_choice}"
+                    cur = st.session_state.get(key, "")
+                    st.session_state[key] = (cur + ("\n\n" if cur else "") + str(txt)).strip()
+                    st.session_state[f"pb_section_{sec_choice}"] = st.session_state[key]
+                    st.success("Inserted into section")
+    
 
 # ---------- Subcontractor Finder (Phase D) ----------
-    try:
-        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn, _rid, key_prefix="prop_y6", title="Ask the CO while drafting")
-    except Exception:
-        pass
-
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
@@ -3572,12 +3620,6 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Outreach (Phase D) ----------
-    try:
-        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn, _rid, key_prefix="subs_y6", title="CO guidance for subcontractors")
-    except Exception:
-        pass
-
 def _smtp_settings() -> Dict[str, Any]:
     out = {"host": None, "port": 587, "username": None, "password": None, "from_email": None, "from_name": "ELA Management", "use_tls": True}
     try:
@@ -3751,12 +3793,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Quotes (Phase E) ----------
-    try:
-        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn, _rid, key_prefix="outreach_y6", title="CO guidance for outreach")
-    except Exception:
-        pass
-
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
         if qty is None or unit_price is None:
