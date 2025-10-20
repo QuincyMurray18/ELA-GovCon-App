@@ -2724,7 +2724,7 @@ with tab_y4:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
-            return
+            st.stop()  # replaced stray return
         rid = st.selectbox(
             "RFP for data views",
             options=df_rf["id"].tolist(),
@@ -3015,10 +3015,10 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             df_rf = pd.read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn, params=())
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
-            return
+            st.stop()  # replaced stray return
         if df_rf.empty:
             st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
-            return
+            st.stop()  # replaced stray return
         opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(),
                            format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
@@ -3029,10 +3029,10 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
-        return
+        st.stop()  # replaced stray return
     if df_items.empty:
         st.info("No L/M items found for this RFP.")
-        return
+        st.stop()  # replaced stray return
 
     pct = _compliance_progress(df_items)
     st.progress(pct/100.0, text=f"{pct}% complete")
@@ -3086,7 +3086,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     df_mx = _load_compliance_matrix(conn, int(rfp_id))
     if df_mx.empty:
         st.info("No items to show.")
-        return
+        st.stop()  # replaced stray return
 
     view = df_mx.rename(columns={
         "item_text":"Requirement","is_must":"Must?","status":"Status",
@@ -3225,7 +3225,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
-        return
+    st.stop()
     rfp_id = st.selectbox(
         "RFP context",
         options=df_rf["id"].tolist(),
