@@ -177,7 +177,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
     except Exception as _ex:
         yield f"AI unavailable: {type(_ex).__name__}: {_ex}"
 
-def :
+def y0_ai_sidebar():
     import streamlit as st
     with st.sidebar.expander("Ask the CO (AI)", expanded=False):
         q = st.text_area("Your question", key="y0_q", height=120)
