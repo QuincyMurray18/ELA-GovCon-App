@@ -142,7 +142,6 @@ def st_x8_panel(conn, rfp_id: int):
                         {"role":"system","content":"You are a US Government CO assistant. Precise, concise, cite with [n]."},
                         {"role":"user","content":prompt},
                     ],
-                    temperature=0.1,
                 )
                 st.write(rr.choices[0].message.content)
             except Exception as e:
@@ -174,7 +173,6 @@ def st_x8_panel(conn, rfp_id: int):
                         {"role":"system","content":"You prepare compliance‑aware CO briefs with citations."},
                         {"role":"user","content":prompt},
                     ],
-                    temperature=0.1,
                 )
                 st.write(rr.choices[0].message.content)
             except Exception as e:
@@ -5841,7 +5839,6 @@ def st_x8_panel(conn, rfp_id: int):
                     {"role":"system","content":"You write precise, compliance-aware answers with citations."},
                     {"role":"user","content":prompt}
                 ],
-                temperature=0.1,
             )
             ans = resp.choices[0].message.content
             _st.success("Answer")
@@ -5868,7 +5865,6 @@ def st_x8_panel(conn, rfp_id: int):
                     {"role":"system","content":"You prepare concise CO-style briefs with citations."},
                     {"role":"user","content":prompt}
                 ],
-                temperature=0.1,
             )
             doc = resp.choices[0].message.content
             _st.success("CO Brief")
