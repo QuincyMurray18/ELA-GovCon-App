@@ -23,32 +23,6 @@ except Exception:
 import smtplib
 import streamlit as st
 
-# --- safety guards for misplaced tab contexts ---
-try:
-    tab_y4
-except NameError:
-    tab_y4 = st.container()
-try:
-    tab_y2
-except NameError:
-    tab_y2 = st.container()
-try:
-    tab_y1
-except NameError:
-    tab_y1 = st.container()
-try:
-    tab_checklist
-except NameError:
-    tab_checklist = st.container()
-try:
-    tab_data
-except NameError:
-    tab_data = st.container()
-try:
-    tab_parse
-except NameError:
-    tab_parse = st.container()
-
 # --- Optional PDF backends for Phase X1 ---
 try:
     import pdfplumber as _pdfplumber  # type: ignore
@@ -2078,7 +2052,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(("solicitation", "request for", "rfp", "rfq", "sources sought")):
+            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
                 return s[:200]
         return fallback
 
@@ -2475,36 +2449,35 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     
 
 # ---------------- Y4: CO Review (Red Team) ----------------
-if False:
-    with tab_y4:
-        st.caption("CO-style compliance review of your draft. Uses local index and L/M checklist.")
-        df_rf_y4 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-        if df_rf_y4 is None or df_rf_y4.empty:
-            st.info("No RFPs yet. Parse & save first.")
-        else:
-            rid_y4 = st.selectbox("RFP context", options=df_rf_y4["id"].tolist(),
-                                  format_func=lambda i: f"#{i} — {df_rf_y4.loc[df_rf_y4['id']==i,'title'].values[0]}",
-                                  key="y4_rfp_sel")
-            c1, c2 = st.columns([3,2])
-            with c1:
-                draft = st.text_area("Paste the draft text to review", height=220, key="y4_draft")
-                focus = st.text_input("Focus (optional, e.g., Technical Approach, Page limits)", key="y4_focus")
-            with c2:
-                k = y_auto_k((focus or "") + " " + (draft or ""))
-                st.write(f"Auto sources: {k}")
-                if st.button("Run CO Review", type="primary", key="y4_go"):
-                    if not (draft or "").strip():
-                        st.warning("Paste some draft content first")
-                    else:
-                        ph = st.empty(); acc = []
-                        for tok in y4_stream_review(conn, int(rid_y4), draft.strip(), focus.strip(), k=int(k)):
-                            acc.append(tok); ph.markdown("".join(acc))
-                        hits = y1_search(conn, int(rid_y4), (focus or "Section L Section M requirements"), k=int(k))
-                        if hits:
-                            import pandas as _pd
-                            dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
-                            st.subheader("Sources used")
-                            st.dataframe(dfh, use_container_width=True, hide_index=True)
+with tab_y4:
+    st.caption("CO-style compliance review of your draft. Uses local index and L/M checklist.")
+    df_rf_y4 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    if df_rf_y4 is None or df_rf_y4.empty:
+        st.info("No RFPs yet. Parse & save first.")
+    else:
+        rid_y4 = st.selectbox("RFP context", options=df_rf_y4["id"].tolist(),
+                              format_func=lambda i: f"#{i} — {df_rf_y4.loc[df_rf_y4['id']==i,'title'].values[0]}",
+                              key="y4_rfp_sel")
+        c1, c2 = st.columns([3,2])
+        with c1:
+            draft = st.text_area("Paste the draft text to review", height=220, key="y4_draft")
+            focus = st.text_input("Focus (optional, e.g., Technical Approach, Page limits)", key="y4_focus")
+        with c2:
+            k = y_auto_k((focus or "") + " " + (draft or ""))
+            st.write(f"Auto sources: {k}")
+            if st.button("Run CO Review", type="primary", key="y4_go"):
+                if not (draft or "").strip():
+                    st.warning("Paste some draft content first")
+                else:
+                    ph = st.empty(); acc = []
+                    for tok in y4_stream_review(conn, int(rid_y4), draft.strip(), focus.strip(), k=int(k)):
+                        acc.append(tok); ph.markdown("".join(acc))
+                    hits = y1_search(conn, int(rid_y4), (focus or "Section L Section M requirements"), k=int(k))
+                    if hits:
+                        import pandas as _pd
+                        dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
+                        st.subheader("Sources used")
+                        st.dataframe(dfh, use_container_width=True, hide_index=True)
 
         # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
@@ -2751,7 +2724,7 @@ if False:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
-            st.stop()  # replaced stray return
+            return
         rid = st.selectbox(
             "RFP for data views",
             options=df_rf["id"].tolist(),
@@ -3042,10 +3015,10 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
             df_rf = pd.read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn, params=())
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
-            st.stop()  # replaced stray return
+            return
         if df_rf.empty:
             st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
-            st.stop()  # replaced stray return
+            return
         opt = st.selectbox("Select an RFP context", options=df_rf['id'].tolist(),
                            format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0] or 'Untitled'}")
         rfp_id = opt
@@ -3056,10 +3029,10 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
-        st.stop()  # replaced stray return
+        return
     if df_items.empty:
         st.info("No L/M items found for this RFP.")
-        st.stop()  # replaced stray return
+        return
 
     pct = _compliance_progress(df_items)
     st.progress(pct/100.0, text=f"{pct}% complete")
@@ -3113,7 +3086,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     df_mx = _load_compliance_matrix(conn, int(rfp_id))
     if df_mx.empty:
         st.info("No items to show.")
-        st.stop()  # replaced stray return
+        return
 
     view = df_mx.rename(columns={
         "item_text":"Requirement","is_must":"Must?","status":"Status",
@@ -3252,7 +3225,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
-    st.stop()
+        return
     rfp_id = st.selectbox(
         "RFP context",
         options=df_rf["id"].tolist(),
