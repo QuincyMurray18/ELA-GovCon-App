@@ -1446,7 +1446,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X5 applied")
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X6 applied")
                 try:
                     df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
                     opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
@@ -1783,6 +1783,67 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             st.info(f"Preview unavailable: {e}")
                 except Exception as e:
                     st.info(f"No preview available: {e}")
+
+                # X6: bulk ZIP download, inventory CSV, and simple search across linked files
+                import io as _io, zipfile as _zipfile
+                c_zip, c_inv = st.columns([1,1])
+                with c_zip:
+                    if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
+                        try:
+                            # Fetch bytes for all linked files
+                            df_bytes = pd.read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
+                            if df_bytes is None or df_bytes.empty:
+                                st.warning("No files to package.")
+                            else:
+                                buf = _io.BytesIO()
+                                with _zipfile.ZipFile(buf, mode="w", compression=_zipfile.ZIP_DEFLATED) as zf:
+                                    for _, r in df_bytes.iterrows():
+                                        fname = (r.get("filename") or f"file_{_}.bin")
+                                        # Avoid directory traversal
+                                        fname = fname.replace("..","").replace("\\","/").split("/")[-1]
+                                        b = r.get("bytes")
+                                        if isinstance(b, (bytes, bytearray)):
+                                            zf.writestr(fname, b)
+                                st.download_button(
+                                    "Download ZIP",
+                                    data=buf.getvalue(),
+                                    file_name=f"rfp_{int(rid)}_linked_files.zip",
+                                    mime="application/zip",
+                                    key=f"zip_dl_{rid}"
+                                )
+                        except Exception as e:
+                            st.error(f"ZIP build failed: {e}")
+                with c_inv:
+                    try:
+                        inv = df_files.copy()
+                        inv["sha_short"] = inv["sha256"].str.slice(0,12)
+                        csvb = inv[["id","filename","mime","pages","sha_short"]].to_csv(index=False).encode("utf-8")
+                        st.download_button("Export file inventory CSV", data=csvb, file_name=f"rfp_{int(rid)}_file_inventory.csv", mime="text/csv", key=f"inv_{rid}")
+                    except Exception as e:
+                        st.info(f"Inventory export unavailable: {e}")
+
+                with st.expander("Find in linked files (simple)", expanded=False):
+                    q = st.text_input("Search phrase", key=f"find_files_{rid}")
+                    if q:
+                        try:
+                            hits = []
+                            pool = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+                            for _, r in pool.iterrows():
+                                b = r.get("bytes"); mime = r.get("mime") or ""
+                                pages = extract_text_pages(b, mime)
+                                text = ("\n\n".join(pages) if pages else "")
+                                pos = text.lower().find(q.lower())
+                                if pos >= 0:
+                                    start = max(0, pos-120); end = min(len(text), pos+120)
+                                    ctx = text[start:end].replace("\n"," ")
+                                    hits.append({"file_id": int(r["id"]), "filename": r.get("filename"), "snippet": ctx})
+                            if hits:
+                                dfh = pd.DataFrame(hits)
+                                st.dataframe(dfh, use_container_width=True, hide_index=True)
+                            else:
+                                st.write("No hits.")
+                        except Exception as e:
+                            st.info(f"No search results: {e}")
 
                 to_unlink = st.multiselect("Unlink file IDs", options=df_files["id"].tolist(), key=f"unlink_{rid}")
                 if st.button("Unlink selected", key=f"unlink_btn_{rid}") and to_unlink:
