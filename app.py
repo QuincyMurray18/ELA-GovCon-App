@@ -1,60 +1,61 @@
 # ==== X8: self-contained CO Brief + Q&A panel (preloaded) ====
 def st_x8_panel(conn, rfp_id: int):
-# --- Quality helpers (MMR retrieval and prompt templates) ---
-def _mmr_select(V, k=8, fetch=24, lambd=0.7):
-    import numpy as _np
-    sims = V  # shape [N]
-    N = sims.shape[0]
-    order = sims.argsort()[::-1][:min(fetch, N)]
-    selected = []
-    if len(order) == 0:
+
+    # --- X8 quality upgrade helpers ---
+    # The next helpers run inside st_x8_panel scope.
+    def _mmr_select(V, k=8, fetch=24, lambd=0.7):
+        import numpy as _np
+        sims = V  # shape [N]
+        N = sims.shape[0]
+        order = sims.argsort()[::-1][:min(fetch, N)]
+        selected = []
+        if len(order) == 0:
+            return selected
+        selected.append(order[0])
+        cand = list(order[1:])
+        while len(selected) < min(k, len(order)):
+            best_idx = None
+            best_score = -1e9
+            for j in cand:
+                score = lambd * sims[j] - (1 - lambd) * 0.0  # relevance only; simple MMR
+                if score > best_score:
+                    best_score = score
+                    best_idx = j
+            selected.append(best_idx)
+            cand.remove(best_idx)
         return selected
-    selected.append(order[0])
-    cand = list(order[1:])
-    while len(selected) < min(k, len(order)):
-        best_idx = None
-        best_score = -1e9
-        for j in cand:
-            score = lambd * sims[j] - (1 - lambd) * 0.0
-            if score > best_score:
-                best_score = score
-                best_idx = j
-        selected.append(best_idx)
-        cand.remove(best_idx)
-    return selected
 
-def _build_answer_prompt(question, ctx_rows, mode="standard", word_cap=220):
-    sections = [
-        "Answer",
-        "Key requirements (must/shall)",
-        "Risks / Red flags",
-        "Unknowns / Questions for KO",
-        "Next actions",
-        "Sources"
-    ]
-    constraints = [
-        f"Max {word_cap} words total for Answer section; bullets elsewhere are fine.",
-        "Cite the supporting chunk with [n] at the end of each factual sentence.",
-        "If unsure or not in context, state it under Unknowns/Questions for KO.",
-        "Prefer ISO dates (YYYY-MM-DD) when you see dates.",
-        "Summarize POP as Base + Options if present.",
-        "If CLINs exist, state the count and list up to 3 examples.",
-    ]
-    ctx = "\\n\\n".join([f"[{i+1}] {r['tag']}\\n{r['text']}" for i, r in enumerate(ctx_rows)])
-    sys = (
-        "You are a senior U.S. Government Contracting Officer. "
-        "Be precise, concise, and compliance-focused. "
-        "Use only the provided context. No speculation. "
-        "Every factual sentence ends with a citation like [n]."
-    )
-    usr = (
-        "QUESTION:\\n" + question + "\\n\\n"
-        "CONTEXT:\\n" + ctx + "\\n\\n"
-        "Write the response in these sections:\\n- " + "\\n- ".join(sections) + "\\n\\n"
-        "Constraints:\\n- " + "\\n- ".join(constraints)
-    )
-    return sys, usr
-
+    def _build_answer_prompt(question, ctx_rows, mode="standard", word_cap=220):
+        sections = [
+            "Answer",
+            "Key requirements (must/shall)",
+            "Risks / Red flags",
+            "Unknowns / Questions for KO",
+            "Next actions",
+            "Sources"
+        ]
+        constraints = [
+            f"Max {word_cap} words total for Answer section; bullets elsewhere are fine.",
+            "Cite the supporting chunk with [n] at the end of each factual sentence.",
+            "If unsure or not in context, state it under Unknowns/Questions for KO.",
+            "Prefer ISO dates (YYYY-MM-DD) when you see dates.",
+            "Summarize POP as Base + Options if present.",
+            "If CLINs exist, state the count and list up to 3 examples.",
+        ]
+        ctx = "\\n\\n".join([f"[{i+1}] {r['tag']}\\n{r['text']}" for i, r in enumerate(ctx_rows)])
+        sys = (
+            "You are a senior U.S. Government Contracting Officer. "
+            "Be precise, concise, and compliance-focused. "
+            "Use only the provided context. No speculation. "
+            "Every factual sentence ends with a citation like [n]."
+        )
+        usr = (
+            "QUESTION:\\n" + question + "\\n\\n"
+            "CONTEXT:\\n" + ctx + "\\n\\n"
+            "Write the response in these sections:\\n- " + "\\n- ".join(sections) + "\\n\\n"
+            "Constraints:\\n- " + "\\n- ".join(constraints)
+        )
+        return sys, usr
     import streamlit as st, pandas as pd, re, os
     from contextlib import closing
     try:
@@ -175,37 +176,37 @@ def _build_answer_prompt(question, ctx_rows, mode="standard", word_cap=220):
             return []
 
     
-if ask and (q or "").strip():
-    order = _rank(q, 24)
-    if not order:
-        st.info("No matches. Rebuild index or try another query.")
-    else:
-        import numpy as _np
-        sims_array = _np.array([sc for _, sc in order], dtype="float32")
-        idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
-        picks = [order[i][0] for i in idxs] if idxs else [k for k, _ in order[:8]]
-        ctx_rows = []
-        src_rows = []
-        for j, k in enumerate(picks, 1):
-            tag = idx["cites"][k]
-            text = idx["chunks"][k]
-            ctx_rows.append({"tag": tag, "text": text})
-            src_rows.append({"#": j, "Source": tag})
-        sys, usr = _build_answer_prompt(q, ctx_rows, mode="standard", word_cap=220)
-        try:
-            rr = client.chat.completions.create(
-                model=MODEL_CHAT,
-                messages=[
-                    {"role":"system","content":sys},
-                    {"role":"user","content":usr},
-                ],
-            )
-            st.write(rr.choices[0].message.content)
-        except Exception as e:
-            st.error(f"Chat failed: {e}")
-        import pandas as _pd
-        st.caption("Sources")
-        st.dataframe(_pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
+    if ask and (q or "").strip():
+        order = _rank(q, 24)
+        if not order:
+            st.info("No matches. Rebuild index or try another query.")
+        else:
+            import numpy as _np
+            sims_array = _np.array([sc for _, sc in order], dtype="float32")
+            idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
+            picks = [order[i][0] for i in idxs] if idxs else [k for k, _ in order[:8]]
+            ctx_rows = []
+            src_rows = []
+            for j, k in enumerate(picks, 1):
+                tag = idx["cites"][k]
+                text = idx["chunks"][k]
+                ctx_rows.append({"tag": tag, "text": text})
+                src_rows.append({"#": j, "Source": tag})
+            sys, usr = _build_answer_prompt(q, ctx_rows, mode="standard", word_cap=220)
+            try:
+                rr = client.chat.completions.create(
+                    model=MODEL_CHAT,
+                    messages=[
+                        {"role":"system","content":sys},
+                        {"role":"user","content":usr},
+                    ],
+                )
+                st.write(rr.choices[0].message.content)
+            except Exception as e:
+                st.error(f"Chat failed: {e}")
+            import pandas as _pd
+            st.caption("Sources")
+            st.dataframe(_pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
 
     if brief:
         seed = "Executive brief: scope, set-aside, NAICS, key dates, POP/ordering period, CLIN/pricing, submission, must-dos"
