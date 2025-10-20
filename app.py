@@ -2475,35 +2475,36 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     
 
 # ---------------- Y4: CO Review (Red Team) ----------------
-with tab_y4:
-    st.caption("CO-style compliance review of your draft. Uses local index and L/M checklist.")
-    df_rf_y4 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-    if df_rf_y4 is None or df_rf_y4.empty:
-        st.info("No RFPs yet. Parse & save first.")
-    else:
-        rid_y4 = st.selectbox("RFP context", options=df_rf_y4["id"].tolist(),
-                              format_func=lambda i: f"#{i} — {df_rf_y4.loc[df_rf_y4['id']==i,'title'].values[0]}",
-                              key="y4_rfp_sel")
-        c1, c2 = st.columns([3,2])
-        with c1:
-            draft = st.text_area("Paste the draft text to review", height=220, key="y4_draft")
-            focus = st.text_input("Focus (optional, e.g., Technical Approach, Page limits)", key="y4_focus")
-        with c2:
-            k = y_auto_k((focus or "") + " " + (draft or ""))
-            st.write(f"Auto sources: {k}")
-            if st.button("Run CO Review", type="primary", key="y4_go"):
-                if not (draft or "").strip():
-                    st.warning("Paste some draft content first")
-                else:
-                    ph = st.empty(); acc = []
-                    for tok in y4_stream_review(conn, int(rid_y4), draft.strip(), focus.strip(), k=int(k)):
-                        acc.append(tok); ph.markdown("".join(acc))
-                    hits = y1_search(conn, int(rid_y4), (focus or "Section L Section M requirements"), k=int(k))
-                    if hits:
-                        import pandas as _pd
-                        dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
-                        st.subheader("Sources used")
-                        st.dataframe(dfh, use_container_width=True, hide_index=True)
+if False:
+    with tab_y4:
+        st.caption("CO-style compliance review of your draft. Uses local index and L/M checklist.")
+        df_rf_y4 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        if df_rf_y4 is None or df_rf_y4.empty:
+            st.info("No RFPs yet. Parse & save first.")
+        else:
+            rid_y4 = st.selectbox("RFP context", options=df_rf_y4["id"].tolist(),
+                                  format_func=lambda i: f"#{i} — {df_rf_y4.loc[df_rf_y4['id']==i,'title'].values[0]}",
+                                  key="y4_rfp_sel")
+            c1, c2 = st.columns([3,2])
+            with c1:
+                draft = st.text_area("Paste the draft text to review", height=220, key="y4_draft")
+                focus = st.text_input("Focus (optional, e.g., Technical Approach, Page limits)", key="y4_focus")
+            with c2:
+                k = y_auto_k((focus or "") + " " + (draft or ""))
+                st.write(f"Auto sources: {k}")
+                if st.button("Run CO Review", type="primary", key="y4_go"):
+                    if not (draft or "").strip():
+                        st.warning("Paste some draft content first")
+                    else:
+                        ph = st.empty(); acc = []
+                        for tok in y4_stream_review(conn, int(rid_y4), draft.strip(), focus.strip(), k=int(k)):
+                            acc.append(tok); ph.markdown("".join(acc))
+                        hits = y1_search(conn, int(rid_y4), (focus or "Section L Section M requirements"), k=int(k))
+                        if hits:
+                            import pandas as _pd
+                            dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
+                            st.subheader("Sources used")
+                            st.dataframe(dfh, use_container_width=True, hide_index=True)
 
         # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
