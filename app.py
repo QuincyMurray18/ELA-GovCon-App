@@ -178,8 +178,8 @@ def ask_ai(messages, tools=None, temperature=0.2):
         yield f"AI unavailable: {type(_ex).__name__}: {_ex}"
 
 def y0_ai_panel():
-import streamlit as st
-st.header("Ask the CO (AI)")
+    import streamlit as st
+    st.header("Ask the CO (AI)")
     q = st.text_area("Your question", key="y0_q", height=120)
     if st.button("Ask", key="y0_go"):
         if not (q or "").strip():
