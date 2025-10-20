@@ -5719,3 +5719,199 @@ try:
 except Exception:
     pass
 # ================== END X8 PANEL ==================
+
+
+# ===== X8 PATCH: reliable feature_flag and self-contained CO Brief + Q&A panel =====
+
+def feature_flag(name: str, default: bool=False) -> bool:
+    """
+    Robust flag reader.
+    Precedence:
+      1) env FEATURE_<NAME>=true/1/on
+      2) st.secrets["features"][name]
+      3) default
+    """
+    try:
+        env_key = f"FEATURE_{name.upper()}"
+        v = os.environ.get(env_key, None)
+        if v is not None:
+            if isinstance(v, str):
+                return v.strip().lower() in {"1","true","yes","on"}
+            if isinstance(v, bool):
+                return v
+            return bool(v)
+    except Exception:
+        pass
+    try:
+        sec = st.secrets.get("features", {})
+        if isinstance(sec, dict) and name in sec:
+            v = sec.get(name)
+            if isinstance(v, str):
+                return v.strip().lower() in {"1","true","yes","on"}
+            if isinstance(v, bool):
+                return v
+            return bool(v)
+    except Exception:
+        pass
+    return bool(default)
+
+
+def _x8_summarize_meta(conn, rfp_id: int) -> str:
+    """Build a CO-style one-page brief from DB facts only."""
+    import pandas as _pd
+    t = []
+    try:
+        rf = _pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        rf = _pd.DataFrame()
+    if rf is not None and not rf.empty:
+        r = rf.iloc[0].to_dict()
+        t.append(f"**RFP #{r.get('id')} – {r.get('title','')}**")
+        if r.get("solnum"): t.append(f"Solicitation: {r.get('solnum')}")
+        if r.get("sam_url"): t.append(f"SAM: {r.get('sam_url')}")
+        if r.get("created_at"): t.append(f"Created: {r.get('created_at')}")
+    try:
+        meta = _pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        meta = _pd.DataFrame(columns=['key','value'])
+    if meta is not None and not meta.empty:
+        def _get(k): 
+            try:
+                v = meta.loc[meta['key']==k,'value']
+                return v.values[0] if len(v) else ""
+            except Exception:
+                return ""
+        naics = _get('naics'); setaside = _get('set_aside'); pop = _get('pop_structure'); opyears = _get('ordering_period_years'); base_mo = _get('base_months')
+        if naics: t.append(f"NAICS: {naics}")
+        if setaside: t.append(f"Set-Aside: {setaside}")
+        if pop or opyears or base_mo:
+            parts = []
+            if pop: parts.append(pop)
+            if opyears: parts.append(f"Ordering Period: {opyears} year(s)")
+            if base_mo: parts.append(f"Base: {base_mo} month(s)")
+            t.append("POP/Ordering: " + " | ".join(parts))
+    try:
+        dates = _pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        if dates is not None and not dates.empty:
+            due = dates[dates['label'].str.contains('Due', case=False, na=False)]
+            if not due.empty:
+                dt = due.iloc[0].to_dict()
+                t.append(f"Due: {dt.get('date_text')} ({dt.get('label')})")
+    except Exception:
+        pass
+    try:
+        clins = _pd.read_sql_query("SELECT COUNT(DISTINCT clin) AS n FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        if clins is not None and not clins.empty:
+            t.append(f"CLIN count: {int(clins.iloc[0]['n'] or 0)}")
+    except Exception:
+        pass
+    try:
+        pocs = _pd.read_sql_query("SELECT name, email, phone FROM pocs WHERE rfp_id=? LIMIT 3;", conn, params=(int(rfp_id),))
+        if pocs is not None and not pocs.empty:
+            rows = []
+            for _, r in pocs.iterrows():
+                rows.append(", ".join([x for x in [r.get('name',''), r.get('email',''), r.get('phone','')] if x]))
+            t.append("POCs: " + " | ".join(rows))
+    except Exception:
+        pass
+    if not t:
+        return "No metadata found. Parse & Save the RFP first."
+    return "\n\n".join(t)
+
+
+def st_x8_panel(conn, rfp_id: int) -> None:
+    """
+    X8 AI: CO Brief + Q&A.
+    Purely local. No external API. Builds a quick text index from linked files and DB facts.
+    """
+    key_ns = f"x8_{int(rfp_id)}"
+    if "x8_idx" not in st.session_state:
+        st.session_state["x8_idx"] = {}
+    with st.expander("X8 AI: CO Brief + Q&A", expanded=True):
+        st.caption("Build an index from linked files and ask questions. Also generate a CO-style brief.")
+        c1, c2, c3 = st.columns([1,1,2])
+        with c1:
+            build = st.button("Build/Refresh Index", key=f"{key_ns}_build")
+        with c2:
+            brief_btn = st.button("CO Brief", key=f"{key_ns}_brief")
+        with c3:
+            q = st.text_input("Ask a question", key=f"{key_ns}_q")
+            ask = st.button("Answer", key=f"{key_ns}_ask")
+        if build:
+            import pandas as _pd
+            # Collect linked files
+            try:
+                df = _pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            except Exception as e:
+                st.error(f"Load files failed: {e}")
+                df = _pd.DataFrame()
+            texts = []
+            page_count = 0
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    b = r.get("bytes"); mime = r.get("mime") or ""
+                    try:
+                        pages = extract_text_pages(b, mime) or []
+                        page_count += len(pages)
+                        texts.append("\n".join(pages))
+                    except Exception:
+                        continue
+            # Fallback to checklist + meta if no files
+            try:
+                ck = _pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+                if ck is not None and not ck.empty:
+                    texts.append("\n".join(ck["item_text"].astype(str).tolist()))
+            except Exception:
+                pass
+            corpus = "\n\n".join([t for t in texts if t]).strip()
+            st.session_state["x8_idx"][int(rfp_id)] = {"text": corpus, "pages": page_count, "files": 0 if df is None else len(df)}
+            st.success(f"Index built. Files: {0 if df is None else len(df)}  Pages: {page_count}  Text size: {len(corpus)} chars")
+        if brief_btn:
+            md = _x8_summarize_meta(conn, int(rfp_id))
+            st.markdown(md)
+            b = md.encode("utf-8")
+            st.download_button("Download CO Brief (md)", data=b, file_name=f"rfp_{int(rfp_id)}_co_brief.md", mime="text/markdown", key=f"{key_ns}_brief_dl")
+        if ask:
+            idx = st.session_state.get("x8_idx", {}).get(int(rfp_id))
+            if not idx or not idx.get("text"):
+                st.warning("Build the index first.")
+            else:
+                text = idx["text"]
+                ql = (q or "").strip().lower()
+                # Simple heuristic answer: look for the first occurrence and return context.
+                pos = text.lower().find(ql[:60]) if ql else -1
+                if pos < 0:
+                    # fallback: split and search by words
+                    words = [w for w in re.findall(r"[a-z0-9]+", ql) if len(w) > 2][:6]
+                    best = -1; best_pos = -1
+                    for m in re.finditer(r".{0,500}", text, flags=re.DOTALL):
+                        s = m.group(0).lower()
+                        score = sum(1 for w in words if w in s)
+                        if score > best:
+                            best = score; best_pos = m.start()
+                    pos = best_pos
+                if pos is None or pos < 0:
+                    st.info("No obvious hit in indexed text. Try another phrasing.")
+                else:
+                    start = max(0, pos - 200); end = min(len(text), pos + 400)
+                    snippet = text[start:end].replace("\n", " ")
+                    st.write(f"**Answer (snippet):** {snippet}")
+                    # Also surface structured hints
+                    try:
+                        res = _kb_search(conn, int(rfp_id), q or "")
+                        hints = []
+                        df = res.get("dates")
+                        if df is not None and not df.empty:
+                            d0 = df.iloc[0].to_dict()
+                            hints.append(f"Key date: {d0.get('label')} → {d0.get('date_text')}")
+                        df = res.get("pocs")
+                        if df is not None and not df.empty:
+                            p0 = df.iloc[0].to_dict()
+                            hints.append(f"POC: {p0.get('name')} {p0.get('email')} {p0.get('phone')}")
+                        if hints:
+                            st.caption("Structured hints")
+                            for h in hints[:3]:
+                                st.write("• " + h)
+                    except Exception:
+                        pass
+# ===== end X8 PATCH =====
