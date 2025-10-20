@@ -539,7 +539,20 @@ def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, conte
         pass
 
 def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6) -> list[dict]:
-    system = SYSTEM_CO + " Use short, unambiguous sentences. When citing, use [C1], [C2] mapped to 'Sources used'."
+    """
+    Build messages for CO Chat with strict format.
+    Output shape must be exactly:
+    Answer
+    Citations: [C#,...]
+    Missing: [list or []]
+    """
+    system = (
+        "You are Contracting Officer Chat for ELA. Purpose answer questions strictly from EVIDENCE. "
+        "Never use outside knowledge. If evidence is insufficient say what is missing and stop. "
+        "Cite every factual claim with [C#] that maps to the cited chunk id. Style concise. "
+        "No speculation. No advice that changes scope. Format:\n"
+        "Answer\nCitations: [C#,...]\nMissing: [list or []]"
+    )
     msgs: list[dict] = [{"role": "system", "content": system}]
     hist = y2_get_messages(conn, int(thread_id))
     if len(hist) > 40:
@@ -552,32 +565,34 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
                 sr = client.chat.completions.create(
                     model=model_name,
                     messages=[
-                        {"role":"system","content":"Summarize the prior CO chat into 5 bullets with facts and decisions only."},
+                        {"role":"system","content":"Summarize the prior CO chat into 5 bullets with only facts and decisions."},
                         {"role":"user","content":joined or "No content"}
                     ],
-                    temperature=0.0
+                    temperature=0.1
                 )
-                summary = sr.choices[0].message.content or ""
+                summ = sr.choices[0].message.content.strip() if sr and sr.choices else ""
+                if summ:
+                    msgs.append({"role":"system","content":"THREAD SUMMARY\n" + summ})
             except Exception:
-                summary = ""
-            if summary:
-                msgs.append({"role":"system","content":"Context summary from earlier turns:\n" + summary})
-            msgs.extend(hist[-16:])
+                pass
         except Exception:
-            msgs.extend(hist[-16:])
+            pass
+        msgs.extend(hist[-16:])
     else:
         msgs.extend(hist)
+
     ev = y1_search(conn, int(rfp_id), user_q or "", k=int(k)) if (user_q or "").strip() else []
-    if ev:
-        ev_lines = []
-        for i,h in enumerate(ev, start=1):
-            tag = f"[C{i}]"
-            src = f"{h['file']} p.{h['page']}"
-            snip = (h.get("text") or "").strip().replace("\n"," ")
-            ev_lines.append(f"{tag} {src} — {snip}")
-        evidence = "\n".join(ev_lines)
-        msgs.append({"role":"system","content": "EVIDENCE:\n" + evidence})
-    msgs.append({"role":"user","content": user_q})
+    ev_lines = []
+    for i, h in enumerate(ev, start=1):
+        tag = f"[C{i}]"
+        src_line = f"{h['file']} p.{h['page']}"
+        snip = (h.get("text") or "").strip().replace("\n"," ")
+        ev_lines.append(f"{tag} {src_line} — {snip}")
+    evidence = "\n".join(ev_lines)
+
+    user = "QUESTION\n" + (user_q or "").strip()
+    user += "\n\nEVIDENCE\n" + (evidence if evidence else "(none)")
+    msgs.append({"role":"user","content": user})
     return msgs
 
 def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
@@ -762,35 +777,27 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
 # === Y4: CO Review (scored compliance with citations) ===
 def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
     """
-    Build messages for a Contracting Officer style review.
-    Output must include: Score 0–100, Strengths, Gaps, Risks, Required fixes, and short Conclusion.
-    Use [C#] next to claims grounded in EVIDENCE.
+    Build messages for a CO style review with strict sections.
+    Sections: Score 0 to 100, Strengths, Weaknesses, Risks, Required fixes, Compliance gaps.
+    Each factual statement must end with a [C#] citation mapped to EVIDENCE.
     """
-    # Reuse Section L/M + compliance as retrieval query
-    q = f"Section L Section M compliance checklist evaluation {draft_text[:400]}"
+    q = f"Section L Section M compliance checklist evaluation {(draft_text or '')[:400]}"
     hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
     ev_lines = []
     for i, h in enumerate(hits, start=1):
         tag = f"[C{i}]"
         src = f"{h['file']} p.{h['page']}"
-        snip = (h.get("text") or "").strip().replace("\\n"," ")
+        snip = (h.get("text") or "").strip().replace("\n"," ")
         ev_lines.append(f"{tag} {src} — {snip}")
-    evidence = "\\n".join(ev_lines)
+    evidence = "\n".join(ev_lines)
 
-    system = (SYSTEM_CO
-              + " Score the draft 0-100 for compliance and clarity."
-              + " Use short, direct sentences. No fluff."
-              + " Structure exactly as:\\n"
-              + "Score: <0-100>\\n"
-              + "Strengths: <bullets>\\n"
-              + "Gaps: <bullets>\\n"
-              + "Risks: <bullets>\\n"
-              + "Required fixes: <bullets>\\n"
-              + "Conclusion: <2-3 lines>\\n"
-              + "Map factual or requirement statements to EVIDENCE using [C#]."
-             )
-
-    user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
+    system = (
+        "You are a federal CO style reviewer. Use only EVIDENCE. "
+        "Output six sections exactly, each in short bullets. "
+        "Sections: Score 0 to 100, Strengths, Weaknesses, Risks, Required fixes, Compliance gaps. "
+        "Map claims to EVIDENCE using [C#]. Refuse if EVIDENCE is missing."
+    )
+    user = f"DRAFT\n{draft_text or '(empty)'}\n\nEVIDENCE\n{evidence or '(none)'}"
     return [{"role":"system","content": system}, {"role":"user","content": user}]
 
 def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
@@ -1928,6 +1935,47 @@ def y55_ai_parse(text: str) -> dict:
     out = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
     t = (text or "").strip()
     if not t:
+        return out
+    try:
+        client = get_ai()
+        model_name = _resolve_model()
+        system = (
+            "You extract structured data from solicitations. Use only the provided EVIDENCE. "
+            "Output valid JSON that matches the SCHEMA. Do not add fields. Do not add comments. "
+            "If a field is not present set it to an empty string or empty array. "
+            "Dates remain as free-text in 'date_text'. Return only JSON."
+            "\nSCHEMA\n"
+            "{"
+            "\"title\":\"string\","
+            "\"solnum\":\"string\","
+            "\"meta\":{\"naics\":\"string\",\"set_aside\":\"string\",\"place_of_performance\":\"string\"},"
+            "\"pocs\":[{\"name\":\"string\",\"email\":\"string\",\"phone\":\"string\",\"role\":\"string\"}],"
+            "\"l_items\":[\"string\"],"
+            "\"clins\":[{\"clin\":\"string\",\"description\":\"string\",\"qty\":\"string\",\"unit\":\"string\",\"unit_price\":\"string\",\"extended_price\":\"string\"}],"
+            "\"dates\":[{\"label\":\"string\",\"date_text\":\"string\"}]"
+            "}"
+        )
+        user = "EVIDENCE\\n" + t[:150000]
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role":"system","content":system},{"role":"user","content":user}],
+            temperature=0.1
+        )
+        raw = resp.choices[0].message.content if resp and resp.choices else ""
+        try:
+            data = json.loads(raw)
+        except Exception:
+            # Attempt to locate the first JSON object
+            jstart = raw.find("{")
+            jend = raw.rfind("}")
+            data = json.loads(raw[jstart:jend+1]) if jstart >= 0 and jend >= 0 else {}
+        if isinstance(data, dict):
+            out.update({k: v for k, v in data.items() if k in out})
+        # minimal normalization
+        out["title"] = (out.get("title") or "").strip()[:160]
+        out["solnum"] = (out.get("solnum") or "").strip()[:80]
+        return out
+    except Exception:
         return out
     try:
         client = get_ai()
