@@ -858,9 +858,7 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
                 acc.append(tok)
                 ph.markdown("".join(acc))
             all_out.append("".join(acc))
-        final = "
-
-".join(all_out).strip()
+        final = "\n\n".join(all_out).strip()
         st.session_state["y4_last_review"] = final
         st.subheader("Combined result")
         st.markdown(final or "_no output_")
@@ -881,19 +879,22 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
 
 
 # === Y5: Upload Review + Drafts plumbing ===
+from contextlib import closing
+import io
+
 def ensure_y5_tables(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS draft_snippets(
-                    id INTEGER PRIMARY KEY,
-                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
-                    section TEXT,
-                    source TEXT,
-                    text TEXT,
-                    created_at TEXT
-                );
-            """)
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS draft_snippets("
+                "id INTEGER PRIMARY KEY,"
+                "rfp_id INTEGER,"
+                "section TEXT,"
+                "source TEXT,"
+                "text TEXT,"
+                "created_at TEXT DEFAULT (datetime('now'))"
+                ");"
+            )
             conn.commit()
     except Exception:
         pass
@@ -904,12 +905,12 @@ def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> li
         return []
     if len(t) <= target_chars:
         return [t]
-    out = []
+    out: list[str] = []
     i = 0
-    while i < len(t):
-        j = min(len(t), i + max(2000, target_chars))
+    n = len(t)
+    while i < n:
+        j = min(n, i + max(2000, target_chars))
         chunk = t[i:j]
-        # try to break at sentence end near the end
         k = chunk.rfind(". ")
         if k > len(chunk) * 0.6:
             chunk = chunk[:k+1]
@@ -918,56 +919,89 @@ def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> li
         i = max(j - overlap, j)
     return out
 
+def _extract_docx_bytes(data: bytes) -> str:
+    try:
+        import docx  # python-docx
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs)
+    except Exception:
+        return ""
+
+def _extract_pdf_bytes(data: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:
+        return ""
+
 def y5_extract_from_uploads(files) -> str:
     if not files:
         return ""
-    parts = []
+    parts: list[str] = []
     for f in files:
         try:
             try:
-                b = f.getbuffer().tobytes()
+                data = f.getbuffer().tobytes()
             except Exception:
-                b = f.read()
-            mime = _detect_mime_light(f.name or "")
-            pages = extract_text_pages(b, mime) or []
-            if not pages and "pdf" in (mime or "").lower():
-                pages, _ = ocr_pages_if_empty(b, mime, pages or [])
-            parts.append("
-
-".join(pages))
+                data = f.read()
+            name = (getattr(f, "name", "") or "").lower()
+            if name.endswith(".txt"):
+                try:
+                    parts.append(data.decode("utf-8", "ignore"))
+                except Exception:
+                    parts.append(str(data))
+            elif name.endswith(".docx"):
+                parts.append(_extract_docx_bytes(data))
+            elif name.endswith(".pdf"):
+                parts.append(_extract_pdf_bytes(data))
         except Exception:
             continue
-    return "
-
-".join([p for p in parts if p]).strip()
+    return "\n\n".join([p for p in parts if p]).strip()
 
 def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
+    # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
     try:
-        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df = pd.read_sql_query(
+            "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            conn, params=(int(rfp_id),)
+        )
     except Exception:
         df = pd.DataFrame()
     if df is None or df.empty:
         return ""
-    parts = []
+    parts: list[str] = []
     for _, r in df.iterrows():
-        b = r.get("bytes"); mime = r.get("mime") or ""
-        pages = extract_text_pages(b, mime) or []
-        parts.append("
-
-".join(pages))
-    return "
-
-".join([p for p in parts if p]).strip()
+        data = r.get("bytes")
+        if data is None:
+            continue
+        name = (r.get("filename") or "").lower()
+        if name.endswith(".txt"):
+            if isinstance(data, (bytes, bytearray)):
+                try:
+                    parts.append(bytes(data).decode("utf-8", "ignore"))
+                except Exception:
+                    continue
+        elif name.endswith(".docx"):
+            parts.append(_extract_docx_bytes(bytes(data)))
+        elif name.endswith(".pdf"):
+            parts.append(_extract_pdf_bytes(bytes(data)))
+    return "\n\n".join([p for p in parts if p]).strip()
 
 def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
+    if not (text or "").strip():
+        return
     try:
         with closing(conn.cursor()) as cur:
-            cur.execute("INSERT INTO draft_snippets(rfp_id, section, source, text, created_at) VALUES(?,?,?,?, datetime('now'));",
-                        (int(rfp_id), section.strip() or "General", source.strip() or "Y5", text.strip()))
+            cur.execute(
+                "INSERT INTO draft_snippets(rfp_id, section, source, text) VALUES(?,?,?,?);",
+                (int(rfp_id), (section or "General").strip(), (source or "Y5").strip(), text.strip())
+            )
             conn.commit()
     except Exception:
         pass
 # === end Y5 ===
+
 
 
 def get_db() -> sqlite3.Connection:
@@ -988,6 +1022,14 @@ def get_db() -> sqlite3.Connection:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deals(
                 id INTEGER PRIMARY KEY,
+def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO draft_snippets(rfp_id, section, source, text, created_at) VALUES(?,?,?,?, datetime('now'));",
+                        (int(rfp_id), section.strip() or "General", source.strip() or "Y5", text.strip()))
+            conn.commit()
+    except Exception:
+        pass
                 title TEXT NOT NULL,
                 agency TEXT,
                 status TEXT,
