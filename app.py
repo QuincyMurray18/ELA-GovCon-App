@@ -1368,6 +1368,31 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
+
+    # X8: force-render CO Brief + Q&A panel at the top
+    try:
+        _rid = locals().get("rid", None)
+    except Exception:
+        _rid = None
+    if not _rid:
+        try:
+            df__rfps = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+            opts__ = df__rfps["id"].tolist() if df__rfps is not None and not df__rfps.empty else []
+        except Exception:
+            opts__ = []
+        if opts__:
+            def _fmt_rfp(x):
+                try:
+                    t = df__rfps.loc[df__rfps["id"]==x,"title"]
+                    return f"#{x} — {t.values[0] if len(t) else ''}"
+                except Exception:
+                    return f"#{x}"
+            _rid = st.selectbox("RFP for X8 AI", options=opts__, format_func=_fmt_rfp, key="x8_pick_inline")
+    if _rid:
+        try:
+            st_x8_panel(conn, int(_rid))
+        except Exception as _e:
+            st.info(f"X8 panel unavailable: {_e}")
     st.header("RFP Analyzer")
     tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
     
