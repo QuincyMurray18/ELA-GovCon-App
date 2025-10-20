@@ -3144,7 +3144,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
                         st.session_state[f"pb_section_{sec}"] = drafted
                         default_val = drafted
             content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
-with right:
+    with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
         font_name = st.selectbox("Font", ["Times New Roman", "Calibri"], index=0)
