@@ -1446,7 +1446,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X4 applied")
+                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X5 applied")
                 try:
                     df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
                     opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
@@ -1757,6 +1757,33 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 st.write("No files linked.")
             else:
                 st.dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
+                # X5: preview and download selected linked file
+                try:
+                    pick = st.selectbox(
+                        "Open file",
+                        options=df_files["id"].tolist(),
+                        format_func=lambda i: f"#{i} — {df_files.loc[df_files['id']==i,'filename'].values[0]}",
+                        key=f"file_pick_{rid}"
+                    )
+                    if pick:
+                        row = pd.read_sql_query(
+                            "SELECT filename, mime, bytes FROM rfp_files WHERE id=?;",
+                            conn, params=(int(pick),)
+                        ).iloc[0]
+                        fname = row.get("filename") or f"rfp_file_{int(pick)}"
+                        mime = row.get("mime") or "application/octet-stream"
+                        b = row.get("bytes")
+                        st.download_button("Download original", data=b, file_name=fname, mime=mime, key=f"dl_{pick}")
+                        try:
+                            pages = extract_text_pages(b, mime)
+                            preview = ("\n\n".join(pages) if pages else "").strip()[:20000]
+                            if preview:
+                                st.text_area("Preview (first 20k chars)", value=preview, height=300)
+                        except Exception as e:
+                            st.info(f"Preview unavailable: {e}")
+                except Exception as e:
+                    st.info(f"No preview available: {e}")
+
                 to_unlink = st.multiselect("Unlink file IDs", options=df_files["id"].tolist(), key=f"unlink_{rid}")
                 if st.button("Unlink selected", key=f"unlink_btn_{rid}") and to_unlink:
                     try:
