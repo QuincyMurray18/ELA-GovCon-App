@@ -441,6 +441,208 @@ def y1_ensure_schema_no_cache(conn: sqlite3.Connection) -> None:
 _ensure_y1_schema = y1_ensure_schema_no_cache
 # === end Y1 ===
 
+# === Y2: CO Chat with per-RFP memory (threads) ===
+def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_threads(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
+                    title TEXT,
+                    created_at TEXT,
+                    last_activity TEXT
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_msgs(
+                    id INTEGER PRIMARY KEY,
+                    thread_id INTEGER NOT NULL REFERENCES rfp_threads(id) ON DELETE CASCADE,
+                    role TEXT,
+                    content TEXT,
+                    ts TEXT
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_msgs_thread ON rfp_msgs(thread_id);")
+            conn.commit()
+    except Exception:
+        pass
+
+def y2_list_threads(conn: sqlite3.Connection, rfp_id: int) -> list[dict]:
+    _ensure_y2_schema(conn)
+    try:
+        df = pd.read_sql_query("SELECT id, title, created_at, last_activity FROM rfp_threads WHERE rfp_id=? ORDER BY COALESCE(last_activity, created_at) DESC, id DESC;", conn, params=(int(rfp_id),))
+        return ([] if df is None or df.empty else [{k:(row[k] if k in row else None) for k in df.columns} for _,row in df.iterrows()])
+    except Exception:
+        return []
+
+def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "New CO Chat") -> int:
+    _ensure_y2_schema(conn)
+    with closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO rfp_threads(rfp_id, title, created_at, last_activity) VALUES(?,?, datetime('now'), datetime('now'));", (int(rfp_id), title.strip() or "New CO Chat"))
+        conn.commit()
+        return int(cur.lastrowid)
+
+def y2_rename_thread(conn: sqlite3.Connection, thread_id: int, title: str) -> None:
+    _ensure_y2_schema(conn)
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("UPDATE rfp_threads SET title=?, last_activity=datetime('now') WHERE id=?;", (title.strip(), int(thread_id)))
+            conn.commit()
+    except Exception:
+        pass
+
+def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
+    _ensure_y2_schema(conn)
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("DELETE FROM rfp_threads WHERE id=?;", (int(thread_id),))
+            conn.commit()
+    except Exception:
+        pass
+
+def y2_get_messages(conn: sqlite3.Connection, thread_id: int) -> list[dict]:
+    _ensure_y2_schema(conn)
+    try:
+        df = pd.read_sql_query("SELECT role, content, ts FROM rfp_msgs WHERE thread_id=? ORDER BY id ASC;", conn, params=(int(thread_id),))
+        if df is None or df.empty:
+            return []
+        return [{"role": row["role"], "content": row["content"]} for _, row in df.iterrows()]
+    except Exception:
+        return []
+
+def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, content: str) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO rfp_msgs(thread_id, role, content, ts) VALUES(?,?,?, datetime('now'));", (int(thread_id), str(role), str(content)))
+            cur.execute("UPDATE rfp_threads SET last_activity=datetime('now') WHERE id=?;", (int(thread_id),))
+            conn.commit()
+    except Exception:
+        pass
+
+def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6) -> list[dict]:
+    system = SYSTEM_CO + " Use short, unambiguous sentences. When citing, use [C1], [C2] mapped to 'Sources used'."
+    msgs: list[dict] = [{"role": "system", "content": system}]
+    hist = y2_get_messages(conn, int(thread_id))
+    if len(hist) > 40:
+        try:
+            mid = hist[:-16]
+            joined = "\n".join([f"{m['role'][:1]}: {m['content']}" for m in mid][-2000:])
+            client = get_ai()
+            model_name = _resolve_model()
+            try:
+                sr = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role":"system","content":"Summarize the prior CO chat into 5 bullets with facts and decisions only."},
+                        {"role":"user","content":joined or "No content"}
+                    ],
+                    temperature=0.0
+                )
+                summary = sr.choices[0].message.content or ""
+            except Exception:
+                summary = ""
+            if summary:
+                msgs.append({"role":"system","content":"Context summary from earlier turns:\n" + summary})
+            msgs.extend(hist[-16:])
+        except Exception:
+            msgs.extend(hist[-16:])
+    else:
+        msgs.extend(hist)
+    ev = y1_search(conn, int(rfp_id), user_q or "", k=int(k)) if (user_q or "").strip() else []
+    if ev:
+        ev_lines = []
+        for i,h in enumerate(ev, start=1):
+            tag = f"[C{i}]"
+            src = f"{h['file']} p.{h['page']}"
+            snip = (h.get("text") or "").strip().replace("\n"," ")
+            ev_lines.append(f"{tag} {src} — {snip}")
+        evidence = "\n".join(ev_lines)
+        msgs.append({"role":"system","content": "EVIDENCE:\n" + evidence})
+    msgs.append({"role":"user","content": user_q})
+    return msgs
+
+def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
+    msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+
+def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
+    st.caption("CO Chat with memory. Threads are stored per RFP.")
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    if df_rf is None or df_rf.empty:
+        st.info("No RFPs yet. Parse & save first.")
+        return
+    rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="y2_rfp_sel")
+    threads = y2_list_threads(conn, int(rfp_id))
+    create = st.button("New thread", key="y2_new")
+    if create:
+        tid = y2_create_thread(conn, int(rfp_id), title="CO guidance")
+        st.session_state["y2_thread_id"] = tid
+        st.experimental_rerun()
+    if threads:
+        pick = st.selectbox("Thread", options=[t["id"] for t in threads], format_func=lambda i: next((f"#{t['id']} — {t.get('title') or 'Untitled'}" for t in threads if t['id']==i), f"#{i}"), key="y2_pick")
+        thread_id = int(pick)
+    else:
+        st.info("No threads yet. Click New thread.")
+        return
+    with st.expander("Thread settings", expanded=False):
+        cur_title = next((t.get("title") or "Untitled" for t in threads if t["id"]==thread_id), "Untitled")
+        new_title = st.text_input("Rename", value=cur_title, key="y2_rename")
+        colA, colB = st.columns([2,1])
+        with colA:
+            if st.button("Save name", key="y2_save_name"):
+                y2_rename_thread(conn, int(thread_id), new_title or "Untitled")
+                st.success("Renamed")
+                st.experimental_rerun()
+        with colB:
+            if st.button("Delete thread", key="y2_del"):
+                y2_delete_thread(conn, int(thread_id))
+                st.success("Deleted")
+                st.experimental_rerun()
+    st.subheader("History")
+    msgs = y2_get_messages(conn, int(thread_id))
+    if msgs:
+        chat_md = []
+        for m in msgs:
+            if m["role"] == "user":
+                chat_md.append(f"**You:** {m['content']}")
+            elif m["role"] == "assistant":
+                chat_md.append(m["content"])
+        st.markdown("\n\n".join(chat_md))
+    else:
+        st.caption("No messages yet.")
+    q = st.text_area("Your question", height=120, key="y2_q")
+    k = st.slider("Sources to cite", 1, 10, 6, key="y2_k")
+    if st.button("Ask (store to thread)", type="primary", key="y2_go"):
+        if not (q or "").strip():
+            st.warning("Enter a question")
+        else:
+            y2_append_message(conn, int(thread_id), "user", q.strip())
+            ph = st.empty(); acc = []
+            for tok in y2_stream_answer(conn, int(rfp_id), int(thread_id), q.strip(), k=int(k)):
+                acc.append(tok); ph.markdown("".join(acc))
+            ans = "".join(acc).strip()
+            if ans:
+                y2_append_message(conn, int(thread_id), "assistant", ans)
+                st.success("Saved to thread")
+# === end Y2 ===
+
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -1662,7 +1864,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data, tab_y1 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)"])
+    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)"])
     
 
     # --- heuristics to auto-fill Title and Solicitation # ---
@@ -2063,7 +2265,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
 
 
-    # ---------------- CHECKLIST ----------------
+    
+    # ---------------- Y2: CO Chat with memory ----------------
+    with tab_y2:
+        y2_ui_threaded_chat(conn)
+# ---------------- CHECKLIST ----------------
     with tab_checklist:
         df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
