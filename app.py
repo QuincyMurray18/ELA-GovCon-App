@@ -235,9 +235,6 @@ SAM_ENDPOINT = "https://api.sam.gov/opportunities/v2/search"
 def ensure_dirs() -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-
-@st.cache_resource(show_spinner=False)
 # === Y1: Retrieval (chunks • embeddings • citations) ===
 def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
     try:
@@ -431,6 +428,17 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
                 yield delta.content
         except Exception:
             pass
+def y1_ensure_schema_no_cache(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute('CREATE TABLE IF NOT EXISTS rfp_chunks(id INTEGER PRIMARY KEY, rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_chunks_rfp ON rfp_chunks(rfp_id);')
+            cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_chunk_key ON rfp_chunks(rfp_file_id, page, chunk_idx);')
+            conn.commit()
+    except Exception:
+        pass
+
+_ensure_y1_schema = y1_ensure_schema_no_cache
 # === end Y1 ===
 
 def get_db() -> sqlite3.Connection:
