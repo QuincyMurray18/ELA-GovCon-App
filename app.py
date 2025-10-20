@@ -137,7 +137,10 @@ try:
 except Exception:
     _Y0OpenAI = None
 
-SYSTEM_CO = (
+SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
+             "Flag non-compliance. Be concise. If evidence is missing, say so.")
+
+import os
 
 def _resolve_model():
     # Priority: Streamlit secrets -> env var -> safe default
@@ -153,9 +156,6 @@ def _resolve_model():
     except Exception:
         pass
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    "Act as a GS-1102 Contracting Officer. Cite exact pages. "
-    "Flag non-compliance. Be concise. If evidence is missing, say so."
-)
 
 _ai_client = None
 def get_ai():
@@ -169,27 +169,39 @@ def get_ai():
 
 def ask_ai(messages, tools=None, temperature=0.2):
     client = get_ai()
+    model_name = _resolve_model()
     try:
         resp = client.chat.completions.create(
-            model=_resolve_model(),
+            model=model_name,
             messages=[{"role":"system","content": SYSTEM_CO}, *messages],
             tools=tools or [],
             temperature=float(temperature),
             stream=True
         )
-        for ch in resp:
-            try:
-                delta = ch.choices[0].delta
-                if hasattr(delta, "content") and delta.content:
-                    yield delta.content
-            except Exception:
-                pass
-    except Exception as _ex:
-        yield f"AI unavailable: {type(_ex).__name__}: {_ex}"
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            model_name = "gpt-4o-mini"
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role":"system","content": SYSTEM_CO}, *messages],
+                tools=tools or [],
+                temperature=float(temperature),
+                stream=True
+            )
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
 
 def y0_ai_panel():
     import streamlit as st
-    st.header(f"Ask the CO (AI) • { _resolve_model() }")
+    st.header(f"Ask the CO (AI) · {_resolve_model()}")
     q = st.text_area("Your question", key="y0_q", height=120)
     if st.button("Ask", key="y0_go"):
         if not (q or "").strip():
