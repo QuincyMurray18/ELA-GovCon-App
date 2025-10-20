@@ -175,81 +175,80 @@ def st_x8_panel(conn, rfp_id: int):
             return [(int(k), float(sims[k])) for k in order]
         except Exception:
             return []
+if ask and (q or "").strip():
+    ql = (q or "").lower()
+    handled = False
 
-    
-    if ask and (q or "").strip():
-
-ql = (q or "").lower()
-handled = False
-
-# ---- X8.2 deterministic POC/contact path ----
-if any(w in ql for w in ["poc","contact","contracting officer","cor","contract specialist","ko","co "]):
+    # ---- X8.2 deterministic POC/contact path ----
+    if any(w in ql for w in ["poc", "contact", "contracting officer", "cor", "contract specialist", "ko", "co "]):
         try:
-        df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            df_p = pd.read_sql_query(
+                "SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;",
+                conn, params=(int(rfp_id),)
+            )
         except Exception:
-        df_p = pd.DataFrame(columns=["name","role","email","phone"])
+            df_p = pd.DataFrame(columns=["name", "role", "email", "phone"])
         if df_p is not None and not df_p.empty:
-        def _domain(e):
-            try: return (e or "").split("@",1)[1].lower()
-            except Exception: return ""
-        df_p = df_p.fillna("")
-        df_p["domain"] = df_p["email"].apply(_domain)
-        gov = df_p["domain"].str.contains(r"\.(gov|mil)$", case=False, regex=True).astype(int)
-        role_boost = df_p["role"].str.contains(r"contract(ing)? officer|ko|contract specialist|cor", case=False, regex=True).astype(int) * 2
-        dom_counts = df_p["domain"].value_counts().to_dict()
-        df_p["dom_freq"] = df_p["domain"].map(lambda d: dom_counts.get(d, 0))
-        bop_bonus = df_p["domain"].str.contains(r"bop\.gov", case=False, regex=True).astype(int) * 3
-        doj_bonus = df_p["domain"].str.contains(r"(justice|usdoj)\.gov", case=False, regex=True).astype(int) * 2
-        df_p["score"] = gov + role_boost + df_p["dom_freq"] + bop_bonus + doj_bonus
-        row = df_p.sort_values(["score"], ascending=False).iloc[0]
-        name = (row.get("name") or "").strip()
-        role = (row.get("role") or "POC").strip() or "POC"
-        email = (row.get("email") or "").strip()
-        phone = (row.get("phone") or "").strip()
-        st.write(f"**Primary POC**  
-{name} — {role}  
-Email: {email}  
-Phone: {phone}")
-        _src_rows = [{"#": 1, "Source": "POCs table (this RFP)"}]
-        st.caption("Sources")
-        import pandas as _pd
-        st.dataframe(_pd.DataFrame(_src_rows), use_container_width=True, hide_index=True)
-        handled = True
+            def _domain(e):
+                try:
+                    return (e or "").split("@", 1)[1].lower()
+                except Exception:
+                    return ""
+            df_p = df_p.fillna("")
+            df_p["domain"] = df_p["email"].apply(_domain)
+            gov = df_p["domain"].str.contains(r"\.(gov|mil)$", case=False, regex=True).astype(int)
+            role_boost = df_p["role"].str.contains(
+                r"contract(ing)? officer|\bko\b|contract specialist|\bcor\b",
+                case=False, regex=True
+            ).astype(int) * 2
+            dom_counts = df_p["domain"].value_counts().to_dict()
+            df_p["dom_freq"] = df_p["domain"].map(lambda d: dom_counts.get(d, 0))
+            bop_bonus = df_p["domain"].str.contains(r"\bbop\.gov\b", case=False, regex=True).astype(int) * 3
+            doj_bonus = df_p["domain"].str.contains(r"(justice|usdoj)\.gov", case=False, regex=True).astype(int) * 2
+            df_p["score"] = gov + role_boost + df_p["dom_freq"] + bop_bonus + doj_bonus
+            row = df_p.sort_values(["score"], ascending=False).iloc[0]
+            name = (row.get("name") or "").strip()
+            role = (row.get("role") or "POC").strip() or "POC"
+            email = (row.get("email") or "").strip()
+            phone = (row.get("phone") or "").strip()
+            st.write(f"**Primary POC**  \n{name} — {role}  \nEmail: {email}  \nPhone: {phone}")
+            _src_rows = [{"#": 1, "Source": "POCs table (this RFP)"}]
+            st.caption("Sources")
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(_src_rows), use_container_width=True, hide_index=True)
+            handled = True
 
-# ---- LLM path (with MMR context) ----
-if not handled:
+    # ---- LLM path (with MMR context) ----
+    if not handled:
         order = _rank(q, 24)
         if not order:
-        st.info("No matches. Rebuild index or try another query.")
+            st.info("No matches. Rebuild index or try another query.")
         else:
-        import numpy as _np
-        sims_array = _np.array([sc for _, sc in order], dtype="float32")
-        idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
-        picks = [order[i][0] for i in idxs] if idxs else [k for k, _ in order[:8]]
-        ctx_rows = []
-        src_rows = []
-        for j, k in enumerate(picks, 1):
-            tag = idx["cites"][k]
-            text = idx["chunks"][k]
-            ctx_rows.append({"tag": tag, "text": text})
-            src_rows.append({"#": j, "Source": tag})
-        sys, usr = _build_answer_prompt(q, ctx_rows, mode="standard", word_cap=220)
-        try:
-            rr = client.chat.completions.create(
-                model=MODEL_CHAT,
-                messages=[
-                    {"role":"system","content": sys + " If multiple POCs appear, pick ONE primary: prefer .gov/.mil domain matching the agency; prefer titles containing 'Contracting Officer' or 'COR'. Do not invent contacts."},
-                    {"role":"user","content":usr},
-                ],
-            )
-            st.write(rr.choices[0].message.content)
-        except Exception as e:
-            st.error(f"Chat failed: {e}")
-        st.caption("Sources")
-        import pandas as _pd
-        st.dataframe(_pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
-
-
+            import numpy as _np
+            sims_array = _np.array([sc for _, sc in order], dtype="float32")
+            idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
+            picks = [order[i][0] for i in idxs] if idxs else [k for k, _ in order[:8]]
+            ctx_rows, src_rows = [], []
+            for j, k in enumerate(picks, 1):
+                tag = idx["cites"][k]
+                text = idx["chunks"][k]
+                ctx_rows.append({"tag": tag, "text": text})
+                src_rows.append({"#": j, "Source": tag})
+            sys, usr = _build_answer_prompt(q, ctx_rows, mode="standard", word_cap=220)
+            try:
+                rr = client.chat.completions.create(
+                    model=MODEL_CHAT,
+                    messages=[
+                        {"role": "system", "content": sys + " If multiple POCs appear, pick ONE primary: prefer .gov/.mil domain matching the agency; prefer titles containing 'Contracting Officer' or 'COR'. Do not invent contacts."},
+                        {"role": "user", "content": usr},
+                    ],
+                )
+                st.write(rr.choices[0].message.content)
+            except Exception as e:
+                st.error(f"Chat failed: {e}")
+            st.caption("Sources")
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
     if brief:
         seed = "Executive brief: scope, set-aside, NAICS, key dates, POP/ordering period, CLIN/pricing, submission, must-dos"
         order = _rank(seed, 12)
