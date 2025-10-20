@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import math
 import sqlite3
 
 from email import encoders
@@ -14,7 +15,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import pandas as pd
 import docx  # for DOCX reading in _read_file
-import requests
+import re
+import mathquests
 import smtplib
 import streamlit as st
 
@@ -233,6 +235,201 @@ def ensure_dirs() -> None:
 
 
 @st.cache_resource(show_spinner=False)
+# === Y1: Retrieval (chunks • embeddings • citations) ===
+def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_chunks(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER,
+                    rfp_file_id INTEGER,
+                    file_name TEXT,
+                    page INTEGER,
+                    chunk_idx INTEGER,
+                    text TEXT,
+                    emb TEXT
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_rfp ON rfp_chunks(rfp_id);")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_chunk_key ON rfp_chunks(rfp_file_id, page, chunk_idx);")
+            conn.commit()
+    except Exception:
+        pass
+
+def _resolve_embed_model() -> str:
+    # Streamlit secrets or env, else default
+    try:
+        import streamlit as _st
+        for k in ("OPENAI_EMBED_MODEL","openai_embed_model","EMBED_MODEL"):
+            v = _st.secrets.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    except Exception:
+        pass
+    import os as _os
+    return _os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    client = get_ai()
+    model = _resolve_embed_model()
+    clean = [t if (t or "").strip() else " " for t in texts]
+    resp = client.embeddings.create(model=model, input=clean)
+    out = []
+    for d in resp.data:
+        try:
+            out.append(list(d.embedding))
+        except Exception:
+            out.append([])
+    return out
+
+def _cos_sim(u: list[float], v: list[float]) -> float:
+    if not u or not v:
+        return 0.0
+    try:
+        import numpy as _np
+        a = _np.array(u, dtype=float); b = _np.array(v, dtype=float)
+        num = float((_np.dot(a, b)))
+        den = float(_np.linalg.norm(a) * _np.linalg.norm(b))
+        return (num / den) if den else 0.0
+    except Exception:
+        num = 0.0; su = 0.0; sv = 0.0
+        for i in range(min(len(u), len(v))):
+            x = float(u[i]); y = float(v[i])
+            num += x*y; su += x*x; sv += y*y
+        den = (su**0.5) * (sv**0.5)
+        return (num / den) if den else 0.0
+
+def _split_chunks(text: str, max_chars: int = 1600, overlap: int = 200) -> list[str]:
+    t = (text or "").strip()
+    if not t:
+        return []
+    chunks = []
+    i = 0
+    n = len(t)
+    while i < n:
+        j = min(n, i + max(200, max_chars))
+        chunk = t[i:j]
+        k = chunk.rfind(". ")
+        if k > 900:
+            chunk = chunk[:k+1]
+            j = i + k + 1
+        chunks.append(chunk)
+        i = max(j - overlap, j)
+    return chunks
+
+def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
+    _ensure_y1_schema(conn)
+    try:
+        df = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if df is None or df.empty:
+        return {"ok": False, "error": "No linked files"}
+    added = 0
+    skipped = 0
+    for _, row in df.iterrows():
+        fid = int(row["id"]); name = row.get("filename") or f"file_{fid}"
+        try:
+            blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
+            b = blob["bytes"]; mime = blob.get("mime") or (row.get("mime") or "application/octet-stream")
+        except Exception:
+            continue
+        pages = extract_text_pages(b, mime) or []
+        if not pages:
+            continue
+        pages = pages[:max_pages]
+        for pi, txt in enumerate(pages, start=1):
+            parts = _split_chunks(txt or "", 1600, 200)
+            for ci, ch in enumerate(parts):
+                try:
+                    if not rebuild:
+                        q = pd.read_sql_query("SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;", conn, params=(fid, pi, ci))
+                        if q is not None and not q.empty:
+                            skipped += 1
+                            continue
+                except Exception:
+                    pass
+                emb = _embed_texts([ch])[0]
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb)
+                        VALUES(?,?,?,?,?,?,?);
+                    """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
+                    conn.commit()
+                added += 1
+    return {"ok": True, "added": added, "skipped": skipped}
+
+def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
+    _ensure_y1_schema(conn)
+    if not (query or "").strip():
+        return []
+    try:
+        df = pd.read_sql_query("SELECT id, rfp_file_id, file_name, page, chunk_idx, text, emb FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    q_emb = _embed_texts([query])[0]
+    rows = []
+    for _, r in df.iterrows():
+        try:
+            emb = json.loads(r.get("emb") or "[]")
+        except Exception:
+            emb = []
+        sim = _cos_sim(q_emb, emb)
+        rows.append({"id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"), "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0), "text": r.get("text") or "", "score": round(float(sim), 6)})
+    rows.sort(key=lambda x: x["score"], reverse=True)
+    return rows[:max(1, int(k))]
+
+def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
+    hits = y1_search(conn, int(rfp_id), question or "", k=k)
+    if not hits:
+        for t in ask_ai([{"role":"user", "content": question or ""}], temperature=temperature):
+            yield t
+        return
+    ev_lines = []
+    for i, h in enumerate(hits, start=1):
+        tag = f"[C{i}]"
+        src = f"{h['file']} p.{h['page']}"
+        snip = h["text"].strip().replace("\n", " ")
+        ev_lines.append(f"{tag} {src} — {snip}")
+    evidence = "\n".join(ev_lines[:k])
+    system = SYSTEM_CO + " Use only the EVIDENCE provided. Add bracketed citations like [C1] next to claims tied to sources."
+    user = f"QUESTION: {question}\n\nEVIDENCE:\n{evidence}\n\nWrite a concise answer. If evidence is insufficient, say what is missing."
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role":"system","content": system}, {"role":"user","content": user}],
+            temperature=float(temperature),
+            stream=True
+        )
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            try:
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role":"system","content": system}, {"role":"user","content": user}],
+                    temperature=float(temperature),
+                    stream=True
+                )
+            except Exception as _e2:
+                yield f"AI unavailable: {type(_e2).__name__}: {_e2}"
+                return
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+# === end Y1 ===
+
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -1454,7 +1651,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs"])
+    tab_parse, tab_checklist, tab_data, tab_y1 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)"])
     
 
     # --- heuristics to auto-fill Title and Solicitation # ---
@@ -1809,6 +2006,50 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     except Exception:
                         pass
                     st.success(f"Saved {saved} RFP record(s).")
+    # ---------------- Y1: Ask with citations ----------------
+    with tab_y1:
+        st.caption("Build a local search index once, then ask CO-style questions with bracketed citations.")
+        df_rf_y1 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        if df_rf_y1.empty:
+            st.info("No RFPs yet. Parse & save first.")
+        else:
+            rid_y1 = st.selectbox("RFP context", options=df_rf_y1["id"].tolist(),
+                                  format_func=lambda i: f"#{i} — {df_rf_y1.loc[df_rf_y1['id']==i,'title'].values[0]}",
+                                  key="y1_rfp_sel")
+            c1, c2 = st.columns([2,2])
+            with c1:
+                if st.button("Build/Update search index for this RFP"):
+                    with st.spinner("Indexing linked files..."):
+                        out = y1_index_rfp(conn, int(rid_y1), rebuild=False)
+                    if out.get("ok"):
+                        st.success(f"Indexed. Added {out.get('added',0)} chunk(s). Skipped {out.get('skipped',0)} existing.")
+                    else:
+                        st.error(out.get("error","Index error"))
+            with c2:
+                if st.button("Rebuild index (overwrite)"):
+                    with st.spinner("Rebuilding..."):
+                        out = y1_index_rfp(conn, int(rid_y1), rebuild=True)
+                    if out.get("ok"):
+                        st.success(f"Rebuilt. Added {out.get('added',0)} chunk(s).")
+                    else:
+                        st.error(out.get("error","Index error"))
+            q_y1 = st.text_area("Your question", height=120, key="y1_q")
+            k = st.slider("Sources to cite", 1, 10, 6)
+            if st.button("Ask with citations", type="primary"):
+                if not (q_y1 or "").strip():
+                    st.warning("Enter a question")
+                else:
+                    ph = st.empty(); acc = []
+                    for tok in ask_ai_with_citations(conn, int(rid_y1), q_y1.strip(), k=int(k)):
+                        acc.append(tok)
+                        ph.markdown("".join(acc))
+                    hits = y1_search(conn, int(rid_y1), q_y1.strip(), k=int(k))
+                    if hits:
+                        import pandas as _pd
+                        dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
+                        st.subheader("Sources used")
+                        st.dataframe(dfh, use_container_width=True, hide_index=True)
+
 
 
     # ---------------- CHECKLIST ----------------
