@@ -1737,12 +1737,15 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         with st.expander("Q&A Memory (X7)", expanded=False):
             st.caption("Ask questions about this RFP. Answers are pulled from saved checklists, CLINs, dates, POCs, and linked file text. History is saved.")
-            q = st.text_input("Your question", key=f"x7_q_{rid}")
-            ask = st.button("Ask (store)", key=f"x7_ask_{rid}")
+            q = st.text_input("Your question", key="x7_q")
+            ask = st.button("Ask (store)", key="x7_ask")
             if ask and (q or "").strip():
                 try:
                     ql = (q or "").lower()
-                    res = _kb_search(conn, int(rid), q or "")
+                    rid_safe = locals().get("rid", None)
+                    if rid_safe is None:
+                        st.warning("Select an RFP in the Data tab above first."); raise Exception("No rid in scope")
+                    res = _kb_search(conn, int(rid_safe), q or "")
                     ans_parts = []
                     if any(w in ql for w in ["due","deadline","close"]):
                         df = res.get("dates")
@@ -1778,16 +1781,16 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 except Exception as e:
                     st.error(f"Q&A failed: {e}")
             try:
-                df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(rid),))
+                df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
                 if df_hist is not None and not df_hist.empty:
                     st.dataframe(df_hist, use_container_width=True, hide_index=True)
                     c1, c2 = st.columns([1,1])
                     with c1:
-                        if st.button("Export Q&A CSV", key=f"x7_export_{rid}"):
+                        if st.button("Export Q&A CSV", key="x7_export"):
                             csvb = df_hist.to_csv(index=False).encode("utf-8")
-                            st.download_button("Download Q&A CSV", data=csvb, file_name=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key=f"x7_dl_{rid}")
+                            st.download_button("Download Q&A CSV", data=csvb, file_name=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key="x7_dl")
                     with c2:
-                        if st.button("Clear history", key=f"x7_clear_{rid}"):
+                        if st.button("Clear history", key="x7_clear"):
                             try:
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(rid),))
