@@ -130,6 +130,12 @@ BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Su
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
+# Y0 sidebar panel (always on)
+try:
+    y0_ai_sidebar()
+except Exception:
+    pass
+
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
 try:
     from openai import OpenAI as _Y0OpenAI
@@ -167,12 +173,11 @@ def ask_ai(messages, tools=None, temperature=0.2):
                 if hasattr(delta, "content") and delta.content:
                     yield delta.content
             except Exception:
-                # ignore malformed chunks
                 pass
     except Exception as _ex:
         yield f"AI unavailable: {type(_ex).__name__}: {_ex}"
 
-def y0_ai_sidebar():
+def :
     import streamlit as st
     with st.sidebar.expander("Ask the CO (AI)", expanded=False):
         q = st.text_area("Your question", key="y0_q", height=120)
