@@ -754,6 +754,75 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
             pass
 # === end Y3 ===
 
+# === Y4: CO Review (Red Team) — score and gaps with citations ===
+def _y4_collect_lm(conn: sqlite3.Connection, rfp_id: int, max_items: int = 100) -> list[str]:
+    try:
+        df = pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        return df["item_text"].astype(str).tolist()[:max_items] if df is not None and not df.empty else []
+    except Exception:
+        return []
+
+def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, focus: str = "", k: int = 6) -> list[dict]:
+    lm_list = _y4_collect_lm(conn, int(rfp_id))
+    # Evidence from local index
+    q = (focus or "") + " Section L Section M requirements evaluation factors compliance"
+    hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
+    ev_lines = []
+    for i, h in enumerate(hits, start=1):
+        tag = f"[C{i}]"
+        src = f"{h['file']} p.{h['page']}"
+        snip = (h.get("text") or "").strip().replace("\n"," ")
+        ev_lines.append(f"{tag} {src} — {snip}")
+    evidence = "\n".join(ev_lines)
+    lm_bullets = "\n".join(f"- {it}" for it in (lm_list or []))
+    system = SYSTEM_CO + " Be blunt. Score compliance out of 100. Use [C#] for any claim tied to EVIDENCE."
+    user = f"""DRAFT TO REVIEW:
+{draft_text.strip() or 'n/a'}
+
+FOCUS: {focus or 'overall'}
+
+SECTION L/M ITEMS (from checklist):
+{lm_bullets or '- n/a'}
+
+EVIDENCE:
+{evidence}
+
+Output in this structure:
+Score: <0-100 numeric>
+Strengths: <3-8 bullets with [C#] cites>
+Gaps/Weaknesses: <3-8 bullets; if no evidence exists say 'No cite'>
+Risks: <2-5 bullets>
+Required Fixes: <ordered list of concrete edits to reach compliance>
+Notes: <one short paragraph>
+
+Keep sentences short. No fluff."""
+    return [
+        {"role":"system","content": system},
+        {"role":"user","content": user},
+    ]
+
+def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, focus: str = "", k: int = 6, temperature: float = 0.1):
+    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", focus or "", k=int(k))
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+# === end Y4 ===
+
+
+
 
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
@@ -1976,7 +2045,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)"])
+    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"])
     
 
     # --- heuristics to auto-fill Title and Solicitation # ---
@@ -2378,7 +2447,39 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
 
     
-    # ---------------- Y2: CO Chat with memory ----------------
+
+# ---------------- Y4: CO Review (Red Team) ----------------
+with tab_y4:
+    st.caption("CO-style compliance review of your draft. Uses local index and L/M checklist.")
+    df_rf_y4 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    if df_rf_y4 is None or df_rf_y4.empty:
+        st.info("No RFPs yet. Parse & save first.")
+    else:
+        rid_y4 = st.selectbox("RFP context", options=df_rf_y4["id"].tolist(),
+                              format_func=lambda i: f"#{i} — {df_rf_y4.loc[df_rf_y4['id']==i,'title'].values[0]}",
+                              key="y4_rfp_sel")
+        c1, c2 = st.columns([3,2])
+        with c1:
+            draft = st.text_area("Paste the draft text to review", height=220, key="y4_draft")
+            focus = st.text_input("Focus (optional, e.g., Technical Approach, Page limits)", key="y4_focus")
+        with c2:
+            k = y_auto_k((focus or "") + " " + (draft or ""))
+            st.write(f"Auto sources: {k}")
+            if st.button("Run CO Review", type="primary", key="y4_go"):
+                if not (draft or "").strip():
+                    st.warning("Paste some draft content first")
+                else:
+                    ph = st.empty(); acc = []
+                    for tok in y4_stream_review(conn, int(rid_y4), draft.strip(), focus.strip(), k=int(k)):
+                        acc.append(tok); ph.markdown("".join(acc))
+                    hits = y1_search(conn, int(rid_y4), (focus or "Section L Section M requirements"), k=int(k))
+                    if hits:
+                        import pandas as _pd
+                        dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
+                        st.subheader("Sources used")
+                        st.dataframe(dfh, use_container_width=True, hide_index=True)
+
+        # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
         y2_ui_threaded_chat(conn)
 # ---------------- CHECKLIST ----------------
