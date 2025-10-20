@@ -1803,17 +1803,29 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     st.caption("No Q&A yet for this RFP.")
             except Exception as e:
                 st.info(f"No history available: {e}")
-            st.caption(f"{len(df_lm)} checklist items")
-            # Inline status editor
-            st.dataframe(df_lm, use_container_width=True, hide_index=True)
-            new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
-            sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
-            if st.button("Update Status", key="lm_status_btn"):
-                ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
-                if ids:
-                    with closing(conn.cursor()) as cur:
-                        cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(rid)) for iid in ids])
-                        conn.commit()
+            # X7 guard: ensure checklist dataframe is defined and rid is available
+            _rid = locals().get("rid", None)
+            if _rid is None:
+                st.caption("Checklist viewer: select an RFP above to load items.")
+            else:
+                try:
+                    df_lm = pd.read_sql_query(
+                        "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
+                        conn, params=(int(_rid),)
+                    )
+                except Exception:
+                    df_lm = pd.DataFrame(columns=['id','item_text','is_must','status'])
+                df_lm = df_lm.fillna("")
+                st.caption(f"{len(df_lm)} checklist items")
+                st.dataframe(df_lm, use_container_width=True, hide_index=True)
+                new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
+                sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
+                if st.button("Update Status", key="lm_status_btn"):
+                    ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
+                    if ids:
+                        with closing(conn.cursor()) as cur:
+                            cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
+                            conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
             # Export
