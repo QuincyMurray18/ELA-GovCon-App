@@ -541,24 +541,41 @@ def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, conte
 def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6) -> list[dict]:
     """
     Build messages for CO Chat with strict format.
-    Output shape must be exactly:
+    If the user question is generic or short, produce a full CO Readout inside "Answer".
+    Output shape is fixed:
     Answer
     Citations: [C#,...]
     Missing: [list or []]
     """
+    def _is_generic(q: str) -> bool:
+        s = (q or "").strip().lower()
+        if len(s) < 8:
+            return True
+        generic_terms = [
+            "what is this", "overview", "break down", "breakdown", "help me understand",
+            "explain", "summarize", "summary", "walk me through", "details", "key points"
+        ]
+        return any(g in s for g in generic_terms)
+
     system = (
         "You are Contracting Officer Chat for ELA. Purpose answer questions strictly from EVIDENCE. "
         "Never use outside knowledge. If evidence is insufficient say what is missing and stop. "
         "Cite every factual claim with [C#] that maps to the cited chunk id. Style concise. "
-        "No speculation. No advice that changes scope. Format:\n"
-        "Answer\nCitations: [C#,...]\nMissing: [list or []]"
+        "No speculation. No advice that changes scope. "
+        "If the question is generic or short, write a CO Readout in the Answer with these labeled parts: "
+        "Overview; Key dates; POCs; NAICS and set-aside; Place of performance; Scope summary; "
+        "Submission instructions; Evaluation criteria; CLINs summary; Risks; Missing items."
+        "\\nFormat:\\nAnswer\\nCitations: [C#,...]\\nMissing: [list or []]"
     )
+
     msgs: list[dict] = [{"role": "system", "content": system}]
+
+    # Thread history
     hist = y2_get_messages(conn, int(thread_id))
     if len(hist) > 40:
         try:
             mid = hist[:-16]
-            joined = "\n".join([f"{m['role'][:1]}: {m['content']}" for m in mid][-2000:])
+            joined = "\\n".join([f"{m['role'][:1]}: {m['content']}" for m in mid][-2000:])
             client = get_ai()
             model_name = _resolve_model()
             try:
@@ -572,7 +589,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
                 )
                 summ = sr.choices[0].message.content.strip() if sr and sr.choices else ""
                 if summ:
-                    msgs.append({"role":"system","content":"THREAD SUMMARY\n" + summ})
+                    msgs.append({"role":"system","content":"THREAD SUMMARY\\n" + summ})
             except Exception:
                 pass
         except Exception:
@@ -581,17 +598,60 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
     else:
         msgs.extend(hist)
 
-    ev = y1_search(conn, int(rfp_id), user_q or "", k=int(k)) if (user_q or "").strip() else []
+    q_in = (user_q or "").strip()
+    long_mode = _is_generic(q_in)
+
+    # Evidence build with query expansion
+    queries = []
+    if q_in:
+        queries.append(q_in)
+    if long_mode:
+        queries.extend([
+            "offers due OR quotes due OR proposals due OR closing date OR submission deadline",
+            "questions due OR Q&A due OR RFI due",
+            "NAICS OR North American Industry Classification",
+            "set-aside OR small business set-aside OR 8(a) OR SDVOSB OR HUBZone OR WOSB",
+            "place of performance OR POP OR performance location OR site",
+            "Section L OR Instructions to Offerors OR submission instructions",
+            "Section M OR Evaluation OR basis of award OR best value OR LPTA",
+            "CLIN OR Schedule of Items OR Bid Schedule OR price sheet",
+            "period of performance OR POP OR base period OR option",
+            "Points of Contact OR POC OR contracting officer OR specialist OR email OR phone",
+            "Statement of Work OR SOW OR Performance Work Statement OR PWS OR scope",
+            "attachments OR amendment OR addendum OR incorporated by reference"
+        ])
+    queries.append("due date OR proposal due OR quotes due OR closing time")
+
+    seen = set()
+    ev = []
+    for qi in queries:
+        try:
+            hits = y1_search(conn, int(rfp_id), qi, k=int(max(k, 6 if long_mode else k)))
+        except Exception:
+            hits = []
+        for h in hits or []:
+            key = (h.get("file"), h.get("page"), (h.get("text") or "")[:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            ev.append(h)
+
+    max_ev = 30 if long_mode else 14
+    ev = ev[:max_ev]
+
     ev_lines = []
     for i, h in enumerate(ev, start=1):
         tag = f"[C{i}]"
-        src_line = f"{h['file']} p.{h['page']}"
-        snip = (h.get("text") or "").strip().replace("\n"," ")
+        src_line = f"{h.get('file','')} p.{h.get('page','')}"
+        snip = (h.get("text") or "").strip().replace("\\n"," ")
         ev_lines.append(f"{tag} {src_line} — {snip}")
-    evidence = "\n".join(ev_lines)
+    evidence = "\\n".join(ev_lines)
 
-    user = "QUESTION\n" + (user_q or "").strip()
-    user += "\n\nEVIDENCE\n" + (evidence if evidence else "(none)")
+    if long_mode:
+        user_hdr = "QUESTION\\nProvide a CO Readout with the labeled parts requested in the system message."
+    else:
+        user_hdr = "QUESTION\\n" + q_in
+    user = user_hdr + "\\n\\nEVIDENCE\\n" + (evidence if evidence else "(none)")
     msgs.append({"role":"user","content": user})
     return msgs
 
@@ -777,27 +837,35 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
 # === Y4: CO Review (scored compliance with citations) ===
 def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
     """
-    Build messages for a CO style review with strict sections.
-    Sections: Score 0 to 100, Strengths, Weaknesses, Risks, Required fixes, Compliance gaps.
-    Each factual statement must end with a [C#] citation mapped to EVIDENCE.
+    Build messages for a Contracting Officer style review.
+    Output must include: Score 0–100, Strengths, Gaps, Risks, Required fixes, and short Conclusion.
+    Use [C#] next to claims grounded in EVIDENCE.
     """
-    q = f"Section L Section M compliance checklist evaluation {(draft_text or '')[:400]}"
+    # Reuse Section L/M + compliance as retrieval query
+    q = f"Section L Section M compliance checklist evaluation {draft_text[:400]}"
     hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
     ev_lines = []
     for i, h in enumerate(hits, start=1):
         tag = f"[C{i}]"
         src = f"{h['file']} p.{h['page']}"
-        snip = (h.get("text") or "").strip().replace("\n"," ")
+        snip = (h.get("text") or "").strip().replace("\\n"," ")
         ev_lines.append(f"{tag} {src} — {snip}")
-    evidence = "\n".join(ev_lines)
+    evidence = "\\n".join(ev_lines)
 
-    system = (
-        "You are a federal CO style reviewer. Use only EVIDENCE. "
-        "Output six sections exactly, each in short bullets. "
-        "Sections: Score 0 to 100, Strengths, Weaknesses, Risks, Required fixes, Compliance gaps. "
-        "Map claims to EVIDENCE using [C#]. Refuse if EVIDENCE is missing."
-    )
-    user = f"DRAFT\n{draft_text or '(empty)'}\n\nEVIDENCE\n{evidence or '(none)'}"
+    system = (SYSTEM_CO
+              + " Score the draft 0-100 for compliance and clarity."
+              + " Use short, direct sentences. No fluff."
+              + " Structure exactly as:\\n"
+              + "Score: <0-100>\\n"
+              + "Strengths: <bullets>\\n"
+              + "Gaps: <bullets>\\n"
+              + "Risks: <bullets>\\n"
+              + "Required fixes: <bullets>\\n"
+              + "Conclusion: <2-3 lines>\\n"
+              + "Map factual or requirement statements to EVIDENCE using [C#]."
+             )
+
+    user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
     return [{"role":"system","content": system}, {"role":"user","content": user}]
 
 def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
@@ -1935,47 +2003,6 @@ def y55_ai_parse(text: str) -> dict:
     out = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
     t = (text or "").strip()
     if not t:
-        return out
-    try:
-        client = get_ai()
-        model_name = _resolve_model()
-        system = (
-            "You extract structured data from solicitations. Use only the provided EVIDENCE. "
-            "Output valid JSON that matches the SCHEMA. Do not add fields. Do not add comments. "
-            "If a field is not present set it to an empty string or empty array. "
-            "Dates remain as free-text in 'date_text'. Return only JSON."
-            "\nSCHEMA\n"
-            "{"
-            "\"title\":\"string\","
-            "\"solnum\":\"string\","
-            "\"meta\":{\"naics\":\"string\",\"set_aside\":\"string\",\"place_of_performance\":\"string\"},"
-            "\"pocs\":[{\"name\":\"string\",\"email\":\"string\",\"phone\":\"string\",\"role\":\"string\"}],"
-            "\"l_items\":[\"string\"],"
-            "\"clins\":[{\"clin\":\"string\",\"description\":\"string\",\"qty\":\"string\",\"unit\":\"string\",\"unit_price\":\"string\",\"extended_price\":\"string\"}],"
-            "\"dates\":[{\"label\":\"string\",\"date_text\":\"string\"}]"
-            "}"
-        )
-        user = "EVIDENCE\\n" + t[:150000]
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role":"system","content":system},{"role":"user","content":user}],
-            temperature=0.1
-        )
-        raw = resp.choices[0].message.content if resp and resp.choices else ""
-        try:
-            data = json.loads(raw)
-        except Exception:
-            # Attempt to locate the first JSON object
-            jstart = raw.find("{")
-            jend = raw.rfind("}")
-            data = json.loads(raw[jstart:jend+1]) if jstart >= 0 and jend >= 0 else {}
-        if isinstance(data, dict):
-            out.update({k: v for k, v in data.items() if k in out})
-        # minimal normalization
-        out["title"] = (out.get("title") or "").strip()[:160]
-        out["solnum"] = (out.get("solnum") or "").strip()[:80]
-        return out
-    except Exception:
         return out
     try:
         client = get_ai()
