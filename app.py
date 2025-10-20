@@ -2052,7 +2052,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
+            if len(s) >= 8 and not s.lower().startswith(("solicitation", "request for", "rfp", "rfq", "sources sought")):
                 return s[:200]
         return fallback
 
