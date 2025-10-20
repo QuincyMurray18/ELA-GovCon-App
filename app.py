@@ -6112,6 +6112,53 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         st.error("Unknown page")
 
 
+
+# === Y2 LOCK PATCH (evidence-only CO Chat) ===
+# This override ensures CO Chat will not answer generically when no RFP evidence is available.
+# Behavior:
+# - If y1_search returns no hits for the question, the assistant refuses and instructs the user to build/update the index.
+# - When evidence exists, normal streaming continues with bracketed citations as before.
+def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
+    try:
+        _k = max(3, int(k))
+    except Exception:
+        _k = 6
+    # Require evidence from the indexed RFP chunks
+    _hits = y1_search(conn, int(rfp_id), user_q or "", k=int(_k))
+    if not _hits:
+        msg = ("Insufficient evidence in linked RFP files. "
+               "Build or Update the search index for this RFP on 'Ask with citations (Y1)', then ask again. "
+               "General answers are disabled in CO Chat.")
+        # Persist refusal to the thread for auditability
+        try:
+            y2_append_message(conn, int(thread_id), "assistant", msg)
+        except Exception:
+            pass
+        # Stream the refusal once
+        yield msg
+        return
+
+    # Otherwise continue with the standard message construction which embeds EVIDENCE
+    msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(_k))
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+# === End Y2 LOCK PATCH ===
+
 def main() -> None:
     conn = get_db()
     st.title(APP_TITLE)
