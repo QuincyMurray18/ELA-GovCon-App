@@ -143,7 +143,7 @@ SYSTEM_CO = (
 
 _ai_client = None
 def get_ai():
-    import streamlit as st as _st  # ensure st exists
+    import streamlit as st  # ensure st exists
     global _ai_client
     if _ai_client is None:
         if _Y0OpenAI is None:
