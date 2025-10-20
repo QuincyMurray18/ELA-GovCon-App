@@ -175,80 +175,85 @@ def st_x8_panel(conn, rfp_id: int):
             return [(int(k), float(sims[k])) for k in order]
         except Exception:
             return []
-if ask and (q or "").strip():
-    ql = (q or "").lower()
-    handled = False
 
-    # ---- X8.2 deterministic POC/contact path ----
-    if any(w in ql for w in ["poc", "contact", "contracting officer", "cor", "contract specialist", "ko", "co "]):
-        try:
-            df_p = pd.read_sql_query(
-                "SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;",
-                conn, params=(int(rfp_id),)
-            )
-        except Exception:
-            df_p = pd.DataFrame(columns=["name", "role", "email", "phone"])
-        if df_p is not None and not df_p.empty:
-            def _domain(e):
-                try:
-                    return (e or "").split("@", 1)[1].lower()
-                except Exception:
-                    return ""
-            df_p = df_p.fillna("")
-            df_p["domain"] = df_p["email"].apply(_domain)
-            gov = df_p["domain"].str.contains(r"\.(gov|mil)$", case=False, regex=True).astype(int)
-            role_boost = df_p["role"].str.contains(
-                r"contract(ing)? officer|\bko\b|contract specialist|\bcor\b",
-                case=False, regex=True
-            ).astype(int) * 2
-            dom_counts = df_p["domain"].value_counts().to_dict()
-            df_p["dom_freq"] = df_p["domain"].map(lambda d: dom_counts.get(d, 0))
-            bop_bonus = df_p["domain"].str.contains(r"\bbop\.gov\b", case=False, regex=True).astype(int) * 3
-            doj_bonus = df_p["domain"].str.contains(r"(justice|usdoj)\.gov", case=False, regex=True).astype(int) * 2
-            df_p["score"] = gov + role_boost + df_p["dom_freq"] + bop_bonus + doj_bonus
-            row = df_p.sort_values(["score"], ascending=False).iloc[0]
-            name = (row.get("name") or "").strip()
-            role = (row.get("role") or "POC").strip() or "POC"
-            email = (row.get("email") or "").strip()
-            phone = (row.get("phone") or "").strip()
-            st.write(f"**Primary POC**  \n{name} — {role}  \nEmail: {email}  \nPhone: {phone}")
-            _src_rows = [{"#": 1, "Source": "POCs table (this RFP)"}]
-            st.caption("Sources")
-            import pandas as _pd
-            st.dataframe(_pd.DataFrame(_src_rows), use_container_width=True, hide_index=True)
-            handled = True
+    if ask and (q or "").strip():
+        ql = (q or "").lower()
+        handled = False
 
-    # ---- LLM path (with MMR context) ----
-    if not handled:
-        order = _rank(q, 24)
-        if not order:
-            st.info("No matches. Rebuild index or try another query.")
-        else:
-            import numpy as _np
-            sims_array = _np.array([sc for _, sc in order], dtype="float32")
-            idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
-            picks = [order[i][0] for i in idxs] if idxs else [k for k, _ in order[:8]]
-            ctx_rows, src_rows = [], []
-            for j, k in enumerate(picks, 1):
-                tag = idx["cites"][k]
-                text = idx["chunks"][k]
-                ctx_rows.append({"tag": tag, "text": text})
-                src_rows.append({"#": j, "Source": tag})
-            sys, usr = _build_answer_prompt(q, ctx_rows, mode="standard", word_cap=220)
+        # ---- X8.2 deterministic POC/contact path ----
+        if any(w in ql for w in ["poc", "contact", "contracting officer", "cor", "contract specialist", "ko", "co "]):
             try:
-                rr = client.chat.completions.create(
-                    model=MODEL_CHAT,
-                    messages=[
-                        {"role": "system", "content": sys + " If multiple POCs appear, pick ONE primary: prefer .gov/.mil domain matching the agency; prefer titles containing 'Contracting Officer' or 'COR'. Do not invent contacts."},
-                        {"role": "user", "content": usr},
-                    ],
+                df_p = pd.read_sql_query(
+                    "SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;",
+                    conn, params=(int(rfp_id),)
                 )
-                st.write(rr.choices[0].message.content)
-            except Exception as e:
-                st.error(f"Chat failed: {e}")
-            st.caption("Sources")
-            import pandas as _pd
-            st.dataframe(_pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
+            except Exception:
+                df_p = pd.DataFrame(columns=["name", "role", "email", "phone"])
+            if df_p is not None and not df_p.empty:
+                def _domain(e):
+                    try:
+                        return (e or "").split("@", 1)[1].lower()
+                    except Exception:
+                        return ""
+                df_p = df_p.fillna("")
+                df_p["domain"] = df_p["email"].apply(_domain)
+                gov = df_p["domain"].str.contains(r"\.(gov|mil)$", case=False, regex=True).astype(int)
+                role_boost = df_p["role"].str.contains(
+                    r"contract(ing)? officer|ko|contract specialist|cor",
+                    case=False, regex=True
+                ).astype(int) * 2
+                dom_counts = df_p["domain"].value_counts().to_dict()
+                df_p["dom_freq"] = df_p["domain"].map(lambda d: dom_counts.get(d, 0))
+                bop_bonus = df_p["domain"].str.contains(r"bop\.gov", case=False, regex=True).astype(int) * 3
+                doj_bonus = df_p["domain"].str.contains(r"(justice|usdoj)\.gov", case=False, regex=True).astype(int) * 2
+                df_p["score"] = gov + role_boost + df_p["dom_freq"] + bop_bonus + doj_bonus
+                row = df_p.sort_values(["score"], ascending=False).iloc[0]
+                name = (row.get("name") or "").strip()
+                role = (row.get("role") or "POC").strip() or "POC"
+                email = (row.get("email") or "").strip()
+                phone = (row.get("phone") or "").strip()
+                st.write(f"**Primary POC**  
+{name} — {role}  
+Email: {email}  
+Phone: {phone}")
+                _src_rows = [{"#": 1, "Source": "POCs table (this RFP)"}]
+                st.caption("Sources")
+                import pandas as _pd
+                st.dataframe(_pd.DataFrame(_src_rows), use_container_width=True, hide_index=True)
+                handled = True
+
+        # ---- LLM path (with MMR context) ----
+        if not handled:
+            order = _rank(q, 24)
+            if not order:
+                st.info("No matches. Rebuild index or try another query.")
+            else:
+                import numpy as _np
+                sims_array = _np.array([sc for _, sc in order], dtype="float32")
+                idxs = _mmr_select(sims_array, k=8, fetch=16, lambd=0.7)
+                picks = [order[i][0] for i in idxs] if idxs else [k for k, _ in order[:8]]
+                ctx_rows, src_rows = [], []
+                for j, k in enumerate(picks, 1):
+                    tag = idx["cites"][k]
+                    text = idx["chunks"][k]
+                    ctx_rows.append({"tag": tag, "text": text})
+                    src_rows.append({"#": j, "Source": tag})
+                sys, usr = _build_answer_prompt(q, ctx_rows, mode="standard", word_cap=220)
+                try:
+                    rr = client.chat.completions.create(
+                        model=MODEL_CHAT,
+                        messages=[
+                            {"role": "system", "content": sys + " If multiple POCs appear, pick ONE primary: prefer .gov/.mil domain matching the agency; prefer titles containing 'Contracting Officer' or 'COR'. Do not invent contacts."},
+                            {"role": "user", "content": usr},
+                        ],
+                    )
+                    st.write(rr.choices[0].message.content)
+                except Exception as e:
+                    st.error(f"Chat failed: {e}")
+                st.caption("Sources")
+                import pandas as _pd
+                st.dataframe(_pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
+
     if brief:
         seed = "Executive brief: scope, set-aside, NAICS, key dates, POP/ordering period, CLIN/pricing, submission, must-dos"
         order = _rank(seed, 12)
@@ -315,426 +320,7 @@ except Exception:
 
 
 # --- hashing helper ---
-def compute_sha256(b: bytes) -> str:
-    try:
-        return hashlib.sha256(b or b"").hexdigest()
-    except Exception:
-        import hashlib as _h
-        return _h.sha256(b or b"").hexdigest()
-
-# Phase X unified settings
-from types import SimpleNamespace as _NS
-
-def getenv_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except Exception:
-        return default
-
-SETTINGS = _NS(
-    APP_NAME=os.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
-    APP_VERSION=os.environ.get("ELA_APP_VERSION", "X-Base"),
-    DATA_DIR=os.environ.get("ELA_DATA_DIR", "data"),
-    UPLOADS_SUBDIR=os.environ.get("ELA_UPLOADS_SUBDIR", "uploads"),
-    DEFAULT_PAGE_SIZE=getenv_int("ELA_PAGE_SIZE", 50),
-)
-
-SETTINGS.UPLOADS_DIR = os.path.join(SETTINGS.DATA_DIR, SETTINGS.UPLOADS_SUBDIR)
-
-# Ensure directories exist
-try:
-    os.makedirs(SETTINGS.DATA_DIR, exist_ok=True)
-    os.makedirs(SETTINGS.UPLOADS_DIR, exist_ok=True)
-except Exception:
-    pass
-
-# Back-compat constants
-DATA_DIR = SETTINGS.DATA_DIR
-UPLOADS_DIR = SETTINGS.UPLOADS_DIR
-
-# Feature flag alias
-def flag(name: str, default: bool=False) -> bool:
-    return feature_flag(name, default)
-
-def feature_flag(name: str, default: bool=False) -> bool:
-    """Read a feature flag from environment or Streamlit secrets.
-    Precedence: os.environ[FEATURE_<NAME>] then st.secrets['features'][name] then default.
-    """
-    val = None
-    try:
-        env_key = f"FEATURE_{name.upper()}"
-        if env_key in os.environ:
-            val = os.environ[env_key]
-    except Exception:
-        pass
-    if val is None:
-        try:
-            import streamlit as _st  # type: ignore
-            sec = _st.secrets.get("features", {})
-            if isinstance(sec, dict) and name in sec:
-                val = sec.get(name)
-        except Exception:
-            pass
-    if isinstance(val, str):
-        return val.strip().lower() in {"1","true","yes","on"}
-    if isinstance(val, bool):
-        return val
-    return bool(val) if val is not None else bool(default)
-
-def _guess_solnum(text: str) -> str:
-    if not text:
-        return ""
-    t = text
-    m = re.search(r'(?i)Solicitation\s*(?:Number|No\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', t)
-    if m:
-        return m.group(1)[:60]
-    m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', t)
-    if m:
-        return m.group(1)[:60]
-    m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', t, re.I)
-    if m:
-        return (m.group(1).upper() + "-" + m.group(2))[:60]
-    return ""
-    if val is None:
-        try:
-            import streamlit as _st  # type: ignore
-            sec = _st.secrets.get("features", {})
-            if isinstance(sec, dict) and name in sec:
-                val = sec.get(name)
-        except Exception:
-            pass
-    if isinstance(val, str):
-        return val.lower() in {"1","true","yes","on"}
-    if isinstance(val, bool):
-        return val
-    return bool(val) if val is not None else bool(default)
-
-
-# External
-
-
-APP_TITLE = "ELA GovCon Suite"
-BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
-
-st.set_page_config(page_title=APP_TITLE, layout="wide")
-
-
-
-# --- key namespacing helper (Phase U) ---
-def ns(*parts) -> str:
-    """Generate stable, unique Streamlit widget keys."""
-    return "k_" + "_".join(str(p) for p in parts if p is not None)
-DATA_DIR = "data"
-DB_PATH = os.path.join(DATA_DIR, "govcon.db")
-UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
-SAM_ENDPOINT = "https://api.sam.gov/opportunities/v2/search"
-
-
-# -------------------- setup --------------------
-def ensure_dirs() -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-
-@st.cache_resource(show_spinner=False)
-def get_db() -> sqlite3.Connection:
-    ensure_dirs()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    with closing(conn.cursor()) as cur:
-        cur.execute("PRAGMA foreign_keys = ON;")
-
-        # Core
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS contacts(
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                email TEXT,
-                org TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS deals(
-                id INTEGER PRIMARY KEY,
-                title TEXT NOT NULL,
-                agency TEXT,
-                status TEXT,
-                value NUMERIC,
-                notice_id TEXT,
-                solnum TEXT,
-                posted_date TEXT,
-                rfp_deadline TEXT,
-                naics TEXT,
-                psc TEXT,
-                sam_url TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS app_settings(
-                key TEXT PRIMARY KEY,
-                val TEXT
-            );
-        """)
-
-        # Org profile (Phase F - Capability Statement)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS org_profile(
-                id INTEGER PRIMARY KEY CHECK (id=1),
-                company_name TEXT,
-                tagline TEXT,
-                address TEXT,
-                phone TEXT,
-                email TEXT,
-                website TEXT,
-                uei TEXT,
-                cage TEXT,
-                naics TEXT,
-                core_competencies TEXT,
-                differentiators TEXT,
-                certifications TEXT,
-                past_performance TEXT,
-                primary_poc TEXT
-            );
-        """)
-
-        # Phase B (RFP analyzer artifacts)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS rfps(
-                id INTEGER PRIMARY KEY,
-                title TEXT,
-                solnum TEXT,
-                notice_id TEXT,
-                sam_url TEXT,
-                file_path TEXT,
-                created_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS rfp_sections(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                section TEXT,
-                content TEXT
-            );
-        """)
-        
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS rfp_files(
-    id INTEGER PRIMARY KEY,
-    rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
-    filename TEXT,
-    mime TEXT,
-    sha256 TEXT UNIQUE,
-    pages INTEGER,
-    bytes BLOB,
-    created_at TEXT
-);
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfp_files_rfp ON rfp_files(rfp_id);")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS lm_items(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                item_text TEXT,
-                is_must INTEGER DEFAULT 1,
-                status TEXT DEFAULT 'Open'
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS clin_lines(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                clin TEXT,
-                description TEXT,
-                qty TEXT,
-                unit TEXT,
-                unit_price TEXT,
-                extended_price TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS key_dates(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                label TEXT,
-                date_text TEXT,
-                date_iso TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pocs(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                name TEXT,
-                role TEXT,
-                email TEXT,
-                phone TEXT
-            );
-        """)
-
-        # Phase D (vendors + outreach)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS vendors(
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                cage TEXT,
-                uei TEXT,
-                naics TEXT,
-                city TEXT,
-                state TEXT,
-                phone TEXT,
-                email TEXT,
-                website TEXT,
-                notes TEXT,
-                last_seen_award TEXT
-            );
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_naics_state ON vendors(naics, state);")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS vendor_contacts(
-                id INTEGER PRIMARY KEY,
-                vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
-                name TEXT,
-                email TEXT,
-                phone TEXT,
-                role TEXT
-            );
-        """)
-
-        # Phase E (quotes + pricing)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS quotes(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                vendor TEXT NOT NULL,
-                received_date TEXT,
-                notes TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS quote_lines(
-                id INTEGER PRIMARY KEY,
-                quote_id INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
-                clin TEXT,
-                description TEXT,
-                qty REAL,
-                unit_price REAL,
-                extended_price REAL
-            );
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_quote_lines ON quote_lines(quote_id, clin);")
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pricing_scenarios(
-                id INTEGER PRIMARY KEY,
-                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
-                name TEXT NOT NULL,
-                overhead_pct REAL DEFAULT 0.0,
-                gna_pct REAL DEFAULT 0.0,
-                fee_pct REAL DEFAULT 0.0,
-                contingency_pct REAL DEFAULT 0.0,
-                created_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pricing_labor(
-                id INTEGER PRIMARY KEY,
-                scenario_id INTEGER NOT NULL REFERENCES pricing_scenarios(id) ON DELETE CASCADE,
-                labor_cat TEXT,
-                hours REAL,
-                rate REAL,
-                fringe_pct REAL DEFAULT 0.0
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pricing_other(
-                id INTEGER PRIMARY KEY,
-                scenario_id INTEGER NOT NULL REFERENCES pricing_scenarios(id) ON DELETE CASCADE,
-                label TEXT,
-                cost REAL
-            );
-        """)
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS past_perf(
-                id INTEGER PRIMARY KEY,
-                project_title TEXT NOT NULL,
-                customer TEXT,
-                contract_no TEXT,
-                naics TEXT,
-                role TEXT,
-                pop_start TEXT,
-                pop_end TEXT,
-                value NUMERIC,
-                scope TEXT,
-                results TEXT,
-                cpars_rating TEXT,
-                contact_name TEXT,
-                contact_email TEXT,
-                contact_phone TEXT,
-                keywords TEXT,
-                notes TEXT
-            );
-        """)
-
-        # Phase H (White Paper Builder)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS white_templates(
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                created_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS white_template_sections(
-                id INTEGER PRIMARY KEY,
-                template_id INTEGER NOT NULL REFERENCES white_templates(id) ON DELETE CASCADE,
-                position INTEGER NOT NULL,
-                title TEXT,
-                body TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS white_papers(
-                id INTEGER PRIMARY KEY,
-                title TEXT NOT NULL,
-                subtitle TEXT,
-                rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
-                created_at TEXT,
-                updated_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS white_paper_sections(
-                id INTEGER PRIMARY KEY,
-                paper_id INTEGER NOT NULL REFERENCES white_papers(id) ON DELETE CASCADE,
-                position INTEGER NOT NULL,
-                title TEXT,
-                body TEXT,
-                image_path TEXT
-            );
-        """)
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS activities(
-                id INTEGER PRIMARY KEY,
-                ts TEXT,
-                type TEXT,
-                subject TEXT,
-                notes TEXT,
-                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
-                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL
-            );
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(ts);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_rel ON activities(deal_id, contact_id);")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tasks(
-                id INTEGER PRIMARY KEY,
-                title TEXT NOT NULL,
-                due_date TEXT,
-                status TEXT DEFAULT 'Open',
+',
                 priority TEXT DEFAULT 'Normal',
                 deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
                 contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
