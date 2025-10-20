@@ -628,7 +628,7 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
     else:
         st.caption("No messages yet.")
     q = st.text_area("Your question", height=120, key="y2_q")
-    k = st.slider("Sources to cite", 1, 10, 6, key="y2_k")
+    k = y_auto_k(q)
     if st.button("Ask (store to thread)", type="primary", key="y2_go"):
         if not (q or "").strip():
             st.warning("Enter a question")
@@ -642,6 +642,100 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
                 y2_append_message(conn, int(thread_id), "assistant", ans)
                 st.success("Saved to thread")
 # === end Y2 ===
+
+
+# === Y3: Proposal drafting from evidence (per-RFP) ===
+def _y3_collect_ctx(conn: sqlite3.Connection, rfp_id: int, max_items: int = 20) -> dict:
+    ctx: dict = {}
+    try:
+        df_items = pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_items = pd.DataFrame(columns=["item_text"])
+    ctx["lm"] = df_items["item_text"].tolist()[:max_items] if isinstance(df_items, pd.DataFrame) and not df_items.empty else []
+    try:
+        df_clins = pd.read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_clins = pd.DataFrame(columns=["clin","description"])
+    ctx["clins"] = [{"clin": str(r.get("clin","")), "desc": str(r.get("description",""))[:160]} for _, r in df_clins.head(max_items).iterrows()] if isinstance(df_clins, pd.DataFrame) and not df_clins.empty else []
+    try:
+        df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_meta = pd.DataFrame(columns=["key","value"])
+    if isinstance(df_meta, pd.DataFrame) and not df_meta.empty:
+        ctx["meta"] = {str(k): str(v) for k,v in zip(df_meta["key"], df_meta["value"])}
+    else:
+        ctx["meta"] = {}
+    try:
+        df_rfp = pd.read_sql_query("SELECT title, solnum FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+        ctx["title"] = df_rfp.iloc[0]["title"] if not df_rfp.empty else ""
+        ctx["solnum"] = df_rfp.iloc[0]["solnum"] if not df_rfp.empty else ""
+    except Exception:
+        ctx["title"] = ""; ctx["solnum"] = ""
+    return ctx
+
+def _y3_build_messages(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
+    ctx = _y3_collect_ctx(conn, int(rfp_id))
+    q = f"{section_title} Section L Section M instructions {ctx.get('title','')} {ctx.get('solnum','')}"
+    hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
+    ev_lines = []
+    for i, h in enumerate(hits, start=1):
+        tag = f"[C{i}]"
+        src = f"{h['file']} p.{h['page']}"
+        snip = (h.get("text") or "").strip().replace("\n"," ")
+        ev_lines.append(f"{tag} {src} — {snip}")
+    evidence = "\n".join(ev_lines)
+    style = (SYSTEM_CO + " Write a proposal section for a federal RFP. Use short, compliant sentences."
+             + " Map claims to evidence with bracketed citations like [C1]."
+             + " Do not invent requirements. If evidence is missing, state the gap plainly.")
+    bullets = "\n".join([f"- {it}" for it in (ctx.get("lm") or [])])
+    clins = "\n".join([f"- {c['clin']}: {c['desc']}" for c in (ctx.get("clins") or [])])
+    constraints = []
+    if ctx["meta"].get("naics"): constraints.append(f"NAICS: {ctx['meta']['naics']}")
+    if ctx["meta"].get("set_aside"): constraints.append(f"Set-Aside: {ctx['meta']['set_aside']}")
+    if ctx["meta"].get("place_of_performance"): constraints.append(f"Place of Performance: {ctx['meta']['place_of_performance']}")
+    limit_line = f"Target length: <= {int(max_words)} words." if isinstance(max_words, int) and max_words>0 else "Target brevity."
+    user = f"""Draft the section: {section_title}
+{limit_line}
+
+RFP title: {ctx.get('title','')}  Solicitation: {ctx.get('solnum','')}
+Constraints: {' | '.join(constraints) if constraints else 'n/a'}
+
+Key L/M items to cover:
+{bullets or '- n/a'}
+
+Relevant CLINs:
+{clins or '- n/a'}
+
+Notes from author:
+{notes or 'n/a'}
+
+EVIDENCE:
+{evidence}
+Write a structured section with a short lead paragraph, 3–6 bullets, and an optional close. Use [C#] next to any factual or requirement-based claim that is tied to EVIDENCE.
+"""
+    return [{"role":"system","content": style}, {"role":"user","content": user}]
+
+def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
+    msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+# === end Y3 ===
+
 
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
@@ -2247,7 +2341,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     else:
                         st.error(out.get("error","Index error"))
             q_y1 = st.text_area("Your question", height=120, key="y1_q")
-            k = st.slider("Sources to cite", 1, 10, 6)
+            k = y_auto_k(q_y1)
             if st.button("Ask with citations", type="primary"):
                 if not (q_y1 or "").strip():
                     st.warning("Enter a question")
@@ -3033,9 +3127,24 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         content_map: Dict[str, str] = {}
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
-            content_map[sec] = st.text_area(sec, value=default_val, height=140)
-
-    with right:
+            st.markdown(f"**{sec}**")
+            notes = st.text_input(f"Notes for {sec}", key=f"y3_notes_{sec}")
+            cA, cB, cC = st.columns([1,1,1])
+            with cA:
+                k = y_auto_k(f"{sec} {notes}")
+            with cB:
+                maxw = st.number_input(f"Max words — {sec}", min_value=0, value=220, step=10, key=f"y3_maxw_{sec}")
+            with cC:
+                if st.button(f"Draft {sec}", key=f"y3_draft_{sec}"):
+                    ph = st.empty(); acc=[]
+                    for tok in y3_stream_draft(conn, int(rfp_id), sec, notes or "", k=int(k), max_words=int(maxw) if maxw>0 else None):
+                        acc.append(tok); ph.markdown("".join(acc))
+                    drafted = "".join(acc).strip()
+                    if drafted:
+                        st.session_state[f"pb_section_{sec}"] = drafted
+                        default_val = drafted
+            content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
+with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
         font_name = st.selectbox("Font", ["Times New Roman", "Calibri"], index=0)
@@ -5632,3 +5741,21 @@ def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
                 pre[key_name] = b
                 st.session_state['pb_prefill'] = pre
                 st.success("Added to compose. Open 'Proposal Builder' -> Import.")
+
+# === helper: auto-select number of sources to cite ===
+def y_auto_k(text: str) -> int:
+    t = (text or "").lower()
+    n = len(t)
+    broad = any(k in t for k in [
+        "overview", "summary", "summarize", "list all", "requirements", "compliance",
+        "section l", "section m", "evaluation factors", "factors", "checklist",
+        "compare", "differences", "conflict", "conflicts", "crosswalk", "matrix"
+    ])
+    if not t.strip():
+        return 4
+    base = 7 if broad else 4
+    if n > 500:
+        base += 1
+    if n > 1200:
+        base += 1
+    return max(3, min(8, base))
