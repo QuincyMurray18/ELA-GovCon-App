@@ -138,6 +138,21 @@ except Exception:
     _Y0OpenAI = None
 
 SYSTEM_CO = (
+
+def _resolve_model():
+    # Priority: Streamlit secrets -> env var -> safe default
+    try:
+        import streamlit as st  # noqa: F401
+        for key in ("OPENAI_MODEL", "openai_model", "model"):
+            try:
+                val = st.secrets.get(key)  # type: ignore[attr-defined]
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     "Act as a GS-1102 Contracting Officer. Cite exact pages. "
     "Flag non-compliance. Be concise. If evidence is missing, say so."
 )
@@ -156,7 +171,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
     client = get_ai()
     try:
         resp = client.chat.completions.create(
-            model="gpt-5-thinking",
+            model=_resolve_model(),
             messages=[{"role":"system","content": SYSTEM_CO}, *messages],
             tools=tools or [],
             temperature=float(temperature),
@@ -174,7 +189,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
 
 def y0_ai_panel():
     import streamlit as st
-    st.header("Ask the CO (AI)")
+    st.header(f"Ask the CO (AI) • { _resolve_model() }")
     q = st.text_area("Your question", key="y0_q", height=120)
     if st.button("Ask", key="y0_go"):
         if not (q or "").strip():
