@@ -130,11 +130,6 @@ BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Su
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-# Y0 main panel (always on)
-try:
-    y0_ai_panel()
-except Exception:
-    pass
 
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
 try:
@@ -5077,6 +5072,11 @@ def main() -> None:
     conn = get_db()
     st.title(APP_TITLE)
     st.caption(BUILD_LABEL)
+    # Y0 main panel (always on)
+    try:
+        y0_ai_panel()
+    except Exception:
+        pass
     router(nav(), conn)
 
 
