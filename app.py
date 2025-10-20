@@ -594,7 +594,7 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
     if create:
         tid = y2_create_thread(conn, int(rfp_id), title="CO guidance")
         st.session_state["y2_thread_id"] = tid
-        st.experimental_rerun()
+        st.rerun()
     if threads:
         pick = st.selectbox("Thread", options=[t["id"] for t in threads], format_func=lambda i: next((f"#{t['id']} — {t.get('title') or 'Untitled'}" for t in threads if t['id']==i), f"#{i}"), key="y2_pick")
         thread_id = int(pick)
@@ -609,12 +609,12 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
             if st.button("Save name", key="y2_save_name"):
                 y2_rename_thread(conn, int(thread_id), new_title or "Untitled")
                 st.success("Renamed")
-                st.experimental_rerun()
+                st.rerun()
         with colB:
             if st.button("Delete thread", key="y2_del"):
                 y2_delete_thread(conn, int(thread_id))
                 st.success("Deleted")
-                st.experimental_rerun()
+                st.rerun()
     st.subheader("History")
     msgs = y2_get_messages(conn, int(thread_id))
     if msgs:
