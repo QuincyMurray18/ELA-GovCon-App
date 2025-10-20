@@ -5431,3 +5431,266 @@ def st_x8_panel(conn, rfp_id: int):
             return
         st.markdown(brief_txt)
 # ========== end X8 ==========
+
+
+
+# ================== X8 AI PANEL (CO Brief + Q&A) ==================
+# No feature flag. Appears under RFP Analyzer automatically.
+try:
+    import numpy as _np
+except Exception:
+    _np = None
+try:
+    from openai import OpenAI as _OpenAI
+except Exception:
+    _OpenAI = None
+
+def _x8_get_models():
+    # pull from secrets if present else defaults
+    try:
+        import streamlit as _stx
+        m = (_stx.secrets.get("models") or {})
+    except Exception:
+        m = {}
+    return {
+        "chat": m.get("heavy", "gpt-5"),
+        "fast": m.get("fast", "gpt-5-mini"),
+        "embed": m.get("embed", "text-embedding-3-small"),
+    }
+
+def _x8_client():
+    if _OpenAI is None:
+        return None, "openai python client not installed"
+    import os as _os
+    key = None
+    try:
+        import streamlit as _stx
+        key = _stx.secrets.get("OPENAI_API_KEY") or _stx.secrets.get("openai", {}).get("api_key")
+    except Exception:
+        pass
+    key = key or _os.getenv("OPENAI_API_KEY")
+    if not key:
+        return None, "OPENAI_API_KEY missing"
+    try:
+        cli = _OpenAI(api_key=key)
+        return cli, None
+    except Exception as ex:
+        return None, str(ex)
+
+def _x8_gather_corpus(conn, rfp_id: int):
+    import pandas as _pd
+    from contextlib import closing as _closing
+    chunks = []
+    meta = []
+    # L/M items
+    try:
+        df = _pd.read_sql_query("SELECT id, item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        for _, r in df.iterrows():
+            txt = str(r.get("item_text","")).strip()
+            if txt:
+                chunks.append(txt)
+                meta.append({"source":"L/M","ref":f"LM#{int(r['id'])}"})
+    except Exception:
+        pass
+    # CLINs
+    try:
+        df = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        for _, r in df.iterrows():
+            s = " | ".join([str(r.get("clin","")), str(r.get("description","")), f"QTY {r.get('qty','')}", str(r.get('unit',''))]).strip()
+            if s:
+                chunks.append(s)
+                meta.append({"source":"CLIN","ref":str(r.get("clin",""))})
+    except Exception:
+        pass
+    # Dates
+    try:
+        df = _pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        for _, r in df.iterrows():
+            s = f"{r.get('label','')}: {r.get('date_text','')}"
+            if s.strip():
+                chunks.append(s)
+                meta.append({"source":"Date","ref":str(r.get('label',''))})
+    except Exception:
+        pass
+    # POCs
+    try:
+        df = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        for _, r in df.iterrows():
+            s = " | ".join([str(r.get("name","")), str(r.get("role","")), str(r.get("email","")), str(r.get("phone",""))]).strip()
+            if s:
+                chunks.append(s)
+                meta.append({"source":"POC","ref":str(r.get('name',''))})
+    except Exception:
+        pass
+    # Linked files: extract per-page text
+    try:
+        df = _pd.read_sql_query("SELECT id, filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        for _, r in df.iterrows():
+            b = r.get("bytes"); mime = r.get("mime","")
+            pages = extract_text_pages(b, mime) if isinstance(b, (bytes, bytearray)) else []
+            for i, p in enumerate(pages[:100]):
+                t = (p or "").strip()
+                if t:
+                    chunks.append(t[:4000])  # safety trim
+                    meta.append({"source": r.get("filename") or f"file#{int(r['id'])}", "ref": f"p.{i+1}"})
+    except Exception:
+        pass
+    return chunks, meta
+
+def _x8_build_index(conn, rfp_id: int):
+    if _np is None:
+        return None, "numpy missing"
+    cli, err = _x8_client()
+    if err:
+        return None, err
+    models = _x8_get_models()
+    txts, meta = _x8_gather_corpus(conn, int(rfp_id))
+    if not txts:
+        return None, "no data to index"
+    # Embed in small batches to avoid token overflow
+    try:
+        vecs = []
+        step = 256
+        for i in range(0, len(txts), step):
+            batch = txts[i:i+step]
+            resp = cli.embeddings.create(model=models["embed"], input=batch)
+            for d in resp.data:
+                vecs.append(d.embedding)
+        import numpy as _np2
+        V = _np2.array(vecs, dtype="float32")
+        # Normalize
+        norms = _np2.linalg.norm(V, axis=1, keepdims=True) + 1e-8
+        Vn = V / norms
+        index = {"vectors": Vn, "texts": txts, "meta": meta, "model": models["embed"]}
+        return index, None
+    except Exception as ex:
+        return None, str(ex)
+
+def _x8_search(index, query: str, top_k: int = 8):
+    if _np is None:
+        return []
+    cli, err = _x8_client()
+    if err:
+        return []
+    models = _x8_get_models()
+    try:
+        er = cli.embeddings.create(model=models["embed"], input=[query])
+        qv = _np.array(er.data[0].embedding, dtype="float32")
+        qv = qv / (float(_np.linalg.norm(qv)) + 1e-8)
+        sims = index["vectors"] @ qv
+        order = sims.argsort()[::-1][:top_k]
+        out = []
+        for idx in order:
+            out.append({
+                "text": index["texts"][idx],
+                "meta": index["meta"][idx],
+                "score": float(sims[idx]),
+            })
+        return out
+    except Exception:
+        return []
+
+def st_x8_panel(conn, rfp_id: int):
+    import streamlit as _st
+    _st.subheader("X8 AI: CO Brief + Q&A")
+    cli, err = _x8_client()
+    if err:
+        _st.warning(f"X8 requires OpenAI API key and numpy. Status: {err}")
+        return
+    models = _x8_get_models()
+    # Build/refresh
+    if _st.button("Build/Refresh Index", key=f"x8_build_{rfp_id}") or f"x8_index_{rfp_id}" not in _st.session_state:
+        with _st.spinner("Building embeddings index..."):
+            idx, e = _x8_build_index(conn, int(rfp_id))
+        if e:
+            _st.error(f"Index failed: {e}")
+            return
+        _st.session_state[f"x8_index_{rfp_id}"] = idx
+        _st.success(f"Indexed {len(idx['texts'])} chunks using {idx['model']}")
+    idx = _st.session_state.get(f"x8_index_{rfp_id}")
+    if not idx:
+        return
+    # Q&A
+    q = _st.text_input("Ask the CO-style assistant about this RFP", key=f"x8_q_{rfp_id}")
+    c1, c2 = _st.columns([1,1])
+    with c1:
+        ask = _st.button("Answer with citations", key=f"x8_ask_{rfp_id}")
+    with c2:
+        brief = _st.button("Generate CO Brief", key=f"x8_brief_{rfp_id}")
+    if ask and (q or "").strip():
+        hits = _x8_search(idx, q, top_k=8)
+        ctx = "\n\n".join([f"[{i+1}] {h['meta']['source']} {h['meta']['ref']}\n{h['text']}" for i,h in enumerate(hits)])
+        prompt = (
+            "You are a US government Contracting Officer assistant. "
+            "Answer the user's question only from the provided context. "
+            "Cite sources like [1], [2] matching the chunk numbers. "
+            "Be concise and specific.\n\nContext:\n" + ctx + "\n\nQuestion: " + q
+        )
+        try:
+            resp = cli.chat.completions.create(
+                model=models["chat"],
+                messages=[
+                    {"role":"system","content":"You write precise, compliance-aware answers with citations."},
+                    {"role":"user","content":prompt}
+                ],
+                temperature=0.1,
+            )
+            ans = resp.choices[0].message.content
+            _st.success("Answer")
+            _st.write(ans)
+            # Show sources table
+            import pandas as _pd
+            rows = [{"#": i+1, "Source": h["meta"]["source"], "Ref": h["meta"]["ref"], "Score": round(h["score"],4)} for i,h in enumerate(hits)]
+            _st.dataframe(_pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        except Exception as ex:
+            _st.error(f"Chat failed: {ex}")
+    if brief:
+        hits = _x8_search(idx, "solicitation summary requirements dates naics set-aside pop clin", top_k=12)
+        ctx = "\n\n".join([f"[{i+1}] {h['meta']['source']} {h['meta']['ref']}\n{h['text']}" for i,h in enumerate(hits)])
+        prompt = (
+            "Create a 1-page executive CO brief from the context. "
+            "Include: Solicitation ID, NAICS, Set-Aside, Response Due, POP/Ordering Period, "
+            "CLIN overview, Key POCs, Submission method, and 3-5 compliance must-dos. "
+            "Use short sections and bullet points. Cite with [n] markers.\n\nContext:\n" + ctx
+        )
+        try:
+            resp = cli.chat.completions.create(
+                model=models["chat"],
+                messages=[
+                    {"role":"system","content":"You prepare concise CO-style briefs with citations."},
+                    {"role":"user","content":prompt}
+                ],
+                temperature=0.1,
+            )
+            doc = resp.choices[0].message.content
+            _st.success("CO Brief")
+            _st.write(doc)
+        except Exception as ex:
+            _st.error(f"Brief failed: {ex}")
+
+# ---- Ensure panel renders inside RFP Analyzer without manual edits ----
+try:
+    _original_run_rfp_analyzer = run_rfp_analyzer
+    def run_rfp_analyzer(conn):
+        _original_run_rfp_analyzer(conn)
+        try:
+            # Try to reuse selected rid from widgets if available
+            rid = None
+            import streamlit as _st
+            for k in ["rfp_data_sel","rfp_sel"]:
+                if k in _st.session_state and _st.session_state.get(k):
+                    rid = int(_st.session_state.get(k))
+                    break
+            if rid is None:
+                import pandas as _pd
+                df_rf = _pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn, params=())
+                if df_rf is not None and not df_rf.empty:
+                    rid = int(df_rf.iloc[0]["id"])
+            if rid:
+                st_x8_panel(conn, int(rid))
+        except Exception as _e:
+            import streamlit as _st
+            _st.info(f"X8 panel unavailable: {_e}")
+except Exception:
+    pass
+# ================== END X8 PANEL ==================
