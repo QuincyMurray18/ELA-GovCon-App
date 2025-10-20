@@ -754,6 +754,100 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
             pass
 # === end Y3 ===
 
+# === Y4: CO Review (scored compliance with citations) ===
+def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
+    """
+    Build messages for a Contracting Officer style review.
+    Output must include: Score 0–100, Strengths, Gaps, Risks, Required fixes, and short Conclusion.
+    Use [C#] next to claims grounded in EVIDENCE.
+    """
+    # Reuse Section L/M + compliance as retrieval query
+    q = f"Section L Section M compliance checklist evaluation {draft_text[:400]}"
+    hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
+    ev_lines = []
+    for i, h in enumerate(hits, start=1):
+        tag = f"[C{i}]"
+        src = f"{h['file']} p.{h['page']}"
+        snip = (h.get("text") or "").strip().replace("\\n"," ")
+        ev_lines.append(f"{tag} {src} — {snip}")
+    evidence = "\\n".join(ev_lines)
+
+    system = (SYSTEM_CO
+              + " Score the draft 0-100 for compliance and clarity."
+              + " Use short, direct sentences. No fluff."
+              + " Structure exactly as:\\n"
+              + "Score: <0-100>\\n"
+              + "Strengths: <bullets>\\n"
+              + "Gaps: <bullets>\\n"
+              + "Risks: <bullets>\\n"
+              + "Required fixes: <bullets>\\n"
+              + "Conclusion: <2-3 lines>\\n"
+              + "Map factual or requirement statements to EVIDENCE using [C#]."
+             )
+
+    user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
+    return [{"role":"system","content": system}, {"role":"user","content": user}]
+
+def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
+    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", k=int(k))
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+
+def y4_ui_review(conn: sqlite3.Connection) -> None:
+    st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    if df_rf is None or df_rf.empty:
+        st.info("No RFPs yet. Parse & save first."); return
+    rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist(),
+                          format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}",
+                          key="y4_rfp_sel")
+    st.subheader("Draft to review")
+    # Option to pull from Proposal Builder session state if present
+    draft_default = ""
+    try:
+        keys = [k for k in st.session_state.keys() if k.startswith("pb_section_")]
+        if keys:
+            with st.expander("Load from Proposal Builder session", expanded=False):
+                picks = st.multiselect("Sections", options=keys, format_func=lambda k: k.replace("pb_section_",""))
+                if st.button("Load selected sections", key="y4_load_pb"):
+                    draft_join = "\\n\\n".join([st.session_state.get(k,"") or "" for k in picks])
+                    st.session_state["y4_draft"] = draft_join.strip()
+            draft_default = st.session_state.get("y4_draft", "")
+    except Exception:
+        pass
+    draft = st.text_area("Paste your draft here", value=draft_default, height=260, key="y4_draft_ta")
+    k = y_auto_k(draft or "review")
+    run = st.button("Run CO Review", type="primary", key="y4_go")
+    if run:
+        if not (draft or "").strip():
+            st.warning("Paste a draft to review."); return
+        ph = st.empty(); acc = []
+        for tok in y4_stream_review(conn, int(rfp_id), draft.strip(), k=int(k)):
+            acc.append(tok); ph.markdown("".join(acc))
+        # Show sources used table
+        hits = y1_search(conn, int(rfp_id), f"Section L Section M compliance {draft[:200]}", k=int(k))
+        if hits:
+            import pandas as _pd
+            dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
+            st.subheader("Sources used")
+            st.dataframe(dfh, use_container_width=True, hide_index=True)
+# === end Y4 ===
+
+
 
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
@@ -1976,7 +2070,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)"])
+    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"])
     
 
     # --- heuristics to auto-fill Title and Solicitation # ---
@@ -2381,6 +2475,10 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
         y2_ui_threaded_chat(conn)
+
+    # ---------------- Y4: CO Review UI ----------------
+    with tab_y4:
+        y4_ui_review(conn)
 # ---------------- CHECKLIST ----------------
     with tab_checklist:
         df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
