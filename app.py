@@ -482,6 +482,109 @@ except Exception:
 import smtplib
 import streamlit as st
 
+
+# === Y6 helper ===
+def _y6_resolve_openai_client():
+    try:
+        if "get_ai" in globals():
+            return get_ai()
+        if "get_openai_client" in globals():
+            return get_openai_client()
+        if "get_ai_client" in globals():
+            return get_ai_client()
+    except Exception:
+        pass
+    from openai import OpenAI  # type: ignore
+    import os as _os
+    key = (
+        st.secrets.get("openai_api_key")
+        or st.secrets.get("OPENAI_API_KEY")
+        or _os.environ.get("OPENAI_API_KEY")
+    )
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+    return OpenAI(api_key=key)
+
+def _y6_resolve_model() -> str:
+    return st.secrets.get("openai_model") or st.secrets.get("OPENAI_MODEL") or "gpt-4o-mini"
+
+def _y6_chat(messages):
+    client = _y6_resolve_openai_client()
+    model = _y6_resolve_model()
+    resp = client.chat.completions.create(model=model, messages=messages, temperature=0.2)
+    try:
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return "AI response unavailable."
+
+def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
+    if not (conn and rfp_id):
+        return None
+    y1 = globals().get("y1_search")
+    if not callable(y1):
+        return None
+    try:
+        k = 6
+        if callable(k_auto_fn):
+            try:
+                k = int(max(3, min(12, k_auto_fn(question))))
+            except Exception:
+                pass
+        hits = y1(conn, int(rfp_id), question or "", k=k) or []
+        if not hits:
+            return None
+        blocks = []
+        for i, h in enumerate(hits, start=1):
+            cid = h.get("chunk_id", i)
+            rid = h.get("rfp_id", rfp_id)
+            text = h.get("chunk") or h.get("text") or ""
+            tag = f"[RFP-{rid}:{cid}]"
+            blocks.append(f"{tag} {text}")
+        return "\n\n".join(blocks)
+    except Exception:
+        return None
+
+def y6_render_co_box(conn, rfp_id=None, *, key_prefix: str, title: str, help_text: str="CO answers. Uses RFP context when available.") -> None:
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.subheader(title)
+        q = st.text_area("Your question", key=f"{key_prefix}_q", height=120, help=help_text)
+    with c2:
+        st.caption("Y6 CO helper")
+    if not st.button("Ask", key=f"{key_prefix}_ask") or not (q or "").strip():
+        return
+    with st.spinner("CO is analyzing..."):
+        ctx = _y6_fetch_y1_context(conn, rfp_id, q, globals().get("y_auto_k"))
+        CO_SYS = (
+            "You are a senior U.S. federal Contracting Officer (CO). "
+            "Answer with short, precise sentences or numbered bullets. "
+            "If RFP context is provided, cite it with [RFP-<id>:<chunk#>]. "
+            "Avoid raw JSON."
+        )
+        sys_prompt = CO_SYS + (f"\n\nRFP context follows. Cite it when relevant:\n{ctx}" if ctx else "")
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": (q or '').strip()},
+        ]
+        ans = _y6_chat(messages)
+    st.markdown(ans)
+    saver = globals().get("y5_save_snippet") or globals().get("pb_add_snippet") or globals().get("save_text_to_drafts")
+    if saver:
+        with st.expander("Add answer to Drafts", expanded=False):
+            sec = st.text_input("Section label", value="CO Notes", key=f"{key_prefix}_draft_sec")
+            if st.button("Add to drafts", key=f"{key_prefix}_draft_add"):
+                try:
+                    if "y5_save_snippet" in globals():
+                        y5_save_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y6 CO Box")
+                    elif "pb_add_snippet" in globals():
+                        pb_add_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y6 CO Box")
+                    else:
+                        saver(conn, rfp_id, ans)
+                    st.success("Saved to drafts")
+                except Exception:
+                    st.info("Drafts saver not available in this build.")
+# === end Y6 helper ===
+
 # === Global extractors to avoid NameError in early calls ===
 def _extract_naics(text: str) -> str:
     import re as _re
@@ -3449,6 +3552,12 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
 
 
 
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+    except Exception:
+        pass
+
 def run_research_tab(conn: sqlite3.Connection) -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/...")
@@ -4374,6 +4483,12 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             render_amendment_sidebar(conn, rid_int, sam_url, ttl)
 
 
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_rfp_analyzer_y6", title="Ask the CO about this RFP")
+    except Exception:
+        pass
+
 def _compliance_progress(df_items: pd.DataFrame) -> int:
     if df_items is None or df_items.empty:
         return 0
@@ -4658,6 +4773,12 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
 
 
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_lm_checklist_y6", title="Ask the CO about L&M")
+    except Exception:
+        pass
+
 def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Optional[int] = None) -> float:
     """Rough page estimate at common spacings for 11pt fonts."""
     if words_per_page is None:
@@ -4836,6 +4957,12 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     
 
 # ---------- Subcontractor Finder (Phase D) ----------
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_proposal_builder_y6", title="Ask the CO while drafting")
+    except Exception:
+        pass
+
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
@@ -4968,6 +5095,12 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Outreach (Phase D) ----------
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_subcontractor_finder_y6", title="CO guidance for subcontractors")
+    except Exception:
+        pass
+
 def _smtp_settings() -> Dict[str, Any]:
     out = {"host": None, "port": 587, "username": None, "password": None, "from_email": None, "from_name": "ELA Management", "use_tls": True}
     try:
@@ -5141,6 +5274,12 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Quotes (Phase E) ----------
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_outreach_y6", title="CO guidance for outreach")
+    except Exception:
+        pass
+
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
         if qty is None or unit_price is None:
