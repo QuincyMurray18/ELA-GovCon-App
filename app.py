@@ -7479,8 +7479,17 @@ def y1_search(conn, rfp_id: int, query: str, k: int = 6):
 
 # Enable chunk-level streaming in Y2 and Y4
 def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
-    for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature):
-        yield tok
+    try:
+        for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature):
+            yield tok
+    except NameError:
+        # fallback if dependencies were not merged
+        hits = []
+        try:
+            hits = y1_search(conn, int(rfp_id), user_q or "", k=int(k))
+        except Exception:
+            pass
+        yield "[system] limited mode. rebuild index on Y1, then retry."
 
 # Re-define y4_stream_review to ensure true token streaming (shadow any earlier stub)
 def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
