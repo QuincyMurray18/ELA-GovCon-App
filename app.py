@@ -1138,6 +1138,14 @@ def render_analyzer(opp_id):
             render_rtm_tab(int(opp_id))
     except Exception:
         pass
+    try:
+        if feature_flags().get('submission_rules', False):
+            st.markdown('---')
+            st.subheader('Forms & Submission')
+            render_forms_and_submission_tabs(int(opp_id))
+    except Exception:
+        pass
+
 
 
 
@@ -17241,6 +17249,14 @@ def route_to(page, opp_id=None, tab=None):
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
 
+# Submission rules flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('submission_rules', False)
+except Exception:
+    pass
+
+
 # RTM flag default
 try:
     ff = feature_flags()
@@ -21942,3 +21958,155 @@ def render_rtm_tab(nid:int):
     else:
         st.info("No RTM rows.")
 # === END RFP PHASE 3 ===
+
+
+
+# === RFP PHASE 4: Forms & Submission Rules (read-only) ===
+import re as _re
+
+def _rfp_collect_text(rfp_json: dict) -> str:
+    """Flatten likely text fields from analyzer JSON for simple regex scanning."""
+    if not rfp_json:
+        return ""
+    parts = []
+    def walk(x):
+        if isinstance(x, dict):
+            for k,v in x.items():
+                if isinstance(v, (dict, list)):
+                    walk(v)
+                else:
+                    if isinstance(v, str):
+                        parts.append(v)
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+        elif isinstance(x, str):
+            parts.append(x)
+    walk(rfp_json)
+    return "\n".join(parts)
+
+def detect_sf_forms(rfp_json: dict):
+    """Return detected SF forms with best-effort details. Uses text search only."""
+    text = _rfp_collect_text(rfp_json).lower()
+    forms = [
+        ("SF 1449", ["sf 1449", "standard form 1449"]),
+        ("SF 33",   ["sf 33", "standard form 33"]),
+        ("SF 18",   ["sf 18", "standard form 18"]),
+        ("SF 30",   ["sf 30", "standard form 30"]),
+        ("SF 1447", ["sf 1447", "standard form 1447"]),
+    ]
+    results = []
+    for name, keys in forms:
+        found = any(k in text for k in keys)
+        if found:
+            # crude fill state hints
+            fill = []
+            if "offeror" in text: fill.append("Offeror info")
+            if "duns" in text or "uei" in text: fill.append("UEI/DUNS")
+            if "cage" in text: fill.append("CAGE")
+            if "signature" in text: fill.append("Signature")
+            if "date" in text: fill.append("Date")
+            results.append({"form": name, "detected": True, "fill_hints": fill})
+    return results
+
+def extract_submission_rules(rfp_json: dict):
+    """Heuristic extraction for subject line rules, copies count, naming, and portal steps."""
+    text = _rfp_collect_text(rfp_json)
+    low = text.lower()
+    rules = {}
+    # Subject line
+    m = _re.search(r"subject\s*:?\s*(line\s*)?should\s*(?:read|include)[:\-]?\s*(.+)", low)
+    if m:
+        rules["subject_rule"] = m.group(2)[:200]
+    elif "subject:" in low:
+        frag = low.split("subject:")[1][:160]
+        rules["subject_rule"] = frag.strip()
+    # Copies
+    m2 = _re.search(r"(\d+)\s+(?:hard|paper)\s+cop(?:y|ies)", low)
+    if m2:
+        try: rules["hard_copies"] = int(m2.group(1))
+        except Exception: pass
+    m3 = _re.search(r"(\d+)\s+(?:electronic|soft)\s+cop(?:y|ies)", low)
+    if m3:
+        try: rules["soft_copies"] = int(m3.group(1))
+        except Exception: pass
+    # File naming
+    m4 = _re.search(r"file\s+name(?:s)?\s*(?:must|should)\s*(?:be|follow)\s*[:\-]?\s*([^\n\r]{1,160})", low)
+    if m4:
+        rules["file_naming"] = m4.group(1).strip()
+    # Portal steps
+    if "sam.gov" in low or "piee" in low or "procurement integrated enterprise environment" in low or "wawf" in low:
+        rules["portal"] = "SAM.gov / PIEE submission"
+    return rules
+
+def submission_checklist(nid:int, rules:dict, forms:list):
+    """Compute read-only warnings. No gating."""
+    conn = get_db()
+    warns = []
+    # forms coverage vs required_docs names
+    try:
+        req_docs = conn.execute("select name, provided from required_docs where notice_id=?", (int(nid),)).fetchall()
+    except Exception:
+        req_docs = []
+    have_names = [r[0].lower() for r in req_docs]
+    for f in forms:
+        fname = f.get("form")
+        if fname and not any(fname.lower() in n for n in have_names):
+            warns.append(f"Required form {fname} not listed in Required documents.")
+    # naming check: if a file naming pattern exists, compare against notice_files names
+    pat = rules.get("file_naming")
+    if pat:
+        try:
+            files = conn.execute("select file_name from notice_files where notice_id=?", (int(nid),)).fetchall()
+            bad = []
+            for (nm,) in files:
+                if nm and pat:
+                    # simple check: ensure all tokens in pattern appear in name if tokens are uppercase words or placeholders
+                    tokens = [t for t in _re.split(r"[^A-Za-z0-9]+", pat) if t]
+                    if tokens and not all(t.lower() in nm.lower() for t in tokens[:2]):  # minimal heuristic
+                        bad.append(nm)
+            if bad:
+                warns.append("Possible bad file names: " + ", ".join(bad[:6]))
+        except Exception:
+            pass
+    return warns
+
+def render_forms_and_submission_tabs(nid:int):
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('submission_rules', False):
+        return
+    try:
+        doc = build_rfpv1_from_notice(int(nid))
+    except Exception:
+        doc = None
+    forms = detect_sf_forms(doc or {})
+    rules = extract_submission_rules(doc or {})
+    tabs = st.tabs(["Forms", "Submission"])
+    with tabs[0]:
+        st.markdown("#### Standard Forms")
+        if forms:
+            st.dataframe(pd.DataFrame(forms), use_container_width=True, hide_index=True)
+        else:
+            st.info("No SF forms detected in analyzer text.")
+        # Show mapping to required docs if present
+        try:
+            conn = get_db()
+            mapdf = pd.read_sql_query("select id, name, template_key, provided from required_docs where notice_id=?", conn, params=(int(nid),))
+            st.markdown("#### Required docs mapping")
+            st.dataframe(mapdf, use_container_width=True, hide_index=True)
+        except Exception:
+            pass
+    with tabs[1]:
+        st.markdown("#### Submission rules")
+        if rules:
+            st.json(rules)
+        else:
+            st.info("No explicit submission rules parsed.")
+        warns = submission_checklist(nid, rules, forms)
+        st.markdown("#### Pre-export checklist (read-only)")
+        if warns:
+            for w in warns:
+                st.warning(w)
+        else:
+            st.success("No obvious issues detected.")
+# === END RFP PHASE 4 ===
