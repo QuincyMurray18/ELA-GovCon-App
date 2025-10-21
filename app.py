@@ -752,7 +752,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
     evidence = "\n".join(ev_lines)
     user = "QUESTION\n" + (q_in or "Provide a CO Readout.") + "\n\nEVIDENCE\n" + (evidence or "(none)")
     msgs = [{"role":"user","content": user}]
-# removed stray return msgs
+return msgs
 def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
     msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
     for tok in ask_ai(msgs, temperature=temperature):
@@ -803,6 +803,106 @@ def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user
                 yield delta.content
         except Exception:
             pass
+
+
+# === Y2 thread storage helpers (schema + CRUD) ===
+from contextlib import closing as _y2_closing
+
+def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
+    try:
+        with _y2_closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS y2_threads(
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER NOT NULL,
+                    title TEXT,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS y2_messages(
+                    id INTEGER PRIMARY KEY,
+                    thread_id INTEGER NOT NULL,
+                    role TEXT CHECK(role in ('user','assistant')),
+                    content TEXT,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_threads_rfp ON y2_threads(rfp_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_msgs_thread ON y2_messages(thread_id);")
+            conn.commit()
+    except Exception:
+        pass
+
+def y2_list_threads(conn: sqlite3.Connection, rfp_id: int):
+    _ensure_y2_schema(conn)
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, title, created_at FROM y2_threads WHERE rfp_id=? ORDER BY id DESC;",
+            conn, params=(int(rfp_id),)
+        )
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    out = []
+    for _, row in df.iterrows():
+        rid = int(row["id"])
+        out.append({
+            "id": rid,
+            "title": (row.get("title") or f"Thread #{rid}"),
+            "created_at": row.get("created_at") or ""
+        })
+    return out
+
+def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "CO guidance") -> int:
+    _ensure_y2_schema(conn)
+    from datetime import datetime as _dt
+    now = _dt.utcnow().isoformat()
+    with _y2_closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO y2_threads(rfp_id, title, created_at) VALUES(?,?,?);",
+                    (int(rfp_id), (title or "Untitled").strip(), now))
+        conn.commit()
+        return int(cur.lastrowid)
+
+def y2_get_messages(conn: sqlite3.Connection, thread_id: int):
+    _ensure_y2_schema(conn)
+    try:
+        df = pd.read_sql_query(
+            "SELECT role, content FROM y2_messages WHERE thread_id=? ORDER BY id;",
+            conn, params=(int(thread_id),)
+        )
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    return [{"role": str(r["role"]), "content": str(r["content"])} for _, r in df.iterrows()]
+
+def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, content: str) -> None:
+    _ensure_y2_schema(conn)
+    from datetime import datetime as _dt
+    now = _dt.utcnow().isoformat()
+    role = "assistant" if str(role).strip().lower() != "user" else "user"
+    with _y2_closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO y2_messages(thread_id, role, content, created_at) VALUES(?,?,?,?);",
+            (int(thread_id), role, (content or "").strip(), now)
+        )
+        conn.commit()
+
+def y2_rename_thread(conn: sqlite3.Connection, thread_id: int, new_title: str) -> None:
+    _ensure_y2_schema(conn)
+    with _y2_closing(conn.cursor()) as cur:
+        cur.execute("UPDATE y2_threads SET title=? WHERE id=?;", ((new_title or "Untitled").strip(), int(thread_id)))
+        conn.commit()
+
+def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
+    _ensure_y2_schema(conn)
+    with _y2_closing(conn.cursor()) as cur:
+        cur.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
+        cur.execute("DELETE FROM y2_threads WHERE id=?;", (int(thread_id),))
+        conn.commit()
+# === end Y2 thread storage helpers ===
 
 def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
     st.caption("CO Chat with memory. Threads are stored per RFP.")
