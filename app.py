@@ -1,3 +1,47 @@
+def feature_flag(name: str, default: bool=False) -> bool:
+    """
+    Read a feature flag from environment or Streamlit secrets.
+    Precedence: os.environ["FEATURE_<NAME>"] then st.secrets["features"][name] then default.
+    Does not raise if Streamlit is absent.
+    """
+    val = None
+    try:
+        import os as _os
+        env_key = f"FEATURE_{name.upper()}"
+        if env_key in _os.environ:
+            val = _os.environ[env_key]
+    except Exception:
+        pass
+    if val is None:
+        try:
+            import streamlit as _st  # type: ignore
+            sec = _st.secrets.get("features", {})
+            if isinstance(sec, dict) and name in sec:
+                val = sec.get(name)
+        except Exception:
+            pass
+    if isinstance(val, str):
+        return val.lower() in {"1","true","yes","on"}
+    if isinstance(val, bool):
+        return val
+    return bool(val) if val is not None else bool(default)
+
+
+def _guess_solnum(text: str) -> str:
+    if not text:
+        return ""
+    t = text
+    m = re.search(r'(?i)Solicitation\s*(?:Number|No\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', t)
+    if m:
+        return m.group(1)[:60]
+    m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', t)
+    if m:
+        return m.group(1)[:60]
+    m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', t, re.I)
+    if m:
+        return (m.group(1).upper() + "-" + m.group(2))[:60]
+    return ""
+
 from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2605,12 +2649,12 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
-# === One‑Page Analyzer (integrated) ===
-try:
+    # === One‑Page Analyzer (integrated) ===
+    try:
     _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-except Exception:
+    except Exception:
     _df_rf_ctx = None
-with st.container():
+    with st.container():
     st.caption("RFP Analyzer · single-page mode")
     if run_rfp_analyzer_onepage is None:
         st.info("One‑Page Analyzer module not found. Place rfp_onepage.py next to this app.")
@@ -2646,7 +2690,7 @@ with st.container():
             else:
                 run_rfp_analyzer_onepage(_pages)
                 st.stop()
-# === end One‑Page Analyzer ===
+    # === end One‑Page Analyzer ===
 
     st.header("RFP Analyzer")
     from contextlib import contextmanager
