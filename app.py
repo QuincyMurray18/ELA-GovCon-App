@@ -1301,7 +1301,7 @@ def _collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
     except Exception:
         df = pd.DataFrame()
     parts = []
-    for _, r in (df or pd.DataFrame()).iterrows():
+    for _, r in (df if (df is not None and not df.empty) else pd.DataFrame()).iterrows():
         b = r.get("bytes"); mime = r.get("mime") or ""
         pages = extract_text_pages(b, mime) or []
         if pages:
