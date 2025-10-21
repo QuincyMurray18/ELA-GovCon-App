@@ -7523,3 +7523,10 @@ def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature
             pass
 # === end PHASE 8 ===
 
+
+
+def _y1_cache_bust():
+    try:
+        st.session_state.pop("_y1_cache", None)
+    except Exception:
+        pass
