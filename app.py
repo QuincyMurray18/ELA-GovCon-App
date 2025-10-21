@@ -1,3 +1,307 @@
+# Helper imports for RTM/Amendment
+import re as _rtm_re
+import json as _rtm_json
+import hashlib as _rtm_hashlib
+from contextlib import closing as _rtm_closing
+try:
+    import sqlite3 as _rtm_sqlite3
+except Exception:
+    import sqlite3 as _rtm_sqlite3
+try:
+    import pandas as _rtm_pd
+except Exception:
+    import pandas as _rtm_pd
+try:
+    import streamlit as _rtm_st
+except Exception:
+    class _Dummy: pass
+    _rtm_st = _Dummy()
+
+# Bridge names
+sqlite3 = _rtm_sqlite3
+pd = _rtm_pd
+st = _rtm_st
+re = _rtm_re
+json = _rtm_json
+hashlib = _rtm_hashlib
+closing = _rtm_closing
+
+# === RTM + Amendment helpers ===
+
+def _now_iso():
+    try:
+        return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return ""
+
+def _ensure_rtm_schema(conn: sqlite3.Connection) -> None:
+    try:
+        with closing(conn.cursor()) as cur:
+            cur.execute("SELECT 1 FROM rtm_requirements LIMIT 1;")
+    except Exception:
+        with closing(conn.cursor()) as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS rtm_requirements(id INTEGER PRIMARY KEY, rfp_id INTEGER, req_key TEXT, source_type TEXT, source_file TEXT, page INTEGER, text TEXT, status TEXT, created_at TEXT, updated_at TEXT);")
+            cur.execute("CREATE TABLE IF NOT EXISTS rtm_links(id INTEGER PRIMARY KEY, rtm_id INTEGER, link_type TEXT, target TEXT, note TEXT, created_at TEXT, updated_at TEXT);")
+            conn.commit()
+
+def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int = 800) -> int:
+    """
+    Seed RTM from L/M checklist and SOW-style shall/must statements in rfp_chunks.
+    Returns number of rows inserted (new).
+    """
+    _ensure_rtm_schema(conn)
+    inserted = 0
+    now = _now_iso()
+    # 1) From L/M
+    try:
+        df_lm = pd.read_sql_query("SELECT id, item_text, is_must FROM lm_items WHERE rfp_id=?", conn, params=(int(rfp_id),))
+    except Exception:
+        df_lm = pd.DataFrame(columns=["id","item_text","is_must"])
+    for i, row in df_lm.head(max_rows).iterrows():
+        txt = (row["item_text"] or "").strip()
+        if not txt:
+            continue
+        key = f"LM-{row['id']}"
+        with closing(conn.cursor()) as cur:
+            cur.execute("SELECT id FROM rtm_requirements WHERE rfp_id=? AND req_key=?;", (int(rfp_id), key))
+            if cur.fetchone():
+                continue
+            cur.execute("""
+                INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
+                VALUES(?,?,?,?,?,?,?, ?, ?);
+            """, (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now))
+            inserted += 1
+    # 2) From SOW chunks, simple heuristic
+    try:
+        df_chunks = pd.read_sql_query("""
+            SELECT id, file_name, page, text FROM rfp_chunks
+            WHERE rfp_id=? ORDER BY file_name, page, id
+        """, conn, params=(int(rfp_id),))
+    except Exception:
+        df_chunks = pd.DataFrame(columns=["file_name","page","text"])
+    trig = re.compile(r"\\b(shall|must|will|provide|furnish)\\b", re.I)
+    for _, row in df_chunks.iterrows():
+        t = (row["text"] or "").strip()
+        if not t:
+            continue
+        # split into sentences with light heuristic
+        sentences = re.split(r"(?<=[\\.;:])\\s+", t)
+        for s in sentences:
+            if len(s) < 40:
+                continue
+            if trig.search(s):
+                key = f"SOW-{hashlib.sha1(s.encode('utf-8')).hexdigest()[:10]}"
+                with closing(conn.cursor()) as cur:
+                    cur.execute("SELECT id FROM rtm_requirements WHERE rfp_id=? AND req_key=?;", (int(rfp_id), key))
+                    if cur.fetchone():
+                        continue
+                    cur.execute("""
+                        INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
+                        VALUES(?,?,?,?,?,?,?, ?, ?);
+                    """, (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now))
+                    inserted += 1
+        if inserted >= max_rows:
+            break
+    conn.commit()
+    return inserted
+
+def rtm_metrics(conn: sqlite3.Connection, rfp_id: int) -> dict:
+    q = pd.read_sql_query("""
+        SELECT r.id, r.source_type, r.status, COUNT(l.id) AS links
+        FROM rtm_requirements r
+        LEFT JOIN rtm_links l ON l.rtm_id = r.id
+        WHERE r.rfp_id=?
+        GROUP BY r.id
+    """, conn, params=(int(rfp_id),))
+    if q is None or q.empty:
+        return {"total":0,"covered":0,"coverage":0.0,"by_type":{}}
+    total = len(q)
+    covered_rows = (q["links"] > 0) | (q["status"].fillna("")=="Covered")
+    covered = int(covered_rows.sum())
+    by_type = {}
+    for t, sub in q.groupby("source_type"):
+        ct = len(sub)
+        cv = int(((sub["links"]>0) | (sub["status"].fillna("")=="Covered")).sum())
+        by_type[t] = {"total": ct, "covered": cv, "coverage": (cv/ct if ct else 0.0)}
+    return {"total": total, "covered": covered, "coverage": (covered/total if total else 0.0), "by_type": by_type}
+
+def rtm_export_csv(conn: sqlite3.Connection, rfp_id: int) -> str:
+    q = pd.read_sql_query("""
+        SELECT r.id, r.req_key, r.source_type, r.source_file, r.page, r.text, r.status,
+               COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '; '), '') AS evidence
+        FROM rtm_requirements r
+        LEFT JOIN rtm_links l ON l.rtm_id=r.id
+        WHERE r.rfp_id=?
+        GROUP BY r.id
+        ORDER BY r.source_type, r.id
+    """, conn, params=(int(rfp_id),))
+    fn = f"/mnt/data/rtm_rfp_{rfp_id}.csv"
+    try:
+        q.to_csv(fn, index=False)
+        return fn
+    except Exception:
+        return ""
+
+def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
+    st.subheader("RTM Coverage")
+    cols = st.columns([1,1,1,3])
+    with cols[0]:
+        if st.button("Build/Update RTM", help="Pull from L/M and SOW 'shall' statements."):
+            n = rtm_build_requirements(conn, int(rfp_id))
+            st.success(f"Added {n} requirement(s).")
+    with cols[1]:
+        path = rtm_export_csv(conn, int(rfp_id))
+        if path:
+            st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv")
+    with cols[2]:
+        if st.button("Mark all with evidence as Covered"):
+            with closing(conn.cursor()) as cur:
+                cur.execute("""
+                    UPDATE rtm_requirements
+                    SET status='Covered', updated_at=?
+                    WHERE rfp_id=? AND id IN (SELECT r.id FROM rtm_requirements r LEFT JOIN rtm_links l ON l.rtm_id=r.id GROUP BY r.id HAVING COUNT(l.id) > 0);
+                """, (_now_iso(), int(rfp_id)))
+                conn.commit()
+    m = rtm_metrics(conn, int(rfp_id))
+    st.caption(f"Coverage: {m['covered']}/{m['total']} = {m['coverage']:.0%}")
+    # Editor
+    df = pd.read_sql_query("""
+        SELECT r.id as rtm_id, r.req_key, r.source_type, r.page, r.text, r.status,
+               COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '\\n'), '') AS evidence
+        FROM rtm_requirements r
+        LEFT JOIN rtm_links l ON l.rtm_id=r.id
+        WHERE r.rfp_id=?
+        GROUP BY r.id
+        ORDER BY r.source_type, r.id
+        LIMIT 1000
+    """, conn, params=(int(rfp_id),))
+    df["add_link_type"] = ""
+    df["add_link_target"] = ""
+    edited = st.data_editor(df, key=f"rtm_editor_{rfp_id}", use_container_width=True, num_rows="dynamic", column_config={
+        "rtm_id": st.column_config.NumberColumn(disabled=True),
+        "text": st.column_config.TextColumn(width="large"),
+        "evidence": st.column_config.TextColumn(disabled=True)
+    })
+    # Persist status changes and new links
+    now = _now_iso()
+    for _, row in edited.iterrows():
+        try:
+            rid = int(row["rtm_id"])
+        except Exception:
+            continue
+        # Status change
+        with closing(conn.cursor()) as cur:
+            cur.execute("UPDATE rtm_requirements SET status=?, updated_at=? WHERE id=?;", (row.get("status") or "Open", now, rid))
+        # New link
+        lt = (row.get("add_link_type") or "").strip()
+        tg = (row.get("add_link_target") or "").strip()
+        if lt and tg:
+            with closing(conn.cursor()) as cur:
+                cur.execute("INSERT INTO rtm_links(rtm_id, link_type, target, note, created_at, updated_at) VALUES(?,?,?,?,?,?);",
+                            (rid, lt, tg, "", now, now))
+    conn.commit()
+
+# --- SAM Amendment awareness ---
+
+def _parse_sam_text_to_facts(txt: str) -> dict:
+    d = {}
+    # Dates
+    m = re.search(r"(Offers|Quotes?) Due[^\\d]*(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|[A-Za-z]{3,9} \\d{1,2}, \\d{4})", txt, re.I)
+    if m: d["offers_due"] = m.group(2)
+    m = re.search(r"(Questions|Q&A) Due[^\\d]*(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|[A-Za-z]{3,9} \\d{1,2}, \\d{4})", txt, re.I)
+    if m: d["questions_due"] = m.group(2)
+    # Codes
+    m = re.search(r"NAICS[^\\d]*(\\d{5,6})", txt, re.I)
+    if m: d["naics"] = m.group(1)
+    m = re.search(r"Set[- ]Aside[^:]*:\\s*([^\\n]+)", txt, re.I)
+    if m: d["set_aside"] = m.group(1).strip()
+    # Clauses and forms
+    clauses = re.findall(r"(52\\.[\\d-]+\\S*)", txt)
+    if clauses: d["clauses"] = sorted(set(clauses))[:50]
+    forms = re.findall(r"\\b(SF|OF)-?\\s?(\\d{1,4}[A-Z]?)\\b", txt)
+    if forms: d["forms"] = sorted(set([f"{a}-{b}" for a,b in forms]))[:50]
+    return d
+
+def sam_snapshot(conn: sqlite3.Connection, rfp_id: int, url: str, ttl_hours: int = 72) -> dict:
+    out = {"url": url, "facts": {}, "sha256": "", "cached": False, "text": ""}
+    if not (url or "").strip():
+        return out
+    r = research_fetch(url, ttl_hours)
+    txt = (r.get("text") or "").strip()
+    out["cached"] = bool(r.get("cached"))
+    out["text"] = txt
+    if not txt:
+        return out
+    sha = hashlib.sha256(txt.encode("utf-8")).hexdigest()
+    out["sha256"] = sha
+    facts = _parse_sam_text_to_facts(txt)
+    out["facts"] = facts
+    now = _now_iso()
+    with closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO sam_versions(rfp_id, url, sha256, extracted_json, created_at) VALUES(?,?,?,?,?);",
+                    (int(rfp_id), url, sha, json.dumps(facts), now))
+        vid = cur.lastrowid
+        for k, v in facts.items():
+            val = json.dumps(v) if not isinstance(v, str) else v
+            cur.execute("INSERT INTO sam_extracts(sam_version_id, key, value) VALUES(?,?,?);", (vid, k, val))
+    conn.commit()
+    return out
+
+def _facts_diff(old: dict, new: dict) -> dict:
+    diffs = {}
+    keys = set(old.keys()) | set(new.keys())
+    for k in keys:
+        ov = old.get(k, "")
+        nv = new.get(k, "")
+        if json.dumps(ov, sort_keys=True) != json.dumps(nv, sort_keys=True):
+            diffs[k] = {"old": ov, "new": nv}
+    return diffs
+
+def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, ttl_hours: int = 72) -> None:
+    if not (url or "").strip():
+        return
+    with st.sidebar.expander("Amendments · SAM Analyzer", expanded=True):
+        st.caption("Tracks changes in Brief, Factors, Clauses, Dates, Forms.")
+        if st.button("Fetch SAM snapshot", key=f"sam_fetch_{rfp_id}"):
+            snap = sam_snapshot(conn, int(rfp_id), url, ttl_hours)
+            st.success(f"Snapshot stored. Cached={snap.get('cached')}")
+        # Last two snapshots
+        try:
+            dfv = pd.read_sql_query("SELECT id, created_at, sha256, extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 2;", conn, params=(int(rfp_id),))
+        except Exception:
+            dfv = None
+        if dfv is not None and not dfv.empty:
+            st.markdown("Latest snapshot facts:")
+            latest = json.loads(dfv.iloc[0]["extracted_json"] or "{}")
+            st.json(latest)
+            if len(dfv) >= 2:
+                prev = json.loads(dfv.iloc[1]["extracted_json"] or "{}")
+                diffs = _facts_diff(prev, latest)
+                if diffs:
+                    st.markdown("**Changes since previous:**")
+                    st.json(diffs)
+                    # Impact to-dos
+                    todos = []
+                    if "offers_due" in diffs:
+                        todos.append("Update due date everywhere. Recalculate schedule and reminders.")
+                    if "clauses" in diffs:
+                        todos.append("Re-run compliance matrix and clause flowdowns.")
+                    if "forms" in diffs:
+                        todos.append("Update RFQ pack forms and signatures.")
+                    if "set_aside" in diffs or "naics" in diffs:
+                        todos.append("Validate eligibility and certs.")
+                    if todos:
+                        st.markdown("**Impact to-dos:**")
+                        for t in todos:
+                            st.write(f"- {t}")
+                else:
+                    st.info("No changes between the last two snapshots.")
+            else:
+                st.info("Only one snapshot stored so far.")
+        else:
+            st.info("No snapshots yet.")
+
+
 def feature_flag(name: str, default: bool=False) -> bool:
     """
     Read a feature flag from environment or Streamlit secrets.
@@ -1709,7 +2013,56 @@ def get_db() -> sqlite3.Connection:
         except Exception:
             pass
 
-        # Schema version for migrations
+        
+        # RTM (Requirements Traceability Matrix)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rtm_requirements(
+                id INTEGER PRIMARY KEY,
+                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
+                req_key TEXT,
+                source_type TEXT,       -- 'L/M' | 'SOW' | 'CLIN' | 'Other'
+                source_file TEXT,
+                page INTEGER,
+                text TEXT NOT NULL,
+                status TEXT DEFAULT 'Open', -- Open | Covered | N/A
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rtm_links(
+                id INTEGER PRIMARY KEY,
+                rtm_id INTEGER NOT NULL REFERENCES rtm_requirements(id) ON DELETE CASCADE,
+                link_type TEXT,         -- 'Proposal' | 'Pricing' | 'Subcontractor' | 'Clause' | 'Other'
+                target TEXT,            -- pointer to evidence (file name+page or section id)
+                note TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rtm_rfp ON rtm_requirements(rfp_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rtm_links ON rtm_links(rtm_id);")
+
+        # SAM Amendment snapshots
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sam_versions(
+                id INTEGER PRIMARY KEY,
+                rfp_id INTEGER NOT NULL REFERENCES rfps(id) ON DELETE CASCADE,
+                url TEXT,
+                sha256 TEXT,
+                extracted_json TEXT,
+                created_at TEXT
+            );
+        """ )
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sam_extracts(
+                id INTEGER PRIMARY KEY,
+                sam_version_id INTEGER NOT NULL REFERENCES sam_versions(id) ON DELETE CASCADE,
+                key TEXT,
+                value TEXT
+            );
+        """)
+# Schema version for migrations
         cur.execute("""
             CREATE TABLE IF NOT EXISTS schema_version(
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -3505,6 +3858,23 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         st.subheader("Attributes")
         df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
         st.dataframe(df_meta, use_container_width=True, hide_index=True)
+        # --- RTM Coverage section ---
+        try:
+            rid_int = int(rid)
+        except Exception:
+            rid_int = None
+        if rid_int:
+            render_rtm_ui(conn, rid_int)
+
+        # --- Amendment awareness sidebar ---
+        try:
+            sam_url = str(pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(rid_int,)).iloc[0]["sam_url"])
+        except Exception:
+            sam_url = ""
+        ttl = int(st.session_state.get("cache_ttl_hours", 72)) if "cache_ttl_hours" in st.session_state else 72
+        if sam_url:
+            render_amendment_sidebar(conn, rid_int, sam_url, ttl)
+
 
 def _compliance_progress(df_items: pd.DataFrame) -> int:
     if df_items is None or df_items.empty:
