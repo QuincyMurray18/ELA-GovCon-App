@@ -145,18 +145,22 @@ def rtm_export_csv(conn: sqlite3.Connection, rfp_id: int) -> str:
         return ""
 
 def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
+    # Unique key namespace to avoid duplicate element IDs
+    _ns = int(st.session_state.get('rtm_ui_ns', 0))
+    st.session_state['rtm_ui_ns'] = _ns + 1
+    _k = f\"{rfp_id}_{_ns}\"
     st.subheader("RTM Coverage")
     cols = st.columns([1,1,1,3])
     with cols[0]:
-        if st.button("Build/Update RTM", help="Pull from L/M and SOW 'shall' statements."):
+        if st.button("Build/Update RTM", key=f"rtm_build_{_k}", help="Pull from L/M and SOW 'shall' statements."):
             n = rtm_build_requirements(conn, int(rfp_id))
             st.success(f"Added {n} requirement(s).")
     with cols[1]:
         path = rtm_export_csv(conn, int(rfp_id))
         if path:
-            st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv")
+            st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv", key=f"rtm_export_{_k}")
     with cols[2]:
-        if st.button("Mark all with evidence as Covered"):
+        if st.button("Mark all with evidence as Covered", key=f"rtm_mark_{_k}"):
             with closing(conn.cursor()) as cur:
                 cur.execute("""
                     UPDATE rtm_requirements
@@ -179,7 +183,7 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
     """, conn, params=(int(rfp_id),))
     df["add_link_type"] = ""
     df["add_link_target"] = ""
-    edited = st.data_editor(df, key=f"rtm_editor_{rfp_id}", use_container_width=True, num_rows="dynamic", column_config={
+    edited = st.data_editor(df, key=f"rtm_editor_{_k}", use_container_width=True, num_rows="dynamic", column_config={
         "rtm_id": st.column_config.NumberColumn(disabled=True),
         "text": st.column_config.TextColumn(width="large"),
         "evidence": st.column_config.TextColumn(disabled=True)
