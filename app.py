@@ -1524,7 +1524,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
                 find_section_M(conn, int(rid))
                 find_clins_all(conn, int(rid))
             st.success("Updated metadata and sections.")
-            st.experimental_rerun()
+            st.rerun()
     # Chips
     try:
         dfm = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
