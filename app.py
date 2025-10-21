@@ -690,8 +690,7 @@ def _embed_cache_dir() -> str:
 def _embed_cache_key(model: str, text: str) -> str:
     try:
         import hashlib as _h
-        return _h.sha256((model + "
-" + (text or "")).encode("utf-8")).hexdigest()
+        return _h.sha256((model + "\n" + (text or "")).encode("utf-8")).hexdigest()
     except Exception:
         return str(abs(hash(model + "|" + (text or ""))))
 
@@ -758,7 +757,6 @@ def _embed_texts(texts: list[str]) -> list[list[float]]:
     # Replace any None with empty list
     return [v if isinstance(v, list) else [] for v in out]
 
-def _cos_sim(u: list[float], v: list[float]) -> float:
 def _cos_sim(u: list[float], v: list[float]) -> float:
     if not u or not v:
         return 0.0
