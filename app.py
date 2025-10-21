@@ -191,15 +191,8 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
             st.success(f"Added {n} requirement(s).")
     with cols[1]:
         path = rtm_export_csv(conn, int(rfp_id))
-        ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
         if path:
-            st.download_button("Export CSV",
-                               data=open(path,'rb').read(),
-                               file_name=Path(path).name,
-                               mime="text/csv",
-                               key=f"rtm_export_{_k}",
-                               disabled=not ok_gate,
-                               help=("Blocked: missing " + ", ".join(missing_gate)) if not ok_gate else "Export RTM as CSV")
+            st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv", key=f"rtm_export_{_k}")
     with cols[2]:
         if st.button("Mark all with evidence as Covered", key=f"rtm_mark_{_k}"):
             with closing(conn.cursor()) as cur:
@@ -665,56 +658,6 @@ def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-
-# === Phase 6: Embedding cache (sha256+model) ===
-def _emb_cache_path() -> str:
-    try:
-        d = os.path.join(DATA_DIR, "emb_cache.sqlite")
-        os.makedirs(os.path.dirname(d), exist_ok=True)
-        return d
-    except Exception:
-        return "emb_cache.sqlite"
-
-def _emb_cache_get_many(keys_models: list[tuple[str,str]]) -> dict:
-    out = {}
-    try:
-        path = _emb_cache_path()
-        con = sqlite3.connect(path)
-        cur = con.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS cache (sha TEXT, model TEXT, vec TEXT, PRIMARY KEY(sha, model));")
-        if not keys_models:
-            con.close(); return out
-        # Batch select
-        qmarks = ",".join(["(?,?)"]*len(keys_models))
-        flat = []
-        for k,m in keys_models:
-            flat.extend([k,m])
-        cur.execute(f"SELECT sha, model, vec FROM cache WHERE (sha, model) IN ({qmarks});", flat)
-        for sha, model, vec in cur.fetchall():
-            try:
-                out[(sha, model)] = json.loads(vec)
-            except Exception:
-                pass
-        con.close()
-    except Exception:
-        pass
-    return out
-
-def _emb_cache_put_many(items: list[tuple[str,str,list]]) -> None:
-    try:
-        path = _emb_cache_path()
-        con = sqlite3.connect(path)
-        cur = con.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS cache (sha TEXT, model TEXT, vec TEXT, PRIMARY KEY(sha, model));")
-        cur.executemany("INSERT OR REPLACE INTO cache(sha, model, vec) VALUES(?,?,?);",
-                        [(sha, model, json.dumps(vec)) for sha, model, vec in items])
-        con.commit()
-        con.close()
-    except Exception:
-        pass
-# === end Phase 6 cache ===
-
-
 def _resolve_embed_model() -> str:
     # Streamlit secrets or env, else default
     try:
@@ -758,7 +701,7 @@ def _cos_sim(u: list[float], v: list[float]) -> float:
         den = (su**0.5) * (sv**0.5)
         return (num / den) if den else 0.0
 
-def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[str]:
+def _split_chunks(text: str, max_chars: int = 1600, overlap: int = 200) -> list[str]:
     t = (text or "").strip()
     if not t:
         return []
@@ -800,7 +743,7 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
             continue
         pages = pages[:max_pages]
         for pi, txt in enumerate(pages, start=1):
-            parts = _split_chunks(txt or "", 1200, 180)
+            parts = _split_chunks(txt or "", 1600, 200)
             for ci, ch in enumerate(parts):
                 try:
                     if not rebuild:
@@ -820,7 +763,6 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                 added += 1
     return {"ok": True, "added": added, "skipped": skipped}
 
-
 def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
     if not (query or "").strip():
@@ -832,26 +774,17 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
     if df is None or df.empty:
         return []
     q_emb = _embed_texts([query])[0]
-    q_terms = set(re.findall(r"[A-Za-z0-9]{3,}", (query or "").lower()))
-    rows: list[dict] = []
+    rows = []
     for _, r in df.iterrows():
         try:
             emb = json.loads(r.get("emb") or "[]")
         except Exception:
             emb = []
         sim = _cos_sim(q_emb, emb)
-        txt = r.get("text") or ""
-        txt_terms = set(re.findall(r"[A-Za-z0-9]{3,}", txt.lower()))
-        overlap = len(q_terms & txt_terms) / (len(q_terms) + 1e-9)
-        score = float(sim)*0.85 + float(overlap)*0.15
-        rows.append({
-            "id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"),
-            "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0),
-            "text": txt, "sim": float(sim), "overlap": float(overlap), "score": round(score, 6)
-        })
+        rows.append({"id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"), "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0), "text": r.get("text") or "", "score": round(float(sim), 6)})
     rows.sort(key=lambda x: x["score"], reverse=True)
-    top_n = min(8, max(1, int(k)))
-    return rows[:top_n]
+    return rows[:max(1, int(k))]
+
 
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
@@ -1318,10 +1251,6 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
     chunking = st.checkbox("Auto-chunk long text", value=True, key="y5_chunk_on")
     run = st.button("Run CO Review", type="primary", key="y4_go")
     if run:
-        ok, missing = require_LM_minimum(conn, int(rfp_id))
-        if not ok:
-            st.error("Missing required items: " + ", ".join(missing) + ". Run finders and fill the gaps before review.")
-            return
         if not (draft_text or "").strip():
             st.warning("Provide input text."); return
         texts = y5_chunk_text(draft_text) if chunking else [draft_text]
@@ -1608,45 +1537,6 @@ def clin_totals_df(conn: sqlite3.Connection, rfp_id: int):
     df["qty_num"] = qn; df["unit_price_num"] = up; df["extended_num"] = ext
     return df
 
-def require_LM_minimum(conn, rfp_id: int) -> tuple[bool, list[str]]:
-    """
-    Gatekeeper for L/M minimums before CO review and exports.
-    Returns (ok, missing_labels). Missing labels come from the same set used in Status & Gaps chips.
-    Required: Due date, NAICS, Set-Aside, POP, Section M, and at least one CLIN.
-    """
-    try:
-        import pandas as _pd
-        from contextlib import closing as _closing
-        # meta
-        try:
-            dfm = _pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
-            meta = {r["key"]: r["value"] for _, r in dfm.iterrows()} if dfm is not None and not dfm.empty else {}
-        except Exception:
-            meta = {}
-        # individual checks
-        checks = []
-        checks.append(("Due", bool(meta.get("offers_due",""))))
-        checks.append(("NAICS", bool(meta.get("naics",""))))
-        checks.append(("Set-Aside", bool(meta.get("set_aside",""))))
-        # POP can be either pop_structure or ordering_period_years present
-        pop_ok = bool(meta.get("pop_structure","") or meta.get("ordering_period_years",""))
-        checks.append(("POP", pop_ok))
-        try:
-            has_M = _pd.read_sql_query("SELECT 1 FROM rfp_sections WHERE rfp_id=? AND section='M' LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
-        except Exception:
-            has_M = False
-        checks.append(("Section M", has_M))
-        try:
-            has_CLIN = _pd.read_sql_query("SELECT 1 FROM clin_lines WHERE rfp_id=? LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
-        except Exception:
-            has_CLIN = False
-        checks.append(("CLINs", has_CLIN))
-        missing = [lbl for lbl, ok in checks if not ok]
-        return (len(missing) == 0, missing)
-    except Exception:
-        # Fail closed if unexpected error
-        return (False, ["Due","NAICS","Set-Aside","POP","Section M","CLINs"])
-
 def render_status_and_gaps(conn: sqlite3.Connection) -> None:
     st.subheader("Status & Gaps")
     try:
@@ -1721,14 +1611,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
         st.caption(f"Total Extended: ${total:,.2f}")
         st.dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
         csvb = dfc.to_csv(index=False).encode("utf-8")
-        ok_gate2, missing_gate2 = require_LM_minimum(conn, int(rid))
-        st.download_button("Export CLIN CSV",
-                           data=csvb,
-                           file_name=f"rfp_{int(rid)}_clins.csv",
-                           mime="text/csv",
-                           key=f"p2_clin_csv_{rid}",
-                           disabled=not ok_gate2,
-                           help=("Blocked: missing " + ", ".join(missing_gate2)) if not ok_gate2 else "Download CLINs CSV")
+        st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
 
 
