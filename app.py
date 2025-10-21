@@ -154,6 +154,8 @@ def y_auto_k(text: str) -> int:
         'section l','section m','evaluation factors','factors','checklist',
         'compare','differences','conflict','conflicts','crosswalk','matrix'
     ])
+    with Research:
+        run_research_tab(conn)
     if not t.strip():
         return 4
     base = 7 if broad else 4
@@ -460,6 +462,17 @@ _ensure_y1_schema = y1_ensure_schema_no_cache
 # === end Y1 ===
 
 # === Y2: CO Chat with per-RFP memory (threads) ===
+
+def co_mode_for_thread(rfp_id: int | None, user_flag: str | None) -> str:
+    """
+    Decide mode for CO Chat.
+    - "CO_strict": default when an RFP id is present.
+    - "Research_flex": allows broader context and web research excerpts if enabled.
+    """
+    if isinstance(user_flag, str) and user_flag.strip().lower() in {"flex","research","on"}:
+        return "Research_flex"
+    return "CO_strict" if (rfp_id is not None and int(rfp_id) > 0) else "Research_flex"
+
 def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
@@ -564,11 +577,18 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
         "No speculation. No advice that changes scope. "
         "If the question is generic or short, write a CO Readout in the Answer with these labeled parts: "
         "Overview; Key dates; POCs; NAICS and set-aside; Place of performance; Scope summary; "
-        "Submission instructions; Evaluation criteria; CLINs summary; Risks; Missing items."
+        "Submission instructions; Evaluation criteria; CLINs summary; Risks; Missing items. Each labeled part must end with "Sources: [C#,…]"."
         "\\nFormat:\\nAnswer\\nCitations: [C#,...]\\nMissing: [list or []]"
     )
 
     msgs: list[dict] = [{"role": "system", "content": system}]
+    # Research mode advisory
+    try:
+        import streamlit as _st_local  # ensure st
+        if bool(_st_local.session_state.get("y2_flex", False)):
+            msgs.append({"role":"system","content":"Research mode ON. Include policy context from research excerpts in EVIDENCE when helpful. Do not contradict the RFP text."})
+    except Exception:
+        pass
 
     # Thread history
     hist = y2_get_messages(conn, int(thread_id))
@@ -659,6 +679,32 @@ def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user
     msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
     client = get_ai()
     model_name = _resolve_model()
+    # Planning step (R3)
+    try:
+        ev_text = ""
+        for m in msgs:
+            if m.get("role")=="user" and "EVIDENCE" in (m.get("content") or ""):
+                ev_text = m["content"].split("EVIDENCE",1)[-1][:18000]
+                break
+        plan_sys = "Plan first. List the labeled parts you will produce and map each to [C#] you intend to use. No prose."
+        plan_user = "EVIDENCE" + (ev_text or "")
+        try:
+            pr = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role":"system","content": plan_sys},{"role":"user","content": plan_user}],
+                temperature=0.1
+            )
+        except Exception:
+            pr = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role":"system","content": plan_sys},{"role":"user","content": plan_user}],
+                temperature=0.1
+            )
+        plan = (pr.choices[0].message.content or "").strip()
+        if plan:
+            msgs.insert(1, {"role":"system","content": "Use this plan:\n" + plan[:1200]})
+    except Exception:
+        pass
     try:
         resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
     except Exception as _e:
@@ -708,7 +754,8 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
                 y2_delete_thread(conn, int(thread_id))
                 st.success("Deleted")
                 st.rerun()
-    st.subheader("History")
+    st.checkbox("Research mode (flex)", value=bool(st.session_state.get("y2_flex", False)), key="y2_flex")
+st.subheader("History")
     msgs = y2_get_messages(conn, int(thread_id))
     if msgs:
         chat_md = []
@@ -740,6 +787,90 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
                         y5_save_snippet(conn, int(rfp_id), sec, ans, source="Y2 Chat")
                         st.success("Saved to drafts")
 # === end Y2 ===
+
+# === Research cache (R2) ===
+def _research_cache_dir() -> str:
+    d = os.path.join(DATA_DIR, "research_cache")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+def _sha16(s: str) -> str:
+    try:
+        import hashlib
+        return hashlib.sha256((s or "").encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return str(abs(hash((s or ""))))[:16]
+
+def research_fetch(url: str, ttl_hours: int = 24) -> dict:
+    """
+    Fetch a URL with simple on-disk cache.
+    Returns dict {url, path, cached, status, text}.
+    """
+    out = {"url": url, "cached": False, "status": 0, "path": "", "text": ""}
+    if not (url or "").strip():
+        return out
+    key = _sha16(url)
+    dirp = _research_cache_dir()
+    meta_path = os.path.join(dirp, f"{key}.json")
+    txt_path  = os.path.join(dirp, f"{key}.txt")
+
+    # serve cache if fresh
+    try:
+        if os.path.exists(meta_path) and os.path.exists(txt_path):
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            age = time.time() - float(meta.get("ts", 0))
+            if age < ttl_hours * 3600:
+                out.update(meta)
+                with open(txt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    out["text"] = fh.read()
+                out["cached"] = True
+                out["status"] = int(out.get("status", 200) or 200)
+                out["path"] = txt_path
+                return out
+    except Exception:
+        pass
+
+    # fetch fresh
+    try:
+        import requests  # lazy import
+        r = requests.get(url, timeout=20, headers={"User-Agent":"ELA-GovCon/1.0"})
+        status = int(getattr(r, "status_code", 0) or 0)
+        text = r.text if hasattr(r, "text") else ""
+        # persist
+        try:
+            with open(txt_path, "w", encoding="utf-8") as fh:
+                fh.write(text or "")
+            with open(meta_path, "w", encoding="utf-8") as fh:
+                json.dump({"url": url, "status": status, "ts": time.time(), "path": txt_path}, fh)
+        except Exception:
+            pass
+        out.update({"status": status, "text": text, "path": txt_path})
+        return out
+    except Exception as e:
+        out.update({"status": 0, "error": str(e)})
+        return out
+
+def research_extract_excerpt(text: str, query: str, window: int = 380) -> str:
+    t = (text or "")
+    if not t:
+        return ""
+    q = (query or "").strip()
+    idx = -1
+    if q:
+        try:
+            idx = t.lower().find(q.lower())
+        except Exception:
+            idx = -1
+    if idx < 0:
+        return t[:window]
+    start = max(0, idx - window//2)
+    end = min(len(t), idx + window//2)
+    return t[start:end]
+
 
 
 # === Y3: Proposal drafting from evidence (per-RFP) ===
@@ -2447,9 +2578,29 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             st.caption("Use Open in SAM for attachments and full details")
 
 
+
+def run_research_tab(conn: sqlite3.Connection) -> None:
+    st.header("Research (FAR/DFARS/Wage/NAICS)")
+    url = st.text_input("URL", placeholder="https://www.acquisition.gov/...")
+    ttl = st.number_input("Cache TTL (hours)", min_value=1, max_value=168, value=24, step=1)
+    q = st.text_input("Highlight phrase (optional)")
+    if st.button("Fetch", type="primary", key="research_fetch_btn"):
+        with st.spinner("Fetching..."):
+            rec = research_fetch(url.strip(), ttl_hours=int(ttl))
+        if rec.get("status", 0) != 200 and not rec.get("cached"):
+            st.error(f"Fetch failed or not cached. Status {rec.get('status')} — {rec.get('error','')}")
+        else:
+            st.success(("Loaded from cache" if rec.get("cached") else "Fetched") + f" — status {rec.get('status')}")
+            txt = rec.get("text","")
+            ex = research_extract_excerpt(txt, q or "")
+            st.text_area("Excerpt", value=ex, height=240)
+            if rec.get("path"):
+                st.markdown(f"[Open cached text]({rec['path']})")
+    st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
+
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs(["Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"])
+    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs(["Research", "Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"])
     
 
     # --- heuristics to auto-fill Title and Solicitation # ---
