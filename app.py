@@ -282,7 +282,7 @@ def _render_markdown_to_docx(doc, md_text):
 def md_to_docx_bytes_rich(md_text: str, title: str = "", base_font: str = "Times New Roman", base_size_pt: int = 11,
                           margins_in: float = 1.0, logo_bytes: bytes = None, logo_width_in: float = 1.5) -> bytes:
     """
-    Guaranteed rich Markdown→DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
+    Guaranteed rich Markdown->DOCX converter with inline bold/italics, headings, lists, and horizontal rules.
     """
     from docx import Document
     from docx.shared import Pt, Inches
@@ -627,12 +627,8 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 # ---- Feature flags ----
 _FEATURE_KEYS = [
     "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core"]
+    "rfp_analyzer_panel", "amend_tracking", "rfp_schema"]
 def init_feature_flags():
-
-# Deals Phase 1: init refresh token
-st.session_state.setdefault("deals_refresh", 0)
-
     flags = st.session_state.setdefault("feature_flags", {})
     # Do not remove existing keys. Only set missing to False.
     for k in _FEATURE_KEYS:
@@ -1627,7 +1623,7 @@ with st.sidebar:
 with st.sidebar:
     st.subheader("Security")
     with st.expander("Change My PIN", expanded=False):
-        st.write("Update your sign-in PIN. New PIN must be 4–12 characters.")
+        st.write("Update your sign-in PIN. New PIN must be 4-12 characters.")
         curr = st.text_input("Current PIN", type="password", key="pin_cur")
         new1 = st.text_input("New PIN", type="password", key="pin_new1")
         new2 = st.text_input("Confirm New PIN", type="password", key="pin_new2")
@@ -1635,7 +1631,7 @@ with st.sidebar:
             if not _verify_pin(ACTIVE_USER, curr or ''):
                 st.error("Current PIN is incorrect.")
             elif not new1 or len(new1) < 4 or len(new1) > 12:
-                st.error("New PIN must be 4–12 characters.")
+                st.error("New PIN must be 4-12 characters.")
             elif new1 != new2:
                 st.error("New PINs do not match.")
             else:
@@ -1689,7 +1685,7 @@ with st.sidebar:
 
 # === End multi-user block ===
 
-# === Outreach Email (per-user) — Gmail SMTP (added 2025-10-08) ===
+# === Outreach Email (per-user) - Gmail SMTP (added 2025-10-08) ===
 # Supports per-user "From" emails, stored credentials, and a sidebar composer.
 import smtplib
 from email.message import EmailMessage
@@ -1725,7 +1721,7 @@ def _save_mail_store(store: dict):
 def set_user_smtp_app_password(user: str, app_password: str):
     store = _load_mail_store()
     u = store.get(user, {})
-    # Light obfuscation (not true encryption) — recommend using Gmail App Passwords
+    # Light obfuscation (not true encryption) - recommend using Gmail App Passwords
     u["smtp_host"] = "smtp.gmail.com"
     u["smtp_port"] = 587
     u["username"] = USER_EMAILS.get(user, "")
@@ -2392,7 +2388,7 @@ def load_outreach_preview(to="", cc="", bcc="", subject="", html=""):
         "from_addr": from_addr,
     }
 
-    st.subheader("Email – Outreach")
+    st.subheader("Email - Outreach")
     from_addr = USER_EMAILS.get(ACTIVE_USER, "")
     if not from_addr:
         st.caption("No email configured for this user. Only Charles and Collin are set up.")
@@ -3303,14 +3299,14 @@ def sam_search(
                             "min_due_days": min_days, "noticeType": notice_types,
                             "active": active, "limit": limit}}
         if df.empty:
-            info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+            info["hint"] = "Try min_days=0-1, add keyword, increase look-back, or clear noticeType."
         return df, info
     except requests.RequestException as e:
         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
 
 
 
-# ---- Hoisted helper implementations (duplicate for e# === SAM Watch → Contacts auto sync helpers ===
+# ---- Hoisted helper implementations (duplicate for e# === SAM Watch -> Contacts auto sync helpers ===
 
 def _contacts_upsert(name: str = "", org: str = "", role: str = "", email: str = "", phone: str = "", source: str = "", notes: str = "") -> tuple:
     # Insert or light update into contacts.
@@ -3482,7 +3478,7 @@ def build_context(max_rows=6):
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
                       f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
-    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    naics_line = ", ".join(codes[:20]) + (" ..." if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
         "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
         conn, params=(max_rows,)
@@ -4131,7 +4127,7 @@ def _validate_text_for_guardrails(md_text: str, page_limit: int = None, require_
     """
     Lightweight validator used across export flows.
     Returns a tuple: (issues: list[str], estimated_pages: int)
-    Heuristics only — cannot actually inspect fonts from Markdown.
+    Heuristics only - cannot actually inspect fonts from Markdown.
     """
     import math, re as _re
     text = (md_text or "").strip()
@@ -4901,7 +4897,7 @@ with legacy_tabs[0]:
 
         conn.commit()
         __ctx_pipeline = True
-        st.success(f"Saved — updated {updated} row(s), deleted {deleted} row(s).")
+        st.success(f"Saved - updated {updated} row(s), deleted {deleted} row(s).")
 
 
 # Analytics mini-dashboard (scoped to Pipeline tab)
@@ -5099,7 +5095,7 @@ with legacy_tabs[1]:
             if info and not info.get("ok", True):
                 msg += f" ({info.get('reason','')})"
             if not GOOGLE_PLACES_KEY:
-                msg += " — Google Places key is missing."
+                msg += " - Google Places key is missing."
             st.warning(msg)
 
 
@@ -5543,7 +5539,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
             if not best.empty and USER_EMAILS.get(ACTIVE_USER, ""):
                 lines = ["Top SAM results (auto digest)"]
                 for _, r in best.iterrows():
-                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
+                    lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} - {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})<br>{str(r.get('url',''))}")
                 try:
                     send_outreach_email(ACTIVE_USER, USER_EMAILS.get(ACTIVE_USER), "SAM Watch: Daily digest", "<br>".join(lines))
                     cur.execute("insert into sam_history(ts_utc,user,action) values(?,?,?)", (str(now_utc), ACTIVE_USER, "digest_sent"))
@@ -5572,7 +5568,7 @@ def sam_live_monitor(run_now: bool = False, hours_interval: int = 3, email_diges
         email = USER_EMAILS.get(ACTIVE_USER, get_setting("company_email",""))
         summary = str(row.get("description",""))[:1200]
 
-        md = f"""# {company} – Proposal Draft
+        md = f"""# {company} - Proposal Draft
 **Opportunity:** {title}
 **Agency:** {agency}
 **Solicitation #:** {sol}
@@ -5691,7 +5687,7 @@ with legacy_tabs[4]:
         except Exception as e:
             st.error(f"Saved searches error: {e}")
     st.subheader("SAM Watch: Auto Search + Attachments + Saved Searches")
-    st.markdown("> **Flow:** Set All active → apply filters → open attachments → choose assignee → **Search** then **Save to pipeline**")
+    st.markdown("> **Flow:** Set All active -> apply filters -> open attachments -> choose assignee -> **Search** then **Save to pipeline**")
     conn = get_db()
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
     st.caption(f"Using NAICS codes: {', '.join(codes) if codes else 'none'}")
@@ -5873,7 +5869,7 @@ except Exception:
                     if not best.empty:
                         lines = ["Top SAM results (auto)"]
                         for _, r in best.iterrows():
-                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} — {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
+                            lines.append(f"• [{int(r['Score'])}] {str(r.get('title',''))[:90]} - {str(r.get('agency',''))[:40]} (due {str(r.get('response_due',''))[:16]})\n{str(r.get('url',''))}")
                         try:
                             send_outreach_email(ACTIVE_USER, email_to_self, "SAM Watch: Top matches", "<br>".join(lines))
                             st.info(f"Emailed {len(best)} matches to {email_to_self}")
@@ -5949,7 +5945,7 @@ except Exception:
         if st.button("Save selected to pipeline"):
             to_save = save_sel.drop(columns=[c for c in ["Save","Link"] if c in save_sel.columns])
             ins, upd = save_opportunities(to_save, default_assignee=assignee_default)
-            st.success(f"Saved to pipeline — inserted {ins}, updated {upd}.")
+            st.success(f"Saved to pipeline - inserted {ins}, updated {upd}.")
             # === Auto add POCs and COs to Contacts after saving to pipeline ===
 try:
     _ss = locals().get('save_sel', None)
@@ -6000,7 +5996,7 @@ except Exception as _e_sync:
 # [disabled to fix indentation]                             body = f"<p>Hello Contracting Officer,</p><p>We reviewed <strong>{str(r.get('title',''))}</strong> at {str(r.get('agency',''))}. We have relevant past performance and would like to confirm points of contact and any site-visit details.</p><p>Regards,<br>{get_setting('company_name','ELA Management LLC')}</p>"
 # [disabled to fix indentation]                             bods.append({"to":"","subject":subj,"body":body,"vendor_id":0})
 # [disabled to fix indentation]                         st.session_state['mail_bodies'] = bods
-# [disabled to fix indentation]                         st.success("Drafts prepared — open the Outreach tab to review and send.")
+# [disabled to fix indentation]                         st.success("Drafts prepared - open the Outreach tab to review and send.")
 # [disabled to fix indentation]                 except Exception as _e_prep:
 # [disabled to fix indentation]                     st.caption(f"[CO outreach prep note: {_e_prep}]")
     else:
@@ -6198,7 +6194,7 @@ with legacy_tabs[11]:
             st.info("Select a valid session to continue.")
         else:
             cur_title = sessions[sessions["id"] == session_id]["title"].iloc[0] if not sessions.empty else "(untitled)"
-            st.caption(f"Session #{session_id} — {cur_title}")
+            st.caption(f"Session #{session_id} - {cur_title}")
 
             # File uploads for this chat session
             up_files = st.file_uploader("Attach files (PDF, DOCX, DOC, TXT)", type=["pdf","docx","doc","txt"],
@@ -6741,7 +6737,7 @@ def build_context(max_rows=6):
         goals_line = (f"Bids target {int(rr['bids_target'])}, submitted {int(rr['bids_submitted'])}; "
                       f"Revenue target ${float(rr['revenue_target']):,.0f}, won ${float(rr['revenue_won']):,.0f}.")
     codes = pd.read_sql_query("select code from naics_watch order by code", conn)["code"].tolist()
-    naics_line = ", ".join(codes[:20]) + (" …" if len(codes) > 20 else "") if codes else "none"
+    naics_line = ", ".join(codes[:20]) + (" ..." if len(codes) > 20 else "") if codes else "none"
     opp = pd.read_sql_query(
         "select title, agency, naics, response_due from opportunities order by posted desc limit ?",
         conn, params=(max_rows,)
@@ -7441,27 +7437,18 @@ def render_sam_watch_ingest():
         with c3:
             if st.session_state.get("feature_flags", {}).get("pipeline_star") and st.form_submit_button("Toggle Star"):
                 for nid in selected_ids:
-                    res = toggle_pipeline_star(user_id, nid)
-                    try:
-                        if feature_flags().get("deals_core"):
-                            if res:
-                                upsert_deal_from_notice(user_id, int(nid))
-                            else:
-                                delete_deal_for_notice(int(nid))
-                    except Exception:
-                        pass
+                    toggle_pipeline_star(user_id, nid)
+        # Diff controls
+        if st.session_state.get("feature_flags", {}).get("amend_tracking"):
+            d1, d2 = st.columns([1,5])
+            with d1:
+                if st.form_submit_button("Open Diff"):
+                    if selected_ids:
+                        st.session_state["selected_notice_id"] = int(selected_ids[0])
+                        st.session_state["diff_tab_open"] = True
 
     # Render diff panel below
-    
-    # Diff controls
-    if st.session_state.get("feature_flags", {}).get("amend_tracking"):
-        try:
-            if selected_ids:
-                st.session_state["selected_notice_id"] = int(selected_ids[0])
-                st.session_state["diff_tab_open"] = True
-        except Exception:
-            pass
-render_diff_panel()
+    render_diff_panel()
 
     # Footer paging
     p1, p2, p3 = st.columns([1,1,6])
@@ -7737,7 +7724,7 @@ def _qa_from_chunks(notice_id: int, q: str, limit: int = 5):
     conn = get_db()
     # Prefer FTS if available
     try:
-        rows = conn.execute("SELECT file_name, page, snippet(rfp_chunks, 3, '[', ']', '…', 8) FROM rfp_chunks WHERE org_id=? AND notice_id=? AND rfp_chunks MATCH ? LIMIT ?",
+        rows = conn.execute("SELECT file_name, page, snippet(rfp_chunks, 3, '[', ']', '...', 8) FROM rfp_chunks WHERE org_id=? AND notice_id=? AND rfp_chunks MATCH ? LIMIT ?",
                             (current_org_id(), int(notice_id), q, int(limit))).fetchall()
         if rows:
             return [{"file": r[0], "page": r[1], "snippet": r[2]} for r in rows]
@@ -8718,7 +8705,7 @@ except Exception as _ex:
 # LEGACY_REMOVED                             "min_due_days": min_days, "noticeType": notice_types,
 # LEGACY_REMOVED                             "active": active, "limit": limit}}
 # LEGACY_REMOVED         if df.empty:
-# LEGACY_REMOVED             info["hint"] = "Try min_days=0–1, add keyword, increase look-back, or clear noticeType."
+# LEGACY_REMOVED             info["hint"] = "Try min_days=0-1, add keyword, increase look-back, or clear noticeType."
 # LEGACY_REMOVED         return df, info
 # LEGACY_REMOVED     except requests.RequestException as e:
 # LEGACY_REMOVED         return pd.DataFrame(), {"ok": False, "reason": "network", "detail": str(e)[:800]}
@@ -9300,7 +9287,7 @@ def render_proposal_builder():
                 df_sel = pd.read_sql_query(f"select title, agency, naics, period, value, role, location, highlights from past_performance where id in ({qmarks})", conn, params=tuple(selected_pp_ids))
                 lines = []
                 for _, r in df_sel.iterrows():
-                    lines.append(f"- {r['title']} — {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
+                    lines.append(f"- {r['title']} - {r['agency']} ({r['role']}); NAICS {r['naics']}; Period {r['period']}; Value ${float(r['value'] or 0):,.0f}. Highlights: {r['highlights']}")
                 pp_text = "\n".join(lines)
 
             # Build common system context
@@ -9678,89 +9665,6 @@ def ensure_deals_table(conn):
     cur.execute("create index if not exists deals_updated_idx on deals(updated_at)")
     conn.commit()
 
-# Add notice_id link to notices if missing
-try:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(deals)")}
-    if "notice_id" not in cols:
-        conn.execute("ALTER TABLE deals ADD COLUMN notice_id INTEGER REFERENCES notices(id)")
-    # Unique per notice when linked
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_deals_notice ON deals(notice_id) WHERE notice_id IS NOT NULL")
-except Exception:
-    pass
-
-
-
-
-
-# === DEALS PHASE 1 HELPERS START ===
-def _bump_deals_refresh():
-    import streamlit as st
-    st.session_state["deals_refresh"] = int(st.session_state.get("deels_refresh_fix", st.session_state.get("deals_refresh", 0)) ) + 1
-    # migrate key typo forward compatibility
-    st.session_state["deels_refresh_fix"] = st.session_state["deals_refresh"]
-
-def upsert_deal_from_notice(user_id: str, notice_id: int, default_stage: str = "No Contact Made"):
-    """Create or refresh a Deal row from a SAM notice. Idempotent via unique notice_id index."""
-    try:
-        conn = get_db()
-        ensure_deals_table(conn)
-        cur = conn.cursor()
-        r = cur.execute("SELECT title, agency, due_at FROM notices WHERE id=?", (int(notice_id),)).fetchone()
-        if not r:
-            return False
-        title, agency, due_date = r[0], r[1], r[2]
-        # Upsert by notice_id
-        cur.execute(
-            """INSERT INTO deals(title, stage, owner, amount, notes, agency, due_date, notice_id, updated_at)
-               VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
-               ON CONFLICT(notice_id) DO UPDATE SET
-                   title=excluded.title,
-                   agency=excluded.agency,
-                   due_date=excluded.due_date,
-                   updated_at=datetime('now')""",
-            (title, default_stage, user_id, None, "Auto-added from SAM", agency, due_date, int(notice_id))
-        )
-        conn.commit()
-        _bump_deals_refresh()
-        try:
-            import streamlit as st
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
-            else:
-                st.rerun()
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
-
-def delete_deal_for_notice(notice_id: int) -> bool:
-    """Delete a Deal row linked to a given notice_id."""
-    try:
-        conn = get_db()
-        ensure_deals_table(conn)
-        cur = conn.cursor()
-        cur.execute("DELETE FROM deals WHERE notice_id=?", (int(notice_id),))
-        conn.commit()
-        _bump_deals_refresh()
-        try:
-            import streamlit as st
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
-            else:
-                st.rerun()
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
-
-# Cached deals loader keyed on refresh token
-import streamlit as _st_deals_cache_alias  # alias to avoid shadowing
-@_st_deals_cache_alias.cache_data(show_spinner=False)
-def _load_deals(stage, q, _refresh_key):
-    return list_deals(stage, q)
-# === DEALS PHASE 1 HELPERS END ===
 def list_deals(stage: str | None = None, q: str | None = None):
     conn = get_db()
     ensure_deals_table(conn)
@@ -9846,7 +9750,7 @@ try:
             st.markdown(" ")
 
         # Data
-        df = _load_deals(stage_filter, q, int(st.session_state.get('deals_refresh', 0)))
+        df = list_deals(stage_filter, q)
 
         # Totals by stage (above grid)
         st.markdown("#### Totals by stage")
@@ -9937,7 +9841,7 @@ try:
         st.markdown("### Board view")
         st.caption("Column per stage with quick add, inline edits, and move.")
 
-        df_board = _load_deals(None, q, int(st.session_state.get('deals_refresh', 0)))
+        df_board = list_deals(stage=None, q=q)
         import pandas as _pd2
         _counts = df_board.groupby("stage")["id"].count() if not df_board.empty else _pd2.Series(dtype=int)
         _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
@@ -10561,7 +10465,7 @@ def _send_team_alert(msg: str):
 
 
 
-# === [MERGE UI] SAM Watch — Minimal UI (final) ===
+# === [MERGE UI] SAM Watch - Minimal UI (final) ===
 try:
     import streamlit as _st
     # Helper to build a stable selection key even if ACTIVE_USER is missing
@@ -10741,7 +10645,7 @@ except Exception as _e_ui:
 # === [END MERGE UI] ===
 
 
-# === Deals tab (formerly Deadlines) – standalone UI with hyperlinks ===
+# === Deals tab (formerly Deadlines) - standalone UI with hyperlinks ===
 try:
     with tabs[TAB['Deals']]:
         st.subheader("Deals")
@@ -11462,13 +11366,6 @@ def set_notice_state(user_id: str, notice_id: int, state: str):
                  VALUES(?,?,?,?)
                  ON CONFLICT(user_id, notice_id) DO UPDATE SET state=excluded.state, ts=excluded.ts""", (user_id, notice_id, state, ts))
     conn.commit()
-
-# Deals Phase 1: on save, upsert into deals when flagged
-try:
-    if feature_flags().get("deals_core") and str(state).lower() == "saved":
-        upsert_deal_from_notice(user_id, int(notice_id))
-except Exception:
-    pass
 
 def toggle_pipeline_star(user_id: str, notice_id: int) -> bool:
     conn = get_db()
@@ -12398,7 +12295,7 @@ def render_diff(opp_id: int):
     if d.get("changed_fields"):
         st.markdown("**Changed fields**")
         for c in d["changed_fields"]:
-            st.write(f"{c['field']}: '{c.get('from')}' → '{c.get('to')}'")
+            st.write(f"{c['field']}: '{c.get('from')}' -> '{c.get('to')}'")
     st.markdown("**Files**")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -14187,7 +14084,7 @@ def render_proposal_wizard(notice_id: int):
         st.write("Factors and requirements")
         for it in (data.get("lm_requirements") or [])[:50]:
             st.markdown(f"- {it.get('text','')}".strip())
-        if st.button("Next → Sections"):
+        if st.button("Next -> Sections"):
             st.session_state["wizard_step"] = 2
             (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
     if step == 2:
@@ -14206,7 +14103,7 @@ def render_proposal_wizard(notice_id: int):
                                 (new_title, None if new_pl==0 else int(new_pl), fname or None, None if fsize==0 else int(fsize), plan or None, sid))
                     conn.commit()
                     st.success("Saved")
-        if st.button("Next → Uploads"):
+        if st.button("Next -> Uploads"):
             st.session_state["wizard_step"] = 3
             (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
     if step == 3:
@@ -14224,7 +14121,7 @@ def render_proposal_wizard(notice_id: int):
         rows = cur.execute("SELECT id, file_name, uploaded_at FROM proposal_files WHERE proposal_id=? ORDER BY id DESC", (pid,)).fetchall()
         for fid, fname, ts in rows:
             st.caption(f"{fname} • {ts}")
-        if st.button("Next → Package"):
+        if st.button("Next -> Package"):
             st.session_state["wizard_step"] = 4
             (st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun())
     if step == 4:
@@ -16030,7 +15927,7 @@ def _rfqg2_render_outreach_panel(opp_id: int, rfq_id: int):
     st.caption(f'{len(targets)} vendors selected')
     # Subject and body templates
     st.markdown('**Email template**')
-    subj_t = st.text_input('Subject', value='RFQ: {title} — reply by {due_date}', key='rfqg2_subj')
+    subj_t = st.text_input('Subject', value='RFQ: {title} - reply by {due_date}', key='rfqg2_subj')
     body_t = st.text_area('Body', value='Hello {company},\n\nWe invite you to quote for {title}. Please submit by {due_date}.\nOpen your secure link: {link}\n\nThank you.', key='rfqg2_body', height=140)
     # Preview first three
     conn = get_db(); cur = conn.cursor()
@@ -16296,7 +16193,7 @@ def _rfqg3_responses_panel(opp_id: int, rfq_id: int):
                     lines = cur.execute("SELECT id, description FROM rfq_lines WHERE rfq_id=? ORDER BY id", (int(rfq_id),)).fetchall()
                     price_inputs = {}
                     for lid, desc in lines[:200]:
-                        price_inputs[lid] = st.number_input(f"Ext price — {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
+                        price_inputs[lid] = st.number_input(f"Ext price - {desc[:60]}", min_value=0.0, step=1.0, key=f"qi_{vid}_{lid}")
                     ex = st.text_area("Exceptions / notes", key=f"exc_{vid}")
                     up = st.file_uploader("Attach vendor PDF(s)", type=["pdf","doc","docx"], accept_multiple_files=True, key=f"up_{vid}")
                     c1,c2 = st.columns(2)
@@ -16564,7 +16461,7 @@ def render_vendors(opp_id: int):
             cnt = _p8_seed_vendors_for_notice(int(opp_id))
             st.success(f'Added {cnt} vendors from Finder results')
     with c2:
-        subj = st.text_input('Email subject', value='RFQ for {title} — due {due_date}', key='p8_subj')
+        subj = st.text_input('Email subject', value='RFQ for {title} - due {due_date}', key='p8_subj')
     with c3:
         body = st.text_area('Email body', value='Hello {company},\nPlease quote the attached RFQ. Due {due_date}.', key='p8_body')
     # Pick vendors by state/naics filters
@@ -16572,7 +16469,7 @@ def render_vendors(opp_id: int):
     stt = (cur.execute('SELECT place_state FROM notices WHERE id=?', (int(opp_id),)).fetchone() or [''])[0] or ''
     ncs = (cur.execute('SELECT naics FROM notices WHERE id=?', (int(opp_id),)).fetchone() or [''])[0] or ''
     vrows = cur.execute("SELECT id, name, state, naics, email FROM vendors WHERE (state=? OR ?='') AND (naics LIKE ? OR ?='') ORDER BY name", (stt, stt, f'%{ncs}%', ncs)).fetchall()
-    choices = {f"{v} — {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
+    choices = {f"{v} - {n or ''} [{s or ''}]": i for (i,n,s,a,e) in vrows for v in [n]}
     sel = st.multiselect('Target vendors', options=list(choices.keys()))
     target_ids = [choices[k] for k in sel]
     if st.button(f'Send RFQs to {len(target_ids)} vendor(s)', disabled=(len(target_ids)==0)):
