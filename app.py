@@ -7466,60 +7466,24 @@ else:
             except Exception:
                 pass
 
-def y1_search(conn, rfp_id: int, query: str, k: int = 6):
-    # Compute snapshot to invalidate cache if chunks changed
-    snap = _y1_snapshot(conn, int(rfp_id))
+
+# === Phase 8: memoized Y1 search (rfp_id + query + k). Avoids hashing the connection. ===
+_Y1_MEMO = {}
+
+def y1_search(conn, rfp_id: int, query: str, k: int = 6) -> list[dict]:
     try:
-        db_path = DB_PATH  # provided in app
+        rk = int(k)
     except Exception:
-        # very conservative fallback
-        db_path = "data/govcon.db"
-    return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
-
-
-# Enable chunk-level streaming in Y2 and Y4
-def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
-    try:
-        for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature):
-            yield tok
-    except NameError:
-        # fallback if dependencies were not merged
-        hits = []
-        try:
-            hits = y1_search(conn, int(rfp_id), user_q or "", k=int(k))
-        except Exception:
-            pass
-        yield "[system] limited mode. rebuild index on Y1, then retry."
-
-# Re-define y4_stream_review to ensure true token streaming (shadow any earlier stub)
-def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
-    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", k=int(k))
-    client = get_ai()
-    model_name = _resolve_model()
-    try:
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=msgs,
-            temperature=float(temperature),
-            stream=True
-        )
-    except Exception as _e:
-        if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=msgs,
-                temperature=float(temperature),
-                stream=True
-            )
-        else:
-            yield f"AI unavailable: {type(_e).__name__}: {_e}"
-            return
-    for ch in resp:
-        try:
-            delta = ch.choices[0].delta
-            if hasattr(delta, "content") and delta.content:
-                yield delta.content
-        except Exception:
-            pass
-# === end PHASE 8 ===
+        rk = 6
+    rk = max(1, min(8, rk))
+    qkey = (int(rfp_id), (query or "").strip().lower(), rk)
+    now = time.time()
+    ent = _Y1_MEMO.get(qkey)
+    # 10 minutes TTL
+    if ent and (now - ent[0] < 600):
+        return ent[1]
+    res = _y1_search_uncached(conn, int(rfp_id), query or "", rk) or []
+    _Y1_MEMO[qkey] = (now, res)
+    return res
+# === end Phase 8 memo ===
 
