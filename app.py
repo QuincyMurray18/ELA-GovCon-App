@@ -729,7 +729,57 @@ def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-def _resolve_embed_model() -> str:
+def _resolve_embed_model(
+
+# === PHASE 6: Embedding cache (sha256 of model:text) ===
+def _embed_cache_dir() -> str:
+    d = os.path.join(DATA_DIR, "embed_cache")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+def _embed_cache_key(model: str, text: str) -> str:
+    h = hashlib.sha256(f"{model}:{text}".encode("utf-8")).hexdigest()
+    return h
+
+def _embed_cache_get(model: str, texts: list[str]) -> tuple[list[list[float]|None], list[int]]:
+    r"""
+    Return (vecs_or_None, missing_idx). For each input text, either a vector or None.
+    Also returns indices of missing items for batch computation.
+    r"""
+    out = []
+    missing = []
+    d = _embed_cache_dir()
+    for i, t in enumerate(texts):
+        key = _embed_cache_key(model, t or " ")
+        fp = os.path.join(d, f"{key}.json")
+        try:
+            with open(fp, "r", encoding="utf-8") as fh:
+                v = json.load(fh)
+            if isinstance(v, list):
+                out.append(v)
+                continue
+        except Exception:
+            pass
+        out.append(None)
+        missing.append(i)
+    return out, missing
+
+def _embed_cache_put(model: str, texts: list[str], vecs: list[list[float]]) -> None:
+    d = _embed_cache_dir()
+    for t, v in zip(texts, vecs):
+        try:
+            key = _embed_cache_key(model, t or " ")
+            fp = os.path.join(d, f"{key}.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump(v, fh)
+        except Exception:
+            pass
+# === end PHASE 6 helpers ===
+
+) -> str:
     # Streamlit secrets or env, else default
     try:
         import streamlit as _st
@@ -746,13 +796,34 @@ def _embed_texts(texts: list[str]) -> list[list[float]]:
     client = get_ai()
     model = _resolve_embed_model()
     clean = [t if (t or "").strip() else " " for t in texts]
-    resp = client.embeddings.create(model=model, input=clean)
-    out = []
-    for d in resp.data:
+
+    # cache lookup
+    cached_vecs, missing_idx = _embed_cache_get(model, clean)
+    to_compute = [clean[i] for i in missing_idx]
+
+    new_vecs: list[list[float]] = []
+    if to_compute:
         try:
-            out.append(list(d.embedding))
+            resp = client.embeddings.create(model=model, input=to_compute)
+            for d in resp.data:
+                try:
+                    new_vecs.append(list(d.embedding))
+                except Exception:
+                    new_vecs.append([])
+            # write cache
+            _embed_cache_put(model, to_compute, new_vecs)
         except Exception:
-            out.append([])
+            # fallback: return empty vecs for missing
+            new_vecs = [[] for _ in to_compute]
+
+    # merge back preserving order
+    out: list[list[float]] = []
+    it = iter(new_vecs)
+    for v in cached_vecs:
+        if v is None:
+            out.append(next(it, []))
+        else:
+            out.append(v)
     return out
 
 def _cos_sim(u: list[float], v: list[float]) -> float:
@@ -772,7 +843,7 @@ def _cos_sim(u: list[float], v: list[float]) -> float:
         den = (su**0.5) * (sv**0.5)
         return (num / den) if den else 0.0
 
-def _split_chunks(text: str, max_chars: int = 1600, overlap: int = 200) -> list[str]:
+def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[str]:
     t = (text or "").strip()
     if not t:
         return []
@@ -844,6 +915,13 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
         return []
     if df is None or df.empty:
         return []
+    # clamp
+    try:
+        k = int(k)
+    except Exception:
+        k = 6
+    k = max(1, min(8, k))
+
     q_emb = _embed_texts([query])[0]
     rows = []
     for _, r in df.iterrows():
@@ -852,9 +930,31 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
         except Exception:
             emb = []
         sim = _cos_sim(q_emb, emb)
-        rows.append({"id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"), "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0), "text": r.get("text") or "", "score": round(float(sim), 6)})
+        rows.append({
+            "id": int(r["id"]),
+            "fid": int(r["rfp_file_id"]),
+            "file": r.get("file_name"),
+            "page": int(r.get("page") or 0),
+            "chunk": int(r.get("chunk_idx") or 0),
+            "text": r.get("text") or "",
+            "score": float(sim),
+        })
+    # primary rank
     rows.sort(key=lambda x: x["score"], reverse=True)
-    return rows[:max(1, int(k))]
+    # de-duplicate by (file,page) to strengthen citation control
+    seen = set()
+    dedup = []
+    for h in rows:
+        key = (h.get("file") or "", int(h.get("page") or 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(h)
+        if len(dedup) >= 32:  # limit working set
+            break
+    # light re-rank: prefer balanced page coverage then score
+    dedup.sort(key=lambda x: (-(x["score"]>0.70), -x["score"]), reverse=False)
+    return dedup[:k]
 
 
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
