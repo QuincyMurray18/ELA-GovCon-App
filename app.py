@@ -571,6 +571,41 @@ def _resolve_model():
     return os.getenv("OPENAI_MODEL", "gpt-5")
 
 _ai_client = None
+
+# === Param guard for chat calls ===
+def _preferred_chat_params():
+    return {"temperature": 0.1, "top_p": 0.9, "presence_penalty": 0, "frequency_penalty": 0}
+
+def _strip_unsupported(params: dict) -> dict:
+    banned = {"temperature", "top_p", "presence_penalty", "frequency_penalty"}
+    return {k: v for k, v in params.items() if k not in banned}
+
+def _chat_create_safe(client, **payload):
+    """Try preferred params first, then retry without them on 400 unsupported_value."""
+    prefer = _preferred_chat_params()
+    p1 = {**payload, **prefer}
+    try:
+        return _chat_create_safe(client, **p1)
+    except Exception as _e:
+        # Retry without tuning params
+        p2 = _strip_unsupported(payload)
+        return _chat_create_safe(client, **p2)
+
+class _StreamingWrapper:
+    def __init__(self, client):
+        self.client = client
+    def create(self, **payload):
+        prefer = _preferred_chat_params()
+        p1 = {**payload, **prefer}
+        try:
+            return self._chat_stream_safe(client).create(**p1)
+        except Exception:
+            p2 = _strip_unsupported(payload)
+            return self._chat_stream_safe(client).create(**p2)
+
+def _chat_stream_safe(client):
+    return _StreamingWrapper(client)
+# === end Param guard ===
 def get_ai():
     import streamlit as st  # ensure st exists
     global _ai_client
@@ -584,7 +619,7 @@ def ask_ai(messages, tools=None, temperature=0.1):
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(
+        resp = _chat_create_safe(client, 
             model=model_name,
             messages=[{"role":"system","content": SYSTEM_CO}, *messages],
             tools=tools or [],
@@ -594,7 +629,7 @@ def ask_ai(messages, tools=None, temperature=0.1):
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
             model_name = "gpt-4o-mini"
-            resp = client.chat.completions.create(
+            resp = _chat_create_safe(client, 
                 model=model_name,
                 messages=[{"role":"system","content": SYSTEM_CO}, *messages],
                 tools=tools or [],
@@ -1294,10 +1329,10 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+        resp = _chat_create_safe(client, model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+            resp = _chat_create_safe(client, model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
@@ -1349,10 +1384,10 @@ def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: 
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+        resp = _chat_create_safe(client, model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+            resp = _chat_create_safe(client, model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
     for ch in resp:
@@ -2946,12 +2981,12 @@ def y55_ai_parse(text: str) -> dict:
             "RFP TEXT START\n" + t[:180000] + "\nRFP TEXT END"
         )
         try:
-            resp = client.chat.completions.create(
+            resp = _chat_create_safe(client, 
                 model=model_name,
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
                 temperature=0.1, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         except Exception as _e:
-            resp = client.chat.completions.create(
+            resp = _chat_create_safe(client, 
                 model="gpt-4o-mini",
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
                 temperature=0.1, top_p=0.9, presence_penalty=0, frequency_penalty=0)
@@ -7272,10 +7307,10 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+        resp = _chat_create_safe(client, model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+            resp = _chat_create_safe(client, model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
