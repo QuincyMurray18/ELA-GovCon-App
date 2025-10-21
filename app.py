@@ -665,6 +665,56 @@ def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+
+# === Phase 6: Embedding cache (sha256+model) ===
+def _emb_cache_path() -> str:
+    try:
+        d = os.path.join(DATA_DIR, "emb_cache.sqlite")
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        return d
+    except Exception:
+        return "emb_cache.sqlite"
+
+def _emb_cache_get_many(keys_models: list[tuple[str,str]]) -> dict:
+    out = {}
+    try:
+        path = _emb_cache_path()
+        con = sqlite3.connect(path)
+        cur = con.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS cache (sha TEXT, model TEXT, vec TEXT, PRIMARY KEY(sha, model));")
+        if not keys_models:
+            con.close(); return out
+        # Batch select
+        qmarks = ",".join(["(?,?)"]*len(keys_models))
+        flat = []
+        for k,m in keys_models:
+            flat.extend([k,m])
+        cur.execute(f"SELECT sha, model, vec FROM cache WHERE (sha, model) IN ({qmarks});", flat)
+        for sha, model, vec in cur.fetchall():
+            try:
+                out[(sha, model)] = json.loads(vec)
+            except Exception:
+                pass
+        con.close()
+    except Exception:
+        pass
+    return out
+
+def _emb_cache_put_many(items: list[tuple[str,str,list]]) -> None:
+    try:
+        path = _emb_cache_path()
+        con = sqlite3.connect(path)
+        cur = con.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS cache (sha TEXT, model TEXT, vec TEXT, PRIMARY KEY(sha, model));")
+        cur.executemany("INSERT OR REPLACE INTO cache(sha, model, vec) VALUES(?,?,?);",
+                        [(sha, model, json.dumps(vec)) for sha, model, vec in items])
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+# === end Phase 6 cache ===
+
+
 def _resolve_embed_model() -> str:
     # Streamlit secrets or env, else default
     try:
@@ -708,7 +758,7 @@ def _cos_sim(u: list[float], v: list[float]) -> float:
         den = (su**0.5) * (sv**0.5)
         return (num / den) if den else 0.0
 
-def _split_chunks(text: str, max_chars: int = 1600, overlap: int = 200) -> list[str]:
+def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[str]:
     t = (text or "").strip()
     if not t:
         return []
@@ -750,7 +800,7 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
             continue
         pages = pages[:max_pages]
         for pi, txt in enumerate(pages, start=1):
-            parts = _split_chunks(txt or "", 1600, 200)
+            parts = _split_chunks(txt or "", 1200, 180)
             for ci, ch in enumerate(parts):
                 try:
                     if not rebuild:
@@ -770,6 +820,7 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                 added += 1
     return {"ok": True, "added": added, "skipped": skipped}
 
+
 def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
     if not (query or "").strip():
@@ -781,17 +832,26 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
     if df is None or df.empty:
         return []
     q_emb = _embed_texts([query])[0]
-    rows = []
+    q_terms = set(re.findall(r"[A-Za-z0-9]{3,}", (query or "").lower()))
+    rows: list[dict] = []
     for _, r in df.iterrows():
         try:
             emb = json.loads(r.get("emb") or "[]")
         except Exception:
             emb = []
         sim = _cos_sim(q_emb, emb)
-        rows.append({"id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"), "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0), "text": r.get("text") or "", "score": round(float(sim), 6)})
+        txt = r.get("text") or ""
+        txt_terms = set(re.findall(r"[A-Za-z0-9]{3,}", txt.lower()))
+        overlap = len(q_terms & txt_terms) / (len(q_terms) + 1e-9)
+        score = float(sim)*0.85 + float(overlap)*0.15
+        rows.append({
+            "id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"),
+            "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0),
+            "text": txt, "sim": float(sim), "overlap": float(overlap), "score": round(score, 6)
+        })
     rows.sort(key=lambda x: x["score"], reverse=True)
-    return rows[:max(1, int(k))]
-
+    top_n = min(8, max(1, int(k)))
+    return rows[:top_n]
 
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
