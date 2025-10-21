@@ -729,8 +729,17 @@ def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-def _resolve_embed_model(
 
+def _resolve_embed_model() -> str:
+    try:
+        import streamlit as _st
+        for k in ("OPENAI_EMBED_MODEL","openai_embed_model","EMBED_MODEL"):
+            v = _st.secrets.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    except Exception:
+        pass
+    return os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 # === PHASE 6: Embedding cache (sha256 of model:text) ===
 def _embed_cache_dir() -> str:
     d = os.path.join(DATA_DIR, "embed_cache")
@@ -778,19 +787,6 @@ def _embed_cache_put(model: str, texts: list[str], vecs: list[list[float]]) -> N
         except Exception:
             pass
 # === end PHASE 6 helpers ===
-
-) -> str:
-    # Streamlit secrets or env, else default
-    try:
-        import streamlit as _st
-        for k in ("OPENAI_EMBED_MODEL","openai_embed_model","EMBED_MODEL"):
-            v = _st.secrets.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-    except Exception:
-        pass
-    import os as _os
-    return _os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
     client = get_ai()
