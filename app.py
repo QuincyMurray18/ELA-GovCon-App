@@ -18,6 +18,43 @@ try:
 except Exception:
     class _Dummy: pass
     _rtm_st = _Dummy()
+# === PHASE 5: L & M compliance gate ===
+def require_LM_minimum(conn, rfp_id):
+    """
+    Returns (ok, missing:list[str]).
+    Required: Offers Due date in rfp_meta, Section M present in rfp_sections, >=1 L/M checklist item.
+    """
+    missing = []
+    try:
+        df_due = pd.read_sql_query(
+            "SELECT value FROM rfp_meta WHERE rfp_id=? AND key IN ('offers_due','due_offer') LIMIT 1;",
+            conn, params=(int(rfp_id),)
+        )
+        if df_due is None or df_due.empty or not str(df_due.iloc[0]["value"]).strip():
+            missing.append("Offers Due date (Section L)")
+    except Exception:
+        missing.append("Offers Due date (Section L)")
+    try:
+        df_m = pd.read_sql_query(
+            "SELECT 1 FROM rfp_sections WHERE rfp_id=? AND (section='M' OR section LIKE 'Section M%') LIMIT 1;",
+            conn, params=(int(rfp_id),)
+        )
+        if df_m is None or df_m.empty:
+            missing.append("Section M present")
+    except Exception:
+        missing.append("Section M present")
+    try:
+        df_lm = pd.read_sql_query(
+            "SELECT COUNT(1) AS c FROM lm_items WHERE rfp_id=?;",
+            conn, params=(int(rfp_id),)
+        )
+        c = int(df_lm.iloc[0]["c"]) if df_lm is not None and not df_lm.empty else 0
+        if c <= 0:
+            missing.append("L/M checklist items")
+    except Exception:
+        missing.append("L/M checklist items")
+    return (len(missing) == 0, missing)
+# === end PHASE 5 ===
 
 def _migrate_deals_columns(conn):
     """
@@ -190,9 +227,14 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
             n = rtm_build_requirements(conn, int(rfp_id))
             st.success(f"Added {n} requirement(s).")
     with cols[1]:
+    ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
+    if not ok_gate:
+        st.button("Export CSV", key=f"rtm_export_blocked_{_k}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
+    else:
         path = rtm_export_csv(conn, int(rfp_id))
         if path:
             st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv", key=f"rtm_export_{_k}")
+
     with cols[2]:
         if st.button("Mark all with evidence as Covered", key=f"rtm_mark_{_k}"):
             with closing(conn.cursor()) as cur:
@@ -1251,6 +1293,11 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
     chunking = st.checkbox("Auto-chunk long text", value=True, key="y5_chunk_on")
     run = st.button("Run CO Review", type="primary", key="y4_go")
     if run:
+        ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
+        if not ok_gate:
+            st.error("L/M compliance gate failed. Missing: " + ", ".join(missing_gate))
+            return
+
         if not (draft_text or "").strip():
             st.warning("Provide input text."); return
         texts = y5_chunk_text(draft_text) if chunking else [draft_text]
@@ -1611,7 +1658,12 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
         st.caption(f"Total Extended: ${total:,.2f}")
         st.dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
         csvb = dfc.to_csv(index=False).encode("utf-8")
-        st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
+        st.warning("Checking L/M gate before export...")
+ok_gate, missing_gate = require_LM_minimum(conn, int(rid))
+if not ok_gate:
+    st.button("Export CLIN CSV", key=f"p2_clin_csv_blocked_{rid}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
+else:
+    st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
 
 
