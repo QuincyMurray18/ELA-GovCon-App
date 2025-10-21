@@ -1360,6 +1360,7 @@ def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k
               + "Required fixes: <bullets>\\n"
               + "Conclusion: <2-3 lines>\\n"
               + "Map factual or requirement statements to EVIDENCE using [C#]."
+              + " Hard caps: max 5 bullets per list. Total output ≤ 220 words. If you exceed a cap, remove items to comply."
              )
 
     user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
@@ -1367,6 +1368,52 @@ def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k
 
 def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
     msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", k=int(k))
+
+
+def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5) -> str:
+    """Enforce ≤5 bullets for key sections and a global word cap."""
+    if not text:
+        return ""
+    lines = text.splitlines()
+    out = []
+    sections = {"Strengths:": "Strengths:", "Gaps:": "Gaps:", "Risks:": "Risks:", "Required fixes:": "Required fixes:"}
+    current = None
+    bullet_count = 0
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        ln_stripped = ln.strip()
+        # detect headers
+        if any(ln_stripped.lower().startswith(h.lower()) for h in sections):
+            current = ln_stripped.split(":")[0].lower()
+            bullet_count = 0
+            out.append(ln)
+            i += 1
+            continue
+        if re.match(r"^(Score:|Conclusion:)", ln_stripped, re.I):
+            current = None
+            out.append(ln)
+            i += 1
+            continue
+        # cap bullets in the four sections
+        if current in {"strengths", "gaps", "risks", "required fixes"}:
+            if re.match(r"^\s*[-*\u2022]\s+", ln):
+                if bullet_count < max_bullets:
+                    out.append(ln)
+                    bullet_count += 1
+                # else drop extra bullets
+            else:
+                out.append(ln)
+            i += 1
+            continue
+        out.append(ln)
+        i += 1
+    text2 = "\n".join(out).strip()
+    words = text2.split()
+    if len(words) <= max_words:
+        return text2
+    return " ".join(words[:max_words]).strip()
+
     client = get_ai()
     model_name = _resolve_model()
     try:
@@ -1436,6 +1483,7 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
                 ph.markdown("".join(acc))
             all_out.append("".join(acc))
         final = "\n\n".join(all_out).strip()
+        final = y4_postprocess_brevity(final, max_words=220, max_bullets=5)
         st.session_state["y4_last_review"] = final
         st.subheader("Combined result")
         st.markdown(final or "_no output_")
