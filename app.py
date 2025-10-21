@@ -148,7 +148,7 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
     # Unique key namespace to avoid duplicate element IDs
     _ns = int(st.session_state.get('rtm_ui_ns', 0))
     st.session_state['rtm_ui_ns'] = _ns + 1
-    _k = f\"{rfp_id}_{_ns}\"
+    _k = f"{rfp_id}_{_ns}"
     st.subheader("RTM Coverage")
     cols = st.columns([1,1,1,3])
     with cols[0]:
@@ -3806,7 +3806,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                     for _, r in df_bytes.iterrows():
                                         fname = (r.get("filename") or f"file_{_}.bin")
                                         # Avoid directory traversal
-                                        fname = fname.replace("..","").replace("\\","/").split("/")[-1]
+                                        fname = fname.replace("..","").replace("\","/").split("/")[-1]
                                         b = r.get("bytes")
                                         if isinstance(b, (bytes, bytearray)):
                                             zf.writestr(fname, b)
