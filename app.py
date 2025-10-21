@@ -402,7 +402,7 @@ def _extract_set_aside(text: str) -> str:
             if norm == "8(A)":
                 norm = "8A"
             return norm
-    m = _re.search(r'(?i)Set[- ]Aside\\s*[:#]?\\s*([A-Za-z0-9 \\-/\\(\\)]+)', text)
+    m = _re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/()]+)', text)
     if m:
         v = m.group(1).strip()
         v = _re.sub(r'\\s+', ' ', v)
