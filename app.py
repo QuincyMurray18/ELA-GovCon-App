@@ -792,7 +792,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
     return msgs
 def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
     try:
-        with _y2_closing(conn.cursor()) as cur:
+        with closing(conn.cursor()) as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS y2_threads(
                     id INTEGER PRIMARY KEY,
@@ -841,7 +841,7 @@ def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "CO gui
     _ensure_y2_schema(conn)
     from datetime import datetime as _dt
     now = _dt.utcnow().isoformat()
-    with _y2_closing(conn.cursor()) as cur:
+    with closing(conn.cursor()) as cur:
         cur.execute("INSERT INTO y2_threads(rfp_id, title, created_at) VALUES(?,?,?);",
                     (int(rfp_id), (title or "Untitled").strip(), now))
         conn.commit()
@@ -865,7 +865,7 @@ def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, conte
     from datetime import datetime as _dt
     now = _dt.utcnow().isoformat()
     role = "assistant" if str(role).strip().lower() != "user" else "user"
-    with _y2_closing(conn.cursor()) as cur:
+    with closing(conn.cursor()) as cur:
         cur.execute(
             "INSERT INTO y2_messages(thread_id, role, content, created_at) VALUES(?,?,?,?);",
             (int(thread_id), role, (content or "").strip(), now)
@@ -874,13 +874,13 @@ def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, conte
 
 def y2_rename_thread(conn: sqlite3.Connection, thread_id: int, new_title: str) -> None:
     _ensure_y2_schema(conn)
-    with _y2_closing(conn.cursor()) as cur:
+    with closing(conn.cursor()) as cur:
         cur.execute("UPDATE y2_threads SET title=? WHERE id=?;", ((new_title or "Untitled").strip(), int(thread_id)))
         conn.commit()
 
 def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
     _ensure_y2_schema(conn)
-    with _y2_closing(conn.cursor()) as cur:
+    with closing(conn.cursor()) as cur:
         cur.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
         cur.execute("DELETE FROM y2_threads WHERE id=?;", (int(thread_id),))
         conn.commit()
