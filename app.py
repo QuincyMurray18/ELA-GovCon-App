@@ -879,43 +879,6 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                 conn.commit()
                 added += len(batch_chunks)
     return {"ok": True, "added": added, "skipped": skipped}
-    if df is None or df.empty:
-        return {"ok": False, "error": "No linked files"}
-    added = 0
-    skipped = 0
-    for _, row in df.iterrows():
-        fid = int(row["id"]); name = row.get("filename") or f"file_{fid}"
-        try:
-            blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
-            b = blob["bytes"]; mime = blob.get("mime") or (row.get("mime") or "application/octet-stream")
-        except Exception:
-            continue
-        pages = extract_text_pages(b, mime) or []
-        if pages:
-            pages, _ocrn = ocr_pages_if_empty(b, mime, pages)
-        if not pages:
-            continue
-        pages = pages[:max_pages]
-        for pi, txt in enumerate(pages, start=1):
-            parts = _split_chunks(txt or "", 1600, 200)
-            for ci, ch in enumerate(parts):
-                try:
-                    if not rebuild:
-                        q = pd.read_sql_query("SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;", conn, params=(fid, pi, ci))
-                        if q is not None and not q.empty:
-                            skipped += 1
-                            continue
-                except Exception:
-                    pass
-                emb = _embed_texts([ch])[0]
-                with closing(conn.cursor()) as cur:
-                    cur.execute("""
-                        INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb)
-                        VALUES(?,?,?,?,?,?,?);
-                    """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
-                    conn.commit()
-                added += 1
-    return {"ok": True, "added": added, "skipped": skipped}
 
 
 def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
