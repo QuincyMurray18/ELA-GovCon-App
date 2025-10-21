@@ -220,36 +220,57 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
     _ns = int(st.session_state.get('rtm_ui_ns', 0))
     st.session_state['rtm_ui_ns'] = _ns + 1
     _k = f"{rfp_id}_{_ns}"
+
     st.subheader("RTM Coverage")
-    cols = st.columns([1,1,1,3])
+    cols = st.columns([1, 1, 1, 3])
+
+    # Build/Update
     with cols[0]:
         if st.button("Build/Update RTM", key=f"rtm_build_{_k}", help="Pull from L/M and SOW 'shall' statements."):
             n = rtm_build_requirements(conn, int(rfp_id))
             st.success(f"Added {n} requirement(s).")
-    with cols[1]:
-    ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
-    if not ok_gate:
-        st.button("Export CSV", key=f"rtm_export_blocked_{_k}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
-    else:
-        path = rtm_export_csv(conn, int(rfp_id))
-        if path:
-            st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv", key=f"rtm_export_{_k}")
 
+    # Export with L/M gate
+    with cols[1]:
+        ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
+        if not ok_gate:
+            st.button("Export CSV", key=f"rtm_export_blocked_{_k}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
+        else:
+            path = rtm_export_csv(conn, int(rfp_id))
+            if path:
+                from pathlib import Path as _Path
+                st.download_button("Export CSV",
+                                   data=open(path, "rb").read(),
+                                   file_name=_Path(path).name,
+                                   mime="text/csv",
+                                   key=f"rtm_export_{_k}")
+
+    # Mark covered
     with cols[2]:
         if st.button("Mark all with evidence as Covered", key=f"rtm_mark_{_k}"):
             with closing(conn.cursor()) as cur:
                 cur.execute("""
                     UPDATE rtm_requirements
                     SET status='Covered', updated_at=?
-                    WHERE rfp_id=? AND id IN (SELECT r.id FROM rtm_requirements r LEFT JOIN rtm_links l ON l.rtm_id=r.id GROUP BY r.id HAVING COUNT(l.id) > 0);
+                    WHERE rfp_id=? AND id IN (
+                        SELECT r.id
+                        FROM rtm_requirements r
+                        LEFT JOIN rtm_links l ON l.rtm_id=r.id
+                        GROUP BY r.id
+                        HAVING COUNT(l.id) > 0
+                    );
                 """, (_now_iso(), int(rfp_id)))
                 conn.commit()
+
+    # Metrics
     m = rtm_metrics(conn, int(rfp_id))
     st.caption(f"Coverage: {m['covered']}/{m['total']} = {m['coverage']:.0%}")
+
     # Editor
     df = pd.read_sql_query("""
         SELECT r.id as rtm_id, r.req_key, r.source_type, r.page, r.text, r.status,
-               COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '\\n'), '') AS evidence
+               COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '
+'), '') AS evidence
         FROM rtm_requirements r
         LEFT JOIN rtm_links l ON l.rtm_id=r.id
         WHERE r.rfp_id=?
@@ -259,11 +280,19 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
     """, conn, params=(int(rfp_id),))
     df["add_link_type"] = ""
     df["add_link_target"] = ""
-    edited = st.data_editor(df, key=f"rtm_editor_{_k}", use_container_width=True, num_rows="dynamic", column_config={
-        "rtm_id": st.column_config.NumberColumn(disabled=True),
-        "text": st.column_config.TextColumn(width="large"),
-        "evidence": st.column_config.TextColumn(disabled=True)
-    })
+
+    edited = st.data_editor(
+        df,
+        key=f"rtm_editor_{_k}",
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "rtm_id": st.column_config.NumberColumn(disabled=True),
+            "text": st.column_config.TextColumn(width="large"),
+            "evidence": st.column_config.TextColumn(disabled=True),
+        },
+    )
+
     # Persist status changes and new links
     now = _now_iso()
     for _, row in edited.iterrows():
@@ -273,7 +302,8 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
             continue
         # Status change
         with closing(conn.cursor()) as cur:
-            cur.execute("UPDATE rtm_requirements SET status=?, updated_at=? WHERE id=?;", (row.get("status") or "Open", now, rid))
+            cur.execute("UPDATE rtm_requirements SET status=?, updated_at=? WHERE id=?;",
+                        (row.get("status") or "Open", now, rid))
         # New link
         lt = (row.get("add_link_type") or "").strip()
         tg = (row.get("add_link_target") or "").strip()
@@ -283,7 +313,6 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
                             (rid, lt, tg, "", now, now))
     conn.commit()
 
-# --- SAM Amendment awareness ---
 
 def _parse_sam_text_to_facts(txt: str) -> dict:
     d = {}
@@ -1659,11 +1688,12 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
         st.dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
         csvb = dfc.to_csv(index=False).encode("utf-8")
         st.warning("Checking L/M gate before export...")
-ok_gate, missing_gate = require_LM_minimum(conn, int(rid))
-    if not ok_gate:
-    st.button("Export CLIN CSV", key=f"p2_clin_csv_blocked_{rid}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
-    else:
-    st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
+        st.warning("Checking L/M gate before export...")
+        ok_gate, missing_gate = require_LM_minimum(conn, int(rid))
+        if not ok_gate:
+            st.button("Export CLIN CSV", key=f"p2_clin_csv_blocked_{rid}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
+        else:
+            st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
 
 
