@@ -711,6 +711,8 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
         except Exception:
             continue
         pages = extract_text_pages(b, mime) or []
+        if pages:
+            pages, _ocrn = ocr_pages_if_empty(b, mime, pages)
         if not pages:
             continue
         pages = pages[:max_pages]
@@ -764,271 +766,20 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
             yield t
         return
     ev_lines = []
-    for i, h in enumerate(hits, start=1):
-        tag = f"[C{i}]"
-        src = f"{h['file']} p.{h['page']}"
-        snip = h["text"].strip().replace("\n", " ")
-        ev_lines.append(f"{tag} {src} — {snip}")
-    evidence = "\n".join(ev_lines[:k])
-    system = SYSTEM_CO + " Use only the EVIDENCE provided. Add bracketed citations like [C1] next to claims tied to sources."
-    user = f"QUESTION: {question}\n\nEVIDENCE:\n{evidence}\n\nWrite a concise answer. If evidence is insufficient, say what is missing."
-    client = get_ai()
-    model_name = _resolve_model()
-    try:
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-            temperature=float(temperature),
-            stream=True
-        )
-    except Exception as _e:
-        if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            try:
-                resp = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-                    temperature=float(temperature),
-                    stream=True
-                )
-            except Exception as _e2:
-                yield f"AI unavailable: {type(_e2).__name__}: {_e2}"
-                return
-        else:
-            yield f"AI unavailable: {type(_e).__name__}: {_e}"
-            return
-    for ch in resp:
-        try:
-            delta = ch.choices[0].delta
-            if hasattr(delta, "content") and delta.content:
-                yield delta.content
-        except Exception:
-            pass
-def y1_ensure_schema_no_cache(conn: sqlite3.Connection) -> None:
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute('CREATE TABLE IF NOT EXISTS rfp_chunks(id INTEGER PRIMARY KEY, rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_chunks_rfp ON rfp_chunks(rfp_id);')
-            cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_chunk_key ON rfp_chunks(rfp_file_id, page, chunk_idx);')
-            conn.commit()
-    except Exception:
-        pass
+for i, h in enumerate(ev, start=1):
+    tag = f"[C{i}]"
+    src_line = f"{h.get('file','')} p.{h.get('page','')}"
+    snip = (h.get("text") or "").strip().replace("\n", " ")
+    ev_lines.append(f"{tag} {src_line} — {snip}")
+evidence = "\n".join(ev_lines)
 
-_ensure_y1_schema = y1_ensure_schema_no_cache
-# === end Y1 ===
-
-# === Y2: CO Chat with per-RFP memory (threads) ===
-
-def co_mode_for_thread(rfp_id: int | None, user_flag: str | None) -> str:
-    """
-    Decide mode for CO Chat.
-    - "CO_strict": default when an RFP id is present.
-    - "Research_flex": allows broader context and web research excerpts if enabled.
-    """
-    if isinstance(user_flag, str) and user_flag.strip().lower() in {"flex","research","on"}:
-        return "Research_flex"
-    return "CO_strict" if (rfp_id is not None and int(rfp_id) > 0) else "Research_flex"
-
-def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS rfp_threads(
-                    id INTEGER PRIMARY KEY,
-                    rfp_id INTEGER REFERENCES rfps(id) ON DELETE CASCADE,
-                    title TEXT,
-                    created_at TEXT,
-                    last_activity TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS rfp_msgs(
-                    id INTEGER PRIMARY KEY,
-                    thread_id INTEGER NOT NULL REFERENCES rfp_threads(id) ON DELETE CASCADE,
-                    role TEXT,
-                    content TEXT,
-                    ts TEXT
-                );
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_msgs_thread ON rfp_msgs(thread_id);")
-            conn.commit()
-    except Exception:
-        pass
-
-def y2_list_threads(conn: sqlite3.Connection, rfp_id: int) -> list[dict]:
-    _ensure_y2_schema(conn)
-    try:
-        df = pd.read_sql_query("SELECT id, title, created_at, last_activity FROM rfp_threads WHERE rfp_id=? ORDER BY COALESCE(last_activity, created_at) DESC, id DESC;", conn, params=(int(rfp_id),))
-        return ([] if df is None or df.empty else [{k:(row[k] if k in row else None) for k in df.columns} for _,row in df.iterrows()])
-    except Exception:
-        return []
-
-def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "New CO Chat") -> int:
-    _ensure_y2_schema(conn)
-    with closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO rfp_threads(rfp_id, title, created_at, last_activity) VALUES(?,?, datetime('now'), datetime('now'));", (int(rfp_id), title.strip() or "New CO Chat"))
-        conn.commit()
-        return int(cur.lastrowid)
-
-def y2_rename_thread(conn: sqlite3.Connection, thread_id: int, title: str) -> None:
-    _ensure_y2_schema(conn)
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("UPDATE rfp_threads SET title=?, last_activity=datetime('now') WHERE id=?;", (title.strip(), int(thread_id)))
-            conn.commit()
-    except Exception:
-        pass
-
-def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
-    _ensure_y2_schema(conn)
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("DELETE FROM rfp_threads WHERE id=?;", (int(thread_id),))
-            conn.commit()
-    except Exception:
-        pass
-
-def y2_get_messages(conn: sqlite3.Connection, thread_id: int) -> list[dict]:
-    _ensure_y2_schema(conn)
-    try:
-        df = pd.read_sql_query("SELECT role, content, ts FROM rfp_msgs WHERE thread_id=? ORDER BY id ASC;", conn, params=(int(thread_id),))
-        if df is None or df.empty:
-            return []
-        return [{"role": row["role"], "content": row["content"]} for _, row in df.iterrows()]
-    except Exception:
-        return []
-
-def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, content: str) -> None:
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("INSERT INTO rfp_msgs(thread_id, role, content, ts) VALUES(?,?,?, datetime('now'));", (int(thread_id), str(role), str(content)))
-            cur.execute("UPDATE rfp_threads SET last_activity=datetime('now') WHERE id=?;", (int(thread_id),))
-            conn.commit()
-    except Exception:
-        pass
-
-def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6) -> list[dict]:
-    """
-    Build messages for CO Chat with strict format.
-    If the user question is generic or short, produce a full CO Readout inside "Answer".
-    Output shape is fixed:
-    Answer
-    Citations: [C#,...]
-    Missing: [list or []]
-    """
-    def _is_generic(q: str) -> bool:
-        s = (q or "").strip().lower()
-        if len(s) < 8:
-            return True
-        generic_terms = [
-            "what is this", "overview", "break down", "breakdown", "help me understand",
-            "explain", "summarize", "summary", "walk me through", "details", "key points"
-        ]
-        return any(g in s for g in generic_terms)
-
-    system = (
-        "You are Contracting Officer Chat for ELA. Purpose answer questions strictly from EVIDENCE. "
-        "Never use outside knowledge. If evidence is insufficient say what is missing and stop. "
-        "Cite every factual claim with [C#] that maps to the cited chunk id. Style concise. "
-        "No speculation. No advice that changes scope. "
-        "If the question is generic or short, write a CO Readout in the Answer with these labeled parts: "
-        "Overview; Key dates; POCs; NAICS and set-aside; Place of performance; Scope summary; "
-        "Submission instructions; Evaluation criteria; CLINs summary; Risks; Missing items. Each labeled part must end with \"Sources: [C#,…]\"."
-        "\\nFormat:\\nAnswer\\nCitations: [C#,...]\\nMissing: [list or []]"
-    )
-
-    msgs: list[dict] = [{"role": "system", "content": system}]
-    # Research mode advisory
-    try:
-        import streamlit as _st_local  # ensure st
-        if bool(_st_local.session_state.get("y2_flex", False)):
-            msgs.append({"role":"system","content":"Research mode ON. Include policy context from research excerpts in EVIDENCE when helpful. Do not contradict the RFP text."})
-    except Exception:
-        pass
-
-    # Thread history
-    hist = y2_get_messages(conn, int(thread_id))
-    if len(hist) > 40:
-        try:
-            mid = hist[:-16]
-            joined = "\\n".join([f"{m['role'][:1]}: {m['content']}" for m in mid][-2000:])
-            client = get_ai()
-            model_name = _resolve_model()
-            try:
-                sr = client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role":"system","content":"Summarize the prior CO chat into 5 bullets with only facts and decisions."},
-                        {"role":"user","content":joined or "No content"}
-                    ],
-                    temperature=0.1
-                )
-                summ = sr.choices[0].message.content.strip() if sr and sr.choices else ""
-                if summ:
-                    msgs.append({"role":"system","content":"THREAD SUMMARY\\n" + summ})
-            except Exception:
-                pass
-        except Exception:
-            pass
-        msgs.extend(hist[-16:])
-    else:
-        msgs.extend(hist)
-
-    q_in = (user_q or "").strip()
-    long_mode = _is_generic(q_in)
-
-    # Evidence build with query expansion
-    queries = []
-    if q_in:
-        queries.append(q_in)
-    if long_mode:
-        queries.extend([
-            "offers due OR quotes due OR proposals due OR closing date OR submission deadline",
-            "questions due OR Q&A due OR RFI due",
-            "NAICS OR North American Industry Classification",
-            "set-aside OR small business set-aside OR 8(a) OR SDVOSB OR HUBZone OR WOSB",
-            "place of performance OR POP OR performance location OR site",
-            "Section L OR Instructions to Offerors OR submission instructions",
-            "Section M OR Evaluation OR basis of award OR best value OR LPTA",
-            "CLIN OR Schedule of Items OR Bid Schedule OR price sheet",
-            "period of performance OR POP OR base period OR option",
-            "Points of Contact OR POC OR contracting officer OR specialist OR email OR phone",
-            "Statement of Work OR SOW OR Performance Work Statement OR PWS OR scope",
-            "attachments OR amendment OR addendum OR incorporated by reference"
-        ])
-    queries.append("due date OR proposal due OR quotes due OR closing time")
-
-    seen = set()
-    ev = []
-    for qi in queries:
-        try:
-            hits = y1_search(conn, int(rfp_id), qi, k=int(max(k, 6 if long_mode else k)))
-        except Exception:
-            hits = []
-        for h in hits or []:
-            key = (h.get("file"), h.get("page"), (h.get("text") or "")[:80])
-            if key in seen:
-                continue
-            seen.add(key)
-            ev.append(h)
-
-    max_ev = 30 if long_mode else 14
-    ev = ev[:max_ev]
-
-    ev_lines = []
-    for i, h in enumerate(ev, start=1):
-        tag = f"[C{i}]"
-        src_line = f"{h.get('file','')} p.{h.get('page','')}"
-        snip = (h.get("text") or "").strip().replace("\\n"," ")
-        ev_lines.append(f"{tag} {src_line} — {snip}")
-    evidence = "\\n".join(ev_lines)
-
-    if long_mode:
-        user_hdr = "QUESTION\\nProvide a CO Readout with the labeled parts requested in the system message."
-    else:
-        user_hdr = "QUESTION\\n" + q_in
-    user = user_hdr + "\\n\\nEVIDENCE\\n" + (evidence if evidence else "(none)")
-    msgs.append({"role":"user","content": user})
-    return msgs
+if long_mode:
+    user_hdr = "QUESTION\nProvide a CO Readout with the labeled parts requested in the system message."
+else:
+    user_hdr = "QUESTION\n" + q_in
+user = user_hdr + "\n\nEVIDENCE\n" + (evidence if evidence else "(none)")
+msgs.append({"role":"user","content": user})
+return msgs
 
 def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
     msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
@@ -1562,6 +1313,213 @@ def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: s
     except Exception:
         pass
 # === end Y5 ===
+
+
+
+
+# === Phase 2: Dedicated finders and status chips ===
+def _collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
+    try:
+        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df = pd.DataFrame()
+    parts = []
+    for _, r in (df or pd.DataFrame()).iterrows():
+        b = r.get("bytes"); mime = r.get("mime") or ""
+        pages = extract_text_pages(b, mime) or []
+        if pages:
+            pages, _ = ocr_pages_if_empty(b, mime, pages)
+        parts.append("\n\n".join(pages))
+    return "\n\n".join([p for p in parts if p]).strip()
+
+def _upsert_meta(conn, rfp_id: int, key: str, value: str):
+    if not value:
+        return
+    with closing(conn.cursor()) as cur:
+        cur.execute("DELETE FROM rfp_meta WHERE rfp_id=? AND key=?;", (int(rfp_id), key))
+        cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), key, value))
+        conn.commit()
+
+def find_due_date(conn: sqlite3.Connection, rfp_id: int) -> str:
+    # Check SAM facts first
+    try:
+        row = pd.read_sql_query("SELECT extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)).iloc[0]
+        facts = json.loads(row["extracted_json"] or "{}")
+        if isinstance(facts, dict) and facts.get("offers_due"):
+            dd = str(facts["offers_due"]).strip()
+            _upsert_meta(conn, int(rfp_id), "offers_due", dd)
+            return dd
+    except Exception:
+        pass
+    # Search chunks
+    try:
+        dfc = pd.read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        dfc = pd.DataFrame()
+    t = " ".join((dfc["text"].tolist() if not dfc.empty else []))[:500000]
+    m = re.search(r"(?i)(offers|quotes|proposals)\s+due[^\d]{0,20}(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})", t)
+    if m:
+        dd = m.group(2).strip()
+        _upsert_meta(conn, int(rfp_id), "offers_due", dd); return dd
+    return ""
+
+def find_naics_setaside(conn: sqlite3.Connection, rfp_id: int) -> dict:
+    full = _collect_full_text(conn, int(rfp_id))
+    naics = _extract_naics(full)
+    set_aside = _extract_set_aside(full)
+    if naics: _upsert_meta(conn, int(rfp_id), "naics", naics)
+    if set_aside: _upsert_meta(conn, int(rfp_id), "set_aside", set_aside)
+    return {"naics": naics, "set_aside": set_aside}
+
+def find_pop(conn: sqlite3.Connection, rfp_id: int) -> dict:
+    full = _collect_full_text(conn, int(rfp_id))
+    pop = extract_pop_structure(full) or {}
+    for k, v in pop.items():
+        _upsert_meta(conn, int(rfp_id), k, str(v))
+    return pop
+
+def find_section_M(conn: sqlite3.Connection, rfp_id: int) -> int:
+    full = _collect_full_text(conn, int(rfp_id))
+    sec = extract_sections_L_M(full)
+    cnt = 0
+    with closing(conn.cursor()) as cur:
+        if sec.get("L"):
+            cur.execute("DELETE FROM rfp_sections WHERE rfp_id=? AND section='L';", (int(rfp_id),))
+            cur.execute("INSERT INTO rfp_sections(rfp_id, section, content) VALUES(?,?,?);", (int(rfp_id), "L", sec["L"][:200000]))
+            cnt += 1
+        if sec.get("M"):
+            cur.execute("DELETE FROM rfp_sections WHERE rfp_id=? AND section='M';", (int(rfp_id),))
+            cur.execute("INSERT INTO rfp_sections(rfp_id, section, content) VALUES(?,?,?);", (int(rfp_id), "M", sec["M"][:200000]))
+            cnt += 1
+        conn.commit()
+    return cnt
+
+def find_clins_all(conn: sqlite3.Connection, rfp_id: int) -> int:
+    full = _collect_full_text(conn, int(rfp_id))
+    rows = extract_clins(full)
+    try:
+        df = pd.read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        existing = set((str(r.get("clin","")), str(r.get("description",""))) for _, r in df.iterrows())
+    except Exception:
+        existing = set()
+    added = 0
+    with closing(conn.cursor()) as cur:
+        for r in rows:
+            key = (r.get("clin",""), r.get("description",""))
+            if key in existing:
+                continue
+            cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES(?,?,?,?,?,?,?);",
+                        (int(rfp_id), r.get("clin"), r.get("description"), r.get("qty"), r.get("unit"), r.get("unit_price"), r.get("extended_price")))
+            added += 1
+        conn.commit()
+    return added
+
+def _parse_money(x):
+    try:
+        s = str(x or "").replace(",", "").replace("$","").strip()
+        return float(s) if s else 0.0
+    except Exception:
+        return 0.0
+
+def clin_totals_df(conn: sqlite3.Connection, rfp_id: int):
+    try:
+        df = pd.read_sql_query("SELECT clin, description, qty, unit_price, extended_price FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return df
+    qn = []
+    up = []
+    ext = []
+    for _, r in df.iterrows():
+        try:
+            qn.append(float(str(r.get("qty","") or "0").replace(",","")))
+        except Exception:
+            qn.append(0.0)
+        up.append(_parse_money(r.get("unit_price")))
+        ext_val = _parse_money(r.get("extended_price"))
+        if not ext_val and qn[-1] and up[-1]:
+            ext_val = qn[-1]*up[-1]
+        ext.append(ext_val)
+    df["qty_num"] = qn; df["unit_price_num"] = up; df["extended_num"] = ext
+    return df
+
+def render_status_and_gaps(conn: sqlite3.Connection) -> None:
+    st.subheader("Status & Gaps")
+    try:
+        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        st.info("No RFPs yet."); return
+    if df_rf is None or df_rf.empty:
+        st.info("No RFPs yet."); return
+    rid = st.selectbox("RFP context", options=df_rf["id"].tolist(),
+                       format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}",
+                       key="p2_rfp")
+    c1, c2 = st.columns([1,1])
+    with c1:
+        if st.button("Run finders", key="p2_find"):
+            with st.spinner("Scanning RFP…"):
+                find_due_date(conn, int(rid))
+                find_naics_setaside(conn, int(rid))
+                find_pop(conn, int(rid))
+                find_section_M(conn, int(rid))
+                find_clins_all(conn, int(rid))
+            st.success("Updated metadata and sections.")
+            st.experimental_rerun()
+    # Chips
+    try:
+        dfm = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+        meta = {r["key"]: r["value"] for _, r in dfm.iterrows()} if dfm is not None and not dfm.empty else {}
+    except Exception:
+        meta = {}
+    due = meta.get("offers_due","")
+    naics = meta.get("naics","")
+    sa = meta.get("set_aside","")
+    pop = meta.get("pop_structure","") or meta.get("ordering_period_years","")
+    def chip(label, ok):
+        st.markdown(f"<span style='display:inline-block;padding:4px 8px;border-radius:12px;background:{'#DCF7E3' if ok else '#FBE8E8'};margin-right:6px'>{label}: {'OK' if ok else 'Missing'}</span>", unsafe_allow_html=True)
+    st.write("")
+    chips = []
+    chips.append(("Due", bool(due)))
+    chips.append(("NAICS", bool(naics)))
+    chips.append(("Set-Aside", bool(sa)))
+    chips.append(("POP", bool(pop)))
+    try:
+        has_M = pd.read_sql_query("SELECT 1 FROM rfp_sections WHERE rfp_id=? AND section='M' LIMIT 1;", conn, params=(int(rid),)).shape[0] > 0
+    except Exception:
+        has_M = False
+    try:
+        has_CLIN = pd.read_sql_query("SELECT 1 FROM clin_lines WHERE rfp_id=? LIMIT 1;", conn, params=(int(rid),)).shape[0] > 0
+    except Exception:
+        has_CLIN = False
+    chips.append(("Section M", has_M))
+    chips.append(("CLINs", has_CLIN))
+    for label, ok in chips:
+        chip(label, ok)
+    # Suggested questions
+    gaps = [lbl for lbl, ok in chips if not ok]
+    if gaps:
+        st.markdown("**Suggested questions**")
+        qs = []
+        if "Due" in gaps: qs.append("Confirm proposals due date and exact time zone.")
+        if "NAICS" in gaps: qs.append("What NAICS code applies and size standard?")
+        if "Set-Aside" in gaps: qs.append("What is the set-aside and eligibility?")
+        if "POP" in gaps: qs.append("What is the base and option structure for POP?")
+        if "Section M" in gaps: qs.append("List Section M factors and relative weights.")
+        if "CLINs" in gaps: qs.append("Extract CLIN schedule and quantities.")
+        st.write("\\n".join([f"- {q}" for q in qs]))
+    # CLIN totals + CSV
+    st.markdown("**CLIN totals**")
+    dfc = clin_totals_df(conn, int(rid))
+    if dfc is None or dfc.empty:
+        st.caption("No CLINs yet.")
+    else:
+        total = float(dfc["extended_num"].sum())
+        st.caption(f"Total Extended: ${total:,.2f}")
+        st.dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
+        csvb = dfc.to_csv(index=False).encode("utf-8")
+        st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
+
 
 
 
@@ -3049,6 +3007,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === end One‑Page Analyzer ===
 
     st.header("RFP Analyzer")
+    render_status_and_gaps(conn)
     from contextlib import contextmanager
     @contextmanager
     def _noop():
