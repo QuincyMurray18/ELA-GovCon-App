@@ -2984,6 +2984,35 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === end One‑Page Analyzer ===
 
     st.header("RFP Analyzer")
+
+    # === Phase 3: RTM + Amendment sidebar wiring ===
+    try:
+        _ctx = pd.read_sql_query("SELECT id, title, sam_url FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        _ctx = pd.DataFrame()
+    if _ctx is not None and not _ctx.empty:
+        rid_p3 = st.selectbox(
+            "RFP context (for RTM & Amendments)",
+            options=_ctx["id"].tolist(),
+            format_func=lambda i: f"#{i} — {_ctx.loc[_ctx['id']==i,'title'].values[0]}",
+            key="p3_rfp_sel"
+        )
+        sam_default = ""
+        try:
+            sam_default = _ctx.loc[_ctx["id"]==rid_p3, "sam_url"].values[0]
+        except Exception:
+            pass
+        cA, cB = st.columns([2,1])
+        with cA:
+            sam_url = st.text_input("SAM URL (for amendment tracking)", value=sam_default or "", key="p3_sam_url")
+        with cB:
+            ttl_hours = st.number_input("Cache TTL (hours)", min_value=1, max_value=168, value=72, step=1, key="p3_ttl")
+        # Sidebar: amendment diff and impact to-dos
+        render_amendment_sidebar(conn, int(rid_p3), sam_url, ttl_hours=int(ttl_hours))
+        # Main panel: full RTM coverage editor + metrics
+        with st.expander("Requirements Traceability Matrix (RTM)", expanded=True):
+            render_rtm_ui(conn, int(rid_p3))
+
     render_status_and_gaps(conn)
     from contextlib import contextmanager
     @contextmanager
