@@ -2469,11 +2469,152 @@ def extract_pop_structure(text: str) -> dict:
 
 
 # === Y5.5: AI-assisted Parse & Save (safe indent) ===
+
+# === Phase 3: Parser schema and normals (Y55) ===
+_Y55_SCHEMA = {
+    "title": str,
+    "solnum": str,
+    "meta": dict,          # may include: naics, set_aside, place_of_performance, due_offer, due_questions
+    "l_items": list,       # list[str]
+    "clins": list,         # list[dict]
+    "dates": list,         # list[dict]
+    "pocs": list           # list[dict]
+}
+
+def _y55_norm_date(s: str) -> str:
+    """
+    Normalize many date strings to 'YYYY MM DD'. Return '' if unknown.
+    """
+    import re, datetime
+    if not s:
+        return ""
+    t = str(s).strip()
+    # Remove time parts
+    t = re.sub(r'(\d{1,2}:\d{2}.*)$', '', t).strip()
+    # Try formats explicitly
+    fmts = ["%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%Y/%m/%d"]
+    for fmt in fmts:
+        try:
+            dt = datetime.datetime.strptime(t, fmt).date()
+            return f"{dt.year:04d} {dt.month:02d} {dt.day:02d}"
+        except Exception:
+            pass
+    # Fallback: grab mm/dd/yy or Month D, YYYY via regex
+    m = re.search(r'([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})', t)
+    if m:
+        try:
+            dt = datetime.datetime.strptime(m.group(0), "%B %d, %Y").date()
+        except Exception:
+            try:
+                dt = datetime.datetime.strptime(m.group(0), "%b %d, %Y").date()
+            except Exception:
+                dt = None
+        if dt:
+            return f"{dt.year:04d} {dt.month:02d} {dt.day:02d}"
+    m = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', t)
+    if m:
+        mm = int(m.group(1)); dd = int(m.group(2)); yy = int(m.group(3))
+        if yy < 100:
+            yy = 2000 + yy if yy < 50 else 1900 + yy
+        try:
+            dt = datetime.date(yy, mm, dd)
+            return f"{dt.year:04d} {dt.month:02d} {dt.day:02d}"
+        except Exception:
+            return ""
+    return ""
+
+def _y55_coerce_money(x):
+    try:
+        s = str(x or "").replace(",", "").replace("$","").strip()
+        return float(s) if s else 0.0
+    except Exception:
+        return 0.0
+
+def _y55_validate(d: dict) -> dict:
+    """
+    Ensure structure matches _Y55_SCHEMA.
+    Coerce money to numeric. Normalize date strings to 'YYYY MM DD' in dates[].date_iso and meta due_*.
+    Replace malformed parts with safe defaults.
+    """
+    import re
+    safe = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
+    if not isinstance(d, dict):
+        return safe
+    out = dict(safe)
+    # Scalars
+    out["title"] = str(d.get("title") or "")[:200]
+    out["solnum"] = str(d.get("solnum") or "")[:80]
+    # Meta
+    meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+    meta2 = {}
+    for k in ("naics","set_aside","place_of_performance","due_offer","due_questions"):
+        v = meta.get(k, "")
+        if k in ("due_offer","due_questions"):
+            meta2[k] = _y55_norm_date(v) if v else ""
+        else:
+            meta2[k] = str(v) if v is not None else ""
+    out["meta"] = meta2
+    # Lists
+    out["l_items"] = [str(x).strip() for x in (d.get("l_items") or []) if isinstance(x, (str,int,float))]
+    clins_in = d.get("clins") if isinstance(d.get("clins"), list) else []
+    clins_out = []
+    for r in clins_in:
+        if not isinstance(r, dict):
+            continue
+        clins_out.append({
+            "clin": str(r.get("clin") or ""),
+            "description": str(r.get("description") or "")[:300],
+            "qty": str(r.get("qty") or ""),
+            "unit": str(r.get("unit") or ""),
+            "unit_price": _y55_coerce_money(r.get("unit_price")),
+            "extended_price": _y55_coerce_money(r.get("extended_price")),
+        })
+    out["clins"] = clins_out
+    dates_in = d.get("dates") if isinstance(d.get("dates"), list) else []
+    dates_out = []
+    for r in dates_in:
+        if not isinstance(r, dict):
+            continue
+        lbl = str(r.get("label") or "").strip()
+        txt = str(r.get("date_text") or "").strip()
+        iso = _y55_norm_date(r.get("date_iso") or txt)
+        dates_out.append({"label": lbl, "date_text": txt, "date_iso": iso})
+    out["dates"] = dates_out
+    pocs_in = d.get("pocs") if isinstance(d.get("pocs"), list) else []
+    pocs_out = []
+    for r in pocs_in:
+        if not isinstance(r, dict):
+            continue
+        pocs_out.append({
+            "name": str(r.get("name") or ""),
+            "role": str(r.get("role") or "POC"),
+            "email": str(r.get("email") or ""),
+            "phone": str(r.get("phone") or ""),
+        })
+    out["pocs"] = pocs_out
+    # Derive due_offer / due_questions if not set, from dates[] labels
+    if not out["meta"].get("due_offer"):
+        for r in out["dates"]:
+            if re.search(r"(Offer|Proposal|Quote|Closing|Response Due)", r["label"], re.I):
+                if r.get("date_iso"):
+                    out["meta"]["due_offer"] = r["date_iso"]; break
+    if not out["meta"].get("due_questions"):
+        for r in out["dates"]:
+            if re.search(r"(Question|Q&A|Inquiry)", r["label"], re.I):
+                if r.get("date_iso"):
+                    out["meta"]["due_questions"] = r["date_iso"]; break
+    return out
+
+
 def y55_ai_parse(text: str) -> dict:
     out = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
     t = (text or "").strip()
     if not t:
+        
+        # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
+        out = _y55_validate(out)
         return out
+
     try:
         client = get_ai()
         model_name = _resolve_model()
@@ -2530,8 +2671,15 @@ def y55_ai_parse(text: str) -> dict:
         if not isinstance(out.get("meta"), dict): out["meta"] = {}
         out["title"] = (out.get("title") or "").strip()[:200]
         out["solnum"] = (out.get("solnum") or "").strip()[:80]
+        
+        # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
+        out = _y55_validate(out)
         return out
+
     except Exception:
+        
+        # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
+        out = _y55_validate(out)
         return out
 
 def _y55_norm_str(x):
