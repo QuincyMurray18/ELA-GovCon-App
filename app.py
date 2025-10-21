@@ -950,6 +950,17 @@ def _y1_search_uncached(conn: sqlite3.Connection, rfp_id: int, query: str, k: in
     # light re-rank: prefer balanced page coverage then score
     dedup.sort(key=lambda x: (-(x["score"]>0.70), -x["score"]), reverse=False)
     return dedup[:k]
+# --- Safe Y1 dispatcher to avoid NameError at runtime ---
+def _safe_y1_search(conn, rfp_id, query, k=6):
+    try:
+        return y1_search(conn, int(rfp_id), query or "", int(k)) or []
+    except NameError:
+        try:
+            return _y1_search_uncached(conn, int(rfp_id), query or "", int(k)) or []
+        except NameError:
+            return []
+
+
 
 
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
