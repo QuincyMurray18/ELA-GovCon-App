@@ -2600,14 +2600,20 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_research, tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs([
-        "Research", "Parse & Save", "Checklist", "CLINs/Dates/POCs",
-        "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"
-    ])
+    from contextlib import contextmanager
+    @contextmanager
+    def _noop():
+        yield
+    tab_research = _noop()
+    tab_parse = _noop()
+    tab_checklist = _noop()
+    tab_data = _noop()
+    tab_y1 = _noop()
+    tab_y2 = _noop()
+    tab_y4 = _noop()
+    st.caption('RFP Analyzer · single-page mode')
     with tab_research:
-        run_research_tab(conn)
-        run_research_tab(conn)
-# --- heuristics to auto-fill Title and Solicitation # ---
+        run_research_tab(conn)# --- heuristics to auto-fill Title and Solicitation # ---
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
