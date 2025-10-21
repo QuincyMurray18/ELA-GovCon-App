@@ -1131,6 +1131,14 @@ def render_analyzer(opp_id):
         analyzer_lm_readonly(int(opp_id))
     except Exception:
         pass
+    try:
+        if feature_flags().get('rtm', False):
+            st.markdown('---')
+            st.subheader('RTM')
+            render_rtm_tab(int(opp_id))
+    except Exception:
+        pass
+
 
 
 def render_compliance(opp_id):
@@ -11754,6 +11762,13 @@ def _rfp_phase1_maybe_store(nid: int):
     try:
         if res.get('ok'):
         try:
+            if feature_flags().get('rtm', False):
+                doc = build_rfpv1_from_notice(int(nid))
+                if doc:
+                    build_rtm(int(nid), doc)
+        except Exception:
+            pass
+        try:
             cnt = relock_on_amendment(int(nid))
             import streamlit as st
             st.session_state['amend_impact_count'] = cnt
@@ -17226,6 +17241,14 @@ def route_to(page, opp_id=None, tab=None):
 def feature_flags():
     return st.session_state.setdefault("feature_flags", {})
 
+# RTM flag default
+try:
+    ff = feature_flags()
+    ff.setdefault('rtm', False)
+except Exception:
+    pass
+
+
 # Observability flag default
 try:
     ff = feature_flags()
@@ -21781,3 +21804,141 @@ def render_env_switcher():
         st.success(f"Env set to {new_env}. Restart app to take effect for DB connection.")
 
 # === END PERSIST PHASE 6 ===
+
+
+
+# === RFP PHASE 3: Requirements Traceability Matrix (RTM) ===
+def ensure_rtm_schema():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS rtm(
+        id INTEGER PRIMARY KEY,
+        notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        req_id TEXT NOT NULL,
+        factor TEXT,
+        subfactor TEXT,
+        requirement TEXT NOT NULL,
+        target_section_key TEXT,
+        evidence_note TEXT,
+        status TEXT NOT NULL CHECK(status IN('Unmapped','Planned','Written','Reviewed')),
+        updated_at TEXT NOT NULL
+    );""" )
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_rtm_req ON rtm(notice_id, req_id);")
+    conn.commit()
+
+def build_rtm(notice_id: int, rfp_json: dict|None=None):
+    if not feature_flags().get('rtm', False):
+        return {'ok': False, 'disabled': True}
+    ensure_rtm_schema()
+    conn = get_db(); cur = conn.cursor()
+    nid = int(notice_id)
+    inserted = 0
+    # Primary source: lm_checklist rows as requirements with stable req_id
+    try:
+        rows = cur.execute("select req_id, factor, subfactor, requirement from lm_checklist where notice_id=?", (nid,)).fetchall()
+    except Exception:
+        rows = []
+    for req_id, factor, subfactor, requirement in rows:
+        if not req_id:
+            req_id = (str(requirement)[:64] or '').lower()
+        try:
+            cur.execute("""INSERT OR IGNORE INTO rtm(notice_id, req_id, factor, subfactor, requirement, status, updated_at)
+                        VALUES(?,?,?,?,?, 'Unmapped', datetime('now'))""", (nid, req_id, factor, subfactor, requirement))
+            if cur.rowcount:
+                inserted += 1
+        except Exception:
+            pass
+    conn.commit()
+    return {'ok': True, 'inserted': inserted}
+
+def rtm_update(nid:int, row_id:int, **fields):
+    ensure_rtm_schema()
+    conn = get_db(); cur = conn.cursor()
+    allowed = {"target_section_key","evidence_note","status"}
+    sets = []; vals = []
+    for k,v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?"); vals.append(v)
+    if not sets:
+        return False
+    sets.append("updated_at=datetime('now')")
+    sql = "UPDATE rtm SET " + ", ".join(sets) + " WHERE id=? AND notice_id=?"
+    vals.extend([int(row_id), int(nid)])
+    cur.execute(sql, vals)
+    conn.commit()
+    return True
+
+def rtm_coverage(nid:int):
+    import pandas as pd
+    ensure_rtm_schema()
+    conn = get_db()
+    try:
+        df = pd.read_sql_query("select factor, status from rtm where notice_id=?", conn, params=(int(nid),))
+    except Exception:
+        return {}, 0.0
+    if df.empty:
+        return {}, 0.0
+    score_map = {"Unmapped":0.0, "Planned":0.25, "Written":0.75, "Reviewed":1.0}
+    df['score'] = df['status'].map(score_map).fillna(0.0)
+    by_factor = df.groupby('factor')['score'].mean().to_dict()
+    overall = float(df['score'].mean())
+    return by_factor, overall
+
+def render_rtm_tab(nid:int):
+    import streamlit as st, pandas as pd
+    if not feature_flags().get('rtm', False):
+        return
+    ensure_rtm_schema()
+    conn = get_db()
+    st.markdown("#### Requirements Traceability Matrix")
+    # Seed if empty
+    cnt = conn.execute("select count(*) from rtm where notice_id=?", (int(nid),)).fetchone()[0]
+    if cnt == 0:
+        try:
+            doc = build_rfpv1_from_notice(int(nid))
+            build_rtm(int(nid), doc)
+        except Exception:
+            pass
+    # Filters
+    factors = pd.read_sql_query("select distinct factor from rtm where notice_id=? order by factor", conn, params=(int(nid),))
+    f1,f2 = st.columns([2,2])
+    with f1:
+        fac = st.selectbox("Filter: factor", options=["All"] + factors['factor'].dropna().tolist())
+    with f2:
+        st_opts = ["All","Unmapped","Planned","Written","Reviewed"]
+        stf = st.selectbox("Filter: status", options=st_opts, index=0)
+    q = "select id, req_id, factor, subfactor, requirement, target_section_key, evidence_note, status from rtm where notice_id=?"
+    params = [int(nid)]
+    if fac != "All":
+        q += " and factor=?"; params.append(fac)
+    if stf != "All":
+        q += " and status=?"; params.append(stf)
+    df = pd.read_sql_query(q + " order by factor, subfactor, id", conn, params=params)
+    edited = st.data_editor(df, use_container_width=True, num_rows=0,
+                            column_config={
+                                "status": st.column_config.SelectboxColumn(options=["Unmapped","Planned","Written","Reviewed"])
+                            },
+                            key=f"rtm_edit_{nid}")
+    if st.button("Save RTM"):
+        for _, row in edited.iterrows():
+            rid = int(row['id'])
+            rtm_update(nid, rid,
+                       target_section_key=row.get('target_section_key'),
+                       evidence_note=row.get('evidence_note'),
+                       status=row.get('status'))
+        st.success("RTM saved.")
+        st.experimental_rerun()
+    # Coverage
+    by_factor, overall = rtm_coverage(nid)
+    st.markdown("#### Coverage")
+    if by_factor:
+        c1,c2 = st.columns([2,1])
+        with c1:
+            pdf = (pd.DataFrame({'factor': list(by_factor.keys()), 'coverage': [round(v*100,1) for v in by_factor.values()] })
+                    .sort_values('coverage', ascending=False))
+            st.dataframe(pdf, use_container_width=True, hide_index=True)
+        with c2:
+            st.metric("Overall", f"{overall*100:.1f}%")
+    else:
+        st.info("No RTM rows.")
+# === END RFP PHASE 3 ===
