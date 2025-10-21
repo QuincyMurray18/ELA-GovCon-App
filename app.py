@@ -752,62 +752,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
     evidence = "\n".join(ev_lines)
     user = "QUESTION\n" + (q_in or "Provide a CO Readout.") + "\n\nEVIDENCE\n" + (evidence or "(none)")
     msgs = [{"role":"user","content": user}]
-return msgs
-def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
-    msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
-    for tok in ask_ai(msgs, temperature=temperature):
-        yield tok
-
-def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
-    msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
-    client = get_ai()
-    model_name = _resolve_model()
-    # Planning step (R3)
-    try:
-        ev_text = ""
-        for m in msgs:
-            if m.get("role")=="user" and "EVIDENCE" in (m.get("content") or ""):
-                ev_text = m["content"].split("EVIDENCE",1)[-1][:18000]
-                break
-        plan_sys = "Plan first. List the labeled parts you will produce and map each to [C#] you intend to use. No prose."
-        plan_user = "EVIDENCE" + (ev_text or "")
-        try:
-            pr = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role":"system","content": plan_sys},{"role":"user","content": plan_user}],
-                temperature=0.1
-            )
-        except Exception:
-            pr = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role":"system","content": plan_sys},{"role":"user","content": plan_user}],
-                temperature=0.1
-            )
-        plan = (pr.choices[0].message.content or "").strip()
-        if plan:
-            msgs.insert(1, {"role":"system","content": "Use this plan:\n" + plan[:1200]})
-    except Exception:
-        pass
-    try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
-    except Exception as _e:
-        if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
-        else:
-            yield f"AI unavailable: {type(_e).__name__}: {_e}"
-            return
-    for ch in resp:
-        try:
-            delta = ch.choices[0].delta
-            if hasattr(delta, "content") and delta.content:
-                yield delta.content
-        except Exception:
-            pass
-
-
-# === Y2 thread storage helpers (schema + CRUD) ===
-from contextlib import closing as _y2_closing
-
+    return msgs
 def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
     try:
         with _y2_closing(conn.cursor()) as cur:
