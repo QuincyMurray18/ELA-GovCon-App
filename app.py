@@ -438,51 +438,6 @@ UPLOADS_DIR = SETTINGS.UPLOADS_DIR
 def flag(name: str, default: bool=False) -> bool:
     return feature_flag(name, default)
 
-def feature_flag(name: str, default: bool=False) -> bool:
-    """
-    Read a feature flag from environment or Streamlit secrets.
-    Precedence: os.environ["FEATURE_<NAME>"] then st.secrets["features"][name] then default.
-    Does not raise if Streamlit is absent.
-    """
-    val = None
-    try:
-        import os as _os
-        env_key = f"FEATURE_{name.upper()}"
-        if env_key in _os.environ:
-            val = _os.environ[env_key]
-    except Exception:
-        pass
-
-
-def _guess_solnum(text: str) -> str:
-    if not text:
-        return ""
-    t = text
-    m = re.search(r'(?i)Solicitation\s*(?:Number|No\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', t)
-    if m:
-        return m.group(1)[:60]
-    m = re.search(r'\b([A-Z0-9]{2,6}[A-Z0-9\-]{0,4}\d{2}[A-Z]?-?[A-Z]?-?\d{3,6})\b', t)
-    if m:
-        return m.group(1)[:60]
-    m = re.search(r'\b(RFQ|RFP|IFB|RFI)[\s#:]*([A-Z0-9][A-Z0-9\-\._/]{3,})\b', t, re.I)
-    if m:
-        return (m.group(1).upper() + "-" + m.group(2))[:60]
-    return ""
-    if val is None:
-        try:
-            import streamlit as _st  # type: ignore
-            sec = _st.secrets.get("features", {})
-            if isinstance(sec, dict) and name in sec:
-                val = sec.get(name)
-        except Exception:
-            pass
-    if isinstance(val, str):
-        return val.lower() in {"1","true","yes","on"}
-    if isinstance(val, bool):
-        return val
-    return bool(val) if val is not None else bool(default)
-
-
 # External
 
 
@@ -759,27 +714,49 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
     rows.sort(key=lambda x: x["score"], reverse=True)
     return rows[:max(1, int(k))]
 
+
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
-    hits = y1_search(conn, int(rfp_id), question or "", k=k)
+    """
+    Streams a CO-style answer grounded in top-k chunk hits with [C#] citations.
+    Falls back to general answer if no hits.
+    """
+    hits = y1_search(conn, int(rfp_id), question or "", k=int(k)) or []
     if not hits:
-        for t in ask_ai([{"role":"user", "content": question or ""}], temperature=temperature):
-            yield t
+        for tok in ask_ai([{"role":"user","content": (question or "").strip()}], temperature=temperature):
+            yield tok
         return
     ev_lines = []
-for i, h in enumerate(ev, start=1):
-    tag = f"[C{i}]"
-    src_line = f"{h.get('file','')} p.{h.get('page','')}"
-    snip = (h.get("text") or "").strip().replace("\n", " ")
-    ev_lines.append(f"{tag} {src_line} — {snip}")
-evidence = "\n".join(ev_lines)
+    for i, h in enumerate(hits, start=1):
+        tag = f"[C{i}]"
+        src_line = f"{h.get('file','')} p.{h.get('page','')}"
+        snip = (h.get("text") or "").strip().replace("\n", " ")
+        ev_lines.append(f"{tag} {src_line} — {snip}")
+    evidence = "\n".join(ev_lines)
+    user = "QUESTION\n" + (question or "").strip() + "\n\nEVIDENCE\n" + evidence
+    for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
+        yield tok
 
-if long_mode:
-    user_hdr = "QUESTION\nProvide a CO Readout with the labeled parts requested in the system message."
-else:
-    user_hdr = "QUESTION\n" + q_in
-user = user_hdr + "\n\nEVIDENCE\n" + (evidence if evidence else "(none)")
-msgs.append({"role":"user","content": user})
-return msgs
+def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6):
+    """
+    Build a minimal message set for CO chat, embedding local evidence as [C#].
+    Returns a list of chat messages (no system role; ask_ai adds SYSTEM_CO).
+    """
+    q_in = (user_q or "").strip()
+    hits = y1_search(conn, int(rfp_id), q_in or "Section L and Section M requirements", k=int(k)) or []
+    ev_lines = []
+    for i, h in enumerate(hits, start=1):
+        tag = f"[C{i}]"
+        src = f"{h.get('file','')} p.{h.get('page','')}"
+        snip = (h.get('text') or '').strip().replace("\n", " ")
+        ev_lines.append(f"{tag} {src} — {snip}")
+    evidence = "\n".join(ev_lines)
+    user = "QUESTION\n" + (q_in or "Provide a CO Readout.") + "\n\nEVIDENCE\n" + (evidence or "(none)")
+    msgs = [{"role":"user","content": user}]
+# removed stray return msgs
+def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
+    msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
+    for tok in ask_ai(msgs, temperature=temperature):
+        yield tok
 
 def y2_stream_answer(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
     msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k))
