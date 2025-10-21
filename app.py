@@ -146,6 +146,7 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
              "Flag non-compliance. Be concise. If evidence is missing, say so.")
 
 # === helper: auto-select number of sources to cite (Y1–Y3) ===
+
 def y_auto_k(text: str) -> int:
     t = (text or '').lower()
     n = len(t)
@@ -154,8 +155,6 @@ def y_auto_k(text: str) -> int:
         'section l','section m','evaluation factors','factors','checklist',
         'compare','differences','conflict','conflicts','crosswalk','matrix'
     ])
-    with Research:
-        run_research_tab(conn)
     if not t.strip():
         return 4
     base = 7 if broad else 4
