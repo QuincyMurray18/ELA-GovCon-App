@@ -577,7 +577,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
         "No speculation. No advice that changes scope. "
         "If the question is generic or short, write a CO Readout in the Answer with these labeled parts: "
         "Overview; Key dates; POCs; NAICS and set-aside; Place of performance; Scope summary; "
-        "Submission instructions; Evaluation criteria; CLINs summary; Risks; Missing items. Each labeled part must end with "Sources: [C#,…]"."
+        "Submission instructions; Evaluation criteria; CLINs summary; Risks; Missing items. Each labeled part must end with \"Sources: [C#,…]\"."
         "\\nFormat:\\nAnswer\\nCitations: [C#,...]\\nMissing: [list or []]"
     )
 
@@ -755,7 +755,7 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
                 st.success("Deleted")
                 st.rerun()
     st.checkbox("Research mode (flex)", value=bool(st.session_state.get("y2_flex", False)), key="y2_flex")
-st.subheader("History")
+    st.subheader("History")
     msgs = y2_get_messages(conn, int(thread_id))
     if msgs:
         chat_md = []
@@ -2600,10 +2600,14 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     st.header("RFP Analyzer")
-    tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs(["Research", "Parse & Save", "Checklist", "CLINs/Dates/POCs", "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"])
-    
-
-    # --- heuristics to auto-fill Title and Solicitation # ---
+    tab_research, tab_parse, tab_checklist, tab_data, tab_y1, tab_y2, tab_y4 = st.tabs([
+        "Research", "Parse & Save", "Checklist", "CLINs/Dates/POCs",
+        "Ask with citations (Y1)", "CO Chat (Y2)", "CO Review (Y4)"
+    ])
+    with tab_research:
+        run_research_tab(conn)
+        run_research_tab(conn)
+# --- heuristics to auto-fill Title and Solicitation # ---
     def _guess_title(text: str, fallback: str) -> str:
         for line in (text or "").splitlines():
             s = line.strip()
