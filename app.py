@@ -627,7 +627,7 @@ def get_secret(section: str, key: str, default: _Optional[str]=None) -> _Optiona
 # ---- Feature flags ----
 _FEATURE_KEYS = [
     "sam_ingest_core", "sam_page_size", "pipeline_star",
-    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core", "deals_kanban"]
+    "rfp_analyzer_panel", "amend_tracking", "rfp_schema", "deals_core"]
 def init_feature_flags():
 
 # Deals Phase 1: init refresh token
@@ -9692,35 +9692,12 @@ except Exception:
 
 
 
-
-
-def get_deal_history(deal_id: int):
-    conn = get_db()
-    cur = conn.cursor()
-    row = cur.execute("SELECT stage_history FROM deals WHERE id=?", (int(deal_id),)).fetchone()
-    import json as _json
-    try:
-        return _json.loads(row[0] or "[]") if row else []
-    except Exception:
-        return []
 # === DEALS PHASE 1 HELPERS START ===
 def _bump_deals_refresh():
     import streamlit as st
     st.session_state["deals_refresh"] = int(st.session_state.get("deels_refresh_fix", st.session_state.get("deals_refresh", 0)) ) + 1
     # migrate key typo forward compatibility
     st.session_state["deels_refresh_fix"] = st.session_state["deals_refresh"]
-
-# Deals Phase 2: add stage_history and next_action
-try:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(deals)")}
-    if "stage_history" not in cols:
-        conn.execute("ALTER TABLE deals ADD COLUMN stage_history TEXT DEFAULT '[]'")
-    if "next_action" not in cols:
-        conn.execute("ALTER TABLE deals ADD COLUMN next_action TEXT")
-except Exception:
-    pass
-
-
 
 def upsert_deal_from_notice(user_id: str, notice_id: int, default_stage: str = "No Contact Made"):
     """Create or refresh a Deal row from a SAM notice. Idempotent via unique notice_id index."""
@@ -9783,33 +9760,12 @@ import streamlit as _st_deals_cache_alias  # alias to avoid shadowing
 @_st_deals_cache_alias.cache_data(show_spinner=False)
 def _load_deals(stage, q, _refresh_key):
     return list_deals(stage, q)
-
-
-def deal_badges(notice_id: int) -> dict:
-    """Return badges for compliance_state and rfq_coverage for a notice_id."""
-    out = {"compliance_state": None, "rfq_coverage": None}
-    try:
-        conn = get_db(); cur = conn.cursor()
-        # compliance_state from notices
-        row = cur.execute("SELECT compliance_state FROM notices WHERE id=?", (int(notice_id),)).fetchone()
-        out["compliance_state"] = (row[0] or "Unreviewed") if row else None
-        # rfq coverage from vendor_quotes linked via rfq table
-        rfq_row = cur.execute("SELECT id FROM rfq WHERE notice_id=? ORDER BY id DESC LIMIT 1", (int(notice_id),)).fetchone()
-        if rfq_row:
-            rfq_id = int(rfq_row[0])
-            cov_rows = cur.execute("SELECT coverage_score FROM vendor_quotes WHERE rfq_id=?", (rfq_id,)).fetchall()
-            scores = [float(r[0] or 0.0) for r in cov_rows if r and r[0] is not None]
-            if scores:
-                out["rfq_coverage"] = sum(scores)/len(scores)
-    except Exception:
-        pass
-    return out
 # === DEALS PHASE 1 HELPERS END ===
 def list_deals(stage: str | None = None, q: str | None = None):
     conn = get_db()
     ensure_deals_table(conn)
     cur = conn.cursor()
-    sql = "select id, title, stage, owner, amount, notes, agency, due_date, next_action, notice_id, created_at, updated_at from deals"
+    sql = "select id, title, stage, owner, amount, notes, agency, due_date, created_at, updated_at from deals"
     params = []
     where = []
     if stage and stage != "All":
@@ -9822,7 +9778,7 @@ def list_deals(stage: str | None = None, q: str | None = None):
         sql += " where " + " and ".join(where)
     sql += " order by updated_at desc, id desc"
     rows = cur.execute(sql, params).fetchall()
-    cols = ["id","title","stage","owner","amount","notes","agency","due_date","next_action","notice_id","created_at","updated_at"]
+    cols = ["id","title","stage","owner","amount","notes","agency","due_date","created_at","updated_at"]
     import pandas as pd
     return pd.DataFrame(rows, columns=cols)
 
@@ -9831,15 +9787,9 @@ def create_deal(title: str, stage: str, owner: str | None, amount: float | None,
     ensure_deals_table(conn)
     cur = conn.cursor()
     cur.execute("""
-        insert into deals (title, stage, owner, amount, notes, agency, due_date, stage_history)
-        values (?,?,?,?,?,?,?, json('[{"ts":'||strftime('%s','now')||',"from":null,"to":'||quote(?)||',"who":quote(coalesce(?,'system'))||'}]'))
+        insert into deals (title, stage, owner, amount, notes, agency, due_date)
+        values (?,?,?,?,?,?,?)
     """, (title, stage, owner, amount, notes, agency, due_date))
-    
-try:
-    cur.execute("UPDATE deals SET stage_history=json_insert(coalesce(stage_history,'[]'),'$[#]', json_object('ts', strftime('%s','now'), 'from', NULL, 'to', stage, 'who', coalesce(owner,'system'))) WHERE id=(SELECT max(id) FROM deals)")
-except Exception:
-    pass
-
     conn.commit()
     return cur.lastrowid
 
@@ -9852,15 +9802,6 @@ def add_deal(title: str, stage: str = "No Contact Made", owner: str | None = Non
     Ignores source/url for now but keeps signature stable."""
     return create_deal(title, stage, owner, amount, notes, agency, due_date)
 def update_deal(id_: int, **fields):
-# Detect stage change for history
-_old = None
-if "stage" in fields:
-    try:
-        _cur = conn.execute("SELECT stage FROM deals WHERE id=?", (int(id_),)).fetchone()
-        _old = _cur[0] if _cur else None
-    except Exception:
-        _old = None
-
     if not fields: return False
     conn = get_db()
     ensure_deals_table(conn)
@@ -9868,7 +9809,7 @@ if "stage" in fields:
     sets = []
     vals = []
     for k,v in fields.items():
-        if k not in {"title","stage","owner","amount","notes","agency","due_date","next_action"}:
+        if k not in {"title","stage","owner","amount","notes","agency","due_date"}:
             continue
         sets.append(f"{k} = ?")
         vals.append(v)
@@ -9879,15 +9820,6 @@ if "stage" in fields:
     cur.execute(sql, vals)
     conn.commit()
     return cur.rowcount > 0
-
-# Append stage history if changed
-try:
-    if "stage" in fields and _old is not None and fields.get("stage") != _old:
-        conn.execute("UPDATE deals SET stage_history = json_insert(coalesce(stage_history,'[]'),'$[#]', json_object('ts', strftime('%s','now'), 'from', ?, 'to', ?, 'who', coalesce(owner,'system'))) WHERE id = ?", (_old, fields.get("stage"), int(id_)))
-        conn.commit()
-except Exception:
-    pass
-
 
 def delete_deal(id_: int):
     conn = get_db()
@@ -9911,13 +9843,10 @@ try:
         with c2:
             q = st.text_input("Search", key="deals_search")
         with c3:
-            owner_filter = st.text_input("Owner filter", key="deals_owner_filter")
+            st.markdown(" ")
 
         # Data
         df = _load_deals(stage_filter, q, int(st.session_state.get('deals_refresh', 0)))
-        if owner_filter:
-            df = df[df["owner"].fillna("").str.contains(owner_filter, case=False)]
-        ))
 
         # Totals by stage (above grid)
         st.markdown("#### Totals by stage")
@@ -9971,7 +9900,7 @@ try:
             st.info("No deals yet. Add your first deal above.")
         else:
             edited = st.data_editor(
-                df[["id","title","stage","owner","amount","agency","due_date","next_action","notes"]],
+                df[["id","title","stage","owner","amount","agency","due_date","notes"]],
                 key="deals_editor",
                 num_rows="dynamic",
                 column_config={
@@ -9983,7 +9912,6 @@ try:
                     "agency": st.column_config.TextColumn("Agency"),
                     "owner": st.column_config.TextColumn("Owner"),
                     "due_date": st.column_config.TextColumn("Due date"),
-                    "next_action": st.column_config.TextColumn("Next action", width="medium"),
                 },
                 hide_index=True
             )
@@ -9992,7 +9920,7 @@ try:
             for _, row in edited.iterrows():
                 orig = df.loc[df["id"]==row["id"]].iloc[0]
                 updates = {}
-                for col in ["title","stage","owner","amount","notes","agency","due_date","next_action"]:
+                for col in ["title","stage","owner","amount","notes","agency","due_date"]:
                     if pd.isna(row[col]) and pd.isna(orig[col]):
                         continue
                     if (row[col] != orig[col]) and not (pd.isna(row[col]) and orig[col] in ("", None)):
@@ -10005,77 +9933,70 @@ try:
                 st.success(f"Saved {len(changes)} change(s).")
 
         # Kanban board
-        if feature_flags().get('deals_kanban'):
-            st.divider()
-                    if feature_flags().get('deals_kanban'):
-            st.markdown("### Board view  \n*Feature: deals_kanban*")
-                    st.caption("Column per stage with quick add, inline edits, and move.")
+        st.divider()
+        st.markdown("### Board view")
+        st.caption("Column per stage with quick add, inline edits, and move.")
 
-                    df_board = _load_deals(None, q, int(st.session_state.get('deals_refresh', 0)))
-                    import pandas as _pd2
-                    _counts = df_board.groupby("stage")["id"].count() if not df_board.empty else _pd2.Series(dtype=int)
-                    _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
-                    _totals = _amounts.groupby(df_board["stage"]).sum() if not df_board.empty else _pd2.Series(dtype=float)
-                    grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
-                    st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
+        df_board = _load_deals(None, q, int(st.session_state.get('deals_refresh', 0)))
+        import pandas as _pd2
+        _counts = df_board.groupby("stage")["id"].count() if not df_board.empty else _pd2.Series(dtype=int)
+        _amounts = _pd2.to_numeric(df_board["amount"], errors="coerce").fillna(0.0) if not df_board.empty else _pd2.Series(dtype=float)
+        _totals = _amounts.groupby(df_board["stage"]).sum() if not df_board.empty else _pd2.Series(dtype=float)
+        grand_total = float(_amounts.sum()) if not df_board.empty else 0.0
+        st.markdown(f"**Total pipeline value:** ${grand_total:,.2f}")
 
-                    cols = st.columns(len(DEAL_STAGES))
-                    for i, stage_name in enumerate(DEAL_STAGES):
-                        with cols[i]:
-                            st.markdown(f"#### {stage_name}")
-                            st.caption(f"{int(_counts.get(stage_name, 0))} deals • ${float(_totals.get(stage_name, 0.0)):,.2f}")
+        cols = st.columns(len(DEAL_STAGES))
+        for i, stage_name in enumerate(DEAL_STAGES):
+            with cols[i]:
+                st.markdown(f"#### {stage_name}")
+                st.caption(f"{int(_counts.get(stage_name, 0))} deals • ${float(_totals.get(stage_name, 0.0)):,.2f}")
 
-                            # Quick add in this stage
-                            with st.container(border=True):
-                                _new_title = st.text_input("New deal title", key=f"quick_new_title_{i}")
-                                qa1, qa2 = st.columns([1,1])
-                                with qa1:
-                                    _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
-                                with qa2:
-                                    _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
-                                if st.button("New in this stage", key=f"quick_new_btn_{i}"):
-                                    if _new_title.strip():
-                                        create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
-                                        st.success("Deal created")
+                # Quick add in this stage
+                with st.container(border=True):
+                    _new_title = st.text_input("New deal title", key=f"quick_new_title_{i}")
+                    qa1, qa2 = st.columns([1,1])
+                    with qa1:
+                        _new_owner = st.text_input("Owner", key=f"quick_new_owner_{i}")
+                    with qa2:
+                        _new_amount = st.number_input("Amount", min_value=0.0, step=100.0, value=0.0, format="%.2f", key=f"quick_new_amt_{i}")
+                    if st.button("New in this stage", key=f"quick_new_btn_{i}"):
+                        if _new_title.strip():
+                            create_deal(_new_title.strip(), stage_name, _new_owner.strip() or None, float(_new_amount) if _new_amount else None, None, None, None)
+                            st.success("Deal created")
+                            st.rerun()
+                        else:
+                            st.warning("Enter a title first")
+
+                # Cards for deals in this stage
+                stage_rows = df_board[df_board["stage"] == stage_name]
+                for _, row in stage_rows.iterrows():
+                    with st.container(border=True):
+                        st.markdown(f"**{row['title']}**")
+                        st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
+                        kc1, kc2 = st.columns([1,1])
+                        with kc1:
+                            new_owner = st.text_input("Owner", value=row["owner"] or "", key=f"owner_{row['id']}")
+                        with kc2:
+                            new_amt = st.number_input("Amount", value=float(row["amount"] or 0.0), step=100.0, format="%.2f", key=f"amt_{row['id']}")
+                        km1, km2 = st.columns([2,1])
+                        with km1:
+                            new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
+                        with km2:
+                            if st.button("Save", key=f"save_{row['id']}"):
+                                changes = {}
+                                if new_owner != (row["owner"] or ""):
+                                    changes["owner"] = new_owner or None
+                                if float(new_amt) != float(row["amount"] or 0.0):
+                                    changes["amount"] = float(new_amt)
+                                if new_stage != row["stage"]:
+                                    changes["stage"] = new_stage
+                                if changes:
+                                    ok = update_deal(int(row["id"]), **changes)
+                                    if ok:
+                                        st.success("Updated")
                                         st.rerun()
                                     else:
-                                        st.warning("Enter a title first")
-
-                            # Cards for deals in this stage
-                            stage_rows = df_board[df_board["stage"] == stage_name]
-                            for _, row in stage_rows.iterrows():
-                                with st.container(border=True):
-                                    _b = deal_badges(int(row.get('notice_id') or 0)) if row.get('notice_id') else {}
-                                    _cov = _b.get('rfq_coverage')
-                                    _state = _b.get('compliance_state')
-                                    badge = ''
-                                    if _state:
-                                        badge += f"  ·  Compliance: {_state}"
-                                    if _cov is not None:
-                                        try: badge += f"  ·  RFQ coverage: {float(_cov):.0f}%"
-                                        except Exception: pass
-                                    st.markdown(f"**{row['title']}**{badge}")
-                                    st.caption(f"Owner: {row['owner'] or 'Unassigned'}  •  Amount: ${float(row['amount'] or 0):,.2f}")
-                                    kc1, kc2 = st.columns([1,1])
-                                    with kc1:
-                                        next_action = st.text_input('Next action', value=row.get('next_action') or '', key=f"next_{row['id']}")
-                                        new_owner = st.text_input("Owner", value=row["owner"] or "", key=f"owner_{row['id']}")
-                                    with kc2:
-                                        new_amt = st.number_input("Amount", value=float(row["amount"] or 0.0), step=100.0, format="%.2f", key=f"amt_{row['id']}")
-                                    km1, km2 = st.columns([2,1])
-                                    with km1:
-                                        new_stage = st.selectbox("Move to", options=DEAL_STAGES, index=DEAL_STAGES.index(stage_name), key=f"mv_{row['id']}")
-                                                 if float(new_amt) != float(row["amount"] or 0.0):
-                                                changes["amount"] = float(new_amt)
-                                            if new_stage != row["stage"]:
-                                                changes["stage"] = new_stage
-                                            if changes:
-                                                ok = update_deal(int(row["id"]), **changes)
-                                                if ok:
-                                                    st.success("Updated")
-                                                    st.rerun()
-                                                else:
-                                                    st.error("No changes saved")
+                                        st.error("No changes saved")
 
         # Danger zone
         with st.expander("Danger zone: delete a deal"):
