@@ -3806,7 +3806,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                     for _, r in df_bytes.iterrows():
                                         fname = (r.get("filename") or f"file_{_}.bin")
                                         # Avoid directory traversal
-                                        fname = fname.replace("..","").replace("\","/").split("/")[-1]
+                                        fname = fname.replace("..","").replace("\\","/").split("/")[-1]
                                         b = r.get("bytes")
                                         if isinstance(b, (bytes, bytearray)):
                                             zf.writestr(fname, b)
