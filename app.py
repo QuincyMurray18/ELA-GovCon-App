@@ -900,8 +900,7 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                     conn.commit()
                 added += 1
     return {"ok": True, "added": added, "skipped": skipped}
-
-def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
+def _y1_search_uncached(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
     if not (query or "").strip():
         return []
@@ -7417,3 +7416,101 @@ def y_auto_k(text: str) -> int:
     if n > 1200:
         base += 1
     return max(3, min(8, base))
+
+
+# === PHASE 8: Latency and UX ===
+# Memoize y1_search by (rfp_id, query) and a snapshot of the chunks table to keep cache fresh.
+def _y1_snapshot(conn, rfp_id: int) -> str:
+    try:
+        df = pd.read_sql_query(
+            "SELECT COUNT(1) AS c, COALESCE(MAX(id),0) AS m FROM rfp_chunks WHERE rfp_id=?;",
+            conn, params=(int(rfp_id),)
+        )
+        c = int(df.iloc[0]["c"]) if df is not None and not df.empty else 0
+        m = int(df.iloc[0]["m"]) if df is not None and not df.empty else 0
+        return f"{c}:{m}"
+    except Exception:
+        return "0:0"
+
+try:
+    import streamlit as _st_phase8
+except Exception:
+    _st_phase8 = None
+
+if _st_phase8 is not None:
+    @_st_phase8.cache_data(show_spinner=False, ttl=600)
+    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
+        import sqlite3 as _sql8
+        # Re-open a read-only connection to keep cache pure
+        try:
+            conn2 = _sql8.connect(db_path, check_same_thread=False)
+        except Exception:
+            conn2 = _sql8.connect(db_path)
+        try:
+            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
+else:
+    # Fallback no-cache path when Streamlit not available
+    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
+        import sqlite3 as _sql8
+        conn2 = _sql8.connect(db_path, check_same_thread=False)
+        try:
+            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
+
+def y1_search(conn, rfp_id: int, query: str, k: int = 6):
+    # Compute snapshot to invalidate cache if chunks changed
+    snap = _y1_snapshot(conn, int(rfp_id))
+    try:
+        db_path = DB_PATH  # provided in app
+    except Exception:
+        # very conservative fallback
+        db_path = "data/govcon.db"
+    return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
+
+
+# Enable chunk-level streaming in Y2 and Y4
+def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
+    for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature):
+        yield tok
+
+# Re-define y4_stream_review to ensure true token streaming (shadow any earlier stub)
+def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
+    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", k=int(k))
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=msgs,
+            temperature=float(temperature),
+            stream=True
+        )
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=msgs,
+                temperature=float(temperature),
+                stream=True
+            )
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+# === end PHASE 8 ===
+
