@@ -1660,9 +1660,9 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
         csvb = dfc.to_csv(index=False).encode("utf-8")
         st.warning("Checking L/M gate before export...")
 ok_gate, missing_gate = require_LM_minimum(conn, int(rid))
-if not ok_gate:
+    if not ok_gate:
     st.button("Export CLIN CSV", key=f"p2_clin_csv_blocked_{rid}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
-else:
+    else:
     st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
 
