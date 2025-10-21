@@ -377,6 +377,39 @@ except Exception:
 import smtplib
 import streamlit as st
 
+# === Global extractors to avoid NameError in early calls ===
+def _extract_naics(text: str) -> str:
+    import re as _re
+    if not text:
+        return ""
+    m = _re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
+    if m:
+        return m.group(1)[:6]
+    m = _re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
+    if m:
+        return m.group(1)
+    m = _re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
+    return m.group(1) if m else ""
+
+def _extract_set_aside(text: str) -> str:
+    import re as _re
+    if not text:
+        return ""
+    tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
+    for t in tags:
+        if _re.search(rf'(?i)\\b{_re.escape(t)}\\b', text):
+            norm = t.upper().replace("(A)", "8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
+            if norm == "8(A)":
+                norm = "8A"
+            return norm
+    m = _re.search(r'(?i)Set[- ]Aside\\s*[:#]?\\s*([A-Za-z0-9 \\-/\\(\\)]+)', text)
+    if m:
+        v = m.group(1).strip()
+        v = _re.sub(r'\\s+', ' ', v)
+        return v[:80]
+    return ""
+# === End global extractors ===
+
 
 try:
     from rfp_onepage import run_rfp_analyzer_onepage
