@@ -1631,7 +1631,6 @@ def get_db() -> sqlite3.Connection:
                 org TEXT
             );
         """)
-        
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deals(
                 id INTEGER PRIMARY KEY,
@@ -1645,14 +1644,13 @@ def get_db() -> sqlite3.Connection:
                 created_at TEXT,
                 updated_at TEXT
             );
+        """)
         # Ensure new columns exist for Deals/SAM Watch
         try:
             _migrate_deals_columns(conn)
         except Exception:
             pass
-
-        """)
-        cur.execute("""
+cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings(
                 key TEXT PRIMARY KEY,
                 val TEXT
