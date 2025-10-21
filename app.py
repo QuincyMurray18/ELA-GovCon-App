@@ -561,7 +561,7 @@ def _resolve_model():
                 pass
     except Exception:
         pass
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return os.getenv("OPENAI_MODEL", "gpt-5")
 
 _ai_client = None
 def get_ai():
@@ -573,7 +573,7 @@ def get_ai():
         _ai_client = _Y0OpenAI()  # uses OPENAI_API_KEY from Streamlit secrets
     return _ai_client
 
-def ask_ai(messages, tools=None, temperature=0.2):
+def ask_ai(messages, tools=None, temperature=0.1):
     client = get_ai()
     model_name = _resolve_model()
     try:
@@ -583,7 +583,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
             tools=tools or [],
             temperature=float(temperature),
             stream=True
-        )
+        , top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
             model_name = "gpt-4o-mini"
@@ -593,7 +593,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
                 tools=tools or [],
                 temperature=float(temperature),
                 stream=True
-            )
+            , top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
@@ -1143,15 +1143,15 @@ Write a structured section with a short lead paragraph, 3–6 bullets, and an op
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 
-def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
+def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.1):
     msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
@@ -1203,10 +1203,10 @@ def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: 
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
     for ch in resp:
@@ -2753,14 +2753,12 @@ def y55_ai_parse(text: str) -> dict:
             resp = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
-                temperature=0.0
-            )
+                temperature=0.1, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         except Exception as _e:
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
-                temperature=0.0
-            )
+                temperature=0.1, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         raw = ""
         try:
             raw = resp.choices[0].message.content or ""
@@ -7078,10 +7076,10 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
