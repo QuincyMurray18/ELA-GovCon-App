@@ -571,41 +571,6 @@ def _resolve_model():
     return os.getenv("OPENAI_MODEL", "gpt-5")
 
 _ai_client = None
-
-# === Param guard for chat calls ===
-def _preferred_chat_params():
-    return {"temperature": 0.1, "top_p": 0.9, "presence_penalty": 0, "frequency_penalty": 0}
-
-def _strip_unsupported(params: dict) -> dict:
-    banned = {"temperature", "top_p", "presence_penalty", "frequency_penalty"}
-    return {k: v for k, v in params.items() if k not in banned}
-
-def _chat_create_safe(client, **payload):
-    """Try preferred params first, then retry without them on 400 unsupported_value."""
-    prefer = _preferred_chat_params()
-    p1 = {**payload, **prefer}
-    try:
-        return _chat_create_safe(client, **p1)
-    except Exception as _e:
-        # Retry without tuning params
-        p2 = _strip_unsupported(payload)
-        return _chat_create_safe(client, **p2)
-
-class _StreamingWrapper:
-    def __init__(self, client):
-        self.client = client
-    def create(self, **payload):
-        prefer = _preferred_chat_params()
-        p1 = {**payload, **prefer}
-        try:
-            return self._chat_stream_safe(client).create(**p1)
-        except Exception:
-            p2 = _strip_unsupported(payload)
-            return self._chat_stream_safe(client).create(**p2)
-
-def _chat_stream_safe(client):
-    return _StreamingWrapper(client)
-# === end Param guard ===
 def get_ai():
     import streamlit as st  # ensure st exists
     global _ai_client
@@ -619,7 +584,7 @@ def ask_ai(messages, tools=None, temperature=0.1):
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = _chat_create_safe(client, 
+        resp = client.chat.completions.create(
             model=model_name,
             messages=[{"role":"system","content": SYSTEM_CO}, *messages],
             tools=tools or [],
@@ -629,7 +594,7 @@ def ask_ai(messages, tools=None, temperature=0.1):
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
             model_name = "gpt-4o-mini"
-            resp = _chat_create_safe(client, 
+            resp = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role":"system","content": SYSTEM_CO}, *messages],
                 tools=tools or [],
@@ -713,84 +678,18 @@ def _resolve_embed_model() -> str:
     import os as _os
     return _os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
-
-def _embed_cache_dir() -> str:
-    d = os.path.join(DATA_DIR, "embed_cache")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
-    return d
-
-def _embed_cache_key(model: str, text: str) -> str:
-    try:
-        import hashlib as _h
-        return _h.sha256((model + "\n" + (text or "")).encode("utf-8")).hexdigest()
-    except Exception:
-        return str(abs(hash(model + "|" + (text or ""))))
-
-def _embed_load(model: str, text: str):
-    key = _embed_cache_key(model, text)
-    path = os.path.join(_embed_cache_dir(), key + ".json")
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:
-        return None
-
-def _embed_store(model: str, text: str, vec):
-    key = _embed_cache_key(model, text)
-    path = os.path.join(_embed_cache_dir(), key + ".json")
-    try:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(list(vec or []), fh)
-    except Exception:
-        pass
-
-def _resolve_embed_model() -> str:
-    # Streamlit secrets or env, else default
-    try:
-        import streamlit as _st
-        for k in ("OPENAI_EMBED_MODEL","openai_embed_model","EMBED_MODEL"):
-            v = _st.secrets.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-    except Exception:
-        pass
-    import os as _os
-    return _os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
-
 def _embed_texts(texts: list[str]) -> list[list[float]]:
     client = get_ai()
     model = _resolve_embed_model()
-    # Try cache first
-    clean = [(t if (t or "").strip() else " ") for t in texts]
-    out: list[list[float]] = [None] * len(clean)  # type: ignore
-    to_query_idx = []
-    to_query_texts = []
-    for i, t in enumerate(clean):
-        cached = _embed_load(model, t)
-        if isinstance(cached, list) and cached:
-            out[i] = list(cached)  # type: ignore
-        else:
-            to_query_idx.append(i)
-            to_query_texts.append(t)
-
-    if to_query_texts:
+    clean = [t if (t or "").strip() else " " for t in texts]
+    resp = client.embeddings.create(model=model, input=clean)
+    out = []
+    for d in resp.data:
         try:
-            resp = client.embeddings.create(model=model, input=to_query_texts)
-            for i, d in enumerate(resp.data):
-                vec = list(d.embedding) if hasattr(d, "embedding") else []
-                idx = to_query_idx[i]
-                out[idx] = vec
-                _embed_store(model, to_query_texts[i], vec)
+            out.append(list(d.embedding))
         except Exception:
-            # Fallback to empty vectors
-            for i, _ in enumerate(to_query_texts):
-                out[to_query_idx[i]] = []
-
-    # Replace any None with empty list
-    return [v if isinstance(v, list) else [] for v in out]
+            out.append([])
+    return out
 
 def _cos_sim(u: list[float], v: list[float]) -> float:
     if not u or not v:
@@ -809,7 +708,7 @@ def _cos_sim(u: list[float], v: list[float]) -> float:
         den = (su**0.5) * (sv**0.5)
         return (num / den) if den else 0.0
 
-def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[str]:
+def _split_chunks(text: str, max_chars: int = 1600, overlap: int = 200) -> list[str]:
     t = (text or "").strip()
     if not t:
         return []
@@ -826,7 +725,6 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
         chunks.append(chunk)
         i = max(j - overlap, j)
     return chunks
-
 
 def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     _ensure_y1_schema(conn)
@@ -851,13 +749,9 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
         if not pages:
             continue
         pages = pages[:max_pages]
-        # Build all chunks first to enable batch embedding + caching
-        batch_chunks = []
-        keys = []  # (fid, pi, ci, text)
         for pi, txt in enumerate(pages, start=1):
-            parts = _split_chunks(txt or "", 1200, 180)
+            parts = _split_chunks(txt or "", 1600, 200)
             for ci, ch in enumerate(parts):
-                # Skip if exists and not rebuilding
                 try:
                     if not rebuild:
                         q = pd.read_sql_query("SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;", conn, params=(fid, pi, ci))
@@ -866,20 +760,15 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                             continue
                 except Exception:
                     pass
-                keys.append((fid, pi, ci, ch))
-                batch_chunks.append(ch)
-        if batch_chunks:
-            embs = _embed_texts(batch_chunks)
-            with closing(conn.cursor()) as cur:
-                for (fid2, pi2, ci2, ch2), emb in zip(keys, embs):
-                    cur.execute(
-                        "INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb) VALUES(?,?,?,?,?,?,?);",
-                        (int(rfp_id), fid2, name, int(pi2), int(ci2), ch2, json.dumps(emb))
-                    )
-                conn.commit()
-                added += len(batch_chunks)
+                emb = _embed_texts([ch])[0]
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb)
+                        VALUES(?,?,?,?,?,?,?);
+                    """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
+                    conn.commit()
+                added += 1
     return {"ok": True, "added": added, "skipped": skipped}
-
 
 def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
@@ -891,10 +780,7 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
         return []
     if df is None or df.empty:
         return []
-    # Clamp and normalize k
-    k = int(max(1, min(8, k)))
     q_emb = _embed_texts([query])[0]
-    q_terms = set([t for t in re.findall(r"[A-Za-z0-9]+", (query or "").lower()) if len(t) > 2])
     rows = []
     for _, r in df.iterrows():
         try:
@@ -902,32 +788,9 @@ def y1_search(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> 
         except Exception:
             emb = []
         sim = _cos_sim(q_emb, emb)
-        txt = r.get("text") or ""
-        # token overlap ratio
-        t_terms = set([t for t in re.findall(r"[A-Za-z0-9]+", txt.lower()) if len(t) > 2])
-        overlap = 0.0
-        if q_terms:
-            overlap = len(q_terms & t_terms) / float(len(q_terms))
-        score = 0.85 * float(sim) + 0.15 * float(overlap)
-        rows.append({
-            "id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"),
-            "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0),
-            "text": txt, "score": round(score, 6)
-        })
-    # Primary sort by reranked score
+        rows.append({"id": int(r["id"]), "fid": int(r["rfp_file_id"]), "file": r.get("file_name"), "page": int(r.get("page") or 0), "chunk": int(r.get("chunk_idx") or 0), "text": r.get("text") or "", "score": round(float(sim), 6)})
     rows.sort(key=lambda x: x["score"], reverse=True)
-    # Deduplicate by file+page to improve citation diversity
-    seen_fp = set()
-    uniq = []
-    for r in rows:
-        key = (r["file"], r["page"])
-        if key in seen_fp:
-            continue
-        seen_fp.add(key)
-        uniq.append(r)
-        if len(uniq) >= k:
-            break
-    return uniq
+    return rows[:max(1, int(k))]
 
 
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
@@ -935,7 +798,7 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
     Streams a CO-style answer grounded in top-k chunk hits with [C#] citations.
     Falls back to general answer if no hits.
     """
-    hits = y1_search(conn, int(rfp_id), question or "", k=min(int(k), 8)) or []
+    hits = y1_search(conn, int(rfp_id), question or "", k=int(k)) or []
     if not hits:
         for tok in ask_ai([{"role":"user","content": (question or "").strip()}], temperature=temperature):
             yield tok
@@ -957,7 +820,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
     Returns a list of chat messages (no system role; ask_ai adds SYSTEM_CO).
     """
     q_in = (user_q or "").strip()
-    hits = y1_search(conn, int(rfp_id), q_in or "Section L and Section M requirements", k=min(int(k), 8)) or []
+    hits = y1_search(conn, int(rfp_id), q_in or "Section L and Section M requirements", k=int(k)) or []
     ev_lines = []
     for i, h in enumerate(hits, start=1):
         tag = f"[C{i}]"
@@ -1292,10 +1155,10 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = _chat_create_safe(client, model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = _chat_create_safe(client, model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
@@ -1347,10 +1210,10 @@ def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: 
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = _chat_create_safe(client, model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = _chat_create_safe(client, model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
     for ch in resp:
@@ -2944,12 +2807,12 @@ def y55_ai_parse(text: str) -> dict:
             "RFP TEXT START\n" + t[:180000] + "\nRFP TEXT END"
         )
         try:
-            resp = _chat_create_safe(client, 
+            resp = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
                 temperature=0.1, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         except Exception as _e:
-            resp = _chat_create_safe(client, 
+            resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
                 temperature=0.1, top_p=0.9, presence_penalty=0, frequency_penalty=0)
@@ -7270,10 +7133,10 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
     client = get_ai()
     model_name = _resolve_model()
     try:
-        resp = _chat_create_safe(client, model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
     except Exception as _e:
         if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = _chat_create_safe(client, model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True, top_p=0.9, presence_penalty=0, frequency_penalty=0)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
