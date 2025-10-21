@@ -959,6 +959,26 @@ def _safe_y1_search(conn, rfp_id, query, k=6):
             return _y1_search_uncached(conn, int(rfp_id), query or "", int(k)) or []
         except NameError:
             return []
+# --- Robust Y1 shim: guarantees y1_search exists ---
+if 'y1_search' not in globals():
+    def y1_search(conn, rfp_id: int, query: str, k: int = 6):
+        try:
+            snap = _y1_snapshot(conn, int(rfp_id))
+        except Exception:
+            snap = None
+        try:
+            db_path = DB_PATH
+        except Exception:
+            db_path = "data/govcon.db"
+        try:
+            return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
+        except Exception:
+            try:
+                return _y1_search_uncached(conn, int(rfp_id), query or "", int(k))
+            except Exception:
+                return []
+
+
 
 
 
