@@ -1650,7 +1650,7 @@ def get_db() -> sqlite3.Connection:
             _migrate_deals_columns(conn)
         except Exception:
             pass
-cur.execute("""
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings(
                 key TEXT PRIMARY KEY,
                 val TEXT
