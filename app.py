@@ -19,6 +19,40 @@ except Exception:
     class _Dummy: pass
     _rtm_st = _Dummy()
 
+def _migrate_deals_columns(conn):
+    """
+    Add columns used by Deals and SAM Watch if missing. Idempotent.
+    """
+    try:
+        import pandas as _pd
+        from contextlib import closing
+        cur_cols = _pd.read_sql_query("PRAGMA table_info(deals);", conn)
+        have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
+    except Exception:
+        have = set()
+
+    def _add(col, ddl):
+        if col not in have:
+            try:
+                from contextlib import closing
+                with closing(conn.cursor()) as _c:
+                    _c.execute(f"ALTER TABLE deals ADD COLUMN {ddl};")
+                conn.commit()
+            except Exception:
+                pass
+
+    _add("agency", "agency TEXT")
+    _add("value", "value REAL")
+    _add("sam_url", "sam_url TEXT")
+    _add("notice_id", "notice_id TEXT")
+    _add("solnum", "solnum TEXT")
+    _add("posted_date", "posted_date TEXT")
+    _add("rfp_deadline", "rfp_deadline TEXT")
+    _add("naics", "naics TEXT")
+    _add("psc", "psc TEXT")
+
+
+
 # Bridge names
 sqlite3 = _rtm_sqlite3
 pd = _rtm_pd
@@ -1611,6 +1645,12 @@ def get_db() -> sqlite3.Connection:
                 created_at TEXT,
                 updated_at TEXT
             );
+        # Ensure new columns exist for Deals/SAM Watch
+        try:
+            _migrate_deals_columns(conn)
+        except Exception:
+            pass
+
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings(
