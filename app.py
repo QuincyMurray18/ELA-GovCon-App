@@ -191,8 +191,15 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
             st.success(f"Added {n} requirement(s).")
     with cols[1]:
         path = rtm_export_csv(conn, int(rfp_id))
+        ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
         if path:
-            st.download_button("Export CSV", data=open(path,'rb').read(), file_name=Path(path).name, mime="text/csv", key=f"rtm_export_{_k}")
+            st.download_button("Export CSV",
+                               data=open(path,'rb').read(),
+                               file_name=Path(path).name,
+                               mime="text/csv",
+                               key=f"rtm_export_{_k}",
+                               disabled=not ok_gate,
+                               help=("Blocked: missing " + ", ".join(missing_gate)) if not ok_gate else "Export RTM as CSV")
     with cols[2]:
         if st.button("Mark all with evidence as Covered", key=f"rtm_mark_{_k}"):
             with closing(conn.cursor()) as cur:
@@ -1251,6 +1258,10 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
     chunking = st.checkbox("Auto-chunk long text", value=True, key="y5_chunk_on")
     run = st.button("Run CO Review", type="primary", key="y4_go")
     if run:
+        ok, missing = require_LM_minimum(conn, int(rfp_id))
+        if not ok:
+            st.error("Missing required items: " + ", ".join(missing) + ". Run finders and fill the gaps before review.")
+            return
         if not (draft_text or "").strip():
             st.warning("Provide input text."); return
         texts = y5_chunk_text(draft_text) if chunking else [draft_text]
@@ -1537,6 +1548,45 @@ def clin_totals_df(conn: sqlite3.Connection, rfp_id: int):
     df["qty_num"] = qn; df["unit_price_num"] = up; df["extended_num"] = ext
     return df
 
+def require_LM_minimum(conn, rfp_id: int) -> tuple[bool, list[str]]:
+    """
+    Gatekeeper for L/M minimums before CO review and exports.
+    Returns (ok, missing_labels). Missing labels come from the same set used in Status & Gaps chips.
+    Required: Due date, NAICS, Set-Aside, POP, Section M, and at least one CLIN.
+    """
+    try:
+        import pandas as _pd
+        from contextlib import closing as _closing
+        # meta
+        try:
+            dfm = _pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+            meta = {r["key"]: r["value"] for _, r in dfm.iterrows()} if dfm is not None and not dfm.empty else {}
+        except Exception:
+            meta = {}
+        # individual checks
+        checks = []
+        checks.append(("Due", bool(meta.get("offers_due",""))))
+        checks.append(("NAICS", bool(meta.get("naics",""))))
+        checks.append(("Set-Aside", bool(meta.get("set_aside",""))))
+        # POP can be either pop_structure or ordering_period_years present
+        pop_ok = bool(meta.get("pop_structure","") or meta.get("ordering_period_years",""))
+        checks.append(("POP", pop_ok))
+        try:
+            has_M = _pd.read_sql_query("SELECT 1 FROM rfp_sections WHERE rfp_id=? AND section='M' LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
+        except Exception:
+            has_M = False
+        checks.append(("Section M", has_M))
+        try:
+            has_CLIN = _pd.read_sql_query("SELECT 1 FROM clin_lines WHERE rfp_id=? LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
+        except Exception:
+            has_CLIN = False
+        checks.append(("CLINs", has_CLIN))
+        missing = [lbl for lbl, ok in checks if not ok]
+        return (len(missing) == 0, missing)
+    except Exception:
+        # Fail closed if unexpected error
+        return (False, ["Due","NAICS","Set-Aside","POP","Section M","CLINs"])
+
 def render_status_and_gaps(conn: sqlite3.Connection) -> None:
     st.subheader("Status & Gaps")
     try:
@@ -1611,7 +1661,14 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
         st.caption(f"Total Extended: ${total:,.2f}")
         st.dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
         csvb = dfc.to_csv(index=False).encode("utf-8")
-        st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
+        ok_gate2, missing_gate2 = require_LM_minimum(conn, int(rid))
+        st.download_button("Export CLIN CSV",
+                           data=csvb,
+                           file_name=f"rfp_{int(rid)}_clins.csv",
+                           mime="text/csv",
+                           key=f"p2_clin_csv_{rid}",
+                           disabled=not ok_gate2,
+                           help=("Blocked: missing " + ", ".join(missing_gate2)) if not ok_gate2 else "Download CLINs CSV")
 
 
 
