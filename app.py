@@ -7773,7 +7773,7 @@ def s1_discover_emails_from_site(url: str, max_emails: int = 3):
         # filter common junk
         cleaned = []
         for m in mails:
-            m2 = m.strip().strip(".,);:>'"")
+            m2 = m.strip().strip(".,);:\'>\\"")
             if len(m2) > 4 and "example.com" not in m2.lower():
                 cleaned.append(m2)
         return cleaned[:max_emails]
