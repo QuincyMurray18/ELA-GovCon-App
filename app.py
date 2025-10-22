@@ -4208,7 +4208,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                                (_guess_title(full_text, title.strip() or "Untitled"), (solnum.strip() or _guess_solnum(full_text)), "", sam_url.strip() or "", "",)
+                                ((_title_in or _guess_title(full_text, "Untitled")) or "Untitled"), (solnum.strip() or (_solnum_in or _guess_solnum(full_text))), "", _sam_in, "",)
                             )
                             rfp_id = cur.lastrowid
                             for it in l_items:
@@ -4295,7 +4295,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                                (_guess_title(text, f.name), _guess_solnum(text), "", "", "",)
+                                ((_title_in or _guess_title(text, f.name)), (_solnum_in or _guess_solnum(text)), (_parse_sam_notice_id(_sam_in) or ""), _sam_in, "", )
                             )
                             rfp_id = cur.lastrowid
                             for it in l_items:
