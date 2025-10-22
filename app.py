@@ -8316,78 +8316,18 @@ def run_outreach(conn):
             _delete_template(conn, sel_name)
             st.warning("Deleted")
             st.rerun()
-
-    # Recipients
-    st.subheader("Recipients")
-    st.caption("Paste or upload a CSV with columns: email, contact, company. Name column optional.")
-    recipients_text = st.text_area("Recipients CSV", value="email,contact,company\nexample@vendor.com,Alex Vendor,VendorCo", height=120)
-    recipients = []
-    try:
-        lines = [ln.strip() for ln in recipients_text.strip().splitlines() if ln.strip()]
-        headers = [h.strip().lower() for h in lines[0].split(",")]
-        for ln in lines[1:]:
-            parts = [p.strip() for p in ln.split(",")]
-            row = dict(zip(headers, parts))
-            recipients.append({
-                "email": row.get("email",""),
-                "contact": row.get("contact",""),
-                "company": row.get("company",""),
-                "name": row.get("name","") or row.get("contact","")
-            })
-    except Exception:
-        st.error("Invalid CSV")
-        recipients = []
-
-    # Preview per recipient
-    st.subheader("Preview")
-    pack_files = _find_pack_files_for_notice(tags.get("notice_id"))
-    if auto_files and pack_files:
-        st.info(f"Auto-attached {len(pack_files)} files from RFQ Pack")
-    elif auto_files:
-        st.warning("No RFQ Pack files found for this notice")
-
-    if recipients:
-        for i, r in enumerate(recipients[:50]):  # limit previews to 50
-            r_tags = dict(tags)
-            r_tags["company"] = r.get("company","")
-            r_tags["contact"] = r.get("contact","")
-            subject = _render_template(subj_edit, r_tags)
-            body = _render_template(body_edit, r_tags)
-            with st.expander(f"{i+1}. {r.get('email','')} • {r.get('company','')}", expanded=False):
-                st.write({"subject": subject, "body": body[:1000]})
+    # Preview
+    # If app already provides a preview, call it with tags and pack_files.
+    if 'render_outreach_preview' in globals():
+        try:
+            render_outreach_preview(conn, tags)
+        except Exception:
+            pass
     else:
-        st.info("Add at least one recipient to see previews")
-
-    # Test send
-    st.subheader("Test send")
-    colT1, colT2 = st.columns([2,1])
-    with colT1:
-        test_to = st.text_input("Test email to")
-    with colT2:
-        smtp_host = st.text_input("SMTP host", value=os.getenv("SMTP_HOST",""))
-    colT3, colT4 = st.columns([1,1])
-    with colT3:
-        smtp_user = st.text_input("SMTP user", value=os.getenv("SMTP_USER",""))
-    with colT4:
-        smtp_pass = st.text_input("SMTP pass", type="password", value=os.getenv("SMTP_PASS",""))
-    smtp_cfg = {"host": smtp_host, "user": smtp_user, "pass": smtp_pass, "from": os.getenv("SMTP_FROM","")}
-
-    if st.button("Send test to me"):
-        subject = _render_template(subj_edit, tags)
-        body = _render_template(body_edit, tags)
-        ok, msg = _send_test_email(smtp_cfg, test_to, subject, body, pack_files if auto_files else [])
-        if ok:
-            st.success("Test email sent")
-        else:
-            st.error(f"Failed: {msg}")
+        st.info('Preview handled by your existing UI. Tags and attachments available for your renderer.')
+        st.write({'tags': {k: tags.get(k, '') for k in ('title','solicitation','due','notice_id','company','contact')}, 'attachments': [p for p in pack_files]})
 
 
-
-if __name__ == "__main__":
-    main()
-
-
-# -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
     st.markdown("### Section Library (Phase V)")
     cols = st.columns([3,2,2])
