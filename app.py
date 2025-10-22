@@ -8517,7 +8517,6 @@ def s1_save_vendor(conn, v:dict)->int|None:
 
 def s1_calc_radius_meters(miles:int)->int:
     return int(float(miles) * 1609.344)
-
 def s1_render_places_panel(conn, default_addr:str|None=None):
     import streamlit as st, pandas as pd
     ensure_subfinder_s1_schema(conn)
