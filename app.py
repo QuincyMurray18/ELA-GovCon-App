@@ -482,6 +482,16 @@ except Exception:
 import smtplib
 import streamlit as st
 
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+
+
 # --- DB helpers: ensure column exists ---
 def _ensure_column(conn, table, col, type_sql):
     cur = conn.cursor()
@@ -565,6 +575,16 @@ def _first_row_value(df, col, default=None):
 # --- Capability Statement Page (full implementation) ---
 def run_capability_statement(conn):
     import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+
     import json, datetime, io, sqlite3
 
     st.header("Capability Statement")
@@ -985,7 +1005,17 @@ import os
 def _resolve_model():
     # Priority: Streamlit secrets -> env var -> safe default
     try:
-        import streamlit as st  # noqa: F401
+        import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+  # noqa: F401
         for key in ("OPENAI_MODEL", "openai_model", "model"):
             try:
                 val = st.secrets.get(key)  # type: ignore[attr-defined]
@@ -999,7 +1029,17 @@ def _resolve_model():
 
 _ai_client = None
 def get_ai():
-    import streamlit as st  # ensure st exists
+    import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+  # ensure st exists
     global _ai_client
     if _ai_client is None:
         if _Y0OpenAI is None:
@@ -1041,6 +1081,16 @@ def ask_ai(messages, tools=None, temperature=0.2):
 
 def y0_ai_panel():
     import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+
     st.header(f"Ask the CO (AI) · {_resolve_model()}")
     q = st.text_area("Your question", key="y0_q", height=120)
     if st.button("Ask", key="y0_go"):
@@ -3926,7 +3976,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if _update_rfp_meta(conn, _rid, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
             st.success("Saved")
             st.session_state["current_rfp_id"] = int(_rid)
-            st.experimental_rerun()
+            st.rerun()
     
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
@@ -7759,6 +7809,16 @@ def s1_get_google_api_key():
     import os
     try:
         import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
@@ -7840,7 +7900,17 @@ def s1_calc_radius_meters(miles):
     return int(float(miles) * 1609.344)
 
 def s1_render_places_panel(conn, default_addr=None):
-    import streamlit as st, pandas as pd
+    import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+, pandas as pd
 
     ensure_subfinder_s1_schema(conn)
 
@@ -8081,6 +8151,16 @@ def main() -> None:
 # Acceptance: Placeholders render for at least {title}, {solicitation}, {due}, {notice_id}, {company}, {contact}
 # ===========================
 import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+
 import sqlite3
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -8275,7 +8355,7 @@ def run_outreach(conn):
             if new_name.strip():
                 _save_template(conn, new_name.strip(), subject="Subject {title}", body="Hello {contact}, ...")
                 st.success(f"Created {new_name.strip()}")
-                st.experimental_rerun()
+                st.rerun()
 
     # Load selected
     tpl = next((t for t in templates if t["name"] == sel_name), {"name":"","subject":"","body":""})
@@ -8291,7 +8371,7 @@ def run_outreach(conn):
         if st.button("Delete template"):
             _delete_template(conn, sel_name)
             st.warning("Deleted")
-            st.experimental_rerun()
+            st.rerun()
 
     # Recipients
     st.subheader("Recipients")
@@ -8732,6 +8812,16 @@ def s1_get_google_api_key()->str|None:
     import os
     try:
         import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
@@ -8810,7 +8900,17 @@ def s1_save_vendor(conn, v:dict)->int|None:
 def s1_calc_radius_meters(miles:int)->int:
     return int(float(miles) * 1609.344)
 def s1_render_places_panel(conn, default_addr:str|None=None):
-    import streamlit as st, pandas as pd
+    import streamlit as st
+
+# Safe rerun helper for Streamlit API changes
+try:
+    _st_can_rerun = hasattr(st, "rerun")
+except Exception:
+    _st_can_rerun = False
+def _st_rerun_fallback():
+    if _st_can_rerun:
+        st.rerun()
+, pandas as pd
     ensure_subfinder_s1_schema(conn)
     st.markdown("### Google Places search")
     key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
