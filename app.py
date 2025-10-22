@@ -5584,7 +5584,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.subheader("Template")
     st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
     subj = st.text_input("Subject", value=st.session_state.get('outreach_subject', "RFQ: {{title}} (Solicitation {{solicitation}})"), key="outreach_subject")
-    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get('outreach_body', "Hello {{company}},\n\nWe are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). Responses are due {{due}}. We’d like your quote and capability confirmation.\n\nCould you reply with pricing and any questions?\n\nThank you,\nELA Management"), key="outreach_body", height=200)."
+    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get('outreach_body', "Hello {{company}},\n\nWe are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). Responses are due {{due}}. We’d like your quote and capability confirmation.\n\nCould you reply with pricing and any questions?\n\nThank you,\nELA Management"), key="outreach_body", height=200)
             " Responses are due {{due}}. We’d like your quote and capability confirmation."
             "<br><br>Could you reply with pricing and any questions?"
             "<br><br>Thank you,<br>ELA Management"
