@@ -5509,6 +5509,38 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
     return out
 
 
+
+def _ot_list(conn):
+    import pandas as pd
+    return pd.read_sql_query(
+        "SELECT id, name, subject, body, created_at, updated_at FROM outreach_templates_t ORDER BY updated_at DESC, id DESC;",
+        conn, params=()
+    )
+
+def _ot_get(conn, tid: int):
+    import pandas as pd
+    df = pd.read_sql_query("SELECT * FROM outreach_templates_t WHERE id=?;", conn, params=(int(tid),))
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+def _ot_upsert(conn, tid, name: str, subject: str, body: str) -> int:
+    from contextlib import closing
+    with closing(conn.cursor()) as cur:
+        if tid:
+            cur.execute("UPDATE outreach_templates SET name=?, subject=?, body=?, updated_at=datetime('now') WHERE id=?;",
+                        (name.strip(), subject, body, int(tid)))
+            conn.commit()
+            return int(tid)
+        cur.execute("INSERT INTO outreach_templates(name, subject, body, created_at, updated_at) VALUES(?,?,?,datetime('now'),datetime('now'));",
+                    (name.strip(), subject, body))
+        conn.commit()
+        return int(cur.lastrowid)
+
+def _ot_delete(conn, tid: int):
+    from contextlib import closing
+    with closing(conn.cursor()) as cur:
+        cur.execute("DELETE FROM outreach_templates WHERE id=?;", (int(tid),))
+        conn.commit()
+
 def run_outreach(conn: sqlite3.Connection) -> None:
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
@@ -5544,52 +5576,55 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
     
-st.subheader("Templates")
-t1, t2 = st.columns([2,2])
-with t1:
-    df_tpl = _ot_list(conn)
-    tpl_options = [("", "— select —")] + [(int(r["id"]), f'{r["name"]}') for _, r in df_tpl.iterrows()]
-    sel = st.selectbox("Pick template", options=[o[0] for o in tpl_options],
-                       format_func=lambda v: dict(tpl_options).get(v, "— select —"),
-                       key="ot_pick")
-    if sel:
-        if st.button("Load into editor", key="ot_load"):
-            row = _ot_get(conn, int(sel))
-            st.session_state["outreach_subject"] = row.get("subject") or ""
-            st.session_state["outreach_body"] = row.get("body") or ""
-            st.session_state["outreach_tpl_name"] = row.get("name") or ""
-            st.success("Template loaded")
-with t2:
-    new_name = st.text_input("Template name", key="outreach_tpl_name", placeholder="e.g., RFQ Intro")
-    c1, c2, c3 = st.columns(3)
-    if st.button("Save as New", key="ot_save_new"):
-        _ = _ot_upsert(conn, None, new_name or "Untitled",
-                       st.session_state.get("outreach_subject",""),
-                       st.session_state.get("outreach_body",""))
-        st.success("Saved"); st.rerun()
-    if sel:
-        with c1:
-            if st.button("Update Selected", key="ot_update"):
-                _ = _ot_upsert(conn, int(sel),
-                               st.session_state.get("outreach_tpl_name") or "Untitled",
-                               st.session_state.get("outreach_subject",""),
-                               st.session_state.get("outreach_body",""))
-                st.success("Updated"); st.rerun()
-        with c2:
-            if st.button("Duplicate", key="ot_dup"):
+    st.subheader("Templates")
+    t1, t2 = st.columns([2,2])
+    with t1:
+        df_tpl = _ot_list(conn)
+        tpl_options = [("", "— select —")] + [(int(r["id"]), f'{r["name"]}') for _, r in df_tpl.iterrows()]
+        sel = st.selectbox("Pick template", options=[o[0] for o in tpl_options],
+                           format_func=lambda v: dict(tpl_options).get(v, "— select —"),
+                           key="ot_pick")
+        if sel:
+            if st.button("Load into editor", key="ot_load"):
                 row = _ot_get(conn, int(sel))
-                _ = _ot_upsert(conn, None, f"{row.get('name','Template')} (copy)", row.get("subject",""), row.get("body",""))
-                st.success("Duplicated"); st.rerun()
-        with c3:
-            if st.button("Delete", key="ot_delete"):
-                _ot_delete(conn, int(sel))
-                st.warning("Deleted"); st.rerun()
-
-        st.subheader("Template")
+                st.session_state["outreach_subject"] = row.get("subject") or ""
+                st.session_state["outreach_body"] = row.get("body") or ""
+                st.session_state["outreach_tpl_name"] = row.get("name") or ""
+                st.success("Template loaded")
+    with t2:
+        new_name = st.text_input("Template name", key="outreach_tpl_name", placeholder="e.g., RFQ Intro")
+        c1, c2, c3 = st.columns(3)
+        if st.button("Save as New", key="ot_save_new"):
+            _ = _ot_upsert(conn, None, new_name or "Untitled",
+                           st.session_state.get("outreach_subject",""),
+                           st.session_state.get("outreach_body",""))
+            st.success("Saved"); st.rerun()
+        if sel:
+            with c1:
+                if st.button("Update Selected", key="ot_update"):
+                    _ = _ot_upsert(conn, int(sel),
+                                   st.session_state.get("outreach_tpl_name") or "Untitled",
+                                   st.session_state.get("outreach_subject",""),
+                                   st.session_state.get("outreach_body",""))
+                    st.success("Updated"); st.rerun()
+            with c2:
+                if st.button("Duplicate", key="ot_dup"):
+                    row = _ot_get(conn, int(sel))
+                    _ = _ot_upsert(conn, None, f"{row.get('name','Template')} (copy)", row.get("subject",""), row.get("body",""))
+                    st.success("Duplicated"); st.rerun()
+            with c3:
+                if st.button("Delete", key="ot_delete"):
+                    _ot_delete(conn, int(sel))
+                    st.warning("Deleted"); st.rerun()
+    
+    
+    
+    
+    
+    st.subheader("Template")
     st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
     subj = st.text_input("Subject", key="outreach_subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
     body = st.text_area("Email Body (HTML supported)", key="outreach_body", value=st.session_state.get("outreach_body", ""), height=200)
-
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
         if qty is None or unit_price is None:
