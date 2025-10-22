@@ -482,6 +482,25 @@ except Exception:
 import smtplib
 import streamlit as st
 
+# --- Context helpers ---
+_CTX_DEFAULTS = {
+    "rfp": None,
+    "clins": [],
+    "sections": [],
+    "imp": {},
+    "price_sheet": [],
+    "staffing": [],
+    "notice_id": None,
+    "proposal_id": None,
+    "meta": {},
+}
+def _ctxd(ctx, key):
+    try:
+        return ctx.get(key, _CTX_DEFAULTS.get(key))
+    except Exception:
+        return _CTX_DEFAULTS.get(key)
+
+
 # --- Safe DataFrame helpers ---
 def _is_df(obj):
     try:
@@ -5102,7 +5121,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
 
         st.markdown("**Must address items from L and M**")
-        items = ctx["items"] if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
+        items = _ctxd(ctx, "items") if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
         if not items.empty:
             st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
@@ -5120,13 +5139,13 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
             exported = _export_docx(
                 out_path,
-                doc_title=ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "Proposal",
+                doc_title=_ctxd(ctx, "rfp").iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "Proposal",
                 sections=sections,
-                clins=ctx["clins"],
-                checklist=ctx["items"],
+                clins=_ctxd(ctx, "clins"),
+                checklist=_ctxd(ctx, "items"),
                 metadata={
-                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if _df_nonempty(ctx.get("rfp")) else ""),
-                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if _df_nonempty(ctx.get("rfp")) else ""),
+                    "Solicitation": (_ctxd(ctx, "rfp").iloc[0]["solnum"] if _df_nonempty(ctx.get("rfp")) else ""),
+                    "Notice ID": (_ctxd(ctx, "rfp").iloc[0]["notice_id"] if _df_nonempty(ctx.get("rfp")) else ""),
                 },
                 font_name=font_name,
                 font_size_pt=int(font_size),
