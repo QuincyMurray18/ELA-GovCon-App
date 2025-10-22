@@ -482,6 +482,26 @@ except Exception:
 import smtplib
 import streamlit as st
 
+# --- Safe DataFrame helpers ---
+def _is_df(obj):
+    try:
+        import pandas as pd
+        return isinstance(obj, pd.DataFrame)
+    except Exception:
+        return False
+
+def _df_nonempty(df):
+    return _is_df(df) and not df.empty
+
+def _first_row_value(df, col, default=None):
+    try:
+        if _df_nonempty(df) and col in df.columns:
+            return df.iloc[0][col]
+    except Exception:
+        pass
+    return default
+
+
 # --- Capability Statement Page (full implementation) ---
 def run_capability_statement(conn):
     import streamlit as st
@@ -5100,13 +5120,13 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
             exported = _export_docx(
                 out_path,
-                doc_title=ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "Proposal",
+                doc_title=ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "Proposal",
                 sections=sections,
                 clins=ctx["clins"],
                 checklist=ctx["items"],
                 metadata={
-                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
-                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if ctx["rfp"] is not None and not ctx["rfp"].empty else ""),
+                    "Solicitation": (ctx["rfp"].iloc[0]["solnum"] if _df_nonempty(ctx.get("rfp")) else ""),
+                    "Notice ID": (ctx["rfp"].iloc[0]["notice_id"] if _df_nonempty(ctx.get("rfp")) else ""),
                 },
                 font_name=font_name,
                 font_size_pt=int(font_size),
@@ -6261,7 +6281,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
                               format_func=lambda rid: "None" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0]}")
     if rfp_id:
         ctx = _load_rfp_context(conn, int(rfp_id))
-        title = (ctx["rfp"].iloc[0]["title"] if ctx["rfp"] is not None and not ctx["rfp"].empty else "")
+        title = (ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "")
         secs = ctx.get("sections", pd.DataFrame())
         # Compute scores
         scores = []
