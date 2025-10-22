@@ -8729,7 +8729,7 @@ def run_outreach(conn):
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
     _tpl_picker_prefill(conn)
-    with st.expander("Templates", expanded=False):
+    with st.expander("Templates", expanded=True):
         render_outreach_templates(conn)
     # Minimal body fields for Subject and Body that use session prefill
     st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
