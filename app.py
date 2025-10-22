@@ -5482,11 +5482,10 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     # O2: templates picker and manager
     try:
         _tpl_picker_prefill(conn)
-        with st.expander("Templates", expanded=True):
+        with st.expander("Templates", expanded=False):
             render_outreach_templates(conn)
-    except Exception as e:
-        st.error(f"O2 templates failed: {e}")
-        st.exception(e)
+    except Exception:
+        pass
 
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
@@ -5531,13 +5530,13 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
         _tpl_picker_prefill(conn)
 
-        with st.expander("Templates", expanded=True):
+        with st.expander("Templates", expanded=False):
 
             render_outreach_templates(conn)
 
-    except Exception as e:
-        st.error(f"O2 templates failed: {e}")
-        st.exception(e)
+    except Exception:
+
+        pass
 
     subj = st.text_input("Subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
 
@@ -6522,7 +6521,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     st.caption("Templates → Drafts → DOCX export. Can include images per section.")
 
     # --- Templates ---
-    with st.expander("Templates", expanded=True):
+    with st.expander("Templates", expanded=False):
         df_t = pd.read_sql_query("SELECT id, name, description, created_at FROM white_templates ORDER BY id DESC;", conn, params=())
         t_col1, t_col2 = st.columns([2,2])
         with t_col1:
@@ -8727,7 +8726,7 @@ def seed_default_templates(conn):
 def run_outreach(conn):
     import streamlit as st
     st.header("Outreach")
-    st.caption("O2 WIRED BUILD — 2025-10-22")
+    st.caption("O2 WIRED BUILD — 2025-10-22 19:31:52 UTC")
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
     _tpl_picker_prefill(conn)
