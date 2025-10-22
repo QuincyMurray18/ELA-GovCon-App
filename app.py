@@ -7750,37 +7750,28 @@ def s1_place_details(place_id):
     except Exception:
         return {}
     return {}
-
 def s1_discover_emails_from_site(url: str, max_emails: int = 3):
-    """Fetch homepage and extract emails. Best effort."""
+    """Fetch homepage and extract emails. Best effort. Returns a list of emails."""
     if not url:
         return []
-    # normalize to http(s)
-    import re as _re, urllib.request as _rq, urllib.parse as _pu, socket
+    import re as _re, urllib.request as _rq, urllib.parse as _pu
     try:
         u = _pu.urlparse(url)
-        if not u.scheme:
-            url2 = "http://" + url
-        else:
-            url2 = url
+        url2 = ("http://" + url) if not u.scheme else url
         req = _rq.Request(url2, headers={"User-Agent": "ELA-GovCon-App/1.0"})
         with _rq.urlopen(req, timeout=12) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
-        # mailto first
         mails = set(_re.findall(r"mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", html))
-        # plain emails
         mails |= set(_re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", html))
-        # filter common junk
         cleaned = []
+        STRIP_CHARS = ".,);:>\'\""
         for m in mails:
-            m2 = m.strip().strip('.,);:>\'\"');:>" + "'" + '"'');:\'>\\"")
+            m2 = m.strip().strip(STRIP_CHARS)
             if len(m2) > 4 and "example.com" not in m2.lower():
                 cleaned.append(m2)
         return cleaned[:max_emails]
     except Exception:
         return []
-
-# === S1 Subcontractor Finder: Google Places ===
 def ensure_subfinder_s1_schema(conn):
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()]
