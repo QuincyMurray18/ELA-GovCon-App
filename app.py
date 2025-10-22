@@ -482,6 +482,9 @@ except Exception:
 import smtplib
 import streamlit as st
 
+
+
+
 # Safe rerun helper for Streamlit API changes
 try:
     _st_can_rerun = hasattr(st, "rerun")
@@ -490,7 +493,6 @@ except Exception:
 def _st_rerun_fallback():
     if _st_can_rerun:
         st.rerun()
-
 
 # --- DB helpers: ensure column exists ---
 def _ensure_column(conn, table, col, type_sql):
@@ -576,14 +578,6 @@ def _first_row_value(df, col, default=None):
 def run_capability_statement(conn):
     import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 
     import json, datetime, io, sqlite3
 
@@ -1002,20 +996,11 @@ def y_auto_k(text: str) -> int:
 
 import os
 
+
 def _resolve_model():
     # Priority: Streamlit secrets -> env var -> safe default
     try:
-        import streamlit as st
-
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
-  # noqa: F401
+        import streamlit as st  # noqa: F401
         for key in ("OPENAI_MODEL", "openai_model", "model"):
             try:
                 val = st.secrets.get(key)  # type: ignore[attr-defined]
@@ -1027,18 +1012,11 @@ def _st_rerun_fallback():
         pass
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+
 _ai_client = None
 def get_ai():
     import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
   # ensure st exists
     global _ai_client
     if _ai_client is None:
@@ -1082,14 +1060,6 @@ def ask_ai(messages, tools=None, temperature=0.2):
 def y0_ai_panel():
     import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 
     st.header(f"Ask the CO (AI) · {_resolve_model()}")
     q = st.text_area("Your question", key="y0_q", height=120)
@@ -7810,14 +7780,6 @@ def s1_get_google_api_key():
     try:
         import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
@@ -7902,14 +7864,6 @@ def s1_calc_radius_meters(miles):
 def s1_render_places_panel(conn, default_addr=None):
     import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 , pandas as pd
 
     ensure_subfinder_s1_schema(conn)
@@ -8152,14 +8106,6 @@ def main() -> None:
 # ===========================
 import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 
 import sqlite3
 from datetime import datetime
@@ -8813,14 +8759,6 @@ def s1_get_google_api_key()->str|None:
     try:
         import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
@@ -8902,14 +8840,6 @@ def s1_calc_radius_meters(miles:int)->int:
 def s1_render_places_panel(conn, default_addr:str|None=None):
     import streamlit as st
 
-# Safe rerun helper for Streamlit API changes
-try:
-    _st_can_rerun = hasattr(st, "rerun")
-except Exception:
-    _st_can_rerun = False
-def _st_rerun_fallback():
-    if _st_can_rerun:
-        st.rerun()
 , pandas as pd
     ensure_subfinder_s1_schema(conn)
     st.markdown("### Google Places search")
