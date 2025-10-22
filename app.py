@@ -7864,7 +7864,7 @@ def s1_calc_radius_meters(miles):
 def s1_render_places_panel(conn, default_addr=None):
     import streamlit as st
 
-, pandas as pd
+import pandas as pd
 
     ensure_subfinder_s1_schema(conn)
 
@@ -8840,7 +8840,7 @@ def s1_calc_radius_meters(miles:int)->int:
 def s1_render_places_panel(conn, default_addr:str|None=None):
     import streamlit as st
 
-, pandas as pd
+import pandas as pd
     ensure_subfinder_s1_schema(conn)
     st.markdown("### Google Places search")
     key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
