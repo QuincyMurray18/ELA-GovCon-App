@@ -481,12 +481,12 @@ except Exception:
     mathquests = None
 import smtplib
 import streamlit as st
-# --- Shim to avoid NameError if run_capability_statement is not defined yet ---
+# --- Safe shim for run_capability_statement to avoid NameError ---
 if 'run_capability_statement' not in globals():
     def run_capability_statement(conn):
-        import streamlit as st  # local import to avoid import-order issues
+        import streamlit as st
         st.header('Capability Statement')
-        st.info('Module not loaded in this build. AI helper will appear when available.')
+        st.info('Capability Statement module not available in this build.')
 
 
 
@@ -7762,7 +7762,7 @@ def test_seed_cases():
     return {"ok": all_ok, "results": results}
 
 # === X16.1: Capability Statement — AI drafting helper ===
-def globals().get("run_capability_statement", lambda _c: __import__("streamlit").st.info("Capability Statement module not available"))(conn):
+def run_capability_statement(conn):
     try:
         if '_orig_run_capability_statement' in globals():
             _orig_run_capability_statement(conn)
