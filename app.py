@@ -494,7 +494,7 @@ def _ensure_column(conn, table, col, type_sql):
             pass
 
 def _update_rfp_meta(conn, rfp_id, title=None, solnum=None, sam_url=None):
-    _ensure_column(conn, "rfps_t", "sam_url", "TEXT")
+    _ensure_column(conn, "rfps", "sam_url", "TEXT")
     sets, vals = [], []
     if title is not None:
         sets.append("title=?"); vals.append(title)
@@ -504,7 +504,7 @@ def _update_rfp_meta(conn, rfp_id, title=None, solnum=None, sam_url=None):
         sets.append("sam_url=?"); vals.append(sam_url)
     if sets:
         vals.append(int(rfp_id))
-        conn.execute(f"UPDATE rfps_t SET {', '.join(sets)} WHERE id=?", vals)
+        conn.execute(f"UPDATE rfps SET {", ".join(sets)} WHERE id=?", vals)
         conn.commit()
         return True
     return False
@@ -3885,23 +3885,49 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
     st.header("RFP Analyzer")
     # --- RFP Meta Editor ---
+    
+    # --- RFP Meta Editor (safe) ---
+    try:
+        # Determine active RFP id
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        if not _rid:
+            _rid = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn).iloc[0]["id"]
+    except Exception:
+        _rid = None
+
+    _title0 = ""
+    _solnum0 = ""
+    _sam0 = ""
+    if _rid:
+        try:
+            _row = pd.read_sql_query("SELECT title, solnum FROM rfps WHERE id=?;", conn, params=(int(_rid),)).iloc[0]
+            _title0 = str(_row.get("title") or "")
+            _solnum0 = str(_row.get("solnum") or "")
+        except Exception:
+            pass
+        try:
+            # sam_url may or may not exist yet
+            _sam0 = pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(int(_rid),)).iloc[0].get("sam_url") or ""
+        except Exception:
+            _sam0 = ""
+
     with st.form("rfp_meta_edit", clear_on_submit=False):
         c1, c2 = st.columns(2)
         with c1:
-            _title = st.text_input("RFP Title", str(ctx.get("rfp_title") or df_rf.loc[df_rf['id']==rfp_id,'title'].values[0] if 'title' in df_rf.columns else ""))
-            _solnum = st.text_input("Solicitation Number", str(ctx.get("rfp_solnum") or df_rf.loc[df_rf['id']==rfp_id,'solnum'].values[0] if 'solnum' in df_rf.columns else ""))
+            _title = st.text_input("RFP Title", _title0, key="meta_title")
+            _solnum = st.text_input("Solicitation Number", _solnum0, key="meta_solnum")
         with c2:
-            _sam_url = st.text_input("SAM.gov URL", str(ctx.get("rfp_sam_url") or (df_rf.loc[df_rf['id']==rfp_id,'sam_url'].values[0] if 'sam_url' in df_rf.columns else "")))
+            _sam_url = st.text_input("SAM.gov URL", _sam0, key="meta_samurl")
             _notice_hint = _parse_sam_notice_id(_sam_url) or ""
             if _notice_hint:
                 st.caption(f"Parsed notice id: {_notice_hint}")
         _save = st.form_submit_button("Save RFP Meta")
-    if _save:
-        if _update_rfp_meta(conn, rfp_id, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
+    if _save and _rid:
+        if _update_rfp_meta(conn, _rid, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
             st.success("Saved")
+            st.session_state["current_rfp_id"] = int(_rid)
             st.experimental_rerun()
     
-
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
         _ctx = pd.read_sql_query("SELECT id, title, sam_url FROM rfps ORDER BY id DESC;", conn, params=())
