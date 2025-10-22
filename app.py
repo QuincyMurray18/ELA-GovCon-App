@@ -7911,7 +7911,7 @@ def s1_render_places_panel(conn, default_addr=None):
                     # Show one-line warning and continue with others
                     st.warning(f"Save failed for {pid}: {e}")
             st.success(f"Saved {saved} vendor{'s' if saved != 1 else ''}")
-if st.session_state.get("s1_page_token"):
+    if st.session_state.get("s1_page_token"): 
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 def run_subcontractor_finder_s1_hook(conn):
