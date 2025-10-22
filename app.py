@@ -5479,14 +5479,6 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
-    # O2: templates picker and manager
-    try:
-        _tpl_picker_prefill(conn)
-        with st.expander("Templates", expanded=False):
-            render_outreach_templates(conn)
-    except Exception:
-        pass
-
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
@@ -5521,35 +5513,19 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
     st.subheader("Template")
-
-    st.markdown("Use tags: {company}, {email}, {phone}, {naics}, {title}, {solicitation}, {due}, {notice_id}")
-
-    # O2: templates picker and manager
-
-    try:
-
-        _tpl_picker_prefill(conn)
-
-        with st.expander("Templates", expanded=False):
-
-            render_outreach_templates(conn)
-
-    except Exception:
-
-        pass
-
-    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
-
-    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get("outreach_html", (
-
-        "Hello {{company}},<br><br>"
+    st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
+    subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
+    body = st.text_area(
+        "Email Body (HTML supported)",
+        value=(
+            "Hello {{company}},<br><br>"
             "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
             " Responses are due {{due}}. We’d like your quote and capability confirmation."
             "<br><br>Could you reply with pricing and any questions?"
             "<br><br>Thank you,<br>ELA Management"
-
-    )), height=200)
-
+        ),
+        height=200,
+    )
 
     with st.expander("Attachments", expanded=False):
         files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
@@ -6727,7 +6703,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
-            a_subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
+            a_subject = st.text_input("Subject", key="act_subject")
         with a_col2:
             a_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
                                   format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
@@ -8091,6 +8067,298 @@ def main() -> None:
     router(nav(), conn)
 
 
+
+
+# ===========================
+# Outreach: templates + previews + test send
+# Scope:
+# 1) Merge tags from notice and RFQ Pack
+# 2) Attach Pack files automatically
+# 3) Preview for each recipient
+# UI:
+# 1) Template picker and editor
+# 2) Per recipient preview and Test send
+# Acceptance: Placeholders render for at least {title}, {solicitation}, {due}, {notice_id}, {company}, {contact}
+# ===========================
+import streamlit as st
+import sqlite3
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import glob
+import os
+
+def _ensure_outreach_tables(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS outreach_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            subject TEXT,
+            body TEXT,
+            updated_at TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS outreach_sends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notice_id INTEGER,
+            recipient_email TEXT,
+            recipient_name TEXT,
+            company TEXT,
+            subject TEXT,
+            body TEXT,
+            status TEXT,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+
+def _get_templates(conn):
+    cur = conn.cursor()
+    rows = cur.execute("SELECT id, name, subject, body, updated_at FROM outreach_templates ORDER BY name").fetchall()
+    out = []
+    for r in rows:
+        out.append({"id": r[0], "name": r[1], "subject": r[2] or "", "body": r[3] or "", "updated_at": r[4] or ""})
+    return out
+
+def _save_template(conn, name, subject, body):
+    cur = conn.cursor()
+    ts = datetime.utcnow().isoformat(timespec="seconds")
+    cur.execute("""
+        INSERT INTO outreach_templates(name, subject, body, updated_at)
+        VALUES(?,?,?,?)
+        ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, body=excluded.body, updated_at=excluded.updated_at
+    """, (name.strip(), subject, body, ts))
+    conn.commit()
+
+def _delete_template(conn, name):
+    cur = conn.cursor()
+    cur.execute("DELETE FROM outreach_templates WHERE name=?", (name.strip(),))
+    conn.commit()
+
+def _tpl_picker_prefill(conn):
+    # Provide a default template if none exist
+    if not _get_templates(conn):
+        _save_template(conn,
+                       name="Default RFQ Outreach",
+                       subject="RFQ: {title} — {solicitation} due {due}",
+                       body=(
+                           "Hello {contact},\n\n"
+                           "My company {company} is assembling a quote for {title} (Solicitation {solicitation}). "
+                           "Due date: {due}.\n\n"
+                           "Are you available for a quick call today? Attached: RFQ Pack for reference.\n\n"
+                           "Thank you,\nELA Management LLC"
+                       ))
+    return _get_templates(conn)
+
+def _merge_notice_and_pack_tags(conn, notice_id):
+    tags = {"notice_id": str(notice_id or "").strip()}
+    # Try to read from a generic 'notices' or 'rfp_notices' table if present
+    cur = conn.cursor()
+    meta = {}
+    for table in ("notices", "rfp_notices", "sam_notices"):
+        try:
+            row = cur.execute(f"SELECT title, solicitation_number, due_date FROM {table} WHERE id=? LIMIT 1", (int(notice_id),)).fetchone()
+            if row:
+                meta = {"title": row[0] or "", "solicitation": row[1] or "", "due": row[2] or ""}
+                break
+        except Exception:
+            pass
+    tags.update({"title": meta.get("title",""), "solicitation": meta.get("solicitation",""), "due": meta.get("due","")})
+    # You can extend with RFQ Pack metadata if you store it in a JSON next to files
+    pack_meta_path = os.path.join("data", "packs", str(notice_id), "meta.json")
+    if os.path.exists(pack_meta_path):
+        try:
+            with open(pack_meta_path, "r", encoding="utf-8") as f:
+                pack_meta = json.load(f)
+            for k, v in pack_meta.items():
+                if isinstance(v, (str,int,float)):
+                    tags.setdefault(k, str(v))
+        except Exception:
+            pass
+    # Keep required acceptance keys present
+    for k in ("company","contact"):
+        tags.setdefault(k, "")
+    return tags
+
+def _render_template(tpl_text: str, tags: dict) -> str:
+    # Simple .format replacement with missing-safe keys
+    class SafeDict(dict):
+        def __missing__(self, key):
+            return "{" + key + "}"
+    try:
+        return tpl_text.format_map(SafeDict(**{k: ("" if v is None else str(v)) for k,v in tags.items()}))
+    except Exception:
+        return tpl_text
+
+def _find_pack_files_for_notice(notice_id):
+    # Attach all files under data/packs/{notice_id}/
+    base = os.path.join("data", "packs", str(notice_id))
+    files = []
+    if os.path.isdir(base):
+        for p in glob.glob(os.path.join(base, "*")):
+            if os.path.isfile(p):
+                files.append(p)
+    return files
+
+def _send_test_email(smtp_cfg: dict, to_addr: str, subject: str, body: str, attachments):
+    # smtp_cfg = {"host":..., "port":..., "user":..., "pass":..., "from":...}
+    host = smtp_cfg.get("host") or os.getenv("SMTP_HOST")
+    port = int(smtp_cfg.get("port") or os.getenv("SMTP_PORT") or 587)
+    user = smtp_cfg.get("user") or os.getenv("SMTP_USER")
+    pwd  = smtp_cfg.get("pass") or os.getenv("SMTP_PASS")
+    from_addr = smtp_cfg.get("from") or os.getenv("SMTP_FROM") or user
+
+    if not host or not user or not pwd or not from_addr:
+        return False, "SMTP not configured"
+
+    msg = MIMEMultipart()
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    for path in attachments or []:
+        try:
+            with open(path, "rb") as f:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"')
+            msg.attach(part)
+        except Exception:
+            pass
+
+    try:
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            server.login(user, pwd)
+            server.send_message(msg)
+        return True, "sent"
+    except Exception as e:
+        return False, str(e)
+
+def run_outreach(conn):
+    _ensure_outreach_tables(conn)
+    st.header("Outreach")
+    st.caption("Templates, per-recipient preview, and test sends")
+
+    # Notice context
+    colA, colB = st.columns([1,1])
+    with colA:
+        notice_id = st.text_input("Notice ID", value=st.session_state.get("notice_id_for_outreach", ""))
+        st.session_state["notice_id_for_outreach"] = notice_id
+    with colB:
+        auto_files = st.checkbox("Attach Pack files automatically", value=True)
+
+    # Tag merge
+    tags = _merge_notice_and_pack_tags(conn, notice_id.strip() if notice_id else None)
+    with st.expander("Context and required placeholders", expanded=False):
+        st.write({k: tags.get(k,"") for k in ("title","solicitation","due","notice_id","company","contact")})
+        st.caption("Available keys come from the notice, RFQ Pack meta.json, and manual recipient fields.")
+
+    # Templates
+    st.subheader("Templates")
+    templates = _tpl_picker_prefill(conn)
+    tpl_names = [t["name"] for t in templates]
+    col1, col2, col3 = st.columns([2,1,1])
+    with col1:
+        sel_name = st.selectbox("Template", options=tpl_names, index=0 if tpl_names else None)
+    with col2:
+        new_name = st.text_input("New template name", value="")
+    with col3:
+        if st.button("Create"):
+            if new_name.strip():
+                _save_template(conn, new_name.strip(), subject="Subject {title}", body="Hello {contact}, ...")
+                st.success(f"Created {new_name.strip()}")
+                st.experimental_rerun()
+
+    # Load selected
+    tpl = next((t for t in templates if t["name"] == sel_name), {"name":"","subject":"","body":""})
+    subj_edit = st.text_input("Subject", value=tpl.get("subject",""))
+    body_edit = st.text_area("Body", value=tpl.get("body",""), height=220, help="Use placeholders like {title}, {solicitation}, {due}, {notice_id}, {company}, {contact}")
+
+    colS, colD = st.columns(2)
+    with colS:
+        if st.button("Save template"):
+            _save_template(conn, sel_name, subj_edit, body_edit)
+            st.success("Saved")
+    with colD:
+        if st.button("Delete template"):
+            _delete_template(conn, sel_name)
+            st.warning("Deleted")
+            st.experimental_rerun()
+
+    # Recipients
+    st.subheader("Recipients")
+    st.caption("Paste or upload a CSV with columns: email, contact, company. Name column optional.")
+    recipients_text = st.text_area("Recipients CSV", value="email,contact,company\nexample@vendor.com,Alex Vendor,VendorCo", height=120)
+    recipients = []
+    try:
+        lines = [ln.strip() for ln in recipients_text.strip().splitlines() if ln.strip()]
+        headers = [h.strip().lower() for h in lines[0].split(",")]
+        for ln in lines[1:]:
+            parts = [p.strip() for p in ln.split(",")]
+            row = dict(zip(headers, parts))
+            recipients.append({
+                "email": row.get("email",""),
+                "contact": row.get("contact",""),
+                "company": row.get("company",""),
+                "name": row.get("name","") or row.get("contact","")
+            })
+    except Exception:
+        st.error("Invalid CSV")
+        recipients = []
+
+    # Preview per recipient
+    st.subheader("Preview")
+    pack_files = _find_pack_files_for_notice(tags.get("notice_id"))
+    if auto_files and pack_files:
+        st.info(f"Auto-attached {len(pack_files)} files from RFQ Pack")
+    elif auto_files:
+        st.warning("No RFQ Pack files found for this notice")
+
+    if recipients:
+        for i, r in enumerate(recipients[:50]):  # limit previews to 50
+            r_tags = dict(tags)
+            r_tags["company"] = r.get("company","")
+            r_tags["contact"] = r.get("contact","")
+            subject = _render_template(subj_edit, r_tags)
+            body = _render_template(body_edit, r_tags)
+            with st.expander(f"{i+1}. {r.get('email','')} • {r.get('company','')}", expanded=False):
+                st.write({"subject": subject, "body": body[:1000]})
+    else:
+        st.info("Add at least one recipient to see previews")
+
+    # Test send
+    st.subheader("Test send")
+    colT1, colT2 = st.columns([2,1])
+    with colT1:
+        test_to = st.text_input("Test email to")
+    with colT2:
+        smtp_host = st.text_input("SMTP host", value=os.getenv("SMTP_HOST",""))
+    colT3, colT4 = st.columns([1,1])
+    with colT3:
+        smtp_user = st.text_input("SMTP user", value=os.getenv("SMTP_USER",""))
+    with colT4:
+        smtp_pass = st.text_input("SMTP pass", type="password", value=os.getenv("SMTP_PASS",""))
+    smtp_cfg = {"host": smtp_host, "user": smtp_user, "pass": smtp_pass, "from": os.getenv("SMTP_FROM","")}
+
+    if st.button("Send test to me"):
+        subject = _render_template(subj_edit, tags)
+        body = _render_template(body_edit, tags)
+        ok, msg = _send_test_email(smtp_cfg, test_to, subject, body, pack_files if auto_files else [])
+        if ok:
+            st.success("Test email sent")
+        else:
+            st.error(f"Failed: {msg}")
+
+
+
 if __name__ == "__main__":
     main()
 
@@ -8602,428 +8870,3 @@ def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
         conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
-
-
-# === O2: Outreach Templates ====================================================
-def ensure_email_templates(conn):
-    with conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS email_templates(
-            id INTEGER PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            subject TEXT NOT NULL DEFAULT '',
-            html_body TEXT NOT NULL DEFAULT '',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )""")
-        conn.execute("""
-        CREATE TRIGGER IF NOT EXISTS trg_email_templates_update
-        AFTER UPDATE ON email_templates
-        BEGIN
-            UPDATE email_templates SET updated_at=CURRENT_TIMESTAMP WHERE id=NEW.id;
-        END;""")
-
-def email_template_list(conn):
-    ensure_email_templates(conn)
-    return conn.execute("SELECT id, name, subject, html_body FROM email_templates ORDER BY name").fetchall()
-
-def email_template_get(conn, template_id:int):
-    ensure_email_templates(conn)
-    return conn.execute("SELECT id, name, subject, html_body FROM email_templates WHERE id=?", (int(template_id),)).fetchone()
-
-def email_template_upsert(conn, name:str, subject:str, html_body:str, template_id:int|None=None):
-    ensure_email_templates(conn)
-    with conn:
-        if template_id:
-            conn.execute("UPDATE email_templates SET name=?, subject=?, html_body=? WHERE id=?",
-                         (name.strip(), subject, html_body, int(template_id)))
-            return template_id
-        conn.execute("""
-            INSERT INTO email_templates(name, subject, html_body)
-            VALUES(?,?,?)
-            ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, html_body=excluded.html_body
-        """, (name.strip(), subject, html_body))
-        return conn.execute("SELECT id FROM email_templates WHERE name=?", (name.strip(),)).fetchone()[0]
-
-def email_template_delete(conn, template_id:int):
-    ensure_email_templates(conn)
-    with conn:
-        conn.execute("DELETE FROM email_templates WHERE id=?", (int(template_id),))
-
-import re as _re_o2
-MERGE_TAGS = {"company","email","title","solicitation","due","notice_id","first_name","last_name","city","state"}
-def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
-    found = set(_re_o2.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", text or ""))
-    return required - found
-
-def render_outreach_templates(conn):
-    import streamlit as st
-    st.subheader("Email templates")
-    ensure_email_templates(conn)
-    rows = email_template_list(conn)
-    names = ["<new>"] + [r[1] for r in rows]
-    sel = st.selectbox("Template", names, key="tpl_sel")
-    if sel == "<new>":
-        tid = None
-        name = st.text_input("Name", key="tpl_name")
-        subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
-        html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
-    else:
-        row = next(r for r in rows if r[1] == sel)
-        tid = row[0]
-        name = st.text_input("Name", value=row[1], key="tpl_name")
-        subject = st.text_input("Subject", value=row[2], key="tpl_subject")
-        html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
-    missing = template_missing_tags((subject or "") + " " + (html or ""))
-    if missing:
-        st.info("Missing merge tags: " + ", ".join(sorted(missing)))
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Save"):
-            if not (name or "").strip():
-                st.error("Name required")
-            else:
-                email_template_upsert(conn, name, subject or "", html or "", tid)
-                st.success("Saved")
-                st.experimental_rerun()
-    with c2:
-        if (tid is not None) and st.button("Duplicate"):
-            email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
-            st.success("Duplicated")
-            st.experimental_rerun()
-    with c3:
-        if (tid is not None) and st.button("Delete"):
-            email_template_delete(conn, tid)
-            st.success("Deleted")
-            st.experimental_rerun()
-
-def _tpl_picker_prefill(conn):
-    import streamlit as st
-    rows = email_template_list(conn)
-    if not rows:
-        return None
-    names = [r[1] for r in rows]
-    choice = st.selectbox("Use template", ["<none>"] + names, key="tpl_pick")
-    if choice != "<none>":
-        row = next(r for r in rows if r[1] == choice)
-        st.session_state["outreach_subject"] = row[2]
-        st.session_state["outreach_html"] = row[3]
-        return row
-    return None
-
-def seed_default_templates(conn):
-    ensure_email_templates(conn)
-    defaults = [
-        ("RFQ Intro", "RFQ: {{title}} {{solicitation}} due {{due}}",
-         "<p>Hello {{first_name}},</p><p>We are collecting quotes for {{title}} under {{solicitation}} due {{due}}.</p><p>Unsubscribe: reply STOP</p>"),
-        ("Follow Up 1", "Follow up on {{title}} RFQ", "<p>Checking in on your quote for {{title}}.</p><p>Unsubscribe: reply STOP</p>")
-    ]
-    for n,s,h in defaults:
-        email_template_upsert(conn, n, s, h, None)
-
-# === RFQ Emailer Module ===
-"""
-Scope
-1) Merge tags from notice and RFQ Pack
-2) Attach Pack files automatically
-3) Preview for each recipient
-
-UI
-1) Template picker and editor
-2) Per recipient preview and Test send
-
-Acceptance
-- Placeholders render for at least {title} {solicitation} {due} {notice_id} {company} {contact}
-"""
-from contextlib import closing as _ml_closing
-from email.mime.base import MIMEBase as _ml_MIMEBase
-from email.mime.multipart import MIMEMultipart as _ml_MIMEMultipart
-from email.mime.text import MIMEText as _ml_MIMEText
-from email import encoders as _ml_encoders
-from datetime import datetime
-import smtplib as _ml_smtplib
-import os as _ml_os
-
-def _ml_ensure_tables(conn: sqlite3.Connection) -> None:
-    with _ml_closing(conn.cursor()) as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS mail_templates(
-                id INTEGER PRIMARY KEY,
-                name TEXT UNIQUE,
-                subject TEXT,
-                body TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            );
-        """)
-        conn.commit()
-    # Seed default template if empty
-    try:
-        df = pd.read_sql_query("SELECT COUNT(1) AS c FROM mail_templates;", conn)
-        if int(df.iloc[0]["c"]) == 0:
-            now = datetime.utcnow().isoformat()
-            with _ml_closing(conn.cursor()) as cur:
-                cur.execute(
-                    "INSERT INTO mail_templates(name, subject, body, created_at, updated_at) VALUES(?,?,?,?,?)",
-                    (
-                        "Default RFQ",
-                        "RFQ: {title} — {solicitation} — response due {due}",
-                        (
-                            "Hello {contact},\n\n"
-                            "We request a quote for {title} (Solicitation {solicitation}, Notice {notice_id}).\n"
-                            "Response due: {due}.\n\n"
-                            "Please review the attached RFQ Pack and reply with pricing and lead time.\n\n"
-                            "Regards,\n{company}"
-                        ),
-                        now,
-                        now,
-                    ),
-                )
-                conn.commit()
-    except Exception:
-        pass
-
-class _SafeMap(dict):
-    def __missing__(self, key):
-        return "{" + key + "}"
-
-def _ml_build_context(conn: sqlite3.Connection, pack_id: int, vendor_id: int | None = None) -> dict:
-    ctx = {"title": "", "solicitation": "", "due": "", "notice_id": "", "company": "", "contact": ""}
-    # org/company
-    try:
-        df = pd.read_sql_query("SELECT company_name FROM org_profile WHERE id=1;", conn)
-        if df is not None and not df.empty:
-            ctx["company"] = str(df.iloc[0]["company_name"] or "").strip() or "Our Company"
-    except Exception:
-        ctx["company"] = "Our Company"
-    # pack core
-    try:
-        row = pd.read_sql_query(
-            "SELECT id, title, rfp_id, deal_id, due_date FROM rfq_packs WHERE id=? LIMIT 1;",
-            conn,
-            params=(int(pack_id),),
-        ).iloc[0]
-        ctx["title"] = str(row.get("title") or "").strip()
-        ctx["due"] = str(row.get("due_date") or "").strip()
-        rfp_id = int(row.get("rfp_id") or 0)
-        deal_id = int(row.get("deal_id") or 0)
-    except Exception:
-        rfp_id = 0
-        deal_id = 0
-    # solicitation + notice
-    if rfp_id:
-        try:
-            r = pd.read_sql_query("SELECT solnum, notice_id, title FROM rfps WHERE id=?", conn, params=(rfp_id,)).iloc[0]
-            ctx["solicitation"] = str(r.get("solnum") or "")
-            ctx["notice_id"] = str(r.get("notice_id") or "")
-            if not ctx["title"]:
-                ctx["title"] = str(r.get("title") or "")
-        except Exception:
-            pass
-    if (not ctx["notice_id"]) and deal_id:
-        try:
-            r = pd.read_sql_query("SELECT notice_id, solnum, title FROM deals WHERE id=?", conn, params=(deal_id,)).iloc[0]
-            ctx["notice_id"] = str(r.get("notice_id") or "")
-            if not ctx["solicitation"]:
-                ctx["solicitation"] = str(r.get("solnum") or "")
-            if not ctx["title"]:
-                ctx["title"] = str(r.get("title") or "")
-        except Exception:
-            pass
-    # recipient contact guess
-    if vendor_id:
-        try:
-            r = pd.read_sql_query("SELECT name, email FROM vendor_contacts WHERE vendor_id=? ORDER BY id LIMIT 1;", conn, params=(int(vendor_id),))
-            if r is not None and not r.empty:
-                nm = str(r.iloc[0].get("name") or "").strip()
-                ctx["contact"] = nm or str(r.iloc[0].get("email") or "").strip()
-        except Exception:
-            pass
-        if not ctx["contact"]:
-            try:
-                r = pd.read_sql_query("SELECT name, email FROM vendors WHERE id=? LIMIT 1;", conn, params=(int(vendor_id),)).iloc[0]
-                ctx["contact"] = str(r.get("name") or r.get("email") or "").strip()
-            except Exception:
-                pass
-    return ctx
-
-def _ml_render(text: str, ctx: dict) -> str:
-    try:
-        return text.format_map(_SafeMap(**ctx))
-    except Exception:
-        try:
-            return text.format(**ctx)
-        except Exception:
-            return text
-
-def _ml_pack_attachments(conn: sqlite3.Connection, pack_id: int) -> list[tuple[str, bytes]]:
-    files = []
-    try:
-        df = pd.read_sql_query("SELECT id, name, path, file_id FROM rfq_attach WHERE pack_id=? ORDER BY id;", conn, params=(int(pack_id),))
-    except Exception:
-        df = None
-    if df is None or df.empty:
-        return files
-    # helper to load bytes
-    def _load_by_path(path: str) -> bytes:
-        try:
-            with open(path, "rb") as fh:
-                return fh.read()
-        except Exception:
-            return b""
-    for _, r in df.iterrows():
-        nm = (r.get("name") or "attachment").strip()
-        path = (r.get("path") or "").strip()
-        if (not path) and r.get("file_id"):
-            try:
-                fr = pd.read_sql_query("SELECT path FROM files WHERE id=?", conn, params=(int(r.get("file_id")),)).iloc[0]
-                path = str(fr.get("path") or "")
-            except Exception:
-                path = ""
-        b = _load_by_path(path) if path else b""
-        if b:
-            files.append((nm, b))
-    return files
-
-def _ml_smtp_config() -> dict:
-    host = _ml_os.getenv("SMTP_HOST", "")
-    port = int(_ml_os.getenv("SMTP_PORT", "587")) if _ml_os.getenv("SMTP_PORT") else 587
-    user = _ml_os.getenv("SMTP_USER", "")
-    pw = _ml_os.getenv("SMTP_PASS", "")
-    sender = _ml_os.getenv("FROM_EMAIL", user or "")
-    use_tls = (_ml_os.getenv("SMTP_TLS", "1").lower() in {"1","true","yes","on"})
-    return {"host":host, "port":port, "user":user, "pw":pw, "sender":sender, "tls":use_tls}
-
-def _ml_send_email(to_addr: str, subject: str, body_text: str, body_html: str | None, attachments: list[tuple[str, bytes]]) -> tuple[bool, str]:
-    cfg = _ml_smtp_config()
-    if not (cfg["host"] and cfg["sender"] and to_addr and subject):
-        return (False, "SMTP config or addresses missing")
-    msg = _ml_MIMEMultipart("mixed")
-    msg["From"] = cfg["sender"]
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    alt = _ml_MIMEMultipart("alternative")
-    alt.attach(_ml_MIMEText(body_text, "plain"))
-    if body_html:
-        alt.attach(_ml_MIMEText(body_html, "html"))
-    msg.attach(alt)
-    for fn, data in attachments:
-        part = _ml_MIMEBase("application", "octet-stream")
-        part.set_payload(data)
-        _ml_encoders.encode_base64(part)
-        part.add_header("Content-Disposition", "attachment; filename=\"{}\"".format(fn))
-        msg.attach(part)
-    try:
-        s = _ml_smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
-        if cfg["tls"]:
-            s.starttls()
-        if cfg["user"]:
-            s.login(cfg["user"], cfg["pw"])  # may no-op if empty
-        s.sendmail(cfg["sender"], [to_addr], msg.as_string())
-        s.quit()
-        return (True, "sent")
-    except Exception as e:
-        return (False, str(e))
-
-def run_rfq_mailer(conn: sqlite3.Connection) -> None:
-    _ml_ensure_tables(conn)
-    st.header("RFQ Mailer")
-    # pick RFQ Pack
-    try:
-        dfp = pd.read_sql_query("SELECT id, title FROM rfq_packs ORDER BY id DESC;", conn)
-    except Exception:
-        dfp = pd.DataFrame()
-    if dfp is None or dfp.empty:
-        st.info("No RFQ Packs.")
-        return
-    # format label lookup
-    _labels = {int(r.id): f"#{int(r.id)} — {str(r.title)}" for _, r in dfp.iterrows()}
-    pack_id = st.selectbox("RFQ Pack", options=dfp["id"].astype(int).tolist(), format_func=lambda i: _labels.get(int(i), str(i)))
-    # vendors linked to pack
-    try:
-        dfv = pd.read_sql_query(
-            """
-            SELECT v.id as vendor_id, v.name as vendor, COALESCE(vc.email, v.email, '') as email,
-                   COALESCE(vc.name, v.name, '') as contact
-            FROM rfq_vendors rv
-            JOIN vendors v ON v.id=rv.vendor_id
-            LEFT JOIN vendor_contacts vc ON vc.vendor_id=v.id
-            WHERE rv.pack_id=?
-            GROUP BY v.id
-            ORDER BY v.name
-            """,
-            conn,
-            params=(int(pack_id),),
-        )
-    except Exception:
-        dfv = pd.DataFrame(columns=["vendor_id","vendor","email","contact"])    
-    # template picker/editor
-    _ml_ensure_tables(conn)
-    try:
-        dft = pd.read_sql_query("SELECT id, name, subject, body FROM mail_templates ORDER BY name;", conn)
-    except Exception:
-        dft = pd.DataFrame()
-    tmpl_names = dft["name"].tolist() if dft is not None and not dft.empty else ["Default RFQ"]
-    colA, colB = st.columns([1,2])
-    with colA:
-        pick = st.selectbox("Template", options=tmpl_names, index=0)
-    if dft is not None and not dft.empty and pick in dft["name"].values:
-        row_t = dft.loc[dft["name"]==pick].iloc[0]
-        subject_val = str(row_t["subject"])
-        body_val = str(row_t["body"])
-    else:
-        subject_val = "RFQ: {title} — {solicitation} — response due {due}"
-        body_val = "Hello {contact},\n\nPlease see attached RFQ Pack for {title} ({solicitation}, notice {notice_id}). Response due {due}.\n\nRegards,\n{company}"
-    with colB:
-        tmpl_name = st.text_input("Template name", value=pick)
-        subject = st.text_input("Subject", value=subject_val)
-        body = st.text_area("Body", value=body_val, height=180)
-        if st.button("Save / Update template"):
-            now = datetime.utcnow().isoformat()
-            with _ml_closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO mail_templates(name, subject, body, created_at, updated_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, body=excluded.body, updated_at=excluded.updated_at;", (tmpl_name.strip() or "Template", subject, body, now, now))
-                conn.commit()
-            st.success("Template saved")
-        st.caption("Placeholders: {title} {solicitation} {due} {notice_id} {company} {contact}")
-    st.divider()
-    # Attachments preview
-    atts = _ml_pack_attachments(conn, int(pack_id))
-    st.caption("Attachments: {} file(s)".format(len(atts)))
-    if atts:
-        st.write("\n".join(["- {}".format(fn) for fn,_ in atts]))
-    # Per-recipient preview and test send
-    if dfv is None or dfv.empty:
-        st.warning("No recipients linked to this pack.")
-        return
-    options = list(range(len(dfv)))
-    def _fmt(i):
-        row = dfv.iloc[i]
-        email = str(row.get("email") or "")
-        lab = "{}".format(row.get("vendor"))
-        return "{} <{}>".format(lab, email) if email else lab
-    idx = st.selectbox("Recipient", options=options, format_func=_fmt)
-    rec = dfv.iloc[idx]
-    ctx = _ml_build_context(conn, int(pack_id), int(rec["vendor_id"]))
-    subj_r = _ml_render(subject, ctx)
-    body_r = _ml_render(body, ctx)
-    st.subheader("Preview")
-    st.text_input("Rendered subject", value=subj_r, disabled=True)
-    st.text_area("Rendered body", value=body_r, height=200, disabled=True)
-    # Simple acceptance check: show missing placeholders if any
-    required = ["title","solicitation","due","notice_id","company","contact"]
-    missing = [k for k in required if ("{"+k+"}") in subject or ("{"+k+"}") in body]
-    if missing:
-        st.warning("Unrendered placeholders present: " + ", ".join(missing))
-    # Test send
-    colx, coly = st.columns([2,2])
-    with colx:
-        to_addr = st.text_input("Send test to", value=str(rec.get("email") or ""))
-    with coly:
-        if st.button("Test send"):
-            ok, msg = _ml_send_email(to_addr.strip(), subj_r, body_r, None, atts)
-            if ok:
-                st.success("Test sent")
-            else:
-                st.error("Send failed: {}".format(msg))
-
-# === End RFQ Emailer Module ===
