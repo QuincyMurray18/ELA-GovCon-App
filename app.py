@@ -5585,75 +5585,10 @@ with t2:
                 _ot_delete(conn, int(sel))
                 st.warning("Deleted"); st.rerun()
 
-    st.subheader("Template")
+        st.subheader("Template")
     st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-    subj = st.text_input("Subject", key="outreach_subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))")
-    body = st.text_area("Email Body (HTML supported)", key="outreach_body", value=st.session_state.get("outreach_body", ""), height=200)."
-            " Responses are due {{due}}. We’d like your quote and capability confirmation."
-            "<br><br>Could you reply with pricing and any questions?"
-            "<br><br>Thank you,<br>ELA Management"
-        ),
-        height=200,
-    )
-
-    with st.expander("Attachments", expanded=False):
-        files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
-        attach_paths: List[str] = []
-        if files:
-            for f in files:
-                pth = save_uploaded_file(f, subdir="outreach")
-                if pth:
-                    attach_paths.append(pth)
-            if attach_paths:
-                st.success(f"Saved {len(attach_paths)} attachment(s)")
-
-    c1, c2, c3 = st.columns([2,2,2])
-    with c1:
-        if st.button("Preview first merge"):
-            v0 = df_sel.iloc[0].to_dict()
-            st.info(f"Subject → {_merge_text(subj, v0, notice)}")
-            st.write(_merge_text(body, v0, notice), unsafe_allow_html=True)
-    with c2:
-        if st.button("Export recipients CSV"):
-            csv = df_sel.to_csv(index=False)
-            path = os.path.join(DATA_DIR, "outreach_recipients.csv")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(csv)
-            st.success("Exported recipients CSV")
-            st.markdown(f"[Download recipients CSV]({path})")
-    with c3:
-        sent = st.button("Send emails (SMTP)", type="primary")
-
-    if sent:
-        ok = 0
-        fail = 0
-        log_rows = []
-        for _, row in df_sel.iterrows():
-            vendor = row.to_dict()
-            to_email = vendor.get("email")
-            if not to_email:
-                log_rows.append({"vendor": vendor.get("name"), "email": "", "status": "skipped: no email"})
-                continue
-            s = _merge_text(subj, vendor, notice)
-            b = _merge_text(body, vendor, notice)
-            success, msg = send_email_smtp(to_email, s, b, attach_paths)
-            ok += 1 if success else 0
-            fail += 0 if success else 1
-            log_rows.append({"vendor": vendor.get("name"), "email": to_email, "status": ("sent" if success else msg)})
-        st.success(f"Done. Sent: {ok}  Failed: {fail}")
-        df_log = pd.DataFrame(log_rows)
-        st.dataframe(df_log, use_container_width=True, hide_index=True)
-        path = os.path.join(DATA_DIR, "outreach_send_log.csv")
-        df_log.to_csv(path, index=False)
-        st.markdown(f"[Download send log]({path})")
-
-
-# ---------- Quotes (Phase E) ----------
-    try:
-        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_outreach_y6", title="CO guidance for outreach")
-    except Exception:
-        pass
+    subj = st.text_input("Subject", key="outreach_subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
+    body = st.text_area("Email Body (HTML supported)", key="outreach_body", value=st.session_state.get("outreach_body", ""), height=200)
 
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
