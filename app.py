@@ -5484,7 +5484,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
     # ==== Templates CRUD Panel ====
     _ot_bootstrap(conn)
-    st.subheader()
+    st.subheader("Templates")
     tcol1, tcol2 = st.columns([2,2])
 
     with tcol1:
