@@ -2763,35 +2763,35 @@ def get_db() -> sqlite3.Connection:
     except Exception:
         pass
     
-# Outreach Templates
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS outreach_templates(
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        subject TEXT,
-        body TEXT,
-        created_at TEXT,
-        updated_at TEXT,
-        tenant_id INTEGER
-    );
-""")
-cur.execute("CREATE INDEX IF NOT EXISTS idx_outreach_templates_tenant ON outreach_templates(tenant_id);")
-cur.execute("""
-    CREATE TRIGGER IF NOT EXISTS outreach_templates_ai_tenant
-    AFTER INSERT ON outreach_templates
-    BEGIN
-        UPDATE outreach_templates
-        SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1),
-            created_at=COALESCE(NEW.created_at, datetime('now')),
-            updated_at=COALESCE(NEW.updated_at, datetime('now'))
-        WHERE rowid=NEW.rowid;
-    END;
-""")
-cur.execute("""
-    CREATE VIEW IF NOT EXISTS outreach_templates_t AS
-    SELECT * FROM outreach_templates
-    WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);
-""")
+        # Outreach Templates
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS outreach_templates(
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                subject TEXT,
+                body TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                tenant_id INTEGER
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_outreach_templates_tenant ON outreach_templates(tenant_id);")
+        cur.execute("""
+            CREATE TRIGGER IF NOT EXISTS outreach_templates_ai_tenant
+            AFTER INSERT ON outreach_templates
+            BEGIN
+                UPDATE outreach_templates
+                SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1),
+                    created_at=COALESCE(NEW.created_at, datetime('now')),
+                    updated_at=COALESCE(NEW.updated_at, datetime('now'))
+                WHERE rowid=NEW.rowid;
+            END;
+        """)
+        cur.execute("""
+            CREATE VIEW IF NOT EXISTS outreach_templates_t AS
+            SELECT * FROM outreach_templates
+            WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);
+        """)
 
         return conn
 
