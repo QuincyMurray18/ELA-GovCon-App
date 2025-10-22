@@ -5583,18 +5583,21 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
     st.subheader("Template")
     
+    
     st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-    subj = st.text_input(
-        "Subject",
-        value=st.session_state.get('outreach_subject', "RFQ: {{title}} (Solicitation {{solicitation}})"),
-        key="outreach_subject"
-    )
-    body = st.text_area(
-        "Email Body (HTML supported)",
-        value=st.session_state.get('outreach_body', "Hello {{company}},\n\nWe are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). Responses are due {{due}}. We’d like your quote and capability confirmation.\n\nCould you reply with pricing and any questions?\n\nThank you,\nELA Management"),
-        key="outreach_body",
-        height=200
-    )
+
+    # Initialize defaults once to avoid value+session_state conflict warnings
+    if 'outreach_subject' not in st.session_state:
+        st.session_state['outreach_subject'] = "RFQ: {{title}} (Solicitation {{solicitation}})"
+    if 'outreach_body' not in st.session_state:
+        st.session_state['outreach_body'] = ("Hello {{company}},\n\n"
+            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). "
+            "Responses are due {{due}}. We’d like your quote and capability confirmation.\n\n"
+            "Could you reply with pricing and any questions?\n\nThank you,\nELA Management")
+
+    subj = st.text_input("Subject", key="outreach_subject")
+    body = st.text_area("Email Body (HTML supported)", key="outreach_body", height=200)
+
 
 
     with st.expander("Attachments", expanded=False):
