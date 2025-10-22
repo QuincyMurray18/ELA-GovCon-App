@@ -7747,6 +7747,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_white_paper_builder(conn)
     elif page == "Subcontractor Finder":
         run_subcontractor_finder(conn)
+        # S1 Google Places panel
+        run_subcontractor_finder_s1_hook(conn)
     elif page == "Outreach":
         run_outreach(conn)
     elif page == "RFQ Pack":
@@ -8179,25 +8181,7 @@ RFP Context (optional, may be empty):
 # === end X16.1 ===
 
 
-
-def run_subcontractor_finder_s1_hook(conn):
-    # S1: safe wrapper to render Google Places panel
-    try:
-        ensure_subfinder_s1_schema(conn)
-    except Exception:
-        pass
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        import streamlit as st
-        try:
-            st.caption("Google Places panel unavailable.")
-        except Exception:
-            pass
-
-
-
-# === S1 Subcontractor Finder helpers ==========================================
+# === S1 Subcontractor Finder: Google Places ====================================
 def ensure_subfinder_s1_schema(conn):
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()]
@@ -8207,7 +8191,17 @@ def ensure_subfinder_s1_schema(conn):
         if "place_id" not in cols:
             try: conn.execute("ALTER TABLE vendors ADD COLUMN place_id TEXT")
             except Exception: pass
+        if "fit_score" not in cols:
+            try: conn.execute("ALTER TABLE vendors ADD COLUMN fit_score REAL")
+            except Exception: pass
+        if "tags" not in cols:
+            try: conn.execute("ALTER TABLE vendors ADD COLUMN tags TEXT")
+            except Exception: pass
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
+
+def s1_normalize_phone(s:str)->str:
+    s = (s or "").strip()
+    return "".join(ch for ch in s if ch.isdigit())
 
 def s1_get_google_api_key()->str|None:
     import os
@@ -8253,6 +8247,44 @@ def s1_places_text_search(query:str, lat:float, lon:float, radius_meters:int, pa
     except Exception as e:
         return {"error": str(e)}
 
+def s1_vendor_exists(conn, place_id:str|None, email:str|None, phone:str|None)->bool:
+    q = "SELECT 1 FROM vendors WHERE 1=0"
+    args = []
+    if place_id:
+        q += " OR place_id=?"; args.append(place_id)
+    if email:
+        q += " OR LOWER(email)=LOWER(?)"; args.append(email.strip())
+    if phone:
+        q += " OR REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?"
+        args.append("%" + s1_normalize_phone(phone) + "%")
+    row = conn.execute(q, tuple(args)).fetchone()
+    return bool(row)
+
+def s1_save_vendor(conn, v:dict)->int|None:
+    ensure_subfinder_s1_schema(conn)
+    name = v.get("name") or ""
+    pid = v.get("place_id") or None
+    addr = v.get("formatted_address") or ""
+    city, state = None, None
+    phone = v.get("formatted_phone_number") or v.get("international_phone_number") or ""
+    phone = s1_normalize_phone(phone)
+    website = v.get("website") or ""
+    email = v.get("email") or ""
+    with conn:
+        conn.execute("""
+            INSERT INTO vendors(name, city, state, phone, email, website, notes, place_id)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(place_id) DO UPDATE SET
+              name=excluded.name,
+              phone=COALESCE(excluded.phone, vendors.phone),
+              website=COALESCE(excluded.website, vendors.website)
+        """, (name, city, state, phone, email, website, addr, pid))
+    row = conn.execute("SELECT id FROM vendors WHERE place_id=?", (pid,)).fetchone()
+    return row[0] if row else None
+
+def s1_calc_radius_meters(miles:int)->int:
+    return int(float(miles) * 1609.344)
+
 def s1_render_places_panel(conn, default_addr:str|None=None):
     import streamlit as st, pandas as pd
     ensure_subfinder_s1_schema(conn)
@@ -8274,9 +8306,8 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
     if not loc:
         st.error("Geocoding failed or API key missing"); return
     lat, lon = loc
-    radius_meters = int(float(miles) * 1609.344)
     token = st.session_state.get("s1_page_token") if next_clicked else None
-    data = s1_places_text_search(q, lat, lon, radius_meters, token)
+    data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
     if "error" in data:
         st.error(f"Places error: {data['error']}"); return
     st.session_state["s1_page_token"] = data.get("next_page_token")
@@ -8287,9 +8318,46 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
         addr = r.get("formatted_address", "")
         rating = r.get("rating", None)
         open_now = (r.get("opening_hours") or {}).get("open_now")
-        rows.append({"place_id": pid,"name": name,"address": addr,"rating": rating,"open_now": open_now})
+        dup = hide_saved and pid and s1_vendor_exists(conn, pid, None, None)
+        if not dup:
+            rows.append({"place_id": pid,"name": name,"address": addr,"rating": rating,"open_now": open_now})
     if not rows:
-        st.info("No results"); return
+        st.info("No new vendors in this page"); return
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
-    st.caption("Set st.secrets['google']['api_key'] to enable.")
+    ids = [r["place_id"] for r in rows if r.get("place_id")]
+    if not ids: return
+    to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
+    if st.button("Save selected to vendors"):
+        saved = 0
+        for r in data.get("results", []):
+            if r.get("place_id") in to_save:
+                try:
+                    s1_save_vendor(conn, r); saved += 1
+                except Exception: pass
+        st.success(f"Saved {saved} vendors")
+    if st.session_state.get("s1_page_token"):
+        st.caption("Another page is available. Click Next page to load more.")
+    st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
+
+
+def o1_list_accounts(conn):
+    ensure_outreach_o1_schema(conn)
+    rows = conn.execute("""
+      SELECT user_email, display_name, smtp_host, smtp_port
+      FROM email_accounts ORDER BY user_email
+    """).fetchall()
+    return rows
+
+def o1_delete_email_account(conn, user_email:str):
+    ensure_outreach_o1_schema(conn)
+    with conn:
+        conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
+
+
+def run_subcontractor_finder_s1_hook(conn):
+    ensure_subfinder_s1_schema(conn)
+    try:
+        s1_render_places_panel(conn)
+    except Exception:
+        pass
