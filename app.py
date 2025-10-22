@@ -7841,77 +7841,113 @@ def s1_calc_radius_meters(miles):
 
 def s1_render_places_panel(conn, default_addr=None):
     import streamlit as st, pandas as pd
+
     ensure_subfinder_s1_schema(conn)
+
     st.markdown("### Google Places search")
     key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
     miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
     q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q", "janitorial"), key="s1_q")
     hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
-    if "s1_page_token" not in st.session_state:
-        st.session_state["s1_page_token"] = None
-    cols = st.columns([1, 1, 1])
-    search_clicked = cols[0].button("Search")
-    next_clicked = cols[1].button("Next page")
-    clear_clicked = cols[2].button("Clear")
-    if clear_clicked:
-        st.session_state["s1_page_token"] = None
-    if not (search_clicked or next_clicked):
-        return
-    if not key_addr:
-        st.error("Address required")
-        return
-    loc = s1_geocode_address(key_addr)
-    if not loc:
-        st.error("Geocoding failed or API key missing")
-        return
-    lat, lon = loc
-    token = st.session_state.get("s1_page_token") if next_clicked else None
-    data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
-    if "error" in data:
-        st.error(f"Places error: {data['error']}")
-        return
-    st.session_state["s1_page_token"] = data.get("next_page_token")
-    rows = []
-    for r in data.get("results", []):
-        pid = r.get("place_id")
-        name = r.get("name")
-        addr = r.get("formatted_address", "")
-        rating = r.get("rating", None)
-        open_now = (r.get("opening_hours") or {}).get("open_now")
-        dup = hide_saved and pid and s1_vendor_exists(conn, pid, None, None)
-        if not dup:
-            rows.append({"place_id": pid, "name": name, "address": addr, "rating": rating, "open_now": open_now})
+
+    ss = st.session_state
+    ss.setdefault("s1_page_token", None)
+    ss.setdefault("s1_results", None)         # table rows
+    ss.setdefault("s1_raw_results", None)     # place_id -> raw place
+    ss.setdefault("s1_saved_ids", set())      # saved this session
+
+    colA, colB, colC = st.columns([1,1,1])
+    do_search = colA.button("Search")
+    do_next = colB.button("Next page")
+    do_clear = colC.button("Clear")
+
+    if do_clear:
+        ss["s1_page_token"] = None
+        ss["s1_results"] = None
+        ss["s1_raw_results"] = None
+        ss["s1_saved_ids"] = set()
+
+    # Fetch new page only on explicit action
+    if (do_search or do_next) and key_addr:
+        loc = s1_geocode_address(key_addr)
+        if not loc:
+            st.error("Geocoding failed or API key missing")
+            return
+        lat, lon = loc
+        token = ss.get("s1_page_token") if do_next else None
+        data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
+        if "error" in data:
+            st.error(f"Places error: {data['error']}")
+            return
+        ss["s1_page_token"] = data.get("next_page_token")
+
+        rows = []
+        raw = {}
+        for r in data.get("results", []) or []:
+            pid = r.get("place_id")
+            if not pid:
+                continue
+            raw[pid] = r
+            name = r.get("name")
+            addr = r.get("formatted_address", "")
+            rating = r.get("rating", None)
+            open_now = (r.get("opening_hours") or {}).get("open_now")
+            dup = hide_saved and (s1_vendor_exists(conn, pid, None, None) or pid in ss["s1_saved_ids"])
+            if not dup:
+                rows.append({"place_id": pid, "name": name, "address": addr, "rating": rating, "open_now": open_now})
+        ss["s1_results"] = rows
+        ss["s1_raw_results"] = raw
+
+    rows = ss.get("s1_results") or []
+    raw = ss.get("s1_raw_results") or {}
+
     if not rows:
-        st.info("No new vendors in this page")
+        st.info("No results yet. Enter an address and click Search.")
+        st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
         return
+
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
     ids = [r["place_id"] for r in rows if r.get("place_id")]
     if not ids:
+        st.info("No selectable results on this page.")
         return
-    
-    # Build a map from visible place_id -> full result for safe saves
-    id_to_result = { (r.get("place_id") or ""): r for r in (data.get("results", []) or []) if (r.get("place_id") or "") in set(ids) }
-    with st.form("s1_save_form"):
+
+    with st.form("s1_save_form", clear_on_submit=False):
         to_save = st.multiselect(
             "Select vendors to save",
             ids,
             format_func=lambda x: next((r["name"] for r in rows if r["place_id"] == x), x),
-            key="s1_to_save",
+            key="s1_select_ids"
         )
         submit = st.form_submit_button("Save selected to vendors", key="s1_save_selected_form")
-        if submit:
-            selected_ids = [pid for pid in (st.session_state.get("s1_to_save") or []) if pid in id_to_result]
-            saved = 0
-            for pid in selected_ids:
-                try:
-                    s1_save_vendor(conn, id_to_result[pid])
-                    saved += 1
-                except Exception as e:
-                    # Show one-line warning and continue with others
-                    st.warning(f"Save failed for {pid}: {e}")
-            st.success(f"Saved {saved} vendor{'s' if saved != 1 else ''}")
-    if st.session_state.get("s1_page_token"): 
+
+    if submit and to_save:
+        saved = 0
+        errors = []
+        for pid in to_save:
+            r = raw.get(pid)
+            if not r:
+                continue
+            try:
+                s1_save_vendor(conn, r)
+                saved += 1
+                ss["s1_saved_ids"].add(pid)
+            except Exception as e:
+                errors.append(f"{pid}: {e}")
+        if saved:
+            st.success(f"Saved {saved} vendors")
+        if errors:
+            st.error("Some saves failed: " + "; ".join(errors))
+
+        if hide_saved:
+            rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
+            ss["s1_results"] = rows
+            df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
+            st.dataframe(df2, use_container_width=True, hide_index=True)
+
+    if ss.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 def run_subcontractor_finder_s1_hook(conn):
