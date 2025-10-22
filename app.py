@@ -5479,15 +5479,6 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
-    st.session_state.setdefault('outreach_subject','')
-    st.session_state.setdefault('outreach_html','')
-    # O2: templates picker and manager
-    try:
-        _tpl_picker_prefill(conn)
-        with st.expander("Templates", expanded=False):
-            render_outreach_templates(conn)
-    except Exception:
-        pass
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
@@ -6712,7 +6703,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
-            a_subject = st.text_input("Subject", key="act_subject")
+            a_subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
         with a_col2:
             a_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
                                   format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
@@ -8590,7 +8581,6 @@ def o1_delete_email_account(conn, user_email:str):
 
 
 # === O2: Outreach Templates ====================================================
-
 def ensure_email_templates(conn):
     with conn:
         conn.execute("""
@@ -8652,8 +8642,8 @@ def render_outreach_templates(conn):
     if sel == "<new>":
         tid = None
         name = st.text_input("Name", key="tpl_name")
-        subject = st.text_input("Subject", key="tpl_subject")
-        html = st.text_area("HTML body", key="tpl_html", height=240)
+        subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
+        html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
     else:
         row = next(r for r in rows if r[1] == sel)
         tid = row[0]
