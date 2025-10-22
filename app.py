@@ -7727,6 +7727,59 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
 def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
+
+# --- S1 enrichment helpers: Place Details and email discovery ---
+def s1_place_details(place_id):
+    """Fetch Google Place Details for phone and website."""
+    key = s1_get_google_api_key()
+    if not key or not place_id:
+        return {}
+    import urllib.parse, urllib.request, json, time
+    base = "https://maps.googleapis.com/maps/api/place/details/json"
+    params = {
+        "place_id": place_id,
+        "fields": "formatted_phone_number,international_phone_number,website",
+        "key": key,
+    }
+    url = base + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("result"):
+            return data["result"]
+    except Exception:
+        return {}
+    return {}
+
+def s1_discover_emails_from_site(url: str, max_emails: int = 3):
+    """Fetch homepage and extract emails. Best effort."""
+    if not url:
+        return []
+    # normalize to http(s)
+    import re as _re, urllib.request as _rq, urllib.parse as _pu, socket
+    try:
+        u = _pu.urlparse(url)
+        if not u.scheme:
+            url2 = "http://" + url
+        else:
+            url2 = url
+        req = _rq.Request(url2, headers={"User-Agent": "ELA-GovCon-App/1.0"})
+        with _rq.urlopen(req, timeout=12) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        # mailto first
+        mails = set(_re.findall(r"mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", html))
+        # plain emails
+        mails |= set(_re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", html))
+        # filter common junk
+        cleaned = []
+        for m in mails:
+            m2 = m.strip().strip(".,);:>'"")
+            if len(m2) > 4 and "example.com" not in m2.lower():
+                cleaned.append(m2)
+        return cleaned[:max_emails]
+    except Exception:
+        return []
+
 # === S1 Subcontractor Finder: Google Places ===
 def ensure_subfinder_s1_schema(conn):
     try:
@@ -7849,6 +7902,7 @@ def s1_render_places_panel(conn, default_addr=None):
     miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
     q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q", "janitorial"), key="s1_q")
     hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
+    enrich = st.checkbox("Enrich with phone and email", value=True, key="s1_enrich_details")
 
     ss = st.session_state
     ss.setdefault("s1_page_token", None)
@@ -7926,29 +7980,47 @@ def s1_render_places_panel(conn, default_addr=None):
 
     if submit:
         st.caption(f"Selected count: {len(to_save)}")
-    if submit and to_save:
-        saved = 0
-        errors = []
-        for pid in to_save:
-            r = raw.get(pid)
-            if not r:
-                continue
-            try:
-                s1_save_vendor(conn, r)
-                saved += 1
-                ss["s1_saved_ids"].add(pid)
-            except Exception as e:
-                errors.append(f"{pid}: {e}")
-        if saved:
-            st.success(f"Saved {saved} vendors")
-        if errors:
-            st.error("Some saves failed: " + "; ".join(errors))
+    
+if submit and to_save:
+    saved = 0
+    errors = []
+    for pid in to_save:
+        r = raw.get(pid) or {}
+        try:
+            # Optional enrichment
+            phone = r.get("formatted_phone_number") or r.get("international_phone_number") or ""
+            website = r.get("website") or ""
+            email = ""
+            if enrich:
+                det = s1_place_details(pid) or {}
+                phone = phone or det.get("formatted_phone_number") or det.get("international_phone_number") or ""
+                website = website or det.get("website") or ""
+                # Try extract emails from website homepage
+                emails = s1_discover_emails_from_site(website) if website else []
+                if emails:
+                    email = emails[0]
 
-        if hide_saved:
-            rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
-            ss["s1_results"] = rows
-            df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
-            st.dataframe(df2, use_container_width=True, hide_index=True)
+            # Merge into a copy before save
+            v = dict(r)
+            if phone: v["formatted_phone_number"] = phone
+            if website: v["website"] = website
+            if email: v["email"] = email
+
+            s1_save_vendor(conn, v)
+            saved += 1
+            ss["s1_saved_ids"].add(pid)
+        except Exception as e:
+            errors.append(f"{pid}: {e}")
+    if saved:
+        st.success(f"Saved {saved} vendors")
+    if errors:
+        st.error("Some saves failed: " + "; ".join(errors))
+
+    if hide_saved:
+        rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
+        ss["s1_results"] = rows
+        df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
+        st.dataframe(df2, use_container_width=True, hide_index=True)
 
     if ss.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
