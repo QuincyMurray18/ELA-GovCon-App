@@ -8720,3 +8720,18 @@ def seed_default_templates(conn):
     ]
     for n,s,h in defaults:
         email_template_upsert(conn, n, s, h, None)
+
+
+
+def run_outreach(conn):
+    import streamlit as st
+    st.header("Outreach")
+    # O2: templates seed + picker + manager
+    seed_default_templates(conn)
+    _tpl_picker_prefill(conn)
+    with st.expander("Templates", expanded=False):
+        render_outreach_templates(conn)
+    # Minimal body fields for Subject and Body that use session prefill
+    st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
+    st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
+
