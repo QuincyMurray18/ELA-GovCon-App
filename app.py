@@ -8337,3 +8337,17 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
     if st.session_state.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
+
+
+def o1_list_accounts(conn):
+    ensure_outreach_o1_schema(conn)
+    rows = conn.execute("""
+      SELECT user_email, display_name, smtp_host, smtp_port
+      FROM email_accounts ORDER BY user_email
+    """).fetchall()
+    return rows
+
+def o1_delete_email_account(conn, user_email:str):
+    ensure_outreach_o1_schema(conn)
+    with conn:
+        conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
