@@ -5479,6 +5479,15 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
+    st.session_state.setdefault('outreach_subject','')
+    st.session_state.setdefault('outreach_html','')
+    # O2: templates picker and manager
+    try:
+        _tpl_picker_prefill(conn)
+        with st.expander("Templates", expanded=False):
+            render_outreach_templates(conn)
+    except Exception:
+        pass
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
@@ -7727,51 +7736,7 @@ def render_workspace_switcher(conn: sqlite3.Connection) -> None:
 def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
-
-# --- S1 enrichment helpers: Place Details and email discovery ---
-def s1_place_details(place_id):
-    """Fetch Google Place Details for phone and website."""
-    key = s1_get_google_api_key()
-    if not key or not place_id:
-        return {}
-    import urllib.parse, urllib.request, json, time
-    base = "https://maps.googleapis.com/maps/api/place/details/json"
-    params = {
-        "place_id": place_id,
-        "fields": "formatted_phone_number,international_phone_number,website",
-        "key": key,
-    }
-    url = base + "?" + urllib.parse.urlencode(params)
-    try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if data.get("result"):
-            return data["result"]
-    except Exception:
-        return {}
-    return {}
-def s1_discover_emails_from_site(url: str, max_emails: int = 3):
-    """Fetch homepage and extract emails. Best effort. Returns a list of emails."""
-    if not url:
-        return []
-    import re as _re, urllib.request as _rq, urllib.parse as _pu
-    try:
-        u = _pu.urlparse(url)
-        url2 = ("http://" + url) if not u.scheme else url
-        req = _rq.Request(url2, headers={"User-Agent": "ELA-GovCon-App/1.0"})
-        with _rq.urlopen(req, timeout=12) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-        mails = set(_re.findall(r"mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", html))
-        mails |= set(_re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", html))
-        cleaned = []
-        STRIP_CHARS = ".,);:>\'\""
-        for m in mails:
-            m2 = m.strip().strip(STRIP_CHARS)
-            if len(m2) > 4 and "example.com" not in m2.lower():
-                cleaned.append(m2)
-        return cleaned[:max_emails]
-    except Exception:
-        return []
+# === S1 Subcontractor Finder: Google Places ===
 def ensure_subfinder_s1_schema(conn):
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()]
@@ -7893,7 +7858,6 @@ def s1_render_places_panel(conn, default_addr=None):
     miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
     q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q", "janitorial"), key="s1_q")
     hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
-    enrich = st.checkbox("Enrich with phone and email", value=True, key="s1_enrich_details")
 
     ss = st.session_state
     ss.setdefault("s1_page_token", None)
@@ -7959,8 +7923,6 @@ def s1_render_places_panel(conn, default_addr=None):
         st.info("No selectable results on this page.")
         return
 
-    submit = False
-    to_save = []
     with st.form("s1_save_form", clear_on_submit=False):
         to_save = st.multiselect(
             "Select vendors to save",
@@ -7973,17 +7935,29 @@ def s1_render_places_panel(conn, default_addr=None):
 
     if submit:
         st.caption(f"Selected count: {len(to_save)}")
-    
-    if saved:
-        st.success(f"Saved {saved} vendors")
-    if errors:
-        st.error("Some saves failed: " + "; ".join(errors))
+    if submit and to_save:
+        saved = 0
+        errors = []
+        for pid in to_save:
+            r = raw.get(pid)
+            if not r:
+                continue
+            try:
+                s1_save_vendor(conn, r)
+                saved += 1
+                ss["s1_saved_ids"].add(pid)
+            except Exception as e:
+                errors.append(f"{pid}: {e}")
+        if saved:
+            st.success(f"Saved {saved} vendors")
+        if errors:
+            st.error("Some saves failed: " + "; ".join(errors))
 
-    if hide_saved:
-        rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
-        ss["s1_results"] = rows
-        df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
-        st.dataframe(df2, use_container_width=True, hide_index=True)
+        if hide_saved:
+            rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
+            ss["s1_results"] = rows
+            df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
+            st.dataframe(df2, use_container_width=True, hide_index=True)
 
     if ss.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
@@ -8613,3 +8587,122 @@ def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
         conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
+
+
+# === O2: Outreach Templates ====================================================
+
+def ensure_email_templates(conn):
+    with conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_templates(
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            subject TEXT NOT NULL DEFAULT '',
+            html_body TEXT NOT NULL DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""")
+        conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_email_templates_update
+        AFTER UPDATE ON email_templates
+        BEGIN
+            UPDATE email_templates SET updated_at=CURRENT_TIMESTAMP WHERE id=NEW.id;
+        END;""")
+
+def email_template_list(conn):
+    ensure_email_templates(conn)
+    return conn.execute("SELECT id, name, subject, html_body FROM email_templates ORDER BY name").fetchall()
+
+def email_template_get(conn, template_id:int):
+    ensure_email_templates(conn)
+    return conn.execute("SELECT id, name, subject, html_body FROM email_templates WHERE id=?", (int(template_id),)).fetchone()
+
+def email_template_upsert(conn, name:str, subject:str, html_body:str, template_id:int|None=None):
+    ensure_email_templates(conn)
+    with conn:
+        if template_id:
+            conn.execute("UPDATE email_templates SET name=?, subject=?, html_body=? WHERE id=?",
+                         (name.strip(), subject, html_body, int(template_id)))
+            return template_id
+        conn.execute("""
+            INSERT INTO email_templates(name, subject, html_body)
+            VALUES(?,?,?)
+            ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, html_body=excluded.html_body
+        """, (name.strip(), subject, html_body))
+        return conn.execute("SELECT id FROM email_templates WHERE name=?", (name.strip(),)).fetchone()[0]
+
+def email_template_delete(conn, template_id:int):
+    ensure_email_templates(conn)
+    with conn:
+        conn.execute("DELETE FROM email_templates WHERE id=?", (int(template_id),))
+
+import re as _re_o2
+MERGE_TAGS = {"company","email","title","solicitation","due","notice_id","first_name","last_name","city","state"}
+def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
+    found = set(_re_o2.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", text or ""))
+    return required - found
+
+def render_outreach_templates(conn):
+    import streamlit as st
+    st.subheader("Email templates")
+    ensure_email_templates(conn)
+    rows = email_template_list(conn)
+    names = ["<new>"] + [r[1] for r in rows]
+    sel = st.selectbox("Template", names, key="tpl_sel")
+    if sel == "<new>":
+        tid = None
+        name = st.text_input("Name", key="tpl_name")
+        subject = st.text_input("Subject", key="tpl_subject")
+        html = st.text_area("HTML body", key="tpl_html", height=240)
+    else:
+        row = next(r for r in rows if r[1] == sel)
+        tid = row[0]
+        name = st.text_input("Name", value=row[1], key="tpl_name")
+        subject = st.text_input("Subject", value=row[2], key="tpl_subject")
+        html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
+    missing = template_missing_tags((subject or "") + " " + (html or ""))
+    if missing:
+        st.info("Missing merge tags: " + ", ".join(sorted(missing)))
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Save"):
+            if not (name or "").strip():
+                st.error("Name required")
+            else:
+                email_template_upsert(conn, name, subject or "", html or "", tid)
+                st.success("Saved")
+                st.experimental_rerun()
+    with c2:
+        if (tid is not None) and st.button("Duplicate"):
+            email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
+            st.success("Duplicated")
+            st.experimental_rerun()
+    with c3:
+        if (tid is not None) and st.button("Delete"):
+            email_template_delete(conn, tid)
+            st.success("Deleted")
+            st.experimental_rerun()
+
+def _tpl_picker_prefill(conn):
+    import streamlit as st
+    rows = email_template_list(conn)
+    if not rows:
+        return None
+    names = [r[1] for r in rows]
+    choice = st.selectbox("Use template", ["<none>"] + names, key="tpl_pick")
+    if choice != "<none>":
+        row = next(r for r in rows if r[1] == choice)
+        st.session_state["outreach_subject"] = row[2]
+        st.session_state["outreach_html"] = row[3]
+        return row
+    return None
+
+def seed_default_templates(conn):
+    ensure_email_templates(conn)
+    defaults = [
+        ("RFQ Intro", "RFQ: {{title}} {{solicitation}} due {{due}}",
+         "<p>Hello {{first_name}},</p><p>We are collecting quotes for {{title}} under {{solicitation}} due {{due}}.</p><p>Unsubscribe: reply STOP</p>"),
+        ("Follow Up 1", "Follow up on {{title}} RFQ", "<p>Checking in on your quote for {{title}}.</p><p>Unsubscribe: reply STOP</p>")
+    ]
+    for n,s,h in defaults:
+        email_template_upsert(conn, n, s, h, None)
