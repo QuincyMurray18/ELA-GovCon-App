@@ -4816,7 +4816,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
         "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
     }
     line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
-    doc = Document()
+    doc = docx.Document()
     h = doc.add_heading(doc_title or "Proposal", level=1)
     if metadata:
         p = doc.add_paragraph(" | ".join(f"{k}: {v}" for k,v in metadata.items()))
@@ -5774,7 +5774,7 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
         st.error("python-docx is required. pip install python-docx")
         return None
 
-    doc = Document()
+    doc = docx.Document()
     for s in doc.sections:
         s.top_margin = Inches(0.7); s.bottom_margin = Inches(0.7); s.left_margin = Inches(0.7); s.right_margin = Inches(0.7)
 
@@ -5946,7 +5946,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
-    doc = Document()
+    doc = docx.Document()
     for s in doc.sections:
         s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
     doc.add_heading("Past Performance", level=1)
@@ -6158,7 +6158,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
-    doc = Document()
+    doc = docx.Document()
     doc.add_heading(title or "White Paper", level=1)
     if subtitle:
         p = doc.add_paragraph(subtitle); p.runs[0].italic = True
