@@ -7955,13 +7955,8 @@ def s1_render_places_panel(conn, default_addr=None):
     if ss.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Places powered by Google. Billing must be enabled.")
+
 def run_subcontractor_finder_s1_hook(conn):
-    import streamlit as st
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception as e:
-        st.exception(e)(conn):
     import streamlit as st
     ensure_subfinder_s1_schema(conn)
     try:
