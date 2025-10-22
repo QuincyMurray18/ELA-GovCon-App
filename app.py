@@ -2762,7 +2762,38 @@ def get_db() -> sqlite3.Connection:
         migrate(conn)
     except Exception:
         pass
-    return conn
+    
+# Outreach Templates
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS outreach_templates(
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        subject TEXT,
+        body TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        tenant_id INTEGER
+    );
+""")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_outreach_templates_tenant ON outreach_templates(tenant_id);")
+cur.execute("""
+    CREATE TRIGGER IF NOT EXISTS outreach_templates_ai_tenant
+    AFTER INSERT ON outreach_templates
+    BEGIN
+        UPDATE outreach_templates
+        SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1),
+            created_at=COALESCE(NEW.created_at, datetime('now')),
+            updated_at=COALESCE(NEW.updated_at, datetime('now'))
+        WHERE rowid=NEW.rowid;
+    END;
+""")
+cur.execute("""
+    CREATE VIEW IF NOT EXISTS outreach_templates_t AS
+    SELECT * FROM outreach_templates
+    WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);
+""")
+
+        return conn
 
 
 def _file_hash() -> str:
@@ -5482,75 +5513,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
-    # ==== Templates CRUD Panel ====
-    _ot_bootstrap(conn)
-    st.subheader("Templates")
-    tcol1, tcol2 = st.columns([2,2])
-
-    with tcol1:
-        st.markdown("**Create / Save As New**")
-        t_name = st.text_input("Template name", key="ot_name")
-        if st.button("Save New Template", key="ot_save_new"):
-            nm = (t_name or "").strip()
-            if not nm:
-                st.error("Name required")
-            else:
-                try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            "INSERT OR REPLACE INTO outreach_templates(name, subject, body, updated_at) VALUES(?,?,?,datetime('now'));",
-                            (nm,
-                             st.session_state.get('outreach_subject','') or '',
-                             st.session_state.get('outreach_body','') or '')
-                        )
-                        conn.commit()
-                    st.success("Template saved")
-                except Exception as e:
-                    st.error(f"Failed to save template: {e}")
-
-    with tcol2:
-        df_ot = _ot_list(conn)
-        if df_ot is None or df_ot.empty:
-            st.caption("No templates yet")
-            ot_sel = None
-        else:
-            ot_sel = st.selectbox(
-                "Load / Edit template",
-                options=df_ot["id"].tolist(),
-                format_func=lambda oid: df_ot.loc[df_ot["id"]==oid, "name"].values[0],
-                key="ot_sel"
-            )
-            if ot_sel:
-                row = _ot_get(conn, int(ot_sel)) or {}
-                st.session_state['outreach_subject'] = row.get("subject","")
-                st.session_state['outreach_body'] = row.get("body","")
-                c1, c2 = st.columns([1,1])
-                with c1:
-                    if st.button("Update Template", key="ot_update"):
-                        try:
-                            with closing(conn.cursor()) as cur:
-                                cur.execute(
-                                    "UPDATE outreach_templates SET subject=?, body=?, updated_at=datetime('now') WHERE id=?;",
-                                    (st.session_state.get('outreach_subject','') or '',
-                                     st.session_state.get('outreach_body','') or '',
-                                     int(ot_sel))
-                                )
-                                conn.commit()
-                            st.success("Template updated")
-                        except Exception as e:
-                            st.error(f"Failed to update template: {e}")
-                with c2:
-                    if st.button("Delete Template", key="ot_delete"):
-                        try:
-                            with closing(conn.cursor()) as cur:
-                                cur.execute("DELETE FROM outreach_templates WHERE id=?;", (int(ot_sel),))
-                                conn.commit()
-                            st.warning("Template deleted")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to delete template: {e}")
-    # ==== end Templates CRUD Panel ====
-
     notice = st.session_state.get("rfp_selected_notice", {})
     vendor_ids: List[int] = st.session_state.get("rfq_vendor_ids", [])
 
@@ -5581,24 +5543,58 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         return
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
+    
+st.subheader("Templates")
+t1, t2 = st.columns([2,2])
+with t1:
+    df_tpl = _ot_list(conn)
+    tpl_options = [("", "— select —")] + [(int(r["id"]), f'{r["name"]}') for _, r in df_tpl.iterrows()]
+    sel = st.selectbox("Pick template", options=[o[0] for o in tpl_options],
+                       format_func=lambda v: dict(tpl_options).get(v, "— select —"),
+                       key="ot_pick")
+    if sel:
+        if st.button("Load into editor", key="ot_load"):
+            row = _ot_get(conn, int(sel))
+            st.session_state["outreach_subject"] = row.get("subject") or ""
+            st.session_state["outreach_body"] = row.get("body") or ""
+            st.session_state["outreach_tpl_name"] = row.get("name") or ""
+            st.success("Template loaded")
+with t2:
+    new_name = st.text_input("Template name", key="outreach_tpl_name", placeholder="e.g., RFQ Intro")
+    c1, c2, c3 = st.columns(3)
+    if st.button("Save as New", key="ot_save_new"):
+        _ = _ot_upsert(conn, None, new_name or "Untitled",
+                       st.session_state.get("outreach_subject",""),
+                       st.session_state.get("outreach_body",""))
+        st.success("Saved"); st.rerun()
+    if sel:
+        with c1:
+            if st.button("Update Selected", key="ot_update"):
+                _ = _ot_upsert(conn, int(sel),
+                               st.session_state.get("outreach_tpl_name") or "Untitled",
+                               st.session_state.get("outreach_subject",""),
+                               st.session_state.get("outreach_body",""))
+                st.success("Updated"); st.rerun()
+        with c2:
+            if st.button("Duplicate", key="ot_dup"):
+                row = _ot_get(conn, int(sel))
+                _ = _ot_upsert(conn, None, f"{row.get('name','Template')} (copy)", row.get("subject",""), row.get("body",""))
+                st.success("Duplicated"); st.rerun()
+        with c3:
+            if st.button("Delete", key="ot_delete"):
+                _ot_delete(conn, int(sel))
+                st.warning("Deleted"); st.rerun()
+
     st.subheader("Template")
-    
-    
     st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-
-    # Initialize defaults once to avoid value+session_state conflict warnings
-    if 'outreach_subject' not in st.session_state:
-        st.session_state['outreach_subject'] = "RFQ: {{title}} (Solicitation {{solicitation}})"
-    if 'outreach_body' not in st.session_state:
-        st.session_state['outreach_body'] = ("Hello {{company}},\n\n"
-            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). "
-            "Responses are due {{due}}. We’d like your quote and capability confirmation.\n\n"
-            "Could you reply with pricing and any questions?\n\nThank you,\nELA Management")
-
-    subj = st.text_input("Subject", key="outreach_subject")
-    body = st.text_area("Email Body (HTML supported)", key="outreach_body", height=200)
-
-
+    subj = st.text_input("Subject", key="outreach_subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))")
+    body = st.text_area("Email Body (HTML supported)", key="outreach_body", value=st.session_state.get("outreach_body", ""), height=200)."
+            " Responses are due {{due}}. We’d like your quote and capability confirmation."
+            "<br><br>Could you reply with pricing and any questions?"
+            "<br><br>Thank you,<br>ELA Management"
+        ),
+        height=200,
+    )
 
     with st.expander("Attachments", expanded=False):
         files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
@@ -8127,47 +8123,6 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
         except Exception:
             pass
 # === End Y2 LOCK PATCH ===
-
-# ==== Outreach Templates storage bootstrap and helpers ====
-def _ot_bootstrap(conn):
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS outreach_templates (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                subject TEXT NOT NULL,
-                body TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-            """)
-            conn.commit()
-    except Exception as e:
-        # Avoid hard crash if DB unavailable in some modes
-        pass
-
-def _ot_list(conn):
-    try:
-        return pd.read_sql_query(
-            "SELECT id, name, subject, body, created_at, updated_at FROM outreach_templates ORDER BY updated_at DESC;",
-            conn, params=()
-        )
-    except Exception:
-        return None
-
-def _ot_get(conn, oid:int):
-    try:
-        df = pd.read_sql_query(
-            "SELECT id, name, subject, body FROM outreach_templates WHERE id=?;",
-            conn, params=(int(oid),)
-        )
-        return None if df is None or df.empty else df.iloc[0].to_dict()
-    except Exception:
-        return None
-# ==== end Outreach Templates helpers ====
-
-
 
 def main() -> None:
     conn = get_db()
