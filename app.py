@@ -5270,6 +5270,11 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         pass
 
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
+    ensure_subfinder_s1_schema(conn)
+    try:
+        s1_render_places_panel(conn)
+    except Exception:
+        pass
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
