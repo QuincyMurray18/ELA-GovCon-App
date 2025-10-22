@@ -7959,6 +7959,8 @@ def s1_render_places_panel(conn, default_addr=None):
         st.info("No selectable results on this page.")
         return
 
+    submit = False
+    to_save = []
     with st.form("s1_save_form", clear_on_submit=False):
         to_save = st.multiselect(
             "Select vendors to save",
