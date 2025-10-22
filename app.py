@@ -8759,6 +8759,7 @@ def _save_template(conn, name:str, subject:str, body:str):
 
 def run_outreach(conn):
     import streamlit as st
+    st.caption('Outreach module v2025-10-22 active')
     _ensure_outreach_schema(conn)
     _seed_templates_if_empty(conn)
 
