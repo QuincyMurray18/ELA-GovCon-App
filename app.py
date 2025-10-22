@@ -7907,8 +7907,7 @@ def s1_render_places_panel(conn, default_addr=None):
     if st.session_state.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
-
-def globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn):
+def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
     try:
         s1_render_places_panel(conn)
@@ -8541,11 +8540,3 @@ def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
         conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
-
-
-def globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn):
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        pass
