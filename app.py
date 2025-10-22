@@ -8177,3 +8177,261 @@ RFP Context (optional, may be empty):
     except Exception as e:
         st.error(f"X16.1 panel error: {e}")
 # === end X16.1 ===
+
+
+# === O1 schema and helpers =====================================================
+
+def ensure_outreach_o1_schema(conn):
+    with conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_accounts(
+          id INTEGER PRIMARY KEY,
+          user_email TEXT UNIQUE NOT NULL,
+          smtp_host TEXT NOT NULL DEFAULT 'smtp.gmail.com',
+          smtp_port INTEGER NOT NULL DEFAULT 587,
+          app_password TEXT NOT NULL,
+          display_name TEXT
+        )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_audit(
+          id INTEGER PRIMARY KEY,
+          sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          user_email TEXT NOT NULL,
+          to_email TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          template_id INTEGER,
+          rfq_pack_id INTEGER,
+          notice_id TEXT,
+          merge_json TEXT,
+          attachments_json TEXT,
+          status TEXT,
+          error TEXT
+        )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_suppress(
+          id INTEGER PRIMARY KEY,
+          email TEXT UNIQUE,
+          domain TEXT,
+          reason TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_audit_time ON email_audit(sent_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_suppress_domain ON email_suppress(domain)")
+
+def o1_get_email_account(conn, user_email:str):
+    ensure_outreach_o1_schema(conn)
+    row = conn.execute("""
+      SELECT user_email, smtp_host, smtp_port, app_password, display_name
+      FROM email_accounts WHERE user_email=?""", (user_email.strip(),)).fetchone()
+    if not row:
+        return None
+    return {
+        "user_email": row[0],
+        "smtp_host": row[1],
+        "smtp_port": int(row[2]),
+        "app_password": row[3],
+        "display_name": row[4] or row[0],
+    }
+
+def o1_upsert_email_account(conn, user_email:str, app_password:str, display_name:str|None=None,
+                            smtp_host:str="smtp.gmail.com", smtp_port:int=587):
+    ensure_outreach_o1_schema(conn)
+    with conn:
+        conn.execute("""
+          INSERT INTO email_accounts(user_email, smtp_host, smtp_port, app_password, display_name)
+          VALUES(?,?,?,?,?)
+          ON CONFLICT(user_email) DO UPDATE SET
+              smtp_host=excluded.smtp_host,
+              smtp_port=excluded.smtp_port,
+              app_password=excluded.app_password,
+              display_name=excluded.display_name
+        """, (user_email.strip(), smtp_host.strip(), int(smtp_port), app_password, (display_name or "").strip()))
+    return True
+
+def o1_log_email_audit(conn, user_email:str, to_email:str, subject:str, status:str,
+                       error:str|None=None, template_id:int|None=None,
+                       rfq_pack_id:int|None=None, notice_id:str|None=None,
+                       merge_json:str|None=None, attachments_json:str|None=None):
+    ensure_outreach_o1_schema(conn)
+    with conn:
+        conn.execute("""
+          INSERT INTO email_audit(user_email, to_email, subject, status, error, template_id,
+                                  rfq_pack_id, notice_id, merge_json, attachments_json)
+          VALUES(?,?,?,?,?,?,?,?,?,?)
+        """, (user_email, to_email, subject, status, error, template_id,
+              rfq_pack_id, notice_id, merge_json, attachments_json))
+
+def o1_mail_can_send(conn, to_email:str)->tuple[bool,str|None]:
+    ensure_outreach_o1_schema(conn)
+    to_email = (to_email or "").strip().lower()
+    dom = to_email.split("@")[-1] if "@" in to_email else to_email
+    row_e = conn.execute("SELECT 1 FROM email_suppress WHERE email=?", (to_email,)).fetchone()
+    row_d = conn.execute("SELECT 1 FROM email_suppress WHERE domain=?", (dom,)).fetchone()
+    if row_e:
+        return False, "suppressed email"
+    if row_d:
+        return False, "suppressed domain"
+    return True, None
+
+# === O1 gmail sender ===========================================================
+
+def o1_send_email(conn, sender_email:str, to_email:str, subject:str, html_body:str,
+                  attachments:list[str]|None=None,
+                  template_id:int|None=None, rfq_pack_id:int|None=None, notice_id:str|None=None,
+                  merge_json:str|None=None):
+    """
+    Uses gmail app password when account exists.
+    Falls back to existing send_email_smtp if defined and no account is stored.
+    Always writes email_audit.
+    """
+    ensure_outreach_o1_schema(conn)
+    ok_can, skip_reason = o1_mail_can_send(conn, to_email)
+    if not ok_can:
+        o1_log_email_audit(conn, sender_email, to_email, subject, "skipped", skip_reason,
+                           template_id, rfq_pack_id, notice_id, merge_json,
+                           json.dumps(attachments or []))
+        return False, skip_reason
+
+    acct = o1_get_email_account(conn, sender_email)
+    if not acct:
+        legacy = globals().get("send_email_smtp")
+        if callable(legacy):
+            try:
+                ok, err = legacy(to_email, subject, html_body, attachments or [])
+                o1_log_email_audit(conn, sender_email, to_email, subject,
+                                   "sent" if ok else "error", None if ok else (err or "error"),
+                                   template_id, rfq_pack_id, notice_id, merge_json,
+                                   json.dumps(attachments or []))
+                return ok, err
+            except Exception as e:
+                o1_log_email_audit(conn, sender_email, to_email, subject, "error", str(e),
+                                   template_id, rfq_pack_id, notice_id, merge_json,
+                                   json.dumps(attachments or []))
+                return False, str(e)
+        return False, "no email account stored"
+
+    try:
+        from email.message import EmailMessage
+        import mimetypes, os, smtplib
+
+        msg = EmailMessage()
+        display = acct["display_name"] or acct["user_email"]
+        msg["From"] = f"{display} <{acct['user_email']}>"
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.set_content("This is an HTML email")
+        msg.add_alternative(html_body or "", subtype="html")
+
+        for p in attachments or []:
+            if not p:
+                continue
+            try:
+                ctype, enc = mimetypes.guess_type(p)
+                maintype, subtype = (ctype.split("/", 1) if ctype else ("application", "octet-stream"))
+                with open(p, "rb") as f:
+                    msg.add_attachment(f.read(), maintype=maintype, subtype=subtype,
+                                       filename=os.path.basename(p))
+            except Exception:
+                pass
+
+        with smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"])) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(acct["user_email"], acct["app_password"])
+            server.send_message(msg)
+
+        o1_log_email_audit(conn, acct["user_email"], to_email, subject, "sent", None,
+                           template_id, rfq_pack_id, notice_id, merge_json,
+                           json.dumps(attachments or []))
+        return True, ""
+    except Exception as e:
+        o1_log_email_audit(conn, acct["user_email"], to_email, subject, "error", str(e),
+                           template_id, rfq_pack_id, notice_id, merge_json,
+                           json.dumps(attachments or []))
+        return False, str(e)
+
+# === O1 ui panel ===============================================================
+
+def outreach_o1_panel(conn):
+    import streamlit as st
+    ensure_outreach_o1_schema(conn)
+    st.subheader("Outreach sender account")
+    with st.form("o1_sender_form", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            user_email = st.text_input("Your gmail address", value=st.session_state.get("o1_user_email",""))
+            display_name = st.text_input("Display name", value=st.session_state.get("o1_display_name",""))
+        with col2:
+            app_password = st.text_input("App password", type="password")
+            smtp_host = st.text_input("SMTP host", value="smtp.gmail.com")
+            smtp_port = st.number_input("SMTP port", min_value=1, max_value=65535, value=587, step=1)
+        saved = st.form_submit_button("Save account")
+        if saved:
+            if not user_email or not app_password:
+                st.error("email and app password required")
+            else:
+                o1_upsert_email_account(conn, user_email, app_password, display_name, smtp_host, int(smtp_port))
+                st.session_state["o1_user_email"] = user_email
+                st.session_state["o1_display_name"] = display_name
+                st.success("account saved")
+
+    st.caption("Test send")
+    c1, c2 = st.columns([3,1])
+    with c1:
+        test_to = st.text_input("Test recipient")
+    with c2:
+        if st.button("Send test"):
+            sender = st.session_state.get("o1_user_email") or ""
+            ok, err = o1_send_email(conn, sender, test_to, "Test from ELA Outreach", "<p>Test OK</p>", [])
+            if ok:
+                st.success("test sent")
+            else:
+                st.error(f"send failed: {err}")
+
+    st.divider()
+    st.subheader("Suppression list")
+    with st.form("o1_suppress_form"):
+        s_col1, s_col2, s_col3 = st.columns([3,3,2])
+        with s_col1:
+            sup_email = st.text_input("Email to suppress")
+        with s_col2:
+            sup_domain = st.text_input("Domain to suppress")
+        with s_col3:
+            sup_reason = st.text_input("Reason", value="unsubscribe")
+        if st.form_submit_button("Add suppression"):
+            if not sup_email and not sup_domain:
+                st.error("email or domain required")
+            else:
+                with conn:
+                    conn.execute("""
+                      INSERT OR IGNORE INTO email_suppress(email, domain, reason)
+                      VALUES(?,?,?)
+                    """, ((sup_email or None), (sup_domain or None), sup_reason))
+                st.success("suppression saved")
+
+    st.caption("Recent sends")
+    rows = conn.execute("""
+      SELECT sent_at, user_email, to_email, subject, status, COALESCE(error,'')
+      FROM email_audit ORDER BY id DESC LIMIT 200
+    """).fetchall()
+    if rows:
+        import pandas as pd
+        df = pd.DataFrame(rows, columns=["sent_at","user_email","to_email","subject","status","error"])
+        st.dataframe(df, hide_index=True, use_container_width=True)
+
+def o1_export_email_audit_csv(conn)->str:
+    import pandas as pd, os
+    rows = conn.execute("""
+      SELECT sent_at, user_email, to_email, subject, template_id, rfq_pack_id,
+             notice_id, status, COALESCE(error,''), merge_json, attachments_json
+      FROM email_audit ORDER BY id DESC
+    """).fetchall()
+    if not rows:
+        return ""
+    df = pd.DataFrame(rows, columns=[
+        "sent_at","user_email","to_email","subject","template_id","rfq_pack_id",
+        "notice_id","status","error","merge_json","attachments_json"
+    ])
+    path = "/mnt/data/email_audit_export.csv"
+    df.to_csv(path, index=False)
+    return path
