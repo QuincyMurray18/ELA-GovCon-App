@@ -8435,3 +8435,220 @@ def o1_export_email_audit_csv(conn)->str:
     path = "/mnt/data/email_audit_export.csv"
     df.to_csv(path, index=False)
     return path
+
+
+# === S1 Subcontractor Finder: Google Places ====================================
+
+def ensure_subfinder_s1_schema(conn):
+    """
+    Ensure vendors table has a place_id column and unique index.
+    """
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()]
+    except Exception:
+        cols = []
+    with conn:
+        if "place_id" not in cols:
+            try:
+                conn.execute("ALTER TABLE vendors ADD COLUMN place_id TEXT")
+            except Exception:
+                pass
+        if "fit_score" not in cols:
+            try:
+                conn.execute("ALTER TABLE vendors ADD COLUMN fit_score REAL")
+            except Exception:
+                pass
+        if "tags" not in cols:
+            try:
+                conn.execute("ALTER TABLE vendors ADD COLUMN tags TEXT")
+            except Exception:
+                pass
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
+
+def s1_normalize_phone(s:str)->str:
+    s = (s or "").strip()
+    return "".join(ch for ch in s if ch.isdigit())
+
+def s1_get_google_api_key()->str|None:
+    import os
+    try:
+        import streamlit as st
+        if "google" in st.secrets and "api_key" in st.secrets["google"]:
+            return st.secrets["google"]["api_key"]
+        if "google_api_key" in st.secrets:
+            return st.secrets["google_api_key"]
+    except Exception:
+        pass
+    return os.environ.get("GOOGLE_API_KEY")
+
+def s1_geocode_address(address:str)->tuple[float,float]|None:
+    """
+    Geocode address to lat,lon using Google Geocoding API.
+    """
+    key = s1_get_google_api_key()
+    if not key:
+        return None
+    import urllib.parse, urllib.request, json
+    params = urllib.parse.urlencode({"address": address, "key": key})
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("results"):
+            loc = data["results"][0]["geometry"]["location"]
+            return float(loc["lat"]), float(loc["lng"])
+    except Exception:
+        return None
+    return None
+
+def s1_places_text_search(query:str, lat:float, lon:float, radius_meters:int, page_token:str|None=None)->dict:
+    """
+    Google Places Text Search near a point with pagination.
+    Returns raw JSON dict including next_page_token.
+    """
+    key = s1_get_google_api_key()
+    if not key:
+        return {"error":"no_api_key"}
+    import urllib.parse, urllib.request, json, time
+    base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {"query": query, "location": f"{lat},{lon}", "radius": radius_meters, "key": key}
+    if page_token:
+        params = {"pagetoken": page_token, "key": key}
+        # Google requires a short delay before using next_page_token
+        time.sleep(2.0)
+    url = base + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"error": str(e)}
+
+def s1_vendor_exists(conn, place_id:str|None, email:str|None, phone:str|None)->bool:
+    q = "SELECT 1 FROM vendors WHERE 1=0"
+    args = []
+    if place_id:
+        q += " OR place_id=?"
+        args.append(place_id)
+    if email:
+        q += " OR LOWER(email)=LOWER(?)"
+        args.append(email.strip())
+    if phone:
+        q += " OR REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?"
+        args.append("%" + s1_normalize_phone(phone) + "%")
+    row = conn.execute(q, tuple(args)).fetchone()
+    return bool(row)
+
+def s1_save_vendor(conn, v:dict)->int|None:
+    """
+    Save minimal vendor fields from Places result. Returns vendor id.
+    """
+    ensure_subfinder_s1_schema(conn)
+    name = v.get("name") or ""
+    pid = v.get("place_id") or None
+    city, state = None, None
+    for comp in v.get("address_components", []):
+        types = comp.get("types", [])
+        if "locality" in types:
+            city = comp.get("long_name")
+        if "administrative_area_level_1" in types:
+            state = comp.get("short_name")
+    phone = v.get("formatted_phone_number") or v.get("international_phone_number") or ""
+    phone = s1_normalize_phone(phone)
+    website = v.get("website") or ""
+    email = v.get("email") or ""
+    addr = v.get("formatted_address") or ""
+    with conn:
+        conn.execute("""
+            INSERT INTO vendors(name, city, state, phone, email, website, notes, place_id)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(place_id) DO UPDATE SET
+              name=excluded.name,
+              city=COALESCE(excluded.city, vendors.city),
+              state=COALESCE(excluded.state, vendors.state),
+              phone=COALESCE(excluded.phone, vendors.phone),
+              website=COALESCE(excluded.website, vendors.website)
+        """, (name, city, state, phone, email, website, addr, pid))
+    row = conn.execute("SELECT id FROM vendors WHERE place_id=?", (pid,)).fetchone()
+    return row[0] if row else None
+
+def s1_calc_radius_meters(miles:int)->int:
+    return int(float(miles) * 1609.344)
+
+def s1_render_places_panel(conn, default_addr:str|None=None):
+    """
+    Adds a Google Places search panel inside Subcontractor Finder.
+    """
+    import streamlit as st, pandas as pd
+    ensure_subfinder_s1_schema(conn)
+    st.markdown("### Google Places search")
+    key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
+    miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
+    q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q","janitorial"), key="s1_q")
+    hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
+    # paging token kept in session
+    if "s1_page_token" not in st.session_state:
+        st.session_state["s1_page_token"] = None
+    cols = st.columns([1,1,1])
+    search_clicked = cols[0].button("Search")
+    next_clicked = cols[1].button("Next page")
+    clear_clicked = cols[2].button("Clear")
+
+    results_df = None
+    if clear_clicked:
+        st.session_state["s1_page_token"] = None
+
+    if search_clicked or next_clicked:
+        if not key_addr:
+            st.error("Address required")
+        else:
+            loc = s1_geocode_address(key_addr)
+            if not loc:
+                st.error("Geocoding failed or API key missing")
+            else:
+                lat, lon = loc
+                token = st.session_state.get("s1_page_token") if next_clicked else None
+                data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
+                if "error" in data:
+                    st.error(f"Places error: {data['error']}")
+                else:
+                    st.session_state["s1_page_token"] = data.get("next_page_token")
+                    rows = []
+                    for r in data.get("results", []):
+                        pid = r.get("place_id")
+                        name = r.get("name")
+                        addr = r.get("formatted_address", "")
+                        rating = r.get("rating", None)
+                        open_now = (r.get("opening_hours") or {}).get("open_now")
+                        dup = False
+                        if hide_saved and pid:
+                            dup = s1_vendor_exists(conn, pid, None, None)
+                        if not dup:
+                            rows.append({
+                                "place_id": pid,
+                                "name": name,
+                                "address": addr,
+                                "rating": rating,
+                                "open_now": open_now,
+                            })
+                    if rows:
+                        results_df = pd.DataFrame(rows)
+                        st.dataframe(results_df, use_container_width=True, hide_index=True)
+                        # Save selected
+                        ids = [r.get("place_id") for r in rows if r.get("place_id")]
+                        if ids:
+                            to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
+                            if st.button("Save selected to vendors"):
+                                saved = 0
+                                for r in data.get("results", []):
+                                    if r.get("place_id") in to_save:
+                                        try:
+                                            s1_save_vendor(conn, r)
+                                            saved += 1
+                                        except Exception:
+                                            pass
+                                st.success(f"Saved {saved} vendors")
+                    else:
+                        st.info("No new vendors in this page")
+    if st.session_state.get("s1_page_token"):
+        st.caption("Another page is available. Click Next page to load more.")
+    st.caption("Configure your Google API key in st.secrets['google']['api_key'] or GOOGLE_API_KEY")
