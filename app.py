@@ -5542,6 +5542,11 @@ def _ot_delete(conn, tid: int):
         conn.commit()
 
 def run_outreach(conn: sqlite3.Connection) -> None:
+    # Ensure valid DB connection
+    try:
+        _ = conn.cursor
+    except Exception:
+        conn = get_db()
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
