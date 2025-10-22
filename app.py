@@ -481,12 +481,185 @@ except Exception:
     mathquests = None
 import smtplib
 import streamlit as st
-# --- Safe shim for run_capability_statement to avoid NameError ---
-if 'run_capability_statement' not in globals():
-    def run_capability_statement(conn):
-        import streamlit as st
-        st.header('Capability Statement')
-        st.info('Capability Statement module not available in this build.')
+
+# --- Capability Statement Page (full implementation) ---
+def run_capability_statement(conn):
+    import streamlit as st
+    import json, datetime, io, sqlite3
+
+    st.header("Capability Statement")
+
+    # Ensure table exists
+    cur = conn.cursor()
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS capability_statement(
+                id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+    )
+    conn.commit()
+
+    # Load last saved
+    row = cur.execute("SELECT data_json FROM capability_statement WHERE id=1").fetchone()
+    defaults = {
+        "company_name": "",
+        "tagline": "",
+        "uei": "",
+        "cage": "",
+        "duns": "",
+        "naics": "561720; 561730; 811310",
+        "psc": "",
+        "website": "",
+        "address": "",
+        "phone": "",
+        "email": "",
+        "core_competencies": "- Bullet one\n- Bullet two",
+        "differentiators": "- Fast response\n- Past performance in federal jobs",
+        "past_performance": "- Agency – Project – Year – Value",
+        "soc_codes": "",
+        "set_asides": "SB; WOSB; VOSB",
+        "social": "",
+    }
+    if row:
+        try:
+            defaults.update(json.loads(row[0]))
+        except Exception:
+            pass
+
+    with st.form("cap_stmt_form", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            company_name = st.text_input("Company name", defaults["company_name"])
+            tagline = st.text_input("Tagline", defaults["tagline"])
+            uei = st.text_input("UEI", defaults["uei"])
+            cage = st.text_input("CAGE", defaults["cage"])
+            duns = st.text_input("DUNS", defaults["duns"])
+            naics = st.text_input("NAICS (semicolon separated)", defaults["naics"])
+            psc = st.text_input("PSC (semicolon separated)", defaults["psc"])
+            set_asides = st.text_input("Socioeconomic set-asides", defaults["set_asides"])
+        with col2:
+            website = st.text_input("Website", defaults["website"])
+            address = st.text_area("Address", defaults["address"], height=80)
+            phone = st.text_input("Phone", defaults["phone"])
+            email = st.text_input("Email", defaults["email"])
+            soc_codes = st.text_input("SOC codes", defaults["soc_codes"])
+            social = st.text_input("Social links", defaults["social"])
+
+        core_competencies = st.text_area("Core competencies (bullets)", defaults["core_competencies"], height=120)
+        differentiators = st.text_area("Differentiators (bullets)", defaults["differentiators"], height=120)
+        past_performance = st.text_area("Past performance (bullets)", defaults["past_performance"], height=120)
+
+        submitted = st.form_submit_button("Save and Preview")
+
+    # Build data dict
+    data = {
+        "company_name": company_name if 'company_name' in locals() else defaults["company_name"],
+        "tagline": tagline if 'tagline' in locals() else defaults["tagline"],
+        "uei": uei if 'uei' in locals() else defaults["uei"],
+        "cage": cage if 'cage' in locals() else defaults["cage"],
+        "duns": duns if 'duns' in locals() else defaults["duns"],
+        "naics": naics if 'naics' in locals() else defaults["naics"],
+        "psc": psc if 'psc' in locals() else defaults["psc"],
+        "website": website if 'website' in locals() else defaults["website"],
+        "address": address if 'address' in locals() else defaults["address"],
+        "phone": phone if 'phone' in locals() else defaults["phone"],
+        "email": email if 'email' in locals() else defaults["email"],
+        "core_competencies": core_competencies if 'core_competencies' in locals() else defaults["core_competencies"],
+        "differentiators": differentiators if 'differentiators' in locals() else defaults["differentiators"],
+        "past_performance": past_performance if 'past_performance' in locals() else defaults["past_performance"],
+        "soc_codes": soc_codes if 'soc_codes' in locals() else defaults["soc_codes"],
+        "set_asides": set_asides if 'set_asides' in locals() else defaults["set_asides"],
+        "social": social if 'social' in locals() else defaults["social"],
+    }
+
+    # Save if submitted
+    if 'submitted' in locals() and submitted:
+        cur.execute("INSERT OR REPLACE INTO capability_statement(id, data_json, updated_at) VALUES(1, ?, ?)",
+                    (json.dumps(data), datetime.datetime.utcnow().isoformat()))
+        conn.commit()
+        st.success("Saved.")
+
+    # Preview
+    st.subheader("Preview")
+    md = f"""
+**{data['company_name']}**
+{data['tagline']}
+
+**UEI:** {data['uei']}   **CAGE:** {data['cage']}   **DUNS:** {data['duns']}
+
+**NAICS:** {data['naics']}
+**PSC:** {data['psc']}
+**Set-asides:** {data['set_asides']}
+**SOC:** {data['soc_codes']}
+
+**Website:** {data['website']}   **Phone:** {data['phone']}   **Email:** {data['email']}
+**Address:** {data['address']}
+
+**Core Competencies**
+{data['core_competencies']}
+
+**Differentiators**
+{data['differentiators']}
+
+**Past Performance**
+{data['past_performance']}
+
+**Social**
+{data['social']}
+"""
+    st.markdown(md)
+
+    # Exports
+    colx, coly = st.columns(2)
+    with colx:
+        # Markdown download always available
+        md_bytes = md.encode("utf-8")
+        st.download_button("Download Markdown", data=md_bytes, file_name="Capability_Statement.md", mime="text/markdown")
+
+    with coly:
+        # Try DOCX export
+        try:
+            from docx import Document
+            from docx.shared import Pt, Inches
+            doc = Document()
+            style = doc.styles["Normal"]
+            style.font.name = "Calibri"
+            style.font.size = Pt(10)
+
+            doc.add_heading(data['company_name'], level=1)
+            if data['tagline']:
+                doc.add_paragraph(data['tagline'])
+
+            t = doc.add_table(rows=4, cols=2)
+            t.style = "Light List Accent 1"
+            t.cell(0,0).text = "UEI";    t.cell(0,1).text = data['uei']
+            t.cell(1,0).text = "CAGE";   t.cell(1,1).text = data['cage']
+            t.cell(2,0).text = "NAICS";  t.cell(2,1).text = data['naics']
+            t.cell(3,0).text = "PSC";    t.cell(3,1).text = data['psc']
+
+            doc.add_heading("Core Competencies", level=2)
+            for line in [l.strip("- ").strip() for l in data['core_competencies'].splitlines() if l.strip()]:
+                doc.add_paragraph(line, style="List Bullet")
+
+            doc.add_heading("Differentiators", level=2)
+            for line in [l.strip("- ").strip() for l in data['differentiators'].splitlines() if l.strip()]:
+                doc.add_paragraph(line, style="List Bullet")
+
+            doc.add_heading("Past Performance", level=2)
+            for line in [l.strip("- ").strip() for l in data['past_performance'].splitlines() if l.strip()]:
+                doc.add_paragraph(line, style="List Bullet")
+
+            doc.add_heading("Contact", level=2)
+            doc.add_paragraph(f"Website: {data['website']}")
+            doc.add_paragraph(f"Phone: {data['phone']}  Email: {data['email']}")
+            doc.add_paragraph(f"Address: {data['address']}")
+
+            bio = io.BytesIO()
+            doc.save(bio)
+            st.download_button("Download DOCX", data=bio.getvalue(), file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.warning("DOCX export unavailable. Install python-docx to enable.")
 
 
 
@@ -7445,7 +7618,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     elif page == "Chat Assistant":
         run_chat_assistant(conn)
     elif page == "Capability Statement":
-        globals().get("run_capability_statement", lambda _c: __import__("streamlit").st.info("Capability Statement module not available"))(conn)
+        run_capability_statement(conn)
     elif page == "CRM":
         run_crm(conn)
     elif page == "Contacts":
