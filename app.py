@@ -504,7 +504,7 @@ def _update_rfp_meta(conn, rfp_id, title=None, solnum=None, sam_url=None):
         sets.append("sam_url=?"); vals.append(sam_url)
     if sets:
         vals.append(int(rfp_id))
-        conn.execute(f"UPDATE rfps SET {", ".join(sets)} WHERE id=?", vals)
+        conn.execute(f'UPDATE rfps SET {", ".join(sets)} WHERE id=?', vals)
         conn.commit()
         return True
     return False
@@ -4117,6 +4117,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             title = st.text_input("RFP Title (used if combining)", key="rfp_title")
             solnum = st.text_input("Solicitation # (used if combining)", key="rfp_solnum")
             sam_url = st.text_input("SAM URL (used if combining)", key="rfp_sam_url", placeholder="https://sam.gov/...")
+            _title_in = (title or "" ).strip()
+            _solnum_in = (solnum or "" ).strip()
+            _sam_in = (sam_url or "" ).strip()
             mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
         with colB:
             st.markdown("**Parse Controls**")
@@ -4208,7 +4211,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                                ((_title_in or _guess_title(full_text, "Untitled")) or "Untitled"), (solnum.strip() or (_solnum_in or _guess_solnum(full_text))), "", _sam_in, "",)
+                                ((_title_in or _guess_title(full_text, "Untitled")), (_solnum_in or _guess_solnum(full_text)), (_parse_sam_notice_id(_sam_in) or ""), (_sam_in or ""), "",)
                             )
                             rfp_id = cur.lastrowid
                             for it in l_items:
