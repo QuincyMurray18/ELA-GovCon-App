@@ -7747,6 +7747,8 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_white_paper_builder(conn)
     elif page == "Subcontractor Finder":
         run_subcontractor_finder(conn)
+        # S1 Google Places panel
+        run_subcontractor_finder_s1_hook(conn)
     elif page == "Outreach":
         run_outreach(conn)
     elif page == "RFQ Pack":
