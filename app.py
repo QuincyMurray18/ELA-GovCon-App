@@ -5513,19 +5513,35 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
     st.subheader("Template")
-    st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-    subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
-    body = st.text_area(
-        "Email Body (HTML supported)",
-        value=(
-            "Hello {{company}},<br><br>"
+
+    st.markdown("Use tags: {company}, {email}, {phone}, {naics}, {title}, {solicitation}, {due}, {notice_id}")
+
+    # O2: templates picker and manager
+
+    try:
+
+        _tpl_picker_prefill(conn)
+
+        with st.expander("Templates", expanded=False):
+
+            render_outreach_templates(conn)
+
+    except Exception:
+
+        pass
+
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
+
+    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get("outreach_html", (
+
+        "Hello {{company}},<br><br>"
             "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
             " Responses are due {{due}}. We’d like your quote and capability confirmation."
             "<br><br>Could you reply with pricing and any questions?"
             "<br><br>Thank you,<br>ELA Management"
-        ),
-        height=200,
-    )
+
+    )), height=200)
+
 
     with st.expander("Attachments", expanded=False):
         files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
