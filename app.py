@@ -5547,6 +5547,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         _ = conn.cursor
     except Exception:
         conn = get_db()
+    conn = get_db()
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
