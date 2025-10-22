@@ -2762,38 +2762,7 @@ def get_db() -> sqlite3.Connection:
         migrate(conn)
     except Exception:
         pass
-    
-        # Outreach Templates
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS outreach_templates(
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                subject TEXT,
-                body TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                tenant_id INTEGER
-            );
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_outreach_templates_tenant ON outreach_templates(tenant_id);")
-        cur.execute("""
-            CREATE TRIGGER IF NOT EXISTS outreach_templates_ai_tenant
-            AFTER INSERT ON outreach_templates
-            BEGIN
-                UPDATE outreach_templates
-                SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1),
-                    created_at=COALESCE(NEW.created_at, datetime('now')),
-                    updated_at=COALESCE(NEW.updated_at, datetime('now'))
-                WHERE rowid=NEW.rowid;
-            END;
-        """)
-        cur.execute("""
-            CREATE VIEW IF NOT EXISTS outreach_templates_t AS
-            SELECT * FROM outreach_templates
-            WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);
-        """)
-
-        return conn
+    return conn
 
 
 def _file_hash() -> str:
@@ -5509,45 +5478,7 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
     return out
 
 
-
-def _ot_list(conn):
-    import pandas as pd
-    return pd.read_sql_query(
-        "SELECT id, name, subject, body, created_at, updated_at FROM outreach_templates_t ORDER BY updated_at DESC, id DESC;",
-        conn, params=()
-    )
-
-def _ot_get(conn, tid: int):
-    import pandas as pd
-    df = pd.read_sql_query("SELECT * FROM outreach_templates_t WHERE id=?;", conn, params=(int(tid),))
-    return df.iloc[0].to_dict() if not df.empty else {}
-
-def _ot_upsert(conn, tid, name: str, subject: str, body: str) -> int:
-    from contextlib import closing
-    with closing(conn.cursor()) as cur:
-        if tid:
-            cur.execute("UPDATE outreach_templates SET name=?, subject=?, body=?, updated_at=datetime('now') WHERE id=?;",
-                        (name.strip(), subject, body, int(tid)))
-            conn.commit()
-            return int(tid)
-        cur.execute("INSERT INTO outreach_templates(name, subject, body, created_at, updated_at) VALUES(?,?,?,datetime('now'),datetime('now'));",
-                    (name.strip(), subject, body))
-        conn.commit()
-        return int(cur.lastrowid)
-
-def _ot_delete(conn, tid: int):
-    from contextlib import closing
-    with closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM outreach_templates WHERE id=?;", (int(tid),))
-        conn.commit()
-
 def run_outreach(conn: sqlite3.Connection) -> None:
-    # Ensure valid DB connection
-    try:
-        _ = conn.cursor
-    except Exception:
-        conn = get_db()
-    conn = get_db()
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
@@ -5581,56 +5512,80 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         return
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
-    
-    st.subheader("Templates")
-    t1, t2 = st.columns([2,2])
-    with t1:
-        df_tpl = _ot_list(conn)
-        tpl_options = [("", "— select —")] + [(int(r["id"]), f'{r["name"]}') for _, r in df_tpl.iterrows()]
-        sel = st.selectbox("Pick template", options=[o[0] for o in tpl_options],
-                           format_func=lambda v: dict(tpl_options).get(v, "— select —"),
-                           key="ot_pick")
-        if sel:
-            if st.button("Load into editor", key="ot_load"):
-                row = _ot_get(conn, int(sel))
-                st.session_state["outreach_subject"] = row.get("subject") or ""
-                st.session_state["outreach_body"] = row.get("body") or ""
-                st.session_state["outreach_tpl_name"] = row.get("name") or ""
-                st.success("Template loaded")
-    with t2:
-        new_name = st.text_input("Template name", key="outreach_tpl_name", placeholder="e.g., RFQ Intro")
-        c1, c2, c3 = st.columns(3)
-        if st.button("Save as New", key="ot_save_new"):
-            _ = _ot_upsert(conn, None, new_name or "Untitled",
-                           st.session_state.get("outreach_subject",""),
-                           st.session_state.get("outreach_body",""))
-            st.success("Saved"); st.rerun()
-        if sel:
-            with c1:
-                if st.button("Update Selected", key="ot_update"):
-                    _ = _ot_upsert(conn, int(sel),
-                                   st.session_state.get("outreach_tpl_name") or "Untitled",
-                                   st.session_state.get("outreach_subject",""),
-                                   st.session_state.get("outreach_body",""))
-                    st.success("Updated"); st.rerun()
-            with c2:
-                if st.button("Duplicate", key="ot_dup"):
-                    row = _ot_get(conn, int(sel))
-                    _ = _ot_upsert(conn, None, f"{row.get('name','Template')} (copy)", row.get("subject",""), row.get("body",""))
-                    st.success("Duplicated"); st.rerun()
-            with c3:
-                if st.button("Delete", key="ot_delete"):
-                    _ot_delete(conn, int(sel))
-                    st.warning("Deleted"); st.rerun()
-    
-    
-    
-    
-    
     st.subheader("Template")
     st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-    subj = st.text_input("Subject", key="outreach_subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
-    body = st.text_area("Email Body (HTML supported)", key="outreach_body", value=st.session_state.get("outreach_body", ""), height=200)
+    subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
+    body = st.text_area(
+        "Email Body (HTML supported)",
+        value=(
+            "Hello {{company}},<br><br>"
+            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
+            " Responses are due {{due}}. We’d like your quote and capability confirmation."
+            "<br><br>Could you reply with pricing and any questions?"
+            "<br><br>Thank you,<br>ELA Management"
+        ),
+        height=200,
+    )
+
+    with st.expander("Attachments", expanded=False):
+        files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
+        attach_paths: List[str] = []
+        if files:
+            for f in files:
+                pth = save_uploaded_file(f, subdir="outreach")
+                if pth:
+                    attach_paths.append(pth)
+            if attach_paths:
+                st.success(f"Saved {len(attach_paths)} attachment(s)")
+
+    c1, c2, c3 = st.columns([2,2,2])
+    with c1:
+        if st.button("Preview first merge"):
+            v0 = df_sel.iloc[0].to_dict()
+            st.info(f"Subject → {_merge_text(subj, v0, notice)}")
+            st.write(_merge_text(body, v0, notice), unsafe_allow_html=True)
+    with c2:
+        if st.button("Export recipients CSV"):
+            csv = df_sel.to_csv(index=False)
+            path = os.path.join(DATA_DIR, "outreach_recipients.csv")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(csv)
+            st.success("Exported recipients CSV")
+            st.markdown(f"[Download recipients CSV]({path})")
+    with c3:
+        sent = st.button("Send emails (SMTP)", type="primary")
+
+    if sent:
+        ok = 0
+        fail = 0
+        log_rows = []
+        for _, row in df_sel.iterrows():
+            vendor = row.to_dict()
+            to_email = vendor.get("email")
+            if not to_email:
+                log_rows.append({"vendor": vendor.get("name"), "email": "", "status": "skipped: no email"})
+                continue
+            s = _merge_text(subj, vendor, notice)
+            b = _merge_text(body, vendor, notice)
+            success, msg = send_email_smtp(to_email, s, b, attach_paths)
+            ok += 1 if success else 0
+            fail += 0 if success else 1
+            log_rows.append({"vendor": vendor.get("name"), "email": to_email, "status": ("sent" if success else msg)})
+        st.success(f"Done. Sent: {ok}  Failed: {fail}")
+        df_log = pd.DataFrame(log_rows)
+        st.dataframe(df_log, use_container_width=True, hide_index=True)
+        path = os.path.join(DATA_DIR, "outreach_send_log.csv")
+        df_log.to_csv(path, index=False)
+        st.markdown(f"[Download send log]({path})")
+
+
+# ---------- Quotes (Phase E) ----------
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_outreach_y6", title="CO guidance for outreach")
+    except Exception:
+        pass
+
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
         if qty is None or unit_price is None:
