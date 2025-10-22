@@ -7974,36 +7974,6 @@ def s1_render_places_panel(conn, default_addr=None):
     if submit:
         st.caption(f"Selected count: {len(to_save)}")
     
-if submit and to_save:
-    saved = 0
-    errors = []
-    for pid in to_save:
-        r = raw.get(pid) or {}
-        try:
-            # Optional enrichment
-            phone = r.get("formatted_phone_number") or r.get("international_phone_number") or ""
-            website = r.get("website") or ""
-            email = ""
-            if enrich:
-                det = s1_place_details(pid) or {}
-                phone = phone or det.get("formatted_phone_number") or det.get("international_phone_number") or ""
-                website = website or det.get("website") or ""
-                # Try extract emails from website homepage
-                emails = s1_discover_emails_from_site(website) if website else []
-                if emails:
-                    email = emails[0]
-
-            # Merge into a copy before save
-            v = dict(r)
-            if phone: v["formatted_phone_number"] = phone
-            if website: v["website"] = website
-            if email: v["email"] = email
-
-            s1_save_vendor(conn, v)
-            saved += 1
-            ss["s1_saved_ids"].add(pid)
-        except Exception as e:
-            errors.append(f"{pid}: {e}")
     if saved:
         st.success(f"Saved {saved} vendors")
     if errors:
