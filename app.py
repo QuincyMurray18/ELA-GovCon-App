@@ -7863,9 +7863,7 @@ def s1_calc_radius_meters(miles):
 
 def s1_render_places_panel(conn, default_addr=None):
     import streamlit as st
-
-import pandas as pd
-
+    import pandas as pd
     ensure_subfinder_s1_schema(conn)
 
     st.markdown("### Google Places search")
