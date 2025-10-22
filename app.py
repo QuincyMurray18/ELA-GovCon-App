@@ -482,6 +482,47 @@ except Exception:
 import smtplib
 import streamlit as st
 
+# --- DB helpers: ensure column exists ---
+def _ensure_column(conn, table, col, type_sql):
+    cur = conn.cursor()
+    cols = [r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()]
+    if col not in cols:
+        try:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type_sql}")
+            conn.commit()
+        except Exception:
+            pass
+
+def _update_rfp_meta(conn, rfp_id, title=None, solnum=None, sam_url=None):
+    _ensure_column(conn, "rfps_t", "sam_url", "TEXT")
+    sets, vals = [], []
+    if title is not None:
+        sets.append("title=?"); vals.append(title)
+    if solnum is not None:
+        sets.append("solnum=?"); vals.append(solnum)
+    if sam_url is not None:
+        sets.append("sam_url=?"); vals.append(sam_url)
+    if sets:
+        vals.append(int(rfp_id))
+        conn.execute(f"UPDATE rfps_t SET {', '.join(sets)} WHERE id=?", vals)
+        conn.commit()
+        return True
+    return False
+
+def _parse_sam_notice_id(s):
+    # Basic patterns for SAM URLs: .../opp/<uuid>/view  or legacy ?id=12345
+    import re
+    if not s:
+        return None
+    m = re.search(r'/opp/([0-9a-fA-F\-]{8,36})/view', s)
+    if m:
+        return m.group(1)
+    m = re.search(r'[?&](id|noticeId|oppId)=(\w+)', s, re.I)
+    if m:
+        return m.group(2)
+    return None
+
+
 # --- Context helpers ---
 _CTX_DEFAULTS = {
     "rfp": None,
@@ -3843,6 +3884,23 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === end One‑Page Analyzer ===
 
     st.header("RFP Analyzer")
+    # --- RFP Meta Editor ---
+    with st.form("rfp_meta_edit", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            _title = st.text_input("RFP Title", str(ctx.get("rfp_title") or df_rf.loc[df_rf['id']==rfp_id,'title'].values[0] if 'title' in df_rf.columns else ""))
+            _solnum = st.text_input("Solicitation Number", str(ctx.get("rfp_solnum") or df_rf.loc[df_rf['id']==rfp_id,'solnum'].values[0] if 'solnum' in df_rf.columns else ""))
+        with c2:
+            _sam_url = st.text_input("SAM.gov URL", str(ctx.get("rfp_sam_url") or (df_rf.loc[df_rf['id']==rfp_id,'sam_url'].values[0] if 'sam_url' in df_rf.columns else "")))
+            _notice_hint = _parse_sam_notice_id(_sam_url) or ""
+            if _notice_hint:
+                st.caption(f"Parsed notice id: {_notice_hint}")
+        _save = st.form_submit_button("Save RFP Meta")
+    if _save:
+        if _update_rfp_meta(conn, rfp_id, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
+            st.success("Saved")
+            st.experimental_rerun()
+    
 
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
