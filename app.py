@@ -6153,7 +6153,7 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
 
 def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
-        from docx import Document
+# from docx import Document  # replaced by 'import docx'
         from docx.shared import Inches
     except Exception:
         st.error("python-docx is required. pip install python-docx")
