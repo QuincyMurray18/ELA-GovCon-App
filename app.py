@@ -7918,11 +7918,14 @@ def s1_render_places_panel(conn, default_addr=None):
         to_save = st.multiselect(
             "Select vendors to save",
             ids,
+            default=[],
             format_func=lambda x: next((r["name"] for r in rows if r["place_id"] == x), x),
             key="s1_select_ids"
         )
         submit = st.form_submit_button("Save selected to vendors", key="s1_save_selected_form")
 
+    if submit:
+        st.caption(f"Selected count: {len(to_save)}")
     if submit and to_save:
         saved = 0
         errors = []
