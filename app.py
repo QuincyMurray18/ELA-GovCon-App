@@ -5270,11 +5270,6 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         pass
 
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        pass
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
@@ -8184,290 +8179,22 @@ RFP Context (optional, may be empty):
 # === end X16.1 ===
 
 
-# === O1 schema and helpers =====================================================
-
-def ensure_outreach_o1_schema(conn):
-    with conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS email_accounts(
-          id INTEGER PRIMARY KEY,
-          user_email TEXT UNIQUE NOT NULL,
-          smtp_host TEXT NOT NULL DEFAULT 'smtp.gmail.com',
-          smtp_port INTEGER NOT NULL DEFAULT 587,
-          app_password TEXT NOT NULL,
-          display_name TEXT
-        )""")
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS email_audit(
-          id INTEGER PRIMARY KEY,
-          sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          user_email TEXT NOT NULL,
-          to_email TEXT NOT NULL,
-          subject TEXT NOT NULL,
-          template_id INTEGER,
-          rfq_pack_id INTEGER,
-          notice_id TEXT,
-          merge_json TEXT,
-          attachments_json TEXT,
-          status TEXT,
-          error TEXT
-        )""")
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS email_suppress(
-          id INTEGER PRIMARY KEY,
-          email TEXT UNIQUE,
-          domain TEXT,
-          reason TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )""")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_audit_time ON email_audit(sent_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_suppress_domain ON email_suppress(domain)")
-
-def o1_get_email_account(conn, user_email:str):
-    ensure_outreach_o1_schema(conn)
-    row = conn.execute("""
-      SELECT user_email, smtp_host, smtp_port, app_password, display_name
-      FROM email_accounts WHERE user_email=?""", (user_email.strip(),)).fetchone()
-    if not row:
-        return None
-    return {
-        "user_email": row[0],
-        "smtp_host": row[1],
-        "smtp_port": int(row[2]),
-        "app_password": row[3],
-        "display_name": row[4] or row[0],
-    }
-
-def o1_upsert_email_account(conn, user_email:str, app_password:str, display_name:str|None=None,
-                            smtp_host:str="smtp.gmail.com", smtp_port:int=587):
-    ensure_outreach_o1_schema(conn)
-    with conn:
-        conn.execute("""
-          INSERT INTO email_accounts(user_email, smtp_host, smtp_port, app_password, display_name)
-          VALUES(?,?,?,?,?)
-          ON CONFLICT(user_email) DO UPDATE SET
-              smtp_host=excluded.smtp_host,
-              smtp_port=excluded.smtp_port,
-              app_password=excluded.app_password,
-              display_name=excluded.display_name
-        """, (user_email.strip(), smtp_host.strip(), int(smtp_port), app_password, (display_name or "").strip()))
-    return True
-
-def o1_log_email_audit(conn, user_email:str, to_email:str, subject:str, status:str,
-                       error:str|None=None, template_id:int|None=None,
-                       rfq_pack_id:int|None=None, notice_id:str|None=None,
-                       merge_json:str|None=None, attachments_json:str|None=None):
-    ensure_outreach_o1_schema(conn)
-    with conn:
-        conn.execute("""
-          INSERT INTO email_audit(user_email, to_email, subject, status, error, template_id,
-                                  rfq_pack_id, notice_id, merge_json, attachments_json)
-          VALUES(?,?,?,?,?,?,?,?,?,?)
-        """, (user_email, to_email, subject, status, error, template_id,
-              rfq_pack_id, notice_id, merge_json, attachments_json))
-
-def o1_mail_can_send(conn, to_email:str)->tuple[bool,str|None]:
-    ensure_outreach_o1_schema(conn)
-    to_email = (to_email or "").strip().lower()
-    dom = to_email.split("@")[-1] if "@" in to_email else to_email
-    row_e = conn.execute("SELECT 1 FROM email_suppress WHERE email=?", (to_email,)).fetchone()
-    row_d = conn.execute("SELECT 1 FROM email_suppress WHERE domain=?", (dom,)).fetchone()
-    if row_e:
-        return False, "suppressed email"
-    if row_d:
-        return False, "suppressed domain"
-    return True, None
-
-# === O1 gmail sender ===========================================================
-
-def o1_send_email(conn, sender_email:str, to_email:str, subject:str, html_body:str,
-                  attachments:list[str]|None=None,
-                  template_id:int|None=None, rfq_pack_id:int|None=None, notice_id:str|None=None,
-                  merge_json:str|None=None):
-    """
-    Uses gmail app password when account exists.
-    Falls back to existing send_email_smtp if defined and no account is stored.
-    Always writes email_audit.
-    """
-    ensure_outreach_o1_schema(conn)
-    ok_can, skip_reason = o1_mail_can_send(conn, to_email)
-    if not ok_can:
-        o1_log_email_audit(conn, sender_email, to_email, subject, "skipped", skip_reason,
-                           template_id, rfq_pack_id, notice_id, merge_json,
-                           json.dumps(attachments or []))
-        return False, skip_reason
-
-    acct = o1_get_email_account(conn, sender_email)
-    if not acct:
-        legacy = globals().get("send_email_smtp")
-        if callable(legacy):
-            try:
-                ok, err = legacy(to_email, subject, html_body, attachments or [])
-                o1_log_email_audit(conn, sender_email, to_email, subject,
-                                   "sent" if ok else "error", None if ok else (err or "error"),
-                                   template_id, rfq_pack_id, notice_id, merge_json,
-                                   json.dumps(attachments or []))
-                return ok, err
-            except Exception as e:
-                o1_log_email_audit(conn, sender_email, to_email, subject, "error", str(e),
-                                   template_id, rfq_pack_id, notice_id, merge_json,
-                                   json.dumps(attachments or []))
-                return False, str(e)
-        return False, "no email account stored"
-
-    try:
-        from email.message import EmailMessage
-        import mimetypes, os, smtplib
-
-        msg = EmailMessage()
-        display = acct["display_name"] or acct["user_email"]
-        msg["From"] = f"{display} <{acct['user_email']}>"
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.set_content("This is an HTML email")
-        msg.add_alternative(html_body or "", subtype="html")
-
-        for p in attachments or []:
-            if not p:
-                continue
-            try:
-                ctype, enc = mimetypes.guess_type(p)
-                maintype, subtype = (ctype.split("/", 1) if ctype else ("application", "octet-stream"))
-                with open(p, "rb") as f:
-                    msg.add_attachment(f.read(), maintype=maintype, subtype=subtype,
-                                       filename=os.path.basename(p))
-            except Exception:
-                pass
-
-        with smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"])) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(acct["user_email"], acct["app_password"])
-            server.send_message(msg)
-
-        o1_log_email_audit(conn, acct["user_email"], to_email, subject, "sent", None,
-                           template_id, rfq_pack_id, notice_id, merge_json,
-                           json.dumps(attachments or []))
-        return True, ""
-    except Exception as e:
-        o1_log_email_audit(conn, acct["user_email"], to_email, subject, "error", str(e),
-                           template_id, rfq_pack_id, notice_id, merge_json,
-                           json.dumps(attachments or []))
-        return False, str(e)
-
-# === O1 ui panel ===============================================================
-
-def outreach_o1_panel(conn):
-    import streamlit as st
-    ensure_outreach_o1_schema(conn)
-    st.subheader("Outreach sender account")
-    with st.form("o1_sender_form", clear_on_submit=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            user_email = st.text_input("Your gmail address", value=st.session_state.get("o1_user_email",""))
-            display_name = st.text_input("Display name", value=st.session_state.get("o1_display_name",""))
-        with col2:
-            app_password = st.text_input("App password", type="password")
-            smtp_host = st.text_input("SMTP host", value="smtp.gmail.com")
-            smtp_port = st.number_input("SMTP port", min_value=1, max_value=65535, value=587, step=1)
-        saved = st.form_submit_button("Save account")
-        if saved:
-            if not user_email or not app_password:
-                st.error("email and app password required")
-            else:
-                o1_upsert_email_account(conn, user_email, app_password, display_name, smtp_host, int(smtp_port))
-                st.session_state["o1_user_email"] = user_email
-                st.session_state["o1_display_name"] = display_name
-                st.success("account saved")
-
-    st.caption("Test send")
-    c1, c2 = st.columns([3,1])
-    with c1:
-        test_to = st.text_input("Test recipient")
-    with c2:
-        if st.button("Send test"):
-            sender = st.session_state.get("o1_user_email") or ""
-            ok, err = o1_send_email(conn, sender, test_to, "Test from ELA Outreach", "<p>Test OK</p>", [])
-            if ok:
-                st.success("test sent")
-            else:
-                st.error(f"send failed: {err}")
-
-    st.divider()
-    st.subheader("Suppression list")
-    with st.form("o1_suppress_form"):
-        s_col1, s_col2, s_col3 = st.columns([3,3,2])
-        with s_col1:
-            sup_email = st.text_input("Email to suppress")
-        with s_col2:
-            sup_domain = st.text_input("Domain to suppress")
-        with s_col3:
-            sup_reason = st.text_input("Reason", value="unsubscribe")
-        if st.form_submit_button("Add suppression"):
-            if not sup_email and not sup_domain:
-                st.error("email or domain required")
-            else:
-                with conn:
-                    conn.execute("""
-                      INSERT OR IGNORE INTO email_suppress(email, domain, reason)
-                      VALUES(?,?,?)
-                    """, ((sup_email or None), (sup_domain or None), sup_reason))
-                st.success("suppression saved")
-
-    st.caption("Recent sends")
-    rows = conn.execute("""
-      SELECT sent_at, user_email, to_email, subject, status, COALESCE(error,'')
-      FROM email_audit ORDER BY id DESC LIMIT 200
-    """).fetchall()
-    if rows:
-        import pandas as pd
-        df = pd.DataFrame(rows, columns=["sent_at","user_email","to_email","subject","status","error"])
-        st.dataframe(df, hide_index=True, use_container_width=True)
-
-def o1_export_email_audit_csv(conn)->str:
-    import pandas as pd, os
-    rows = conn.execute("""
-      SELECT sent_at, user_email, to_email, subject, template_id, rfq_pack_id,
-             notice_id, status, COALESCE(error,''), merge_json, attachments_json
-      FROM email_audit ORDER BY id DESC
-    """).fetchall()
-    if not rows:
-        return ""
-    df = pd.DataFrame(rows, columns=[
-        "sent_at","user_email","to_email","subject","template_id","rfq_pack_id",
-        "notice_id","status","error","merge_json","attachments_json"
-    ])
-    path = "/mnt/data/email_audit_export.csv"
-    df.to_csv(path, index=False)
-    return path
-
-
 # === S1 Subcontractor Finder: Google Places ====================================
-
 def ensure_subfinder_s1_schema(conn):
-    """
-    Ensure vendors table has a place_id column and unique index.
-    """
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()]
     except Exception:
         cols = []
     with conn:
         if "place_id" not in cols:
-            try:
-                conn.execute("ALTER TABLE vendors ADD COLUMN place_id TEXT")
-            except Exception:
-                pass
+            try: conn.execute("ALTER TABLE vendors ADD COLUMN place_id TEXT")
+            except Exception: pass
         if "fit_score" not in cols:
-            try:
-                conn.execute("ALTER TABLE vendors ADD COLUMN fit_score REAL")
-            except Exception:
-                pass
+            try: conn.execute("ALTER TABLE vendors ADD COLUMN fit_score REAL")
+            except Exception: pass
         if "tags" not in cols:
-            try:
-                conn.execute("ALTER TABLE vendors ADD COLUMN tags TEXT")
-            except Exception:
-                pass
+            try: conn.execute("ALTER TABLE vendors ADD COLUMN tags TEXT")
+            except Exception: pass
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
 
 def s1_normalize_phone(s:str)->str:
@@ -8486,13 +8213,9 @@ def s1_get_google_api_key()->str|None:
         pass
     return os.environ.get("GOOGLE_API_KEY")
 
-def s1_geocode_address(address:str)->tuple[float,float]|None:
-    """
-    Geocode address to lat,lon using Google Geocoding API.
-    """
+def s1_geocode_address(address:str):
     key = s1_get_google_api_key()
-    if not key:
-        return None
+    if not key: return None
     import urllib.parse, urllib.request, json
     params = urllib.parse.urlencode({"address": address, "key": key})
     url = f"https://maps.googleapis.com/maps/api/geocode/json?{params}"
@@ -8507,19 +8230,13 @@ def s1_geocode_address(address:str)->tuple[float,float]|None:
     return None
 
 def s1_places_text_search(query:str, lat:float, lon:float, radius_meters:int, page_token:str|None=None)->dict:
-    """
-    Google Places Text Search near a point with pagination.
-    Returns raw JSON dict including next_page_token.
-    """
     key = s1_get_google_api_key()
-    if not key:
-        return {"error":"no_api_key"}
+    if not key: return {"error":"no_api_key"}
     import urllib.parse, urllib.request, json, time
     base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {"query": query, "location": f"{lat},{lon}", "radius": radius_meters, "key": key}
     if page_token:
         params = {"pagetoken": page_token, "key": key}
-        # Google requires a short delay before using next_page_token
         time.sleep(2.0)
     url = base + "?" + urllib.parse.urlencode(params)
     try:
@@ -8532,11 +8249,9 @@ def s1_vendor_exists(conn, place_id:str|None, email:str|None, phone:str|None)->b
     q = "SELECT 1 FROM vendors WHERE 1=0"
     args = []
     if place_id:
-        q += " OR place_id=?"
-        args.append(place_id)
+        q += " OR place_id=?"; args.append(place_id)
     if email:
-        q += " OR LOWER(email)=LOWER(?)"
-        args.append(email.strip())
+        q += " OR LOWER(email)=LOWER(?)"; args.append(email.strip())
     if phone:
         q += " OR REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?"
         args.append("%" + s1_normalize_phone(phone) + "%")
@@ -8544,32 +8259,21 @@ def s1_vendor_exists(conn, place_id:str|None, email:str|None, phone:str|None)->b
     return bool(row)
 
 def s1_save_vendor(conn, v:dict)->int|None:
-    """
-    Save minimal vendor fields from Places result. Returns vendor id.
-    """
     ensure_subfinder_s1_schema(conn)
     name = v.get("name") or ""
     pid = v.get("place_id") or None
+    addr = v.get("formatted_address") or ""
     city, state = None, None
-    for comp in v.get("address_components", []):
-        types = comp.get("types", [])
-        if "locality" in types:
-            city = comp.get("long_name")
-        if "administrative_area_level_1" in types:
-            state = comp.get("short_name")
     phone = v.get("formatted_phone_number") or v.get("international_phone_number") or ""
     phone = s1_normalize_phone(phone)
     website = v.get("website") or ""
     email = v.get("email") or ""
-    addr = v.get("formatted_address") or ""
     with conn:
         conn.execute("""
             INSERT INTO vendors(name, city, state, phone, email, website, notes, place_id)
             VALUES(?,?,?,?,?,?,?,?)
             ON CONFLICT(place_id) DO UPDATE SET
               name=excluded.name,
-              city=COALESCE(excluded.city, vendors.city),
-              state=COALESCE(excluded.state, vendors.state),
               phone=COALESCE(excluded.phone, vendors.phone),
               website=COALESCE(excluded.website, vendors.website)
         """, (name, city, state, phone, email, website, addr, pid))
@@ -8580,9 +8284,6 @@ def s1_calc_radius_meters(miles:int)->int:
     return int(float(miles) * 1609.344)
 
 def s1_render_places_panel(conn, default_addr:str|None=None):
-    """
-    Adds a Google Places search panel inside Subcontractor Finder.
-    """
     import streamlit as st, pandas as pd
     ensure_subfinder_s1_schema(conn)
     st.markdown("### Google Places search")
@@ -8590,70 +8291,49 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
     miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
     q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q","janitorial"), key="s1_q")
     hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
-    # paging token kept in session
-    if "s1_page_token" not in st.session_state:
-        st.session_state["s1_page_token"] = None
+    if "s1_page_token" not in st.session_state: st.session_state["s1_page_token"] = None
     cols = st.columns([1,1,1])
     search_clicked = cols[0].button("Search")
     next_clicked = cols[1].button("Next page")
     clear_clicked = cols[2].button("Clear")
-
-    results_df = None
-    if clear_clicked:
-        st.session_state["s1_page_token"] = None
-
-    if search_clicked or next_clicked:
-        if not key_addr:
-            st.error("Address required")
-        else:
-            loc = s1_geocode_address(key_addr)
-            if not loc:
-                st.error("Geocoding failed or API key missing")
-            else:
-                lat, lon = loc
-                token = st.session_state.get("s1_page_token") if next_clicked else None
-                data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
-                if "error" in data:
-                    st.error(f"Places error: {data['error']}")
-                else:
-                    st.session_state["s1_page_token"] = data.get("next_page_token")
-                    rows = []
-                    for r in data.get("results", []):
-                        pid = r.get("place_id")
-                        name = r.get("name")
-                        addr = r.get("formatted_address", "")
-                        rating = r.get("rating", None)
-                        open_now = (r.get("opening_hours") or {}).get("open_now")
-                        dup = False
-                        if hide_saved and pid:
-                            dup = s1_vendor_exists(conn, pid, None, None)
-                        if not dup:
-                            rows.append({
-                                "place_id": pid,
-                                "name": name,
-                                "address": addr,
-                                "rating": rating,
-                                "open_now": open_now,
-                            })
-                    if rows:
-                        results_df = pd.DataFrame(rows)
-                        st.dataframe(results_df, use_container_width=True, hide_index=True)
-                        # Save selected
-                        ids = [r.get("place_id") for r in rows if r.get("place_id")]
-                        if ids:
-                            to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
-                            if st.button("Save selected to vendors"):
-                                saved = 0
-                                for r in data.get("results", []):
-                                    if r.get("place_id") in to_save:
-                                        try:
-                                            s1_save_vendor(conn, r)
-                                            saved += 1
-                                        except Exception:
-                                            pass
-                                st.success(f"Saved {saved} vendors")
-                    else:
-                        st.info("No new vendors in this page")
+    if clear_clicked: st.session_state["s1_page_token"] = None
+    if not (search_clicked or next_clicked): return
+    if not key_addr:
+        st.error("Address required"); return
+    loc = s1_geocode_address(key_addr)
+    if not loc:
+        st.error("Geocoding failed or API key missing"); return
+    lat, lon = loc
+    token = st.session_state.get("s1_page_token") if next_clicked else None
+    data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
+    if "error" in data:
+        st.error(f"Places error: {data['error']}"); return
+    st.session_state["s1_page_token"] = data.get("next_page_token")
+    rows = []
+    for r in data.get("results", []):
+        pid = r.get("place_id")
+        name = r.get("name")
+        addr = r.get("formatted_address", "")
+        rating = r.get("rating", None)
+        open_now = (r.get("opening_hours") or {}).get("open_now")
+        dup = hide_saved and pid and s1_vendor_exists(conn, pid, None, None)
+        if not dup:
+            rows.append({"place_id": pid,"name": name,"address": addr,"rating": rating,"open_now": open_now})
+    if not rows:
+        st.info("No new vendors in this page"); return
+    df = pd.DataFrame(rows)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    ids = [r["place_id"] for r in rows if r.get("place_id")]
+    if not ids: return
+    to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
+    if st.button("Save selected to vendors"):
+        saved = 0
+        for r in data.get("results", []):
+            if r.get("place_id") in to_save:
+                try:
+                    s1_save_vendor(conn, r); saved += 1
+                except Exception: pass
+        st.success(f"Saved {saved} vendors")
     if st.session_state.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
-    st.caption("Configure your Google API key in st.secrets['google']['api_key'] or GOOGLE_API_KEY")
+    st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
