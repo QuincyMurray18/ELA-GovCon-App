@@ -8726,6 +8726,7 @@ def seed_default_templates(conn):
 def run_outreach(conn):
     import streamlit as st
     st.header("Outreach")
+    st.caption("O2 WIRED BUILD — 2025-10-22")
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
     _tpl_picker_prefill(conn)
