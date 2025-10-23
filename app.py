@@ -8008,7 +8008,7 @@ except Exception:
 enriched = []
 phones_found = 0
 sites_found = 0
-for r in (rows or []):
+for r in (_rows or []):
     pid = r.get("place_id")
     det = _s1d_place_details(pid, key) if pid and key else {}
     ph = det.get("formatted_phone_number") or det.get("international_phone_number") or r.get("phone") or ""
