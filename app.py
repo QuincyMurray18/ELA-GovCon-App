@@ -8200,8 +8200,9 @@ if "_o3_render_sender_picker" not in globals():
             "from_email": (username or "").strip(),
             "from_name": "ELA Management"
         }
-def render_outreach_mailmerge(conn):
-    import streamlit as st, pandas as _pd
+\1
+    global _O4_CONN
+    _O4_CONN = conn
     _o3_ensure_schema(conn)
     st.subheader("Mail Merge & Send")
     try:
@@ -8747,6 +8748,19 @@ def o1_list_accounts(conn):
     """).fetchall()
     return rows
 
+def ensure_outreach_o1_schema(conn):
+    with conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_accounts(
+            user_email TEXT PRIMARY KEY,
+            display_name TEXT DEFAULT '',
+            app_password TEXT DEFAULT '',
+            smtp_host TEXT DEFAULT 'smtp.gmail.com',
+            smtp_port INTEGER DEFAULT 465,
+            use_ssl INTEGER DEFAULT 1
+        )""")
+
+
 def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
@@ -8883,6 +8897,14 @@ def run_outreach(conn):
     # Minimal body fields for Subject and Body that use session prefill
     st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
     st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
+
+    with st.expander("Sender accounts", expanded=False):
+        _o4_accounts_ui(conn)
+    with st.expander("Opt-outs & compliance", expanded=False):
+        _o4_optout_ui(conn)
+    with st.expander("Send audit log", expanded=False):
+        _o4_audit_ui(conn)
+    render_outreach_mailmerge(conn)
 
 
 # === O3: Outreach Mail Merge + Send (appended) ===============================
@@ -9165,3 +9187,116 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         import streamlit as st
         st.error(f"Past Performance export failed: {e}")
         return None
+
+
+# === O4: Multi-sender accounts + opt-outs + audit UI ================================
+def _o4_accounts_ui(conn):
+    import streamlit as st, pandas as _pd
+    ensure_outreach_o1_schema(conn)
+    rows = conn.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email").fetchall()
+    if rows:
+        st.dataframe(_pd.DataFrame(rows, columns=["Email","Display name","SMTP host","SMTP port","SSL"]), use_container_width=True, hide_index=True)
+    st.markdown("**Add or update account**")
+    c1,c2 = st.columns([3,2])
+    with c1:
+        email = st.text_input("Email", key="o4_ac_email")
+        display = st.text_input("Display name", key="o4_ac_display")
+        app_pw = st.text_input("Gmail App password", type="password", key="o4_ac_pw")
+    with c2:
+        host = st.text_input("SMTP host", value="smtp.gmail.com", key="o4_ac_host")
+        port = st.number_input("SMTP port", min_value=1, max_value=65535, value=465, step=1, key="o4_ac_port")
+        ssl = st.checkbox("Use SSL", value=True, key="o4_ac_ssl")
+    c3, c4 = st.columns(2)
+    with c3:
+        if st.button("Save account", key="o4_ac_save"):
+            if not email:
+                st.error("Email required")
+            else:
+                with conn:
+                    conn.execute("""
+                    INSERT INTO email_accounts(user_email, display_name, app_password, smtp_host, smtp_port, use_ssl)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(user_email) DO UPDATE SET
+                        display_name=excluded.display_name,
+                        app_password=excluded.app_password,
+                        smtp_host=excluded.smtp_host,
+                        smtp_port=excluded.smtp_port,
+                        use_ssl=excluded.use_ssl
+                    """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
+                st.success("Saved")
+                st.experimental_rerun()
+    with c4:
+        if st.button("Delete account", key="o4_ac_del"):
+            if not email:
+                st.error("Enter the Email of the account to delete")
+            else:
+                with conn:
+                    conn.execute("DELETE FROM email_accounts WHERE user_email=?", (email.strip(),))
+                st.success("Deleted")
+                st.experimental_rerun()
+
+def _o3_render_sender_picker():
+    # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
+    import streamlit as st
+    conn = globals().get("_O4_CONN")
+    if conn is None:
+        st.warning("Internal: sender picker not initialized"); 
+        return {"email":"", "app_password":""}
+    ensure_outreach_o1_schema(conn)
+    rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
+    choices = [r[0] for r in rows] + ["<add new>"]
+    sel = st.selectbox("From account", choices, key="o4_sender_sel")
+    chosen = {"email":"", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
+    if sel == "<add new>":
+        st.info("Add an account below in 'Sender accounts'. Then select it here.")
+    else:
+        row = conn.execute("SELECT user_email, display_name, app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?", (sel,)).fetchone()
+        if row:
+            chosen = {"email": row[0], "display_name": row[1] or "", "app_password": row[2] or "",
+                      "smtp_host": row[3] or "smtp.gmail.com", "smtp_port": int(row[4] or 465), "use_ssl": int(row[5] or 1)}
+    st.caption("Uses Gmail SMTP. Create an App Password once per account and save it above.")
+    return chosen
+
+def _o4_optout_ui(conn):
+    import streamlit as st, pandas as _pd
+    # tables already created by O3; ensure again for safety
+    with conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS outreach_optouts(id INTEGER PRIMARY KEY, email TEXT UNIQUE)")
+    st.markdown("**Opt-outs**")
+    em = st.text_input("Add single email to opt-out", key="o4_opt_one")
+    if st.button("Add opt-out", key="o4_opt_add") and em:
+        with conn:
+            conn.execute("INSERT OR IGNORE INTO outreach_optouts(email) VALUES(?)", (em.strip().lower(),))
+        st.success("Added")
+        st.experimental_rerun()
+    up = st.file_uploader("Bulk upload CSV with 'email' column", type=["csv"], key="o4_opt_csv")
+    if up is not None:
+        try:
+            df = _pd.read_csv(up)
+            emails = [str(x).strip().lower() for x in df.get("email", []) if str(x).strip()]
+            with conn:
+                conn.executemany("INSERT OR IGNORE INTO outreach_optouts(email) VALUES(?)", [(e,) for e in emails])
+            st.success(f"Imported {len(emails)} emails")
+        except Exception as e:
+            st.error(f"CSV error: {e}")
+    try:
+        df2 = _pd.read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
+        st.dataframe(df2, use_container_width=True, hide_index=True)
+    except Exception:
+        pass
+
+def _o4_audit_ui(conn):
+    import streamlit as st, pandas as _pd
+    try:
+        blasts = _pd.read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
+        st.markdown("**Recent blasts**")
+        st.dataframe(blasts, use_container_width=True, hide_index=True)
+    except Exception:
+        st.caption("No blasts yet")
+    try:
+        logs = _pd.read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
+        st.markdown("**Recent sends**")
+        st.dataframe(logs, use_container_width=True, hide_index=True)
+    except Exception:
+        st.caption("No logs yet")
+
