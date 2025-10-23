@@ -8210,7 +8210,7 @@ if "_o3_render_sender_picker" not in globals():
         pass
     subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
     body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
-    rows = _o3_collect_recipients_ui(conn)
+
     if rows is not None and not rows.empty and (subj or body):
         with st.expander("Preview (first 5)", expanded=True):
             prev = []
