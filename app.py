@@ -8207,6 +8207,7 @@ if "_o3_render_sender_picker" not in globals():
 def render_outreach_mailmerge(conn):
     global _O4_CONN
 
+    import streamlit as st
     try:
         _tpl_picker_prefill(conn)
     except Exception:
@@ -8245,15 +8246,15 @@ def render_outreach_mailmerge(conn):
             except Exception as e:
                 st.error(f"Send failed: {e}")
 def render_outreach_mailmerge(conn):
-
+    import streamlit as st
     import pandas as _pd
     rows = _o3_collect_recipients_ui(conn)
 def render_outreach_mailmerge(conn):
-
+    import streamlit as st
     import pandas as _pd
     rows = _o3_collect_recipients_ui(conn)
 def render_outreach_mailmerge(conn):
-
+    import streamlit as st
     import pandas as _pd
 
     # 1) Pick recipients
@@ -8967,24 +8968,27 @@ def seed_default_templates(conn):
 
 
 
-
 def run_outreach(conn):
-    # Badge
+    import streamlit as st
+
+    # O4 badge if present
     try:
         _o4_render_badge()
     except Exception:
         pass
 
     st.header("Outreach")
+    with st.expander("Follow-ups & SLA (O5)", expanded=False):
+        render_outreach_o5_followups(conn)
 
-    # O4 UI
+    # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
             o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
 
-    # O2
+    # Templates (O2)
     try:
         _tpl_picker_prefill(conn)
         with st.expander("Templates", expanded=False):
@@ -8992,11 +8996,7 @@ def run_outreach(conn):
     except Exception:
         pass
 
-    # O3
-    try:
-        globals()["_O4_CONN"] = conn  # enable O3 sender picker to access DB if it expects this
-    except Exception:
-        pass
+    # Mail merge + send (O3)
     try:
         with st.expander("Mail Merge & Send", expanded=True):
             render_outreach_mailmerge(conn)
@@ -9281,19 +9281,6 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
-
-
-# === O4 wiring helpers (added) =================================================
-def _o4_render_badge():
-
-    try:
-        st.sidebar.markdown("**O4 Active**")
-    except Exception:
-        pass
-
-def o4_sender_accounts_ui(conn):
-    # alias to the implemented UI
-    _o4_accounts_ui(conn)
 def _o4_accounts_ui(conn):
     import streamlit as st, pandas as _pd
     ensure_outreach_o1_schema(conn)
@@ -9403,3 +9390,142 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
+
+
+# === O5: Follow-ups & SLA ==================================================
+import sqlite3, pandas as _pd, smtplib, ssl, time
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+def _o5_now_iso():
+    return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def ensure_o5_schema(conn: sqlite3.Connection) -> None:
+    with conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_sequences(
+            id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL
+        );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_steps(
+            id INTEGER PRIMARY KEY, seq_id INTEGER NOT NULL,
+            step_no INTEGER NOT NULL, delay_hours INTEGER NOT NULL DEFAULT 72,
+            subject TEXT DEFAULT '', body_html TEXT DEFAULT '',
+            FOREIGN KEY(seq_id) REFERENCES outreach_sequences(id)
+        );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_schedules(
+            id INTEGER PRIMARY KEY, seq_id INTEGER NOT NULL, step_no INTEGER NOT NULL,
+            to_email TEXT NOT NULL, vendor_id INTEGER,
+            send_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+            last_error TEXT DEFAULT '',
+            subject TEXT DEFAULT '', body_html TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(seq_id) REFERENCES outreach_sequences(id)
+        );""")
+
+def _o5_list_sequences(conn):
+    try:
+        return _pd.read_sql_query("SELECT id, name FROM outreach_sequences ORDER BY name;", conn)
+    except Exception:
+        return _pd.DataFrame(columns=["id","name"])
+
+def _o5_list_steps(conn, seq_id: int):
+    try:
+        return _pd.read_sql_query("SELECT id, step_no, delay_hours, subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
+    except Exception:
+        return _pd.DataFrame(columns=["id","step_no","delay_hours","subject"])
+
+def _o5_upsert_sequence(conn, name: str):
+    with conn:
+        conn.execute("INSERT INTO outreach_sequences(name) VALUES(?) ON CONFLICT(name) DO NOTHING;", (name.strip(),))
+
+def _o5_add_step(conn, seq_id: int, step_no: int, delay_hours: int, subject: str, body_html: str):
+    with conn:
+        conn.execute("INSERT INTO outreach_steps(seq_id, step_no, delay_hours, subject, body_html) VALUES(?,?,?,?,?)",
+                     (seq_id, step_no, int(delay_hours), subject or "", body_html or ""))
+
+def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str | None = None):
+    if not start_at_iso:
+        start_at_iso = _o5_now_iso()
+    steps = _pd.read_sql_query("SELECT step_no, delay_hours, subject, body_html FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
+    if steps is None or steps.empty:
+        return 0
+    count = 0
+    with conn:
+        for em in emails:
+            em = (em or "").strip().lower()
+            if not em:
+                continue
+            base = __import__("datetime").datetime.fromisoformat(start_at_iso.replace("Z","+00:00"))
+            for _, row in steps.iterrows():
+                eta = base + __import__("datetime").timedelta(hours=int(row["delay_hours"] or 0))
+                conn.execute("""INSERT INTO outreach_schedules(seq_id, step_no, to_email, send_at, subject, body_html, status)
+                                VALUES(?,?,?,?,?,?, 'queued')""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), row["subject"] or "", row["body_html"] or ""))
+                base = eta
+                count += 1
+    return count
+
+def _o5_pick_sender_from_session():
+    host = st.session_state.get("smtp_host") or (st.session_state.get("smtp_profile") or {}).get("host")
+    port = st.session_state.get("smtp_port", 587)
+    tls = bool(st.session_state.get("smtp_tls", True))
+    username = st.session_state.get("smtp_username", "")
+    password = st.session_state.get("smtp_password", "")
+    return {"host": host or "smtp.gmail.com", "port": int(port or 587), "tls": tls, "username": username, "password": password}
+
+def _o5_smtp_send(sender: dict, to_email: str, subject: str, html: str):
+    msg = MIMEMultipart("alternative"); msg["Subject"] = subject or ""; msg["From"] = sender["username"]; msg["To"] = to_email
+    msg.attach(MIMEText(html or "", "html"))
+    if sender["tls"]:
+        server = smtplib.SMTP(sender["host"], sender["port"]); server.ehlo(); server.starttls(context=ssl.create_default_context()); server.login(sender["username"], sender["password"])
+    else:
+        server = smtplib.SMTP_SSL(sender["host"], sender["port"], context=ssl.create_default_context()); server.login(sender["username"], sender["password"])
+    server.sendmail(sender["username"], [to_email], msg.as_string()); server.quit()
+
+def _o5_send_due(conn, limit: int = 200):
+    now = _o5_now_iso()
+    df = _pd.read_sql_query("SELECT id, to_email, subject, body_html FROM outreach_schedules WHERE status='queued' AND send_at<=? ORDER BY send_at LIMIT ?;", conn, params=(now, int(limit)))
+    if df is None or df.empty: return 0, 0
+    ok = 0; fail = 0; sender = _o5_pick_sender_from_session()
+    for _, r in df.iterrows():
+        try:
+            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]); 
+            with conn: conn.execute("UPDATE outreach_schedules SET status='sent' WHERE id=?", (int(r["id"]),)); ok += 1
+        except Exception as e:
+            with conn: conn.execute("UPDATE outreach_schedules SET status='error', last_error=? WHERE id=?", (str(e)[:500], int(r["id"]))); fail += 1
+    return ok, fail
+
+def render_outreach_o5_followups(conn):
+    ensure_o5_schema(conn)
+    st.subheader("O5 — Follow-ups & SLA")
+    seq_df = _o5_list_sequences(conn); names = ["— New —"] + ([] if seq_df is None or seq_df.empty else seq_df["name"].tolist())
+    c1, c2 = st.columns([2,3])
+    with c1:
+        sel = st.selectbox("Sequence", names, key="o5_seq_sel")
+        new_name = st.text_input("New sequence name", key="o5_seq_name") if sel == "— New —" else sel
+        if st.button("Save sequence", key="o5_seq_save"):
+            if new_name and new_name.strip(): _o5_upsert_sequence(conn, new_name.strip()); st.success("Sequence saved"); st.experimental_rerun()
+    with c2:
+        if sel != "— New —" and (seq_df is not None and not seq_df.empty):
+            seq_id = int(seq_df.loc[seq_df["name"]==sel, "id"].iloc[0])
+            st.markdown("**Steps**"); steps = _o5_list_steps(conn, seq_id)
+            if steps is not None and not steps.empty: st.dataframe(steps, use_container_width=True, hide_index=True)
+            st.markdown("**Add step**"); s1,s2,s3 = st.columns(3)
+            with s1: step_no = st.number_input("Step #", 1, 20, value=(int(steps["step_no"].max())+1 if steps is not None and not steps.empty else 1))
+            with s2: delay = st.number_input("Delay hours", 1, 720, value=72)
+            with s3: subj = st.text_input("Subject", key="o5_step_subj")
+            body = st.text_area("HTML body", height=180, key="o5_step_body")
+            if st.button("Add step", key="o5_step_add"): _o5_add_step(conn, seq_id, int(step_no), int(delay), subj, body); st.success("Step added"); st.experimental_rerun()
+    st.markdown("---"); st.markdown("**Queue follow-ups**")
+    if sel != "— New —" and (seq_df is not None and not seq_df.empty):
+        seq_id = int(seq_df.loc[seq_df["name"]==sel, "id"].iloc[0])
+    else:
+        seq_id = None
+    emails_txt = st.text_area("Paste recipient emails (one per line)", height=120, key="o5_emails")
+    if st.button("Queue follow-ups", key="o5_queue"):
+        if not seq_id: st.error("Select an existing sequence first")
+        else:
+            emails = [e.strip() for e in (emails_txt or "").splitlines() if e.strip()]
+            n = _o5_queue_followups(conn, seq_id, emails); st.success(f"Queued {n} follow-up sends")
+    st.markdown("**Send due now**")
+    if st.button("Send due follow-ups", key="o5_send_due"):
+        ok, fail = _o5_send_due(conn, limit=200); st.success(f"Sent {ok}, failed {fail}")
+# === End O5 ================================================================
