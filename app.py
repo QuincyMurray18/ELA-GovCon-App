@@ -9930,9 +9930,9 @@ def render_subfinder_s1d(conn):
                 city = parts[-2]
                 state = parts[-1].split()[0]
         details = _s1d_place_details(pid, key) if pid else {}
-status = details.get("_status","")
-phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
-website = details.get("website") or ""
+        status = details.get("_status","")
+        phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
+        website = details.get("website") or ""
         dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
         rows.append({
             "name": name, "address": addr, "city": city, "state": state,
