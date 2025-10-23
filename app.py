@@ -8013,7 +8013,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
         run_sam_watch(conn)
     elif page == "RFP Analyzer":
-        run_rfp_analyzer(conn)
+        run_rfp_analyzer_tri_tri(conn)
     elif page == "L and M Checklist":
         run_lm_checklist(conn)
     elif page == "Proposal Builder":
@@ -9006,103 +9006,44 @@ def seed_default_templates(conn):
 
 def run_outreach(conn):
     import streamlit as st
-    import pandas as _pd
 
-    # Header
+    # O4 badge if present
+    try:
+        _o4_render_badge()
+    except Exception:
+        pass
+
     st.header("Outreach")
-
-    # O6: query unsubscribe handler always on
-    try:
-        o6_handle_query_unsubscribe(conn)
-    except Exception:
-        pass
-
-    # Top: sender + template pick + quick preview
-    top1, top2 = st.columns([1,1])
-    with top1:
-        try:
-            _o4_render_badge()
-        except Exception:
-            pass
-        st.subheader("Sender")
-        try:
-            sender = _o3_render_sender_picker()
-        except Exception:
-            # Fallback minimal sender fields
-            st.caption("Minimal sender (fallback)")
-            sender = {"email": st.text_input("From email", key="o3_from_email"),
-                      "app_password": st.text_input("App password", type="password", key="o3_from_pwd")}
-    with top2:
-        st.subheader("Templates")
-        try:
-            _tpl_picker_prefill(conn)
-        except Exception:
-            pass
-        try:
-            render_outreach_templates(conn)
-        except Exception:
-            st.info("Template editor unavailable in this build.")
-
-    # Middle: recipients + compose + live preview
-    st.subheader("Recipients")
-    try:
-        rows = _o3_collect_recipients_ui(conn)
-    except Exception:
-        rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
-
-    st.subheader("Compose")
-    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
-    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=260, key="o3_body")
-
-    # Live preview first 5
-    if rows is not None and hasattr(rows, "empty") and not rows.empty and (subj or body):
-        prev_rows = []
-        for _, r in rows.head(5).iterrows():
-            data = {k: str(r.get(k,"") or "") for k in r.index}
-            try:
-                subject_m = _o3_merge(subj, data)
-            except Exception:
-                subject_m = subj
-            try:
-                body_m = _o3_merge(body, data)
-            except Exception:
-                body_m = body
-            prev_rows.append({"to": r.get("email",""), "subject": subject_m, "preview": (body_m or "")[:160]})
-        st.caption("Preview — first 5")
-        st.dataframe(_pd.DataFrame(prev_rows), use_container_width=True, hide_index=True)
-
-    # Bottom: actions + SLA widget + compliance
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1:
-        test = st.button("Test run (no send)", key="o3_test_unified")
-    with c2:
-        do = st.button("Send batch", type="primary", key="o3_send_unified")
-    with c3:
-        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max_unified")
-
-    # Send
-    if (test or do):
-        if not sender or not sender.get("email"):
-            st.error("Missing sender credentials")
-        elif rows is None or (hasattr(rows, "empty") and rows.empty):
-            st.error("No recipients")
-        else:
-            try:
-                _o3_send_batch(conn, sender, rows, subj, body, test_only=bool(test), max_send=int(maxn))
-            except Exception as e:
-                st.error(f"Send failed: {e}")
-
-    # SLA follow-ups inline
-    try:
-        render_outreach_o5_followups(conn)
-    except Exception:
-        pass
-
-    # Compliance inline
-    try:
+    with st.expander("Compliance (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
+
+    # O6: handle unsubscribe links
+    o6_handle_query_unsubscribe(conn)
+    with st.expander("Follow-ups & SLA (O5)", expanded=False):
+        render_outreach_o5_followups(conn)
+
+    # Sender accounts (O4)
+    try:
+        with st.expander("Sender accounts", expanded=True):
+            o4_sender_accounts_ui(conn)
+    except Exception as e:
+        st.warning(f"O4 sender UI unavailable: {e}")
+
+    # Templates (O2)
+    try:
+        _tpl_picker_prefill(conn)
+        with st.expander("Templates", expanded=False):
+            render_outreach_templates(conn)
     except Exception:
         pass
+
+    # Mail merge + send (O3)
+    try:
+        with st.expander("Mail Merge & Send", expanded=True):
+            render_outreach_mailmerge(conn)
+    except Exception as e:
+        st.error(f"Mail merge panel error: {e}")
+
 
 def _o3_ensure_schema(conn):
     with _o3c(conn.cursor()) as cur:
@@ -10058,3 +9999,128 @@ def _wrap_run_subfinder():
     g["run_subcontractor_finder"] = wrapped
 
 _wrap_run_subfinder()
+
+
+
+# ==== Phase 3: RFP Analyzer tri pane (single surface, no flags) ====
+def _has_symbol(name: str) -> bool:
+    try:
+        return name in globals() and callable(globals()[name])
+    except Exception:
+        return False
+
+def _safe_call(fn_name, *args, **kwargs):
+    try:
+        return globals()[fn_name](*args, **kwargs)
+    except Exception as e:
+        import streamlit as st
+        st.error(f"{fn_name} failed: {e}")
+        try:
+            st.exception(e)
+        except Exception:
+            pass
+        return None
+
+def run_rfp_analyzer_tri(conn):
+    import streamlit as st
+    st.markdown("### RFP Analyzer")
+    # One surface: left files rail, center RTM, right L&M. Bottom export bar.
+    left, mid, right = st.columns([0.26, 0.48, 0.26], gap="small")
+
+    # Left: Files rail
+    with left:
+        st.subheader("Files")
+        # Prefer existing UI functions if present
+        called = False
+        for cand in ["rfp_files_rail", "rfp_files_ui", "rfp_files_panel", "files_panel", "rfp_upload_and_list"]:
+            if _has_symbol(cand):
+                _safe_call(cand, conn)
+                called = True
+                break
+        if not called:
+            # Minimal fallback rail
+            up = st.file_uploader("Add files", type=["pdf", "docx", "xlsx", "csv", "txt"], accept_multiple_files=True)
+            if up:
+                ss = st.session_state.setdefault("tri_rfp_files", [])
+                for u in up:
+                    ss.append({"name": u.name, "size": u.size})
+                st.success(f"Added {len(up)} file(s) to session")
+            files = st.session_state.get("tri_rfp_files", [])
+            if files:
+                st.write({ "files": files })
+            else:
+                st.caption("No files loaded")
+
+    # Middle: RTM
+    with mid:
+        st.subheader("RTM")
+        called = False
+        for cand in ["rtm_builder_ui", "build_rtm_ui", "render_rtm", "rtm_panel", "run_rtm"]:
+            if _has_symbol(cand):
+                _safe_call(cand, conn)
+                called = True
+                break
+        if not called:
+            st.caption("RTM builder not found. Showing placeholder.")
+            st.text_area("Requirements", key="tri_rtm_req", height=240, placeholder="Extract and map requirements here.")
+
+    # Right: L & M checklist
+    with right:
+        st.subheader("L & M")
+        called = False
+        for cand in ["lm_checklist_ui", "render_lm_checklist", "lm_panel", "run_l_and_m"]:
+            if _has_symbol(cand):
+                _safe_call(cand, conn)
+                called = True
+                break
+        if not called:
+            items = st.session_state.setdefault("tri_lm_items", ["Conform to page limits", "Font/format compliance", "Past performance included"])
+            checks = st.session_state.setdefault("tri_lm_checks", [False]*len(items))
+            for i, label in enumerate(items):
+                checks[i] = st.checkbox(label, value=checks[i], key=f"tri_lm_{i}")
+
+    st.divider()
+    # Bottom export bar
+    col_a, col_b, col_c, col_d = st.columns([0.25, 0.25, 0.25, 0.25])
+    with col_a:
+        if st.button("Validate"):
+            did = False
+            for cand in ["validate_rfp_state", "validate_rtm_and_lm"]:
+                if _has_symbol(cand):
+                    _safe_call(cand, conn)
+                    did = True
+                    break
+            if not did:
+                st.info("No validator found. Placeholder only.")
+    with col_b:
+        if st.button("Export RTM"):
+            did = False
+            for cand in ["export_rtm_docx", "export_rtm_csv"]:
+                if _has_symbol(cand):
+                    _safe_call(cand, conn)
+                    did = True
+                    break
+            if not did:
+                st.info("No RTM export function found.")
+    with col_c:
+        if st.button("Export Proposal"):
+            did = False
+            for cand in ["export_proposal_docx", "export_proposal_pdf", "proposal_export"]:
+                if _has_symbol(cand):
+                    _safe_call(cand, conn)
+                    did = True
+                    break
+            if not did:
+                st.info("No proposal export function found.")
+    with col_d:
+        if st.button("Open CO Chat"):
+            did = False
+            for cand in ["run_co_chat", "open_co_chat", "ask_ai_with_citations_ui"]:
+                if _has_symbol(cand):
+                    _safe_call(cand, conn)
+                    did = True
+                    break
+            if not did:
+                st.info("CO Chat UI not found.")
+# ==== End Phase 3 tri pane ====
+
