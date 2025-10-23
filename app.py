@@ -5479,7 +5479,17 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
-    # O2: templates picker and manager
+
+        # -- O4 Sender profiles UI --
+        try:
+            o4_sender_accounts_ui(conn)
+        except Exception as _e:
+            try:
+                import streamlit as _st
+                _st.caption(f"O4 sender UI unavailable: {_e}")
+            except Exception:
+                pass
+        # O2: templates picker and manager
     try:
         _tpl_picker_prefill(conn)
         with st.expander("Templates", expanded=False):
@@ -9404,3 +9414,125 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
+
+
+# === O4: SMTP sender profiles (UI + storage) ===
+def _o4_ensure_smtp_schema(conn):
+    try:
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS smtp_profiles(
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                host TEXT,
+                port INTEGER,
+                tls INTEGER DEFAULT 1,
+                username TEXT,
+                app_password TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );""")
+            conn.commit()
+    except Exception:
+        pass
+
+def _o4_list_profiles(conn):
+    try:
+        import pandas as _pd
+        return _pd.read_sql_query("SELECT id, name, host, port, tls, username FROM smtp_profiles ORDER BY name;", conn)
+    except Exception:
+        import pandas as _pd
+        return _pd.DataFrame(columns=["id","name","host","port","tls","username"])
+
+def _o4_get_profile(conn, name):
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query("SELECT * FROM smtp_profiles WHERE name=? LIMIT 1;", conn, params=(name,))
+        return df.iloc[0].to_dict() if df is not None and not df.empty else None
+    except Exception:
+        return None
+
+def _o4_upsert_profile(conn, name, host, port, tls, username, app_password):
+    from contextlib import closing as _closing
+    try:
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        with _closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO smtp_profiles(name, host, port, tls, username, app_password, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(name) DO UPDATE SET host=excluded.host, port=excluded.port, tls=excluded.tls, username=excluded.username, app_password=excluded.app_password, updated_at=excluded.updated_at;",
+                        (name.strip(), host.strip(), int(port or 587), int(bool(tls)), username.strip(), app_password.strip(), now, now))
+            conn.commit()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+def _o4_delete_profile(conn, name):
+    from contextlib import closing as _closing
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("DELETE FROM smtp_profiles WHERE name=?;", (name,))
+            conn.commit()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+def _o4_render_badge():
+    try:
+        import streamlit as _st
+        _st.sidebar.markdown("<div style='padding:4px 8px;border-radius:8px;background:#E6F4EA;color:#0B6623;font-weight:600;display:inline-block;'>O4 Active</div>", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+def o4_sender_accounts_ui(conn):
+    import streamlit as _st
+    _o4_ensure_smtp_schema(conn)
+    _o4_render_badge()
+    with _st.expander("Sender accounts", expanded=True):
+        df = _o4_list_profiles(conn)
+        names = ["— New —"] + (df["name"].tolist() if df is not None and not df.empty else [])
+        pick = _st.selectbox("Profile", options=names, key="o4_pick_profile")
+        edit_new = (pick == "— New —")
+        if edit_new:
+            name = _st.text_input("Profile name", key="o4_name")
+            host = _st.text_input("SMTP host", value="smtp.gmail.com", key="o4_host")
+            port = _st.number_input("Port", min_value=1, max_value=65535, value=587, key="o4_port")
+            tls = _st.checkbox("Use STARTTLS", value=True, key="o4_tls")
+            username = _st.text_input("Gmail address (username)", key="o4_user")
+            app_password = _st.text_input("App password", type="password", key="o4_pass")
+        else:
+            rec = _o4_get_profile(conn, pick) or {}
+            name = pick
+            host = _st.text_input("SMTP host", value=str(rec.get("host") or ""), key="o4_host_existing")
+            port = _st.number_input("Port", min_value=1, max_value=65535, value=int(rec.get("port") or 587), key="o4_port_existing")
+            tls = _st.checkbox("Use STARTTLS", value=bool(int(rec.get("tls") or 1)), key="o4_tls_existing")
+            username = _st.text_input("Gmail address (username)", value=str(rec.get("username") or ""), key="o4_user_existing")
+            app_password = _st.text_input("App password", type="password", key="o4_pass_existing")
+        c1, c2, c3 = _st.columns([1,1,1])
+        with c1:
+            if _st.button("Save/Update", key="o4_save"):
+                ok, msg = _o4_upsert_profile(conn, name, host, port, tls, username, app_password or "")
+                if ok: _st.success("Saved"); _st.session_state["smtp_profile"] = name
+                else: _st.error(f"Save failed: {msg}")
+        with c2:
+            if not edit_new and _st.button("Delete", key="o4_del"):
+                ok, msg = _o4_delete_profile(conn, name)
+                if ok: _st.success("Deleted"); _st.rerun()
+                else: _st.error(f"Delete failed: {msg}")
+        with c3:
+            if _st.button("Use This Sender", key="o4_use"):
+                _st.session_state["smtp_profile"] = name
+                _st.success(f"Active sender: {name}")
+        # Expose fields for mailer code
+        active_name = _st.session_state.get("smtp_profile")
+        active = _o4_get_profile(conn, active_name) if active_name else None
+        if active:
+            for k, v in [
+                ("smtp_name", active.get("name")),
+                ("smtp_host", active.get("host")),
+                ("smtp_port", int(active.get("port") or 587)),
+                ("smtp_tls", bool(int(active.get("tls") or 1))),
+                ("smtp_username", active.get("username")),
+                ("smtp_password", active.get("app_password")),
+            ]:
+                _st.session_state[k] = v
+        _st.caption("Uses Gmail App Passwords. Create one-time per account under Google Account → Security → App passwords.")
+# === end O4 ===
