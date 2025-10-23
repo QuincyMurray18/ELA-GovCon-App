@@ -5488,7 +5488,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         pass
 
     st.header("Outreach")
-    import streamlit as st
     st.markdown("**O3 WIRED — Mail Merge & Send**")
     with st.expander("Mail Merge & Send", expanded=True):
         render_outreach_mailmerge(conn)
