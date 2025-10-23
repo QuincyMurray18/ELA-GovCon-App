@@ -800,22 +800,50 @@ def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
             text = h.get("chunk") or h.get("text") or ""
             tag = f"[RFP-{rid}:{cid}]"
             blocks.append(f"{tag} {text}")
-# [auto-disabled broken fragment]         return "
-
-# [auto-disabled broken fragment] ".join(parts)
         return "\n\n".join(blocks)
     except Exception:
         return None
-# [auto-disabled window] 
 
-# y6_render_co_box temporarily disabled by repair script because source was truncated.
-def y6_render_co_box(*args, **kwargs):
-    try:
-        import streamlit as st
-        st.info('Y6 CO box unavailable in this build.')
-    except Exception:
-        pass
-
+def y6_render_co_box(conn, rfp_id=None, *, key_prefix: str, title: str, help_text: str="CO answers. Uses RFP context when available.") -> None:
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.subheader(title)
+        q = st.text_area("Your question", key=f"{key_prefix}_q", height=120, help=help_text)
+    with c2:
+        st.caption("Y6 CO helper")
+    if not st.button("Ask", key=f"{key_prefix}_ask") or not (q or "").strip():
+        return
+    with st.spinner("CO is analyzing..."):
+        ctx = _y6_fetch_y1_context(conn, rfp_id, q, globals().get("y_auto_k"))
+        CO_SYS = (
+            "You are a senior U.S. federal Contracting Officer (CO). "
+            "Answer with short, precise sentences or numbered bullets. "
+            "If RFP context is provided, cite it with [RFP-<id>:<chunk#>]. "
+            "Avoid raw JSON."
+        )
+        sys_prompt = CO_SYS + (f"\n\nRFP context follows. Cite it when relevant:\n{ctx}" if ctx else "")
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": (q or '').strip()},
+        ]
+        ans = _y6_chat(messages)
+    st.markdown(ans)
+    saver = globals().get("y5_save_snippet") or globals().get("pb_add_snippet") or globals().get("save_text_to_drafts")
+    if saver:
+        with st.expander("Add answer to Drafts", expanded=False):
+            sec = st.text_input("Section label", value="CO Notes", key=f"{key_prefix}_draft_sec")
+            if st.button("Add to drafts", key=f"{key_prefix}_draft_add"):
+                try:
+                    if "y5_save_snippet" in globals():
+                        y5_save_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y6 CO Box")
+                    elif "pb_add_snippet" in globals():
+                        pb_add_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y6 CO Box")
+                    else:
+                        saver(conn, rfp_id, ans)
+                    st.success("Saved to drafts")
+                except Exception:
+                    st.info("Drafts saver not available in this build.")
+# === end Y6 helper ===
 
 # === Global extractors to avoid NameError in early calls ===
 def _extract_naics(text: str) -> str:
@@ -1928,9 +1956,6 @@ def _extract_pdf_bytes(data: bytes) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-# [auto-disabled broken fragment]         return "
-
-# [auto-disabled broken fragment] ".join(parts)
         return "\n\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception:
         return ""
@@ -1957,10 +1982,7 @@ def y5_extract_from_uploads(files) -> str:
                 parts.append(_extract_pdf_bytes(data))
         except Exception:
             continue
-# [auto-disabled broken fragment]     return "
-
-# [auto-disabled broken fragment] ".join(parts)
-join([p for p in parts if p]).strip()
+    return "\n\n".join([p for p in parts if p]).strip()
 
 def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
     # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
@@ -1989,10 +2011,7 @@ def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
             parts.append(_extract_docx_bytes(bytes(data)))
         elif name.endswith(".pdf"):
             parts.append(_extract_pdf_bytes(bytes(data)))
-# [auto-disabled broken fragment]     return "
-
-# [auto-disabled broken fragment] ".join(parts)
-join([p for p in parts if p]).strip()
+    return "\n\n".join([p for p in parts if p]).strip()
 
 def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
     if not (text or "").strip():
@@ -2024,10 +2043,7 @@ def _collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
         if pages:
             pages, _ = ocr_pages_if_empty(b, mime, pages)
         parts.append("\n\n".join(pages))
-# [auto-disabled broken fragment]     return "
-
-# [auto-disabled broken fragment] ".join(parts)
-join([p for p in parts if p]).strip()
+    return "\n\n".join([p for p in parts if p]).strip()
 
 def _upsert_meta(conn, rfp_id: int, key: str, value: str):
     if not value:
@@ -2899,10 +2915,7 @@ def extract_text_from_file(path: str) -> str:
                 return b.decode('latin-1', errors='ignore')
             except Exception:
                 return ''
-# [auto-disabled broken fragment]     return "
-
-# [auto-disabled broken fragment] ".join(parts)
-join(pages)
+    return "\n\n".join(pages)
 
         
 
@@ -3956,42 +3969,42 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     tab_y2 = _noop()
     tab_y4 = _noop()
     st.caption('RFP Analyzer · single-page mode')
-# [auto-disabled duplicate]     with tab_research:
-# [auto-disabled duplicate]         run_research_tab(conn)# --- heuristics to auto-fill Title and Solicitation # ---
-# [auto-disabled duplicate]     def _guess_title(text: str, fallback: str) -> str:
-# [auto-disabled duplicate]         for line in (text or "").splitlines():
-# [auto-disabled duplicate]             s = line.strip()
-# [auto-disabled duplicate]             if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
-# [auto-disabled duplicate]                 return s[:200]
-# [auto-disabled duplicate]         return fallback
-# [auto-disabled duplicate] 
-# [auto-disabled duplicate]     def _guess_solnum(text: str) -> str:
-# [auto-disabled duplicate]         if not text:
-# [auto-disabled duplicate]             return ""
-# [auto-disabled duplicate]     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
-# [auto-disabled duplicate]     def _extract_naics(text: str) -> str:
-# [auto-disabled duplicate]         if not text: return ""
-# [auto-disabled duplicate]         m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
-# [auto-disabled duplicate]         if m: return m.group(1)[:6]
-# [auto-disabled duplicate]         m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
-# [auto-disabled duplicate]         if m: return m.group(1)
-# [auto-disabled duplicate]         m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
-# [auto-disabled duplicate]         return m.group(1) if m else ""
-# [auto-disabled duplicate] 
-# [auto-disabled duplicate]     def _extract_set_aside(text: str) -> str:
-# [auto-disabled duplicate]         if not text: return ""
-# [auto-disabled duplicate]         tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
-# [auto-disabled duplicate]         for t in tags:
-# [auto-disabled duplicate]             if re.search(rf'(?i)\b{re.escape(t)}\b', text):
-# [auto-disabled duplicate]                 norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
-# [auto-disabled duplicate]                 if norm == "8(A)": norm = "8A"
-# [auto-disabled duplicate]                 return norm
-# [auto-disabled duplicate]         m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
-# [auto-disabled duplicate]         if m:
-# [auto-disabled duplicate]             v = m.group(1).strip()
-# [auto-disabled duplicate]             v = re.sub(r'\s+', ' ', v)
-# [auto-disabled duplicate]             return v[:80]
-# [auto-disabled stray]         return ""
+    with tab_research:
+        run_research_tab(conn)# --- heuristics to auto-fill Title and Solicitation # ---
+    def _guess_title(text: str, fallback: str) -> str:
+        for line in (text or "").splitlines():
+            s = line.strip()
+            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
+                return s[:200]
+        return fallback
+
+    def _guess_solnum(text: str) -> str:
+        if not text:
+            return ""
+    # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
+    def _extract_naics(text: str) -> str:
+        if not text: return ""
+        m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
+        if m: return m.group(1)[:6]
+        m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
+        if m: return m.group(1)
+        m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
+        return m.group(1) if m else ""
+
+    def _extract_set_aside(text: str) -> str:
+        if not text: return ""
+        tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
+        for t in tags:
+            if re.search(rf'(?i)\b{re.escape(t)}\b', text):
+                norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
+                if norm == "8(A)": norm = "8A"
+                return norm
+        m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
+        if m:
+            v = m.group(1).strip()
+            v = re.sub(r'\s+', ' ', v)
+            return v[:80]
+        return ""
 
     def _extract_place(text: str) -> str:
         if not text: return ""
@@ -4141,11 +4154,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 try:
                     pages = extract_text_pages(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     if pages:
-# [auto-disabled broken fragment]                         return "
-
-# [auto-disabled broken fragment] ".join(parts)
                         return "\n\n".join(pages)
-# [auto-disabled stray]                     return ""
+                    return ""
                 except Exception as e:
                     st.warning(f"XLSX parse failed for {file.name}: {e}.")
                     return ""
@@ -6261,7 +6271,9 @@ def _pp_writeup_block(rec: dict) -> str:
         parts.append(f"**CPARS:** {rec['cpars_rating']}")
     if any([rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")]):
         parts.append("**POC:** " + ", ".join([x for x in [rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")] if x]))
-    return "\n".join(parts)
+    return "\n\n".join(parts)
+
+
 def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
         from docx.shared import Inches  # type: ignore
@@ -6484,6 +6496,8 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
 
 def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
+    except Exception:
+        pass
 # from docx import Document  # replaced by 'import docx'
         from docx.shared import Inches
     except Exception:
@@ -9014,3 +9028,4 @@ def render_outreach_mailmerge(conn):
         else:
             _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
 # === end O3 ===================================================================
+
