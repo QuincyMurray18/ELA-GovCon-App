@@ -7995,10 +7995,9 @@ if _hide_saved:
 
 
         
-    rows = [r for r in rows if r["place_id"] not in ss.get("s1_saved_ids", set())]
-
-
-        
+    # guard rows and use dict.get to avoid NameError/KeyError
+    rows = (rows or [])
+    rows = [r for r in rows if isinstance(r, dict) and r.get("place_id") not in ss.get("s1_saved_ids", set())]
     ss["s1_results"] = rows
 
 # Enrich legacy S1 with phone and website and render clickable links
