@@ -8238,20 +8238,12 @@ def render_outreach_mailmerge(conn):
             _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
 # === end O3 ===================================================================
 
-
-
-
-
-
-    main()
-
-
 # -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
 
 
 if __name__ == "__main__":
     main()
-    main()
+
 
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
     st.markdown("### Section Library (Phase V)")
