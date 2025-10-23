@@ -8200,7 +8200,6 @@ if "_o3_render_sender_picker" not in globals():
             "from_email": (username or "").strip(),
             "from_name": "ELA Management"
         }
-\1
     global _O4_CONN
     _O4_CONN = conn
     _o3_ensure_schema(conn)
