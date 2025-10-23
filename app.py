@@ -8207,7 +8207,6 @@ if "_o3_render_sender_picker" not in globals():
 def render_outreach_mailmerge(conn):
     global _O4_CONN
 
-    import streamlit as st
     try:
         _tpl_picker_prefill(conn)
     except Exception:
@@ -8246,15 +8245,15 @@ def render_outreach_mailmerge(conn):
             except Exception as e:
                 st.error(f"Send failed: {e}")
 def render_outreach_mailmerge(conn):
-    import streamlit as st
+
     import pandas as _pd
     rows = _o3_collect_recipients_ui(conn)
 def render_outreach_mailmerge(conn):
-    import streamlit as st
+
     import pandas as _pd
     rows = _o3_collect_recipients_ui(conn)
 def render_outreach_mailmerge(conn):
-    import streamlit as st
+
     import pandas as _pd
 
     # 1) Pick recipients
@@ -8968,10 +8967,9 @@ def seed_default_templates(conn):
 
 
 
-def run_outreach(conn):
-    import streamlit as st
 
-    # O4 badge if present
+def run_outreach(conn):
+    # Badge
     try:
         _o4_render_badge()
     except Exception:
@@ -8979,14 +8977,14 @@ def run_outreach(conn):
 
     st.header("Outreach")
 
-    # Sender accounts (O4)
+    # O4 UI
     try:
         with st.expander("Sender accounts", expanded=True):
             o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
 
-    # Templates (O2)
+    # O2
     try:
         _tpl_picker_prefill(conn)
         with st.expander("Templates", expanded=False):
@@ -8994,7 +8992,11 @@ def run_outreach(conn):
     except Exception:
         pass
 
-    # Mail merge + send (O3)
+    # O3
+    try:
+        globals()["_O4_CONN"] = conn  # enable O3 sender picker to access DB if it expects this
+    except Exception:
+        pass
     try:
         with st.expander("Mail Merge & Send", expanded=True):
             render_outreach_mailmerge(conn)
@@ -9283,7 +9285,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 # === O4 wiring helpers (added) =================================================
 def _o4_render_badge():
-    import streamlit as st
+
     try:
         st.sidebar.markdown("**O4 Active**")
     except Exception:
@@ -9401,54 +9403,3 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
-
-# === O4 Hook and UI wiring ===
-def _o4_render_badge():
-    try:
-        import streamlit as st
-        st.sidebar.markdown("**O4 Active**")
-    except Exception:
-        pass
-
-def o4_sender_accounts_ui(conn):
-    # Wrapper to call internal O4 UI if present
-    fn = globals().get("_o4_accounts_ui") or globals().get("render_o4_accounts_ui") or globals().get("o4_accounts_ui")
-    if fn:
-        return fn(conn)
-    try:
-        import streamlit as st
-        st.info("O4: sender accounts UI is not defined in this build.")
-    except Exception:
-        pass
-
-def _run_outreach_o4(conn):
-    try:
-        o4_sender_accounts_ui(conn)
-    except Exception as e:
-        try:
-            import streamlit as st
-            st.error(f"O4 failed: {e}")
-        except Exception:
-            pass
-
-def _wrap_run_outreach():
-    g = globals()
-    base = g.get("run_outreach")
-    if not callable(base):
-        return
-    if getattr(base, "_o4_wrapped", False):
-        return
-    def wrapped(conn):
-        base(conn)
-        _o4_render_badge()
-        try:
-            import streamlit as st
-            with st.expander("Sender accounts (O4)"):
-                _run_outreach_o4(conn)
-        except Exception:
-            # If Streamlit unavailable, just run O4 hook
-            _run_outreach_o4(conn)
-    wrapped._o4_wrapped = True
-    g["run_outreach"] = wrapped
-
-_wrap_run_outreach()
