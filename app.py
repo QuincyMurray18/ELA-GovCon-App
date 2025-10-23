@@ -8011,29 +8011,29 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     elif page == "Subcontractor Finder":
         t0, t1 = st.tabs(["S0 Vendors", "S1 Google Places"])
         with t0:
-        run_subcontractor_finder(conn)
-        # S1 Google Places panel
-        globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
+            run_subcontractor_finder(conn)
+            # S1 Google Places panel
+            globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
         with t1:
-        # S1 Google Places tab
-        (_ensure_s1d_wired() if callable(globals().get("_ensure_s1d_wired")) else None)
-        wrapped = getattr(globals().get("run_subcontractor_finder"), "_s1d_wrapped", False)
-        st.caption(f"S1D wrapped = {wrapped}")
-        globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
-        # Render S1D directly if available
-        if callable(globals().get("render_subfinder_s1d")):
-            try:
-                key_ok = False
+            # S1 Google Places tab
+            (_ensure_s1d_wired() if callable(globals().get("_ensure_s1d_wired")) else None)
+            wrapped = getattr(globals().get("run_subcontractor_finder"), "_s1d_wrapped", False)
+            st.caption(f"S1D wrapped = {wrapped}")
+            globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
+            # Render S1D directly if available
+            if callable(globals().get("render_subfinder_s1d")):
                 try:
-                    key_ok = bool(_s1d_google_key())
-                except Exception:
                     key_ok = False
-                st.caption("S1D key present = " + str(key_ok))
-                globals().get("render_subfinder_s1d")(conn)
-            except Exception as e:
-                st.exception(e)
-        else:
-            st.info("S1D UI not available in this build.")
+                    try:
+                        key_ok = bool(_s1d_google_key())
+                    except Exception:
+                        key_ok = False
+                    st.caption("S1D key present = " + str(key_ok))
+                    globals().get("render_subfinder_s1d")(conn)
+                except Exception as e:
+                    st.exception(e)
+            else:
+                st.info("S1D UI not available in this build.")
 
     elif page == "Outreach":
         run_outreach(conn)
