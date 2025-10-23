@@ -9826,6 +9826,7 @@ def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def _s1d_place_details(pid: str, key: str):
+
     try:
         resp = _requests.get(
             "https://maps.googleapis.com/maps/api/place/details/json",
@@ -9837,16 +9838,16 @@ def _s1d_place_details(pid: str, key: str):
             timeout=10,
         )
         js = resp.json()
-        if js.get("status") != "OK":
-            return {}
+        status = js.get("status")
+        if status != "OK":
+            return {"_status": status or "ERR"}
         res = js.get("result", {}) or {}
-        # Normalize fields
         phone = res.get("formatted_phone_number") or res.get("international_phone_number") or ""
         website = res.get("website") or ""
-        url = res.get("url") or ""
-        return {"formatted_phone_number": phone, "website": website, "url": url}
+        url = res.get("url") or f"https://www.google.com/maps/place/?q=place_id:{pid}"
+        return {"formatted_phone_number": phone, "website": website, "url": url, "_status": "OK"}
     except Exception:
-        return {}
+        return {"_status": "EXC"}
 
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
     # Ensure columns
@@ -9929,13 +9930,15 @@ def render_subfinder_s1d(conn):
                 city = parts[-2]
                 state = parts[-1].split()[0]
         details = _s1d_place_details(pid, key) if pid else {}
-        phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
-        website = details.get("website") or ""
+status = details.get("_status","")
+phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
+website = details.get("website") or ""
         dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
         rows.append({
             "name": name, "address": addr, "city": city, "state": state,
             "phone": phone, "website": website, "place_id": pid,
-            "google_url": details.get("url") or "",
+            "google_url": details.get("url") or f"https://www.google.com/maps/place/?q=place_id:{pid}",
+            "_status": status or "",
             "_dup": dup
         })
         # be nice to Places
@@ -9955,6 +9958,16 @@ def render_subfinder_s1d(conn):
     show["website"] = show.apply(lambda r: _s1d_linkify_site(r["website"] or r.get("google_url","")), axis=1)
     show = show[["name","phone","website","address","city","state","place_id","_dup"]]
     st.markdown("**Results**")
+    # Diagnostics summary
+    try:
+        _pd = __import__("pandas")
+        phone_ok = int((df["phone"].astype(str) != "").sum())
+        site_ok = int((df["website"].astype(str) != "").sum())
+        st.caption(f"S1D diagnostics: phones {phone_ok}/{len(df)}, websites {site_ok}/{len(df)}")
+        if "_status" in df.columns:
+            st.caption("Details status: " + ", ".join(f"{k}:{v}" for k,v in df["_status"].value_counts().to_dict().items()))
+    except Exception:
+        pass
     st.markdown(show.to_html(escape=False, index=False), unsafe_allow_html=True)
     # Select and save non-duplicates
     keep = df[~df["_dup"]]
