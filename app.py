@@ -5488,6 +5488,19 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         pass
 
     st.header("Outreach")
+
+# O4: sender accounts, opt-outs, audit
+try:
+    st.markdown("**O4 — Sending Controls**")
+    with st.expander("Sender accounts", expanded=False):
+        _o4_accounts_ui(conn)
+    with st.expander("Opt-outs", expanded=False):
+        _o4_optout_ui(conn)
+    with st.expander("Send audit", expanded=False):
+        _o4_audit_ui(conn)
+except Exception:
+    pass
+
     st.markdown("**O3 WIRED — Mail Merge & Send**")
     with st.expander("Mail Merge & Send", expanded=True):
         render_outreach_mailmerge(conn)
