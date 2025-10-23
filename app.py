@@ -8013,7 +8013,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
         run_sam_watch(conn)
     elif page == "RFP Analyzer":
-        run_rfp_analyzer_tri_tri(conn)
+        run_rfp_analyzer_tri(conn)
     elif page == "L and M Checklist":
         run_lm_checklist(conn)
     elif page == "Proposal Builder":
