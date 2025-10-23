@@ -3087,20 +3087,6866 @@ def derive_lm_items(section_text: str) -> list:
         return []
     items = []
     for line in section_text.splitlines():
-        s = line.strip()
-        if len(s) < 4:
-            continue
-        if re.match(r'^([\-\u2022\*]|\(?[a-zA-Z0-9]\)|[0-9]+\.)\s+', s):
-            items.append(s)
-    seen = set()
-    uniq = []
-    for it in items:
-        if it not in seen:
-            uniq.append(it)
-            seen.add(it)
-    return uniq[:500]
 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}=
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}l
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}.
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}r
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}p
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}f
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}l
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}<
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}4
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}:
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}c
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}o
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}u
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}f
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}r
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}.
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}m
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}a
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}c
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}h
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}r
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}'
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}^
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}[
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}-
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}u
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}2
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}0
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}2
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}2
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}*
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}]
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}|
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}?
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}[
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}a
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}-
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}z
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}A
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}-
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}Z
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}0
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}-
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}9
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}]
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}|
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}[
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}0
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}-
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}9
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}]
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}.
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}\
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}'
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0},
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}:
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}m
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}.
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}a
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}p
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}p
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}d
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}=
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}u
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}q
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}=
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}[
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}]
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}f
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}o
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}r
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}m
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}:
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}f
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}o
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}:
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}u
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}q
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}.
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}a
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}p
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}p
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}d
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}s
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}.
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}a
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}d
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}d
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}(
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0})
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}r
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}e
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}t
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}u
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}r
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0} 
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}u
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}n
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}i
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}q
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}[
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}:
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}5
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}0
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}0
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}]
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
+
+try:
+    cur.execute(
+        "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+        (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
+except sqlite3.IntegrityError:
+    cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
+    row2 = cur.fetchone()
+    if not row2:
+        raise
+    rid = int(row2[0]); pages2 = int(row2[1]) if row2[1] is not None else 0
+    if rfp_id is not None:
+        try:
+            cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
+            conn.commit()
+        except Exception:
+            pass
+    return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages2, "dedup": True, "ocr_pages": 0}
 def extract_clins(text: str) -> list:
     if not text:
         return []
