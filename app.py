@@ -8911,6 +8911,8 @@ from contextlib import closing as _o3c
 import smtplib as _o3smtp
 from email.mime.text import MIMEText as _O3MIMEText
 from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
+_O4_CONN = None
+
 
 def _o3_ensure_schema(conn):
     with _o3c(conn.cursor()) as cur:
