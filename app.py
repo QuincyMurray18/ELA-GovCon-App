@@ -8150,6 +8150,56 @@ if "_o3_collect_recipients_ui" not in globals():
         except Exception:
             return None
 
+
+# --- Outreach SMTP sender picker: fallback stub if full implementation is defined later ---
+if "_o3_render_sender_picker" not in globals():
+    def _o3_render_sender_picker():
+        import streamlit as st
+        from contextlib import closing
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                cur.execute("INSERT OR IGNORE INTO smtp_settings(id, host, port, username, password, use_tls) VALUES (1, '', 587, '', '', 1)")
+                row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+            host, port, username, password, use_tls = row or ("", 587, "", "", 1)
+        except Exception:
+            host, port, username, password, use_tls = "", 587, "", "", 1
+
+        st.caption("SMTP Settings")
+        c1, c2, c3 = st.columns([2,1,1])
+        with c1:
+            host = st.text_input("SMTP host", value=str(host), key="o3_smtp_host")
+        with c2:
+            port = st.number_input("Port", value=int(port or 587), min_value=1, max_value=65535, step=1, key="o3_smtp_port")
+        with c3:
+            use_tls = st.checkbox("Use TLS", value=bool(use_tls), key="o3_smtp_tls")
+
+        c4, c5 = st.columns(2)
+        with c4:
+            username = st.text_input("Username", value=str(username or ""), key="o3_smtp_user")
+        with c5:
+            password = st.text_input("Password", value=str(password or ""), type="password", key="o3_smtp_pass")
+
+        if st.button("Save SMTP", key="o3_smtp_save"):
+            try:
+                from contextlib import closing
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE smtp_settings SET host=?, port=?, username=?, password=?, use_tls=? WHERE id=1",
+                                (host.strip(), int(port), username.strip(), password, 1 if use_tls else 0))
+                    conn.commit()
+                st.success("Saved SMTP settings")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+        return {
+            "host": host.strip(),
+            "port": int(port or 587),
+            "username": (username or "").strip(),
+            "password": password or "",
+            "use_tls": bool(use_tls),
+            "from_email": (username or "").strip(),
+            "from_name": "ELA Management"
+        }
 def render_outreach_mailmerge(conn):
     import streamlit as st, pandas as _pd
     _o3_ensure_schema(conn)
