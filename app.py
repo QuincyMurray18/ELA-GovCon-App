@@ -9401,3 +9401,54 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
+
+# === O4 Hook and UI wiring ===
+def _o4_render_badge():
+    try:
+        import streamlit as st
+        st.sidebar.markdown("**O4 Active**")
+    except Exception:
+        pass
+
+def o4_sender_accounts_ui(conn):
+    # Wrapper to call internal O4 UI if present
+    fn = globals().get("_o4_accounts_ui") or globals().get("render_o4_accounts_ui") or globals().get("o4_accounts_ui")
+    if fn:
+        return fn(conn)
+    try:
+        import streamlit as st
+        st.info("O4: sender accounts UI is not defined in this build.")
+    except Exception:
+        pass
+
+def _run_outreach_o4(conn):
+    try:
+        o4_sender_accounts_ui(conn)
+    except Exception as e:
+        try:
+            import streamlit as st
+            st.error(f"O4 failed: {e}")
+        except Exception:
+            pass
+
+def _wrap_run_outreach():
+    g = globals()
+    base = g.get("run_outreach")
+    if not callable(base):
+        return
+    if getattr(base, "_o4_wrapped", False):
+        return
+    def wrapped(conn):
+        base(conn)
+        _o4_render_badge()
+        try:
+            import streamlit as st
+            with st.expander("Sender accounts (O4)"):
+                _run_outreach_o4(conn)
+        except Exception:
+            # If Streamlit unavailable, just run O4 hook
+            _run_outreach_o4(conn)
+    wrapped._o4_wrapped = True
+    g["run_outreach"] = wrapped
+
+_wrap_run_outreach()
