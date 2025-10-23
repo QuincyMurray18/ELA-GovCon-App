@@ -3847,22 +3847,7 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
-        # === One-Page Analyzer (integrated) ===
-    try:
-        _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-    except Exception:
-        _df_rf_ctx = None
-    with st.container():
-
-    # Compact workflow header
-    _rfp_flow = st.radio(
-        "Workflow",
-        options=["Overview", "Intake", "Analyze", "Deliverables", "Advanced"],
-        index=0,
-        key="rfp_analyzer_flow",
-        horizontal=True
-    )
-
+        
     def _expand_for(title: str) -> bool:
         t = (title or "").lower()
         if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
@@ -3873,8 +3858,15 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             return _rfp_flow in ("Analyze", "Overview")
         if "manual editors" in t:
             return _rfp_flow in ("Advanced",)
-        # default: show on Overview
         return _rfp_flow == "Overview"
+
+# === One-Page Analyzer (integrated) ===
+    try:
+        _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        _df_rf_ctx = None
+    with st.container():
+        _rfp_flow = st.radio("Workflow", ["Overview","Intake","Analyze","Deliverables","Advanced"], index=0, key="rfp_analyzer_flow", horizontal=True)
         st.caption("RFP Analyzer · single-page mode")
         if run_rfp_analyzer_onepage is None:
             st.info("One-Page Analyzer module not found. Place rfp_onepage.py next to this app.")
