@@ -9748,6 +9748,36 @@ def _s1d_norm_phone(p: str) -> str:
         digits = digits[1:]
     return digits
 
+def _s1d_format_phone_display(digits: str) -> str:
+    d = "".join(ch for ch in str(digits) if ch.isdigit())
+    if len(d) == 10:
+        return f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
+    if len(d) == 11 and d.startswith("1"):
+        d = d[1:]
+        return f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
+    return digits or ""
+
+def _s1d_linkify_phone(digits: str) -> str:
+    d = "".join(ch for ch in str(digits) if ch.isdigit())
+    if not d:
+        return ""
+    label = _s1d_format_phone_display(d)
+    return f"<a href='tel:{d}'>{label}</a>"
+
+def _s1d_linkify_site(url: str, fallback: str = "site") -> str:
+    if not url:
+        return ""
+    u = str(url).strip()
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    # Make label a clean domain
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(u).netloc or fallback
+    except Exception:
+        host = fallback
+    return f"<a href='{u}' target='_blank' rel='noopener noreferrer'>{host}</a>"
+
 def _s1d_existing_vendor_keys(conn):
     # Build keys to detect duplicates: by place_id if present, else name+phone
     try:
@@ -9793,12 +9823,28 @@ def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_
     js = r.json()
     return js
 
+
+@st.cache_data(show_spinner=False, ttl=3600)
 def _s1d_place_details(pid: str, key: str):
     try:
-        r = _requests.get("https://maps.googleapis.com/maps/api/place/details/json",
-                          params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
-                          timeout=10)
-        return r.json().get("result", {}) or {}
+        resp = _requests.get(
+            "https://maps.googleapis.com/maps/api/place/details/json",
+            params={
+                "place_id": pid,
+                "fields": "formatted_phone_number,international_phone_number,website,url",
+                "key": key,
+            },
+            timeout=10,
+        )
+        js = resp.json()
+        if js.get("status") != "OK":
+            return {}
+        res = js.get("result", {}) or {}
+        # Normalize fields
+        phone = res.get("formatted_phone_number") or res.get("international_phone_number") or ""
+        website = res.get("website") or ""
+        url = res.get("url") or ""
+        return {"formatted_phone_number": phone, "website": website, "url": url}
     except Exception:
         return {}
 
@@ -9893,7 +9939,7 @@ def render_subfinder_s1d(conn):
             "_dup": dup
         })
         # be nice to Places
-        _time.sleep(0.05)
+        _time.sleep(0.12)
     import pandas as _pd
     df = _pd.DataFrame(rows)
     if df.empty:
@@ -9905,7 +9951,8 @@ def render_subfinder_s1d(conn):
         return f"<a href='{url}' target='_blank'>{text}</a>"
     show = df.copy()
     show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
-    show["website"] = show.apply(lambda r: _mk_link(r["website"], "site") if r["website"] else "", axis=1)
+    show["phone"] = show.apply(lambda r: _s1d_linkify_phone(r["phone"]), axis=1)
+    show["website"] = show.apply(lambda r: _s1d_linkify_site(r["website"]) if r["website"] else "", axis=1)
     show = show[["name","phone","website","address","city","state","place_id","_dup"]]
     st.markdown("**Results**")
     st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
