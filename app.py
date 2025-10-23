@@ -1,3 +1,4 @@
+BUILD_TAG_O3 = "O3 LOCKON — 2025-10-23 03:23:05 UTC"
 import requests
 import time
 # Helper imports for RTM/Amendment
@@ -9014,6 +9015,7 @@ def seed_default_templates(conn):
 
 
 def run_outreach(conn):
+    st.caption(BUILD_TAG_O3)
     st.caption("O3 WIRED BUILD — 2025-10-23 03:14:35 UTC")
     import streamlit as st
     st.header("Outreach")
@@ -9029,3 +9031,9 @@ def run_outreach(conn):
     st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
     st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
 
+
+def router(page, conn):
+    if page and page.strip().lower().startswith("outreach"):
+        run_outreach(conn)
+    else:
+        run_outreach(conn)
