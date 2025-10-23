@@ -9279,6 +9279,19 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
+
+
+# === O4 wiring helpers (added) =================================================
+def _o4_render_badge():
+    import streamlit as st
+    try:
+        st.sidebar.markdown("**O4 Active**")
+    except Exception:
+        pass
+
+def o4_sender_accounts_ui(conn):
+    # alias to the implemented UI
+    _o4_accounts_ui(conn)
 def _o4_accounts_ui(conn):
     import streamlit as st, pandas as _pd
     ensure_outreach_o1_schema(conn)
