@@ -9952,10 +9952,10 @@ def render_subfinder_s1d(conn):
     show = df.copy()
     show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
     show["phone"] = show.apply(lambda r: _s1d_linkify_phone(r["phone"]), axis=1)
-    show["website"] = show.apply(lambda r: _s1d_linkify_site(r["website"]) if r["website"] else "", axis=1)
+    show["website"] = show.apply(lambda r: _s1d_linkify_site(r["website"] or r.get("google_url","")), axis=1)
     show = show[["name","phone","website","address","city","state","place_id","_dup"]]
     st.markdown("**Results**")
-    st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
+    st.markdown(show.to_html(escape=False, index=False), unsafe_allow_html=True)
     # Select and save non-duplicates
     keep = df[~df["_dup"]]
     if keep.empty:
