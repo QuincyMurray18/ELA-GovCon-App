@@ -7998,45 +7998,8 @@ if _hide_saved:
     # guard rows and use dict.get to avoid NameError/KeyError
     _rows = locals().get('rows', st.session_state.get('s1_results') or [])
 _rows = (_rows or [])
-    rows = [r for r in rows if isinstance(r, dict) and r.get("place_id") not in ss.get("s1_saved_ids", set())]
-    ss["s1_results"] = rows
-
-# Enrich legacy S1 with phone and website and render clickable links
-try:
-    key = _s1d_get_api_key()
-except Exception:
-    key = None
-enriched = []
-phones_found = 0
-sites_found = 0
-for r in (_rows or []):
-    pid = r.get("place_id")
-    det = _s1d_place_details(pid, key) if pid and key else {}
-    ph = det.get("formatted_phone_number") or det.get("international_phone_number") or r.get("phone") or ""
-    site = det.get("website") or r.get("website") or ""
-    gurl = det.get("url") or r.get("google_url") or (f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "")
-    phones_found += 1 if ph else 0
-    sites_found += 1 if site else 0
-    enriched.append({**r, "phone": s1_normalize_phone(ph), "website": site, "google_url": gurl, "_status": det.get("_status","")})
-    _time.sleep(0.11)
-df2 = pd.DataFrame(enriched) if enriched else pd.DataFrame([], columns=["name","phone","website","address","place_id"])
-if not df2.empty:
-    show = df2.copy()
-    def _mk_name(rr):
-        t = rr.get("name","")
-        u = rr.get("google_url","") or ""
-        return t if not u else f"<a href='{u}' target='_blank'>{t}</a>"
-    show["name"] = show.apply(_mk_name, axis=1)
-    show["phone"] = show.apply(lambda rr: _s1d_linkify_phone(rr.get("phone","")), axis=1)
-    show["website"] = show.apply(lambda rr: _s1d_linkify_site(rr.get("website","") or rr.get("google_url","")), axis=1)
-    cols = [c for c in ["name","phone","website","address","rating","_status"] if c in show.columns]
-    st.markdown(show[cols].to_html(escape=False, index=False), unsafe_allow_html=True)
-    st.caption(f"S1 legacy diagnostics: phones {phones_found}/{len(df2)}, websites {sites_found}/{len(df2)}")
-else:
-    st.info("No results.")
-
-
-    if ss.get("s1_page_token"):
+_s1_legacy_enrich_and_render(conn)
+if ss.get("s1_page_token"):
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 def run_subcontractor_finder_s1_hook(conn):
@@ -8046,6 +8009,63 @@ def run_subcontractor_finder_s1_hook(conn):
     except Exception:
         pass
 
+
+
+# ---- Legacy S1 enrich and render, safe and self contained ----
+def _s1_legacy_enrich_and_render(conn):
+    import streamlit as st
+    import pandas as pd
+    import time as _time
+
+    ss = st.session_state
+
+    # get prior results if any
+    _rows = locals().get("rows", ss.get("s1_results") or [])
+    _rows = _rows or []
+
+    # hide already saved if user requested
+    _hide_saved = bool(ss.get("s1_hide_saved", True))
+    if _hide_saved:
+        saved_ids = ss.get("s1_saved_ids", set())
+        _rows = [r for r in _rows if isinstance(r, dict) and r.get("place_id") not in saved_ids]
+    ss["s1_results"] = _rows
+
+    # enrich with details
+    try:
+        key = _s1d_get_api_key()
+    except Exception:
+        key = None
+
+    enriched, phones_found, sites_found = [], 0, 0
+    for r in _rows:
+        pid = r.get("place_id")
+        det = _s1d_place_details(pid, key) if pid and key else {}
+        ph = det.get("formatted_phone_number") or det.get("international_phone_number") or r.get("phone") or ""
+        site = det.get("website") or r.get("website") or ""
+        gurl = det.get("url") or r.get("google_url") or (f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "")
+        enriched.append({**r, "phone": s1_normalize_phone(ph), "website": site, "google_url": gurl, "_status": det.get("_status","")})
+        phones_found += 1 if ph else 0
+        sites_found += 1 if site else 0
+        _time.sleep(0.11)
+
+    df2 = pd.DataFrame(enriched) if enriched else pd.DataFrame([], columns=["name","phone","website","address","place_id"])
+    if df2.empty:
+        st.info("No results.")
+        return
+
+    # linkify table
+    def _mk_name(rr):
+        t = rr.get("name","")
+        u = rr.get("google_url","") or ""
+        return t if not u else f"<a href='{u}' target='_blank'>{t}</a>"
+
+    show = df2.copy()
+    show["name"] = show.apply(_mk_name, axis=1)
+    show["phone"] = show.apply(lambda rr: _s1d_linkify_phone(rr.get("phone","")), axis=1)
+    show["website"] = show.apply(lambda rr: _s1d_linkify_site(rr.get("website","") or rr.get("google_url","")), axis=1)
+    cols = [c for c in ["name","phone","website","address","rating","_status"] if c in show.columns]
+    st.markdown(show[cols].to_html(escape=False, index=False), unsafe_allow_html=True)
+    st.caption(f"S1 legacy diagnostics: phones {phones_found}/{len(df2)}, websites {sites_found}/{len(df2)}")
 
 # --- S1D wrapper ensure ---
 def _ensure_s1d_wired():
