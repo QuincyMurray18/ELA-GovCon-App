@@ -3847,19 +3847,6 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
-        
-
-    def _visible_for(title: str) -> bool:
-        t = (title or "").lower()
-        if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
-            return _rfp_flow in ("Deliverables", "Overview")
-        if any(k in t for k in ["ingest", "files for this rfp", "manual text paste", "acquisition meta", "ordering / pop", "file library"]):
-            return _rfp_flow in ("Intake", "Overview")
-        if any(k in t for k in ["find in linked files", "q&a", "search", "semantic", "ask the co"]):
-            return _rfp_flow in ("Analyze", "Overview")
-        if "manual editors" in t:
-            return _rfp_flow in ("Advanced",)
-        return _rfp_flow == "Overview"
 
     def _expand_for(title: str) -> bool:
         t = (title or "").lower()
@@ -3873,7 +3860,18 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             return _rfp_flow in ("Advanced",)
         return _rfp_flow == "Overview"
 
-# === One-Page Analyzer (integrated) ===
+    def _visible_for(title: str) -> bool:
+        t = (title or "").lower()
+        if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
+            return _rfp_flow in ("Deliverables", "Overview")
+        if any(k in t for k in ["ingest", "files for this rfp", "manual text paste", "acquisition meta", "ordering / pop", "file library"]):
+            return _rfp_flow in ("Intake", "Overview")
+        if any(k in t for k in ["find in linked files", "q&a", "search", "semantic", "ask the co"]):
+            return _rfp_flow in ("Analyze", "Overview")
+        if "manual editors" in t:
+            return _rfp_flow in ("Advanced",)
+        return _rfp_flow == "Overview"
+        # === One-Page Analyzer (integrated) ===
     try:
         _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
@@ -3988,9 +3986,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # Sidebar: amendment diff and impact to-dos
         render_amendment_sidebar(conn, int(rid_p3), sam_url, ttl_hours=int(ttl_hours))
         # Main panel: full RTM coverage editor + metrics
-        if _visible_for("Requirements Traceability Matrix (RTM)"):
-            with st.expander("Requirements Traceability Matrix (RTM)", expanded=_expand_for("Requirements Traceability Matrix (RTM)")):
-            render_rtm_ui(conn, int(rid_p3))
+        with st.expander("Requirements Traceability Matrix (RTM)", expanded=_expand_for("Requirements Traceability Matrix (RTM)")):
+            if not _visible_for("Requirements Traceability Matrix (RTM)"):
+                st.empty()
+            else:
+                render_rtm_ui(conn, int(rid_p3))
 
     render_status_and_gaps(conn)
     from contextlib import contextmanager
@@ -4089,58 +4089,60 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         # --- X1 Ingest: File Library + Health ---
         if True:
-            if _visible_for("X1 Ingest: File Library + Health"):
-                with st.expander("X1 Ingest: File Library + Health", expanded=_expand_for("X1 Ingest: File Library + Health")):
-                st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X7 applied")
-                try:
-                    df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-                    opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
-                except Exception:
-                    df_rf_list = pd.DataFrame()
-                    opt_rf = [None]
-                def _fmt_rfp(x):
+            with st.expander("X1 Ingest: File Library + Health", expanded=_expand_for("X1 Ingest: File Library + Health")):
+                if not _visible_for("X1 Ingest: File Library + Health"):
+                    st.empty()
+                else:
+                    st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X7 applied")
                     try:
-                        if x is None:
-                            return "None"
-                        ttl = df_rf_list.loc[df_rf_list["id"]==x,"title"]
-                        return f"#{x} — {ttl.values[0] if len(ttl) else ''}"
+                        df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+                        opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
                     except Exception:
-                        return str(x) if x is not None else "None"
-                link_now_rfp = st.selectbox("Link to existing RFP (optional)", options=opt_rf, format_func=_fmt_rfp, key="x1_link_now_rfp")
-                ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
-                link_to_rfp = st.checkbox("Also remember these to auto-link to the next new RFP created below", value=False)
-                if st.button("Ingest Files", key="x1_ingest_btn"):
-                    if not ing_files:
-                        st.warning("No files selected")
-                    else:
-                        rows = []
-                        ids = []
-                        for f in ing_files:
-                            try:
-                                b = f.getbuffer().tobytes()
-                            except Exception:
-                                b = f.read()
-                            rec = save_rfp_file_db(conn, int(link_now_rfp) if link_now_rfp is not None else None, f.name, b)
-                            rows.append({
-                                "Filename": rec["filename"],
-                                "SHA256": rec["sha256"][:12],
-                                "MIME": rec["mime"],
-                                "Pages": rec["pages"],
-                                "OCR pages": rec.get("ocr_pages", 0),
-                                "Dedup?": "Yes" if rec.get("dedup") else "No",
-                                "rfp_file_id": rec["id"],
-                                "Linked RFP": (int(link_now_rfp) if link_now_rfp is not None else None),
-                            })
-                            ids.append(int(rec["id"]))
-                        import pandas as _pd
-                        df_ing = _pd.DataFrame(rows)
-                        st.dataframe(df_ing, use_container_width=True, hide_index=True)
-                        st.session_state["x1_last_ingested_ids"] = ids
-                        st.session_state["x1_pending_link_after_create"] = bool(link_to_rfp)
-                        if link_now_rfp is not None:
-                            st.success(f"Ingested {len(rows)} file(s). Linked to RFP #{int(link_now_rfp)}.")
+                        df_rf_list = pd.DataFrame()
+                        opt_rf = [None]
+                    def _fmt_rfp(x):
+                        try:
+                            if x is None:
+                                return "None"
+                            ttl = df_rf_list.loc[df_rf_list["id"]==x,"title"]
+                            return f"#{x} — {ttl.values[0] if len(ttl) else ''}"
+                        except Exception:
+                            return str(x) if x is not None else "None"
+                    link_now_rfp = st.selectbox("Link to existing RFP (optional)", options=opt_rf, format_func=_fmt_rfp, key="x1_link_now_rfp")
+                    ing_files = st.file_uploader("Files to ingest", type=["pdf","docx","xlsx","txt"], accept_multiple_files=True, key="x1_ing")
+                    link_to_rfp = st.checkbox("Also remember these to auto-link to the next new RFP created below", value=False)
+                    if st.button("Ingest Files", key="x1_ingest_btn"):
+                        if not ing_files:
+                            st.warning("No files selected")
                         else:
-                            st.success(f"Ingested {len(rows)} file(s).")
+                            rows = []
+                            ids = []
+                            for f in ing_files:
+                                try:
+                                    b = f.getbuffer().tobytes()
+                                except Exception:
+                                    b = f.read()
+                                rec = save_rfp_file_db(conn, int(link_now_rfp) if link_now_rfp is not None else None, f.name, b)
+                                rows.append({
+                                    "Filename": rec["filename"],
+                                    "SHA256": rec["sha256"][:12],
+                                    "MIME": rec["mime"],
+                                    "Pages": rec["pages"],
+                                    "OCR pages": rec.get("ocr_pages", 0),
+                                    "Dedup?": "Yes" if rec.get("dedup") else "No",
+                                    "rfp_file_id": rec["id"],
+                                    "Linked RFP": (int(link_now_rfp) if link_now_rfp is not None else None),
+                                })
+                                ids.append(int(rec["id"]))
+                            import pandas as _pd
+                            df_ing = _pd.DataFrame(rows)
+                            st.dataframe(df_ing, use_container_width=True, hide_index=True)
+                            st.session_state["x1_last_ingested_ids"] = ids
+                            st.session_state["x1_pending_link_after_create"] = bool(link_to_rfp)
+                            if link_now_rfp is not None:
+                                st.success(f"Ingested {len(rows)} file(s). Linked to RFP #{int(link_now_rfp)}.")
+                            else:
+                                st.success(f"Ingested {len(rows)} file(s).")
         colA, colB = st.columns([3,2])
         with colA:
             ups = st.file_uploader(
@@ -4149,9 +4151,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 accept_multiple_files=True,
                 key="rfp_ups"
             )
-            if _visible_for("Manual Text Paste (optional)"):
-                with st.expander("Manual Text Paste (optional)", expanded=_expand_for("Manual Text Paste (optional)")):
-                pasted = st.text_area("Paste any text to include in parsing", height=150, key="rfp_paste")
+            with st.expander("Manual Text Paste (optional)", expanded=_expand_for("Manual Text Paste (optional)")):
+                if not _visible_for("Manual Text Paste (optional)"):
+                    st.empty()
+                else:
+                    pasted = st.text_area("Paste any text to include in parsing", height=150, key="rfp_paste")
             title = st.text_input("RFP Title (used if combining)", key="rfp_title")
             solnum = st.text_input("Solicitation # (used if combining)", key="rfp_solnum")
             sam_url = st.text_input("SAM URL (used if combining)", key="rfp_sam_url", placeholder="https://sam.gov/...")
@@ -4430,247 +4434,249 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
 
-        if _visible_for("Q&A Memory (X7)"):
-            with st.expander("Q&A Memory (X7)", expanded=_expand_for("Q&A Memory (X7)")):
-            st.caption("Ask questions about this RFP. Answers are pulled from saved checklists, CLINs, dates, POCs, and linked file text. History is saved.")
-            q = st.text_input("Your question", key="x7_q")
-            ask = st.button("Ask (store)", key="x7_ask")
-            if ask and (q or "").strip():
-                try:
-                    ql = (q or "").lower()
-                    rid_safe = locals().get("rid", None)
-                    if rid_safe is None:
-                        st.warning("Select an RFP in the Data tab above first."); raise Exception("No rid in scope")
-                    res = _kb_search(conn, int(rid_safe), q or "")
-                    ans_parts = []
-                    if any(w in ql for w in ["due","deadline","close"]):
-                        df = res.get("dates")
-                        if df is not None and not df.empty:
-                            top = df.iloc[0]
-                            ans_parts.append(f"Due: {top.get('date_text','')} ({top.get('label','')})")
-                    if any(w in ql for w in ["poc","contact","officer","specialist"]):
-                        df = res.get("pocs")
-                        if df is not None and not df.empty:
-                            s = "; ".join([f"{r.get('name','')} ({r.get('email','')})" for _, r in df.head(3).iterrows()])
-                            if s: ans_parts.append("POCs: " + s)
-                    if "clin" in ql:
-                        df = res.get("clins")
-                        if df is not None and not df.empty:
-                            ans_parts.append(f"CLINs detected: {len(df)}; first: {df.iloc[0].get('clin','')}")
-                    if any(w in ql for w in ["checklist","compliance","shall","must"]):
-                        df = res.get("checklist")
-                        if df is not None and not df.empty:
-                            open_cnt = int((df['status']!='Complete').sum())
-                            ans_parts.append(f"Checklist items: {len(df)}. Open: {open_cnt}.")
-                    if not ans_parts:
-                        sec = res.get("sections")
-                        if sec is not None and not sec.empty:
-                            snip = (sec.iloc[0].get("content","") or "").strip().replace("\n"," ")
-                            ans_parts.append("Top section snippet: " + snip[:300])
-                    a = " | ".join(ans_parts) if ans_parts else "No direct answer found in saved data."
-                    from contextlib import closing as _closing_x7
-                    with _closing_x7(conn.cursor()) as cur:
-                        cur.execute("INSERT INTO rfp_chat(rfp_id, ts, q, a) VALUES(?,?,?,?);",
-                                    (int(rid), datetime.utcnow().isoformat(), q.strip(), a))
-                        conn.commit()
-                    st.success("Stored Q&A.")
-                except Exception as e:
-                    st.error(f"Q&A failed: {e}")
-            try:
-                df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
-                if df_hist is not None and not df_hist.empty:
-                    st.dataframe(df_hist, use_container_width=True, hide_index=True)
-                    c1, c2 = st.columns([1,1])
-                    with c1:
-                        if st.button("Export Q&A CSV", key="x7_export"):
-                            csvb = df_hist.to_csv(index=False).encode("utf-8")
-                            st.download_button("Download Q&A CSV", data=csvb, file_name=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key="x7_dl")
-                    with c2:
-                        if st.button("Clear history", key="x7_clear"):
-                            try:
-                                with closing(conn.cursor()) as cur:
-                                    cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(rid),))
-                                    conn.commit()
-                                st.success("Cleared.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Clear failed: {e}")
-                else:
-                    st.caption("No Q&A yet for this RFP.")
-            except Exception as e:
-                st.info(f"No history available: {e}")
-            # X7 guard: ensure checklist dataframe is defined and rid is available
-            _rid = locals().get("rid", None)
-            if _rid is None:
-                st.caption("Checklist viewer: select an RFP above to load items.")
+        with st.expander("Q&A Memory (X7)", expanded=_expand_for("Q&A Memory (X7)")):
+            if not _visible_for("Q&A Memory (X7)"):
+                st.empty()
             else:
-                try:
-                    df_lm = pd.read_sql_query(
-                        "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
-                        conn, params=(int(_rid),)
-                    )
-
-                    if _visible_for("Add to Proposal Drafts"):
-                        with st.expander("Add to Proposal Drafts", expanded=_expand_for("Add to Proposal Drafts")):
-                        sec = st.text_input("Section label", value="Research Notes", key="y5_sec_y1")
-                        ans_txt = "".join(acc).strip()
-                        if st.button("Add to drafts", key="y5_add_y1"):
-                            y5_save_snippet(conn, int(rid_y1), sec, ans_txt or q_y1.strip(), source="Y1 Q&A")
-                            st.success("Saved to drafts")
-                except Exception:
-                    df_lm = pd.DataFrame(columns=['id','item_text','is_must','status'])
-                df_lm = df_lm.fillna("")
-                st.caption(f"{len(df_lm)} checklist items")
-                st.dataframe(df_lm, use_container_width=True, hide_index=True)
-                new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
-                sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
-                if st.button("Update Status", key="lm_status_btn"):
-                    ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
-                    if ids:
-                        with closing(conn.cursor()) as cur:
-                            cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
+                st.caption("Ask questions about this RFP. Answers are pulled from saved checklists, CLINs, dates, POCs, and linked file text. History is saved.")
+                q = st.text_input("Your question", key="x7_q")
+                ask = st.button("Ask (store)", key="x7_ask")
+                if ask and (q or "").strip():
+                    try:
+                        ql = (q or "").lower()
+                        rid_safe = locals().get("rid", None)
+                        if rid_safe is None:
+                            st.warning("Select an RFP in the Data tab above first."); raise Exception("No rid in scope")
+                        res = _kb_search(conn, int(rid_safe), q or "")
+                        ans_parts = []
+                        if any(w in ql for w in ["due","deadline","close"]):
+                            df = res.get("dates")
+                            if df is not None and not df.empty:
+                                top = df.iloc[0]
+                                ans_parts.append(f"Due: {top.get('date_text','')} ({top.get('label','')})")
+                        if any(w in ql for w in ["poc","contact","officer","specialist"]):
+                            df = res.get("pocs")
+                            if df is not None and not df.empty:
+                                s = "; ".join([f"{r.get('name','')} ({r.get('email','')})" for _, r in df.head(3).iterrows()])
+                                if s: ans_parts.append("POCs: " + s)
+                        if "clin" in ql:
+                            df = res.get("clins")
+                            if df is not None and not df.empty:
+                                ans_parts.append(f"CLINs detected: {len(df)}; first: {df.iloc[0].get('clin','')}")
+                        if any(w in ql for w in ["checklist","compliance","shall","must"]):
+                            df = res.get("checklist")
+                            if df is not None and not df.empty:
+                                open_cnt = int((df['status']!='Complete').sum())
+                                ans_parts.append(f"Checklist items: {len(df)}. Open: {open_cnt}.")
+                        if not ans_parts:
+                            sec = res.get("sections")
+                            if sec is not None and not sec.empty:
+                                snip = (sec.iloc[0].get("content","") or "").strip().replace("\n"," ")
+                                ans_parts.append("Top section snippet: " + snip[:300])
+                        a = " | ".join(ans_parts) if ans_parts else "No direct answer found in saved data."
+                        from contextlib import closing as _closing_x7
+                        with _closing_x7(conn.cursor()) as cur:
+                            cur.execute("INSERT INTO rfp_chat(rfp_id, ts, q, a) VALUES(?,?,?,?);",
+                                        (int(rid), datetime.utcnow().isoformat(), q.strip(), a))
                             conn.commit()
-                    st.success(f"Updated {len(ids)} item(s).")
-                    st.rerun()
-            # Export
-            if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
-                out = df_lm.copy()
-                out.insert(0, "rfp_id", int(rid))
-                csv_bytes = out.to_csv(index=False).encode("utf-8")
-                st.download_button("Download CSV", data=csv_bytes, file_name=f"rfp_{rid}_compliance.csv", mime="text/csv", key="lm_dl")
+                        st.success("Stored Q&A.")
+                    except Exception as e:
+                        st.error(f"Q&A failed: {e}")
+                try:
+                    df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
+                    if df_hist is not None and not df_hist.empty:
+                        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                        c1, c2 = st.columns([1,1])
+                        with c1:
+                            if st.button("Export Q&A CSV", key="x7_export"):
+                                csvb = df_hist.to_csv(index=False).encode("utf-8")
+                                st.download_button("Download Q&A CSV", data=csvb, file_name=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key="x7_dl")
+                        with c2:
+                            if st.button("Clear history", key="x7_clear"):
+                                try:
+                                    with closing(conn.cursor()) as cur:
+                                        cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(rid),))
+                                        conn.commit()
+                                    st.success("Cleared.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Clear failed: {e}")
+                    else:
+                        st.caption("No Q&A yet for this RFP.")
+                except Exception as e:
+                    st.info(f"No history available: {e}")
+                # X7 guard: ensure checklist dataframe is defined and rid is available
+                _rid = locals().get("rid", None)
+                if _rid is None:
+                    st.caption("Checklist viewer: select an RFP above to load items.")
+                else:
+                    try:
+                        df_lm = pd.read_sql_query(
+                            "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
+                            conn, params=(int(_rid),)
+                        )
+
+                        with st.expander("Add to Proposal Drafts", expanded=False):
+                            sec = st.text_input("Section label", value="Research Notes", key="y5_sec_y1")
+                            ans_txt = "".join(acc).strip()
+                            if st.button("Add to drafts", key="y5_add_y1"):
+                                y5_save_snippet(conn, int(rid_y1), sec, ans_txt or q_y1.strip(), source="Y1 Q&A")
+                                st.success("Saved to drafts")
+                    except Exception:
+                        df_lm = pd.DataFrame(columns=['id','item_text','is_must','status'])
+                    df_lm = df_lm.fillna("")
+                    st.caption(f"{len(df_lm)} checklist items")
+                    st.dataframe(df_lm, use_container_width=True, hide_index=True)
+                    new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
+                    sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
+                    if st.button("Update Status", key="lm_status_btn"):
+                        ids = [int(x) for x in sel_ids.split(",") if x.strip().isdigit()]
+                        if ids:
+                            with closing(conn.cursor()) as cur:
+                                cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
+                                conn.commit()
+                        st.success(f"Updated {len(ids)} item(s).")
+                        st.rerun()
+                # Export
+                if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
+                    out = df_lm.copy()
+                    out.insert(0, "rfp_id", int(rid))
+                    csv_bytes = out.to_csv(index=False).encode("utf-8")
+                    st.download_button("Download CSV", data=csv_bytes, file_name=f"rfp_{rid}_compliance.csv", mime="text/csv", key="lm_dl")
 
     # ---------------- CLINs / Dates / POCs ----------------
     with tab_data:
         # X2: Files for this RFP
-        if _visible_for("Files for this RFP (X2)"):
-            with st.expander("Files for this RFP (X2)", expanded=_expand_for("Files for this RFP (X2)")):
-            try:
-                df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
-            except Exception as e:
-                df_files = pd.DataFrame()
-            st.caption("Linked files")
-            if df_files is None or df_files.empty:
-                st.write("No files linked.")
+        with st.expander("Files for this RFP (X2)", expanded=_expand_for("Files for this RFP (X2)")):
+            if not _visible_for("Files for this RFP (X2)"):
+                st.empty()
             else:
-                st.dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
-                # X5: preview and download selected linked file
                 try:
-                    pick = st.selectbox(
-                        "Open file",
-                        options=df_files["id"].tolist(),
-                        format_func=lambda i: f"#{i} — {df_files.loc[df_files['id']==i,'filename'].values[0]}",
-                        key=f"file_pick_{rid}"
-                    )
-                    if pick:
-                        row = pd.read_sql_query(
-                            "SELECT filename, mime, bytes FROM rfp_files WHERE id=?;",
-                            conn, params=(int(pick),)
-                        ).iloc[0]
-                        fname = row.get("filename") or f"rfp_file_{int(pick)}"
-                        mime = row.get("mime") or "application/octet-stream"
-                        b = row.get("bytes")
-                        st.download_button("Download original", data=b, file_name=fname, mime=mime, key=f"dl_{pick}")
-                        try:
-                            pages = extract_text_pages(b, mime)
-                            preview = ("\n\n".join(pages) if pages else "").strip()[:20000]
-                            if preview:
-                                st.text_area("Preview (first 20k chars)", value=preview, height=300)
-                        except Exception as e:
-                            st.info(f"Preview unavailable: {e}")
+                    df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
                 except Exception as e:
-                    st.info(f"No preview available: {e}")
-
-                # X6: bulk ZIP download, inventory CSV, and simple search across linked files
-                import io as _io, zipfile as _zipfile
-                c_zip, c_inv = st.columns([1,1])
-                with c_zip:
-                    if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
-                        try:
-                            # Fetch bytes for all linked files
-                            df_bytes = pd.read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
-                            if df_bytes is None or df_bytes.empty:
-                                st.warning("No files to package.")
-                            else:
-                                buf = _io.BytesIO()
-                                with _zipfile.ZipFile(buf, mode="w", compression=_zipfile.ZIP_DEFLATED) as zf:
-                                    for _, r in df_bytes.iterrows():
-                                        fname = (r.get("filename") or f"file_{_}.bin")
-                                        # Avoid directory traversal
-                                        fname = fname.replace("..","").replace("\\","/").split("/")[-1]
-                                        b = r.get("bytes")
-                                        if isinstance(b, (bytes, bytearray)):
-                                            zf.writestr(fname, b)
-                                st.download_button(
-                                    "Download ZIP",
-                                    data=buf.getvalue(),
-                                    file_name=f"rfp_{int(rid)}_linked_files.zip",
-                                    mime="application/zip",
-                                    key=f"zip_dl_{rid}"
-                                )
-                        except Exception as e:
-                            st.error(f"ZIP build failed: {e}")
-                with c_inv:
+                    df_files = pd.DataFrame()
+                st.caption("Linked files")
+                if df_files is None or df_files.empty:
+                    st.write("No files linked.")
+                else:
+                    st.dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
+                    # X5: preview and download selected linked file
                     try:
-                        inv = df_files.copy()
-                        inv["sha_short"] = inv["sha256"].str.slice(0,12)
-                        csvb = inv[["id","filename","mime","pages","sha_short"]].to_csv(index=False).encode("utf-8")
-                        st.download_button("Export file inventory CSV", data=csvb, file_name=f"rfp_{int(rid)}_file_inventory.csv", mime="text/csv", key=f"inv_{rid}")
-                    except Exception as e:
-                        st.info(f"Inventory export unavailable: {e}")
-
-                if _visible_for("Find in linked files (simple)"):
-                    with st.expander("Find in linked files (simple)", expanded=_expand_for("Find in linked files (simple)")):
-                    q = st.text_input("Search phrase", key=f"find_files_{rid}")
-                    if q:
-                        try:
-                            hits = []
-                            pool = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
-                            for _, r in pool.iterrows():
-                                b = r.get("bytes"); mime = r.get("mime") or ""
+                        pick = st.selectbox(
+                            "Open file",
+                            options=df_files["id"].tolist(),
+                            format_func=lambda i: f"#{i} — {df_files.loc[df_files['id']==i,'filename'].values[0]}",
+                            key=f"file_pick_{rid}"
+                        )
+                        if pick:
+                            row = pd.read_sql_query(
+                                "SELECT filename, mime, bytes FROM rfp_files WHERE id=?;",
+                                conn, params=(int(pick),)
+                            ).iloc[0]
+                            fname = row.get("filename") or f"rfp_file_{int(pick)}"
+                            mime = row.get("mime") or "application/octet-stream"
+                            b = row.get("bytes")
+                            st.download_button("Download original", data=b, file_name=fname, mime=mime, key=f"dl_{pick}")
+                            try:
                                 pages = extract_text_pages(b, mime)
-                                text = ("\n\n".join(pages) if pages else "")
-                                pos = text.lower().find(q.lower())
-                                if pos >= 0:
-                                    start = max(0, pos-120); end = min(len(text), pos+120)
-                                    ctx = text[start:end].replace("\n"," ")
-                                    hits.append({"file_id": int(r["id"]), "filename": r.get("filename"), "snippet": ctx})
-                            if hits:
-                                dfh = pd.DataFrame(hits)
-                                st.dataframe(dfh, use_container_width=True, hide_index=True)
-                            else:
-                                st.write("No hits.")
-                        except Exception as e:
-                            st.info(f"No search results: {e}")
+                                preview = ("\n\n".join(pages) if pages else "").strip()[:20000]
+                                if preview:
+                                    st.text_area("Preview (first 20k chars)", value=preview, height=300)
+                            except Exception as e:
+                                st.info(f"Preview unavailable: {e}")
+                    except Exception as e:
+                        st.info(f"No preview available: {e}")
 
-                to_unlink = st.multiselect("Unlink file IDs", options=df_files["id"].tolist(), key=f"unlink_{rid}")
-                if st.button("Unlink selected", key=f"unlink_btn_{rid}") and to_unlink:
-                    try:
-                        ph = ",".join(["?"]*len(to_unlink))
-                        with closing(conn.cursor()) as _cur:
-                            _cur.execute(f"UPDATE rfp_files SET rfp_id=NULL WHERE id IN ({ph});", tuple(int(i) for i in to_unlink))
-                            conn.commit()
-                        st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
-                    except Exception as e:
-                        st.error(f"Unlink failed: {e}")
-            st.caption("Attach from library")
-            try:
-                df_pool = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
-            except Exception:
-                df_pool = pd.DataFrame()
-            if df_pool is None or df_pool.empty:
-                st.write("No unlinked files in library.")
-            else:
-                st.dataframe(df_pool, use_container_width=True, hide_index=True)
-                to_link = st.multiselect("Attach file IDs", options=df_pool["id"].tolist(), key=f"link_{rid}")
-                if st.button("Attach selected to this RFP", key=f"link_btn_{rid}") and to_link:
-                    try:
-                        ph = ",".join(["?"]*len(to_link))
-                        with closing(conn.cursor()) as _cur2:
-                            _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(rid), *[int(i) for i in to_link]))
-                            conn.commit()
-                        st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
-                    except Exception as e:
-                        st.error(f"Link failed: {e}")
+                    # X6: bulk ZIP download, inventory CSV, and simple search across linked files
+                    import io as _io, zipfile as _zipfile
+                    c_zip, c_inv = st.columns([1,1])
+                    with c_zip:
+                        if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
+                            try:
+                                # Fetch bytes for all linked files
+                                df_bytes = pd.read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
+                                if df_bytes is None or df_bytes.empty:
+                                    st.warning("No files to package.")
+                                else:
+                                    buf = _io.BytesIO()
+                                    with _zipfile.ZipFile(buf, mode="w", compression=_zipfile.ZIP_DEFLATED) as zf:
+                                        for _, r in df_bytes.iterrows():
+                                            fname = (r.get("filename") or f"file_{_}.bin")
+                                            # Avoid directory traversal
+                                            fname = fname.replace("..","").replace("\\","/").split("/")[-1]
+                                            b = r.get("bytes")
+                                            if isinstance(b, (bytes, bytearray)):
+                                                zf.writestr(fname, b)
+                                    st.download_button(
+                                        "Download ZIP",
+                                        data=buf.getvalue(),
+                                        file_name=f"rfp_{int(rid)}_linked_files.zip",
+                                        mime="application/zip",
+                                        key=f"zip_dl_{rid}"
+                                    )
+                            except Exception as e:
+                                st.error(f"ZIP build failed: {e}")
+                    with c_inv:
+                        try:
+                            inv = df_files.copy()
+                            inv["sha_short"] = inv["sha256"].str.slice(0,12)
+                            csvb = inv[["id","filename","mime","pages","sha_short"]].to_csv(index=False).encode("utf-8")
+                            st.download_button("Export file inventory CSV", data=csvb, file_name=f"rfp_{int(rid)}_file_inventory.csv", mime="text/csv", key=f"inv_{rid}")
+                        except Exception as e:
+                            st.info(f"Inventory export unavailable: {e}")
+
+                    with st.expander("Find in linked files (simple)", expanded=False):
+                        q = st.text_input("Search phrase", key=f"find_files_{rid}")
+                        if q:
+                            try:
+                                hits = []
+                                pool = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+                                for _, r in pool.iterrows():
+                                    b = r.get("bytes"); mime = r.get("mime") or ""
+                                    pages = extract_text_pages(b, mime)
+                                    text = ("\n\n".join(pages) if pages else "")
+                                    pos = text.lower().find(q.lower())
+                                    if pos >= 0:
+                                        start = max(0, pos-120); end = min(len(text), pos+120)
+                                        ctx = text[start:end].replace("\n"," ")
+                                        hits.append({"file_id": int(r["id"]), "filename": r.get("filename"), "snippet": ctx})
+                                if hits:
+                                    dfh = pd.DataFrame(hits)
+                                    st.dataframe(dfh, use_container_width=True, hide_index=True)
+                                else:
+                                    st.write("No hits.")
+                            except Exception as e:
+                                st.info(f"No search results: {e}")
+
+                    to_unlink = st.multiselect("Unlink file IDs", options=df_files["id"].tolist(), key=f"unlink_{rid}")
+                    if st.button("Unlink selected", key=f"unlink_btn_{rid}") and to_unlink:
+                        try:
+                            ph = ",".join(["?"]*len(to_unlink))
+                            with closing(conn.cursor()) as _cur:
+                                _cur.execute(f"UPDATE rfp_files SET rfp_id=NULL WHERE id IN ({ph});", tuple(int(i) for i in to_unlink))
+                                conn.commit()
+                            st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
+                        except Exception as e:
+                            st.error(f"Unlink failed: {e}")
+                st.caption("Attach from library")
+                try:
+                    df_pool = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
+                except Exception:
+                    df_pool = pd.DataFrame()
+                if df_pool is None or df_pool.empty:
+                    st.write("No unlinked files in library.")
+                else:
+                    st.dataframe(df_pool, use_container_width=True, hide_index=True)
+                    to_link = st.multiselect("Attach file IDs", options=df_pool["id"].tolist(), key=f"link_{rid}")
+                    if st.button("Attach selected to this RFP", key=f"link_btn_{rid}") and to_link:
+                        try:
+                            ph = ",".join(["?"]*len(to_link))
+                            with closing(conn.cursor()) as _cur2:
+                                _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(rid), *[int(i) for i in to_link]))
+                                conn.commit()
+                            st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
+                        except Exception as e:
+                            st.error(f"Link failed: {e}")
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
@@ -4683,125 +4689,131 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         )
 
 
-        if _visible_for("Acquisition Meta (X4)"):
-            with st.expander("Acquisition Meta (X4)", expanded=_expand_for("Acquisition Meta (X4)")):
-            try:
-                df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
-            except Exception:
-                df_meta_all = pd.DataFrame(columns=['key','value'])
-            if df_meta_all is None or df_meta_all.empty:
-                st.write("No meta extracted yet.")
+        with st.expander("Acquisition Meta (X4)", expanded=_expand_for("Acquisition Meta (X4)")):
+            if not _visible_for("Acquisition Meta (X4)"):
+                st.empty()
             else:
-                # Highlight common fields
-                want = ['naics','set_aside','place_of_performance','pop_structure','ordering_period_years','base_months']
-                show = df_meta_all[df_meta_all["key"].isin(want)]
-                if show.empty:
-                    st.dataframe(df_meta_all, use_container_width=True, hide_index=True)
+                try:
+                    df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+                except Exception:
+                    df_meta_all = pd.DataFrame(columns=['key','value'])
+                if df_meta_all is None or df_meta_all.empty:
+                    st.write("No meta extracted yet.")
                 else:
-                    st.dataframe(show, use_container_width=True, hide_index=True)
+                    # Highlight common fields
+                    want = ['naics','set_aside','place_of_performance','pop_structure','ordering_period_years','base_months']
+                    show = df_meta_all[df_meta_all["key"].isin(want)]
+                    if show.empty:
+                        st.dataframe(df_meta_all, use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(show, use_container_width=True, hide_index=True)
 
-        if _visible_for("Ordering / POP (X3)"):
-            with st.expander("Ordering / POP (X3)", expanded=_expand_for("Ordering / POP (X3)")):
-            try:
-                df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
-            except Exception:
-                df_meta = pd.DataFrame(columns=['key','value'])
-            if df_meta is None or df_meta.empty:
-                st.write("No POP metadata yet.")
+        with st.expander("Ordering / POP (X3)", expanded=_expand_for("Ordering / POP (X3)")):
+            if not _visible_for("Ordering / POP (X3)"):
+                st.empty()
             else:
-                pop = df_meta[df_meta["key"].isin(["pop_structure","ordering_period_years","base_months"])]
-                if pop.empty:
-                    st.dataframe(df_meta, use_container_width=True, hide_index=True)
+                try:
+                    df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+                except Exception:
+                    df_meta = pd.DataFrame(columns=['key','value'])
+                if df_meta is None or df_meta.empty:
+                    st.write("No POP metadata yet.")
                 else:
-                    st.dataframe(pop, use_container_width=True, hide_index=True)
+                    pop = df_meta[df_meta["key"].isin(["pop_structure","ordering_period_years","base_months"])]
+                    if pop.empty:
+                        st.dataframe(df_meta, use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(pop, use_container_width=True, hide_index=True)
 
         # === Phase S: Manual Editors (LM / CLINs / Dates / POCs / Meta) ===
 
         import pandas as _pd
         from contextlib import closing as _closing_ed
-        if _visible_for("Manual Editors"):
-            with st.expander("Manual Editors", expanded=_expand_for("Manual Editors")):
-            tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
-            with tab_lm:
-                try:
-                    df_lm_e = _pd.read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
-                except Exception:
-                    df_lm_e = _pd.DataFrame(columns=['item_text','is_must','status'])
-                df_lm_e = df_lm_e.fillna('')
-                ed_lm = st.data_editor(df_lm_e, num_rows='dynamic', use_container_width=True, key=f'ed_lm_{rid}')
-                if st.button('Save L/M', key=f'save_lm_{rid}'):
-                    with _closing_ed(conn.cursor()) as cur:
-                        cur.execute('DELETE FROM lm_items WHERE rfp_id=?;', (int(rid),))
-                        for _, r in ed_lm.fillna('').iterrows():
-                            txt = str(r.get('item_text','')).strip()
-                            if not txt: continue
-                            cur.execute('INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);', (int(rid), txt, int(r.get('is_must') or 0), str(r.get('status') or 'Open')))
-                        conn.commit()
-                    st.success('L/M saved.')
-            with tab_clin:
-                try:
-                    df_c_e = _pd.read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
-                except Exception:
-                    df_c_e = _pd.DataFrame(columns=['clin','description','qty','unit','unit_price','extended_price'])
-                df_c_e = df_c_e.fillna('')
-                ed_c = st.data_editor(df_c_e, num_rows='dynamic', use_container_width=True, key=f'ed_clin_{rid}')
-                if st.button('Save CLINs', key=f'save_clin_{rid}'):
-                    with _closing_ed(conn.cursor()) as cur:
-                        cur.execute('DELETE FROM clin_lines WHERE rfp_id=?;', (int(rid),))
-                        for _, r in ed_c.fillna('').iterrows():
-                            if not any(str(r.get(col,'')).strip() for col in ['clin','description','qty','unit','unit_price','extended_price']):
-                                continue
-                            cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);', (int(rid), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
-                        conn.commit()
-                    st.success('CLINs saved.')
-            with tab_dates:
-                try:
-                    df_d_e = _pd.read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
-                except Exception:
-                    df_d_e = _pd.DataFrame(columns=['label','date_text','date_iso'])
-                df_d_e = df_d_e.fillna('')
-                ed_d = st.data_editor(df_d_e, num_rows='dynamic', use_container_width=True, key=f'ed_dates_{rid}')
-                if st.button('Save Dates', key=f'save_dates_{rid}'):
-                    with _closing_ed(conn.cursor()) as cur:
-                        cur.execute('DELETE FROM key_dates WHERE rfp_id=?;', (int(rid),))
-                        for _, r in ed_d.fillna('').iterrows():
-                            if not any(str(r.get(col,'')).strip() for col in ['label','date_text','date_iso']):
-                                continue
-                            cur.execute('INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);', (int(rid), str(r.get('label','')), str(r.get('date_text','')), str(r.get('date_iso',''))))
-                        conn.commit()
-                    st.success('Dates saved.')
-            with tab_pocs:
-                try:
-                    df_p_e = _pd.read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
-                except Exception:
-                    df_p_e = _pd.DataFrame(columns=['name','role','email','phone'])
-                df_p_e = df_p_e.fillna('')
-                ed_p = st.data_editor(df_p_e, num_rows='dynamic', use_container_width=True, key=f'ed_pocs_{rid}')
-                if st.button('Save POCs', key=f'save_pocs_{rid}'):
-                    with _closing_ed(conn.cursor()) as cur:
-                        cur.execute('DELETE FROM pocs WHERE rfp_id=?;', (int(rid),))
-                        for _, r in ed_p.fillna('').iterrows():
-                            if not any(str(r.get(col,'')).strip() for col in ['name','role','email','phone']):
-                                continue
-                            cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);', (int(rid), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
-                        conn.commit()
-                    st.success('POCs saved.')
-            with tab_meta:
-                try:
-                    df_m_e = _pd.read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
-                except Exception:
-                    df_m_e = _pd.DataFrame(columns=['key','value'])
-                df_m_e = df_m_e.fillna('')
-                ed_m = st.data_editor(df_m_e, num_rows='dynamic', use_container_width=True, key=f'ed_meta_{rid}')
-                if st.button('Save Meta', key=f'save_meta_{rid}'):
-                    with _closing_ed(conn.cursor()) as cur:
-                        cur.execute('DELETE FROM rfp_meta WHERE rfp_id=?;', (int(rid),))
-                        for _, r in ed_m.fillna('').iterrows():
-                            k = str(r.get('key','')).strip(); v = str(r.get('value','')).strip()
-                            if not k and not v: continue
-                            cur.execute('INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);', (int(rid), k, v))
-                        conn.commit()
-                    st.success('Meta saved.')
+        with st.expander("Manual Editors", expanded=_expand_for("Manual Editors")):
+            if not _visible_for("Manual Editors"):
+                st.empty()
+            else:
+                tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
+                with tab_lm:
+                    try:
+                        df_lm_e = _pd.read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
+                    except Exception:
+                        df_lm_e = _pd.DataFrame(columns=['item_text','is_must','status'])
+                    df_lm_e = df_lm_e.fillna('')
+                    ed_lm = st.data_editor(df_lm_e, num_rows='dynamic', use_container_width=True, key=f'ed_lm_{rid}')
+                    if st.button('Save L/M', key=f'save_lm_{rid}'):
+                        with _closing_ed(conn.cursor()) as cur:
+                            cur.execute('DELETE FROM lm_items WHERE rfp_id=?;', (int(rid),))
+                            for _, r in ed_lm.fillna('').iterrows():
+                                txt = str(r.get('item_text','')).strip()
+                                if not txt: continue
+                                cur.execute('INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);', (int(rid), txt, int(r.get('is_must') or 0), str(r.get('status') or 'Open')))
+                            conn.commit()
+                        st.success('L/M saved.')
+                with tab_clin:
+                    try:
+                        df_c_e = _pd.read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
+                    except Exception:
+                        df_c_e = _pd.DataFrame(columns=['clin','description','qty','unit','unit_price','extended_price'])
+                    df_c_e = df_c_e.fillna('')
+                    ed_c = st.data_editor(df_c_e, num_rows='dynamic', use_container_width=True, key=f'ed_clin_{rid}')
+                    if st.button('Save CLINs', key=f'save_clin_{rid}'):
+                        with _closing_ed(conn.cursor()) as cur:
+                            cur.execute('DELETE FROM clin_lines WHERE rfp_id=?;', (int(rid),))
+                            for _, r in ed_c.fillna('').iterrows():
+                                if not any(str(r.get(col,'')).strip() for col in ['clin','description','qty','unit','unit_price','extended_price']):
+                                    continue
+                                cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);', (int(rid), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
+                            conn.commit()
+                        st.success('CLINs saved.')
+                with tab_dates:
+                    try:
+                        df_d_e = _pd.read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
+                    except Exception:
+                        df_d_e = _pd.DataFrame(columns=['label','date_text','date_iso'])
+                    df_d_e = df_d_e.fillna('')
+                    ed_d = st.data_editor(df_d_e, num_rows='dynamic', use_container_width=True, key=f'ed_dates_{rid}')
+                    if st.button('Save Dates', key=f'save_dates_{rid}'):
+                        with _closing_ed(conn.cursor()) as cur:
+                            cur.execute('DELETE FROM key_dates WHERE rfp_id=?;', (int(rid),))
+                            for _, r in ed_d.fillna('').iterrows():
+                                if not any(str(r.get(col,'')).strip() for col in ['label','date_text','date_iso']):
+                                    continue
+                                cur.execute('INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);', (int(rid), str(r.get('label','')), str(r.get('date_text','')), str(r.get('date_iso',''))))
+                            conn.commit()
+                        st.success('Dates saved.')
+                with tab_pocs:
+                    try:
+                        df_p_e = _pd.read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
+                    except Exception:
+                        df_p_e = _pd.DataFrame(columns=['name','role','email','phone'])
+                    df_p_e = df_p_e.fillna('')
+                    ed_p = st.data_editor(df_p_e, num_rows='dynamic', use_container_width=True, key=f'ed_pocs_{rid}')
+                    if st.button('Save POCs', key=f'save_pocs_{rid}'):
+                        with _closing_ed(conn.cursor()) as cur:
+                            cur.execute('DELETE FROM pocs WHERE rfp_id=?;', (int(rid),))
+                            for _, r in ed_p.fillna('').iterrows():
+                                if not any(str(r.get(col,'')).strip() for col in ['name','role','email','phone']):
+                                    continue
+                                cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);', (int(rid), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
+                            conn.commit()
+                        st.success('POCs saved.')
+                with tab_meta:
+                    try:
+                        df_m_e = _pd.read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
+                    except Exception:
+                        df_m_e = _pd.DataFrame(columns=['key','value'])
+                    df_m_e = df_m_e.fillna('')
+                    ed_m = st.data_editor(df_m_e, num_rows='dynamic', use_container_width=True, key=f'ed_meta_{rid}')
+                    if st.button('Save Meta', key=f'save_meta_{rid}'):
+                        with _closing_ed(conn.cursor()) as cur:
+                            cur.execute('DELETE FROM rfp_meta WHERE rfp_id=?;', (int(rid),))
+                            for _, r in ed_m.fillna('').iterrows():
+                                k = str(r.get('key','')).strip(); v = str(r.get('value','')).strip()
+                                if not k and not v: continue
+                                cur.execute('INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);', (int(rid), k, v))
+                            conn.commit()
+                        st.success('Meta saved.')
         # === End Phase S ===
         col1, col2, col3 = st.columns(3)
         with col1:
