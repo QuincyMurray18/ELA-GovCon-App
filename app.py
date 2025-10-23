@@ -1,13 +1,5 @@
 import requests
 import time
-
-# --- S1D helper: Google API key resolver ---
-def _s1d_google_key():
-    try:
-        s = st.secrets
-        return s.get("google", {}).get("api_key") or s.get("GOOGLE_API_KEY")
-    except Exception:
-        return os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_PLACES_API_KEY")
 # Helper imports for RTM/Amendment
 import re as _rtm_re
 import json as _rtm_json
@@ -2125,7 +2117,7 @@ def find_clins_all(conn: sqlite3.Connection, rfp_id: int) -> int:
         existing = set()
     added = 0
     with closing(conn.cursor()) as cur:
-        for r in _rows:
+        for r in rows:
             key = (r.get("clin",""), r.get("description",""))
             if key in existing:
                 continue
@@ -3125,7 +3117,7 @@ def extract_clins(text: str) -> list:
             })
     seen = set()
     uniq = []
-    for r in _rows:
+    for r in rows:
         if r['clin'] not in seen:
             uniq.append(r)
             seen.add(r['clin'])
@@ -3551,7 +3543,7 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
                 if any([clin, desc, qty, upr, ext]):
                     rows.append({'clin': clin, 'description': desc[:300] if desc else "", 'qty': qty, 'unit': unit, 'unit_price': upr, 'extended_price': ext})
     seen = set(); uniq = []
-    for r in _rows:
+    for r in rows:
         key = (r['clin'], r['description'], r['qty'], r['unit_price'], r['extended_price'])
         if key in seen: continue
         seen.add(key); uniq.append(r)
@@ -7982,99 +7974,21 @@ def s1_render_places_panel(conn, default_addr=None):
         if errors:
             st.error("Some saves failed: " + "; ".join(errors))
 
-        
-# source flag from session to avoid NameError in any context
+        if hide_saved:
+            rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
+            ss["s1_results"] = rows
+            df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
+            st.dataframe(df2, use_container_width=True, hide_index=True)
 
-
-        
-_hide_saved = bool(st.session_state.get("s1_hide_saved", True))
-
-
-        
-if _hide_saved:
-
-
-        
-    # guard rows and use dict.get to avoid NameError/KeyError
-    _rows = locals().get('rows', st.session_state.get('s1_results') or [])
-_rows = (_rows or [])
-_s1_legacy_enrich_and_render(conn)
-if ss.get("s1_page_token"):
-    st.caption("Another page is available. Click Next page to load more.")
-st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
+    if ss.get("s1_page_token"):
+        st.caption("Another page is available. Click Next page to load more.")
+    st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
     try:
         s1_render_places_panel(conn)
     except Exception:
         pass
-
-
-
-# ---- Legacy S1 enrich and render, safe and self contained ----
-def _s1_legacy_enrich_and_render(conn):
-    import streamlit as st
-    import pandas as pd
-    import time as _time
-
-    ss = st.session_state
-
-    # get prior results if any
-    _rows = locals().get("rows", ss.get("s1_results") or [])
-    _rows = _rows or []
-
-    # hide already saved if user requested
-    _hide_saved = bool(ss.get("s1_hide_saved", True))
-    if _hide_saved:
-        saved_ids = ss.get("s1_saved_ids", set())
-        _rows = [r for r in _rows if isinstance(r, dict) and r.get("place_id") not in saved_ids]
-    ss["s1_results"] = _rows
-
-    # enrich with details
-    try:
-        key = _s1d_get_api_key()
-    except Exception:
-        key = None
-
-    enriched, phones_found, sites_found = [], 0, 0
-    for r in _rows:
-        pid = r.get("place_id")
-        det = _s1d_place_details(pid, key) if pid and key else {}
-        ph = det.get("formatted_phone_number") or det.get("international_phone_number") or r.get("phone") or ""
-        site = det.get("website") or r.get("website") or ""
-        gurl = det.get("url") or r.get("google_url") or (f"https://www.google.com/maps/place/?q=place_id:{pid}" if pid else "")
-        enriched.append({**r, "phone": s1_normalize_phone(ph), "website": site, "google_url": gurl, "_status": det.get("_status","")})
-        phones_found += 1 if ph else 0
-        sites_found += 1 if site else 0
-        _time.sleep(0.11)
-
-    df2 = pd.DataFrame(enriched) if enriched else pd.DataFrame([], columns=["name","phone","website","address","place_id"])
-    if df2.empty:
-        st.info("No results.")
-        return
-
-    # linkify table
-    def _mk_name(rr):
-        t = rr.get("name","")
-        u = rr.get("google_url","") or ""
-        return t if not u else f"<a href='{u}' target='_blank'>{t}</a>"
-
-    show = df2.copy()
-    show["name"] = show.apply(_mk_name, axis=1)
-    show["phone"] = show.apply(lambda rr: _s1d_linkify_phone(rr.get("phone","")), axis=1)
-    show["website"] = show.apply(lambda rr: _s1d_linkify_site(rr.get("website","") or rr.get("google_url","")), axis=1)
-    cols = [c for c in ["name","phone","website","address","rating","_status"] if c in show.columns]
-    st.markdown(show[cols].to_html(escape=False, index=False), unsafe_allow_html=True)
-    st.caption(f"S1 legacy diagnostics: phones {phones_found}/{len(df2)}, websites {sites_found}/{len(df2)}")
-
-# --- S1D wrapper ensure ---
-def _ensure_s1d_wired():
-    wrap = globals().get("_wrap_run_subfinder")
-    if callable(wrap):
-        wrap()
-        fn = globals().get("run_subcontractor_finder")
-        if callable(fn):
-            setattr(fn, "_s1d_wrapped", True)
 
 
 def router(page: str, conn: sqlite3.Connection) -> None:
@@ -8095,27 +8009,32 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     elif page == "White Paper Builder":
         run_white_paper_builder(conn)
     elif page == "Subcontractor Finder":
-        
-        # Ensure S1D wrapper is attached
-        (_ensure_s1d_wired() if callable(globals().get("_ensure_s1d_wired")) else None)
-        if not getattr(globals().get("run_subcontractor_finder"), "_s1d_wrapped", False):
-            globals().get("_wrap_run_subfinder", lambda: None)()
-            fn = globals().get("run_subcontractor_finder")
-            if callable(fn): setattr(fn, "_s1d_wrapped", True)
-        st.caption(f"S1D wrapped = {getattr(globals().get('run_subcontractor_finder'), '_s1d_wrapped', False)}")
-        globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
-        # S1D diagnostics and forced UI render
-        try:
-            key_ok = False
-            try:
-                key_ok = bool(_s1d_google_key())
-            except Exception:
-                key_ok = False
-            st.caption("S1D key present = " + str(key_ok))
-            globals().get("render_subfinder_s1d", lambda _c: None)(conn)
-        except Exception as e:
-            st.exception(e)
+        t0, t1 = st.tabs(["S0 Vendors", "S1 Google Places"])
+        with t0:
         run_subcontractor_finder(conn)
+        # S1 Google Places panel
+        globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
+        with t1:
+        # S1 Google Places tab
+        (_ensure_s1d_wired() if callable(globals().get("_ensure_s1d_wired")) else None)
+        wrapped = getattr(globals().get("run_subcontractor_finder"), "_s1d_wrapped", False)
+        st.caption(f"S1D wrapped = {wrapped}")
+        globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
+        # Render S1D directly if available
+        if callable(globals().get("render_subfinder_s1d")):
+            try:
+                key_ok = False
+                try:
+                    key_ok = bool(_s1d_google_key())
+                except Exception:
+                    key_ok = False
+                st.caption("S1D key present = " + str(key_ok))
+                globals().get("render_subfinder_s1d")(conn)
+            except Exception as e:
+                st.exception(e)
+        else:
+            st.info("S1D UI not available in this build.")
+
     elif page == "Outreach":
         run_outreach(conn)
     elif page == "RFQ Pack":
@@ -8921,7 +8840,7 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
     to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
     # [removed duplicate Save selected block]
     if st.session_state.get("s1_page_token"):
-    st.caption(\"Another page is available. Click Next page to load more.\")
+        st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 
 
@@ -9816,36 +9735,6 @@ def _s1d_norm_phone(p: str) -> str:
         digits = digits[1:]
     return digits
 
-def _s1d_format_phone_display(digits: str) -> str:
-    d = "".join(ch for ch in str(digits) if ch.isdigit())
-    if len(d) == 10:
-        return f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
-    if len(d) == 11 and d.startswith("1"):
-        d = d[1:]
-        return f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
-    return digits or ""
-
-def _s1d_linkify_phone(digits: str) -> str:
-    d = "".join(ch for ch in str(digits) if ch.isdigit())
-    if not d:
-        return ""
-    label = _s1d_format_phone_display(d)
-    return f"<a href='tel:{d}'>{label}</a>"
-
-def _s1d_linkify_site(url: str, fallback: str = "site") -> str:
-    if not url:
-        return ""
-    u = str(url).strip()
-    if not u.startswith(("http://", "https://")):
-        u = "https://" + u
-    # Make label a clean domain
-    try:
-        from urllib.parse import urlparse
-        host = urlparse(u).netloc or fallback
-    except Exception:
-        host = fallback
-    return f"<a href='{u}' target='_blank' rel='noopener noreferrer'>{host}</a>"
-
 def _s1d_existing_vendor_keys(conn):
     # Build keys to detect duplicates: by place_id if present, else name+phone
     try:
@@ -9857,7 +9746,7 @@ def _s1d_existing_vendor_keys(conn):
             return set(), set()
     by_np = set()
     by_pid = set()
-    for r in _rows:
+    for r in rows:
         name = (r[0] or "").strip().lower()
         ph = _s1d_norm_phone(r[1] or "")
         pid = (r[2] or "").strip()
@@ -9891,31 +9780,14 @@ def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_
     js = r.json()
     return js
 
-
-@st.cache_data(show_spinner=False, ttl=3600)
 def _s1d_place_details(pid: str, key: str):
-
     try:
-        resp = _requests.get(
-            "https://maps.googleapis.com/maps/api/place/details/json",
-            params={
-                "place_id": pid,
-                "fields": "formatted_phone_number,international_phone_number,website,url",
-                "key": key,
-            },
-            timeout=10,
-        )
-        js = resp.json()
-        status = js.get("status")
-        if status != "OK":
-            return {"_status": status or "ERR"}
-        res = js.get("result", {}) or {}
-        phone = res.get("formatted_phone_number") or res.get("international_phone_number") or ""
-        website = res.get("website") or ""
-        url = res.get("url") or f"https://www.google.com/maps/place/?q=place_id:{pid}"
-        return {"formatted_phone_number": phone, "website": website, "url": url, "_status": "OK"}
+        r = _requests.get("https://maps.googleapis.com/maps/api/place/details/json",
+                          params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
+                          timeout=10)
+        return r.json().get("result", {}) or {}
     except Exception:
-        return {"_status": "EXC"}
+        return {}
 
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
     # Ensure columns
@@ -9933,7 +9805,7 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
     # Insert
     saved = 0
     with conn:
-        for r in _rows:
+        for r in rows:
             conn.execute("""INSERT INTO vendors_t(name, email, phone, website, city, state, naics, place_id)
                             VALUES(?,?,?,?,?,?,?,?)""",
                          (r.get("name",""), "", r.get("phone",""), r.get("website",""), r.get("city",""), r.get("state",""), "", r.get("place_id","")))
@@ -9998,19 +9870,17 @@ def render_subfinder_s1d(conn):
                 city = parts[-2]
                 state = parts[-1].split()[0]
         details = _s1d_place_details(pid, key) if pid else {}
-        status = details.get("_status","")
         phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
         website = details.get("website") or ""
         dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
         rows.append({
             "name": name, "address": addr, "city": city, "state": state,
             "phone": phone, "website": website, "place_id": pid,
-            "google_url": details.get("url") or f"https://www.google.com/maps/place/?q=place_id:{pid}",
-            "_status": status or "",
+            "google_url": details.get("url") or "",
             "_dup": dup
         })
         # be nice to Places
-        _time.sleep(0.12)
+        _time.sleep(0.05)
     import pandas as _pd
     df = _pd.DataFrame(rows)
     if df.empty:
@@ -10022,21 +9892,10 @@ def render_subfinder_s1d(conn):
         return f"<a href='{url}' target='_blank'>{text}</a>"
     show = df.copy()
     show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
-    show["phone"] = show.apply(lambda r: _s1d_linkify_phone(r["phone"]), axis=1)
-    show["website"] = show.apply(lambda r: _s1d_linkify_site(r["website"] or r.get("google_url","")), axis=1)
+    show["website"] = show.apply(lambda r: _mk_link(r["website"], "site") if r["website"] else "", axis=1)
     show = show[["name","phone","website","address","city","state","place_id","_dup"]]
     st.markdown("**Results**")
-    # Diagnostics summary
-    try:
-        _pd = __import__("pandas")
-        phone_ok = int((df["phone"].astype(str) != "").sum())
-        site_ok = int((df["website"].astype(str) != "").sum())
-        st.caption(f"S1D diagnostics: phones {phone_ok}/{len(df)}, websites {site_ok}/{len(df)}")
-        if "_status" in df.columns:
-            st.caption("Details status: " + ", ".join(f"{k}:{v}" for k,v in df["_status"].value_counts().to_dict().items()))
-    except Exception:
-        pass
-    st.markdown(show.to_html(escape=False, index=False), unsafe_allow_html=True)
+    st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
     # Select and save non-duplicates
     keep = df[~df["_dup"]]
     if keep.empty:
