@@ -9006,44 +9006,103 @@ def seed_default_templates(conn):
 
 def run_outreach(conn):
     import streamlit as st
+    import pandas as _pd
 
-    # O4 badge if present
-    try:
-        _o4_render_badge()
-    except Exception:
-        pass
-
+    # Header
     st.header("Outreach")
-    with st.expander("Compliance (O6)", expanded=False):
-        render_outreach_o6_compliance(conn)
 
-    # O6: handle unsubscribe links
-    o6_handle_query_unsubscribe(conn)
-    with st.expander("Follow-ups & SLA (O5)", expanded=False):
-        render_outreach_o5_followups(conn)
-
-    # Sender accounts (O4)
+    # O6: query unsubscribe handler always on
     try:
-        with st.expander("Sender accounts", expanded=True):
-            o4_sender_accounts_ui(conn)
-    except Exception as e:
-        st.warning(f"O4 sender UI unavailable: {e}")
-
-    # Templates (O2)
-    try:
-        _tpl_picker_prefill(conn)
-        with st.expander("Templates", expanded=False):
-            render_outreach_templates(conn)
+        o6_handle_query_unsubscribe(conn)
     except Exception:
         pass
 
-    # Mail merge + send (O3)
-    try:
-        with st.expander("Mail Merge & Send", expanded=True):
-            render_outreach_mailmerge(conn)
-    except Exception as e:
-        st.error(f"Mail merge panel error: {e}")
+    # Top: sender + template pick + quick preview
+    top1, top2 = st.columns([1,1])
+    with top1:
+        try:
+            _o4_render_badge()
+        except Exception:
+            pass
+        st.subheader("Sender")
+        try:
+            sender = _o3_render_sender_picker()
+        except Exception:
+            # Fallback minimal sender fields
+            st.caption("Minimal sender (fallback)")
+            sender = {"email": st.text_input("From email", key="o3_from_email"),
+                      "app_password": st.text_input("App password", type="password", key="o3_from_pwd")}
+    with top2:
+        st.subheader("Templates")
+        try:
+            _tpl_picker_prefill(conn)
+        except Exception:
+            pass
+        try:
+            render_outreach_templates(conn)
+        except Exception:
+            st.info("Template editor unavailable in this build.")
 
+    # Middle: recipients + compose + live preview
+    st.subheader("Recipients")
+    try:
+        rows = _o3_collect_recipients_ui(conn)
+    except Exception:
+        rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
+
+    st.subheader("Compose")
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=260, key="o3_body")
+
+    # Live preview first 5
+    if rows is not None and hasattr(rows, "empty") and not rows.empty and (subj or body):
+        prev_rows = []
+        for _, r in rows.head(5).iterrows():
+            data = {k: str(r.get(k,"") or "") for k in r.index}
+            try:
+                subject_m = _o3_merge(subj, data)
+            except Exception:
+                subject_m = subj
+            try:
+                body_m = _o3_merge(body, data)
+            except Exception:
+                body_m = body
+            prev_rows.append({"to": r.get("email",""), "subject": subject_m, "preview": (body_m or "")[:160]})
+        st.caption("Preview — first 5")
+        st.dataframe(_pd.DataFrame(prev_rows), use_container_width=True, hide_index=True)
+
+    # Bottom: actions + SLA widget + compliance
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test_unified")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send_unified")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max_unified")
+
+    # Send
+    if (test or do):
+        if not sender or not sender.get("email"):
+            st.error("Missing sender credentials")
+        elif rows is None or (hasattr(rows, "empty") and rows.empty):
+            st.error("No recipients")
+        else:
+            try:
+                _o3_send_batch(conn, sender, rows, subj, body, test_only=bool(test), max_send=int(maxn))
+            except Exception as e:
+                st.error(f"Send failed: {e}")
+
+    # SLA follow-ups inline
+    try:
+        render_outreach_o5_followups(conn)
+    except Exception:
+        pass
+
+    # Compliance inline
+    try:
+        render_outreach_o6_compliance(conn)
+    except Exception:
+        pass
 
 def _o3_ensure_schema(conn):
     with _o3c(conn.cursor()) as cur:
@@ -9999,222 +10058,3 @@ def _wrap_run_subfinder():
     g["run_subcontractor_finder"] = wrapped
 
 _wrap_run_subfinder()
-
-
-
-# --- Phase 1: Subfinder single-surface (feature flag) ---
-try:
-    _RUN_SUBFINDER_LEGACY = run_subcontractor_finder  # keep alias to legacy expander-based UI
-except Exception:
-    _RUN_SUBFINDER_LEGACY = None
-
-SUBFINDER_SINGLE_SURFACE: bool = True  # set False to rollback
-
-def _normalize_state_abbrev(s: str) -> str:
-    try:
-        return (s or "").strip().upper()[:2]
-    except Exception:
-        return ""
-
-def _sf_fetch_vendors(conn, naics="", state="", city_contains="", kw="") -> "pd.DataFrame":
-    q = """
-        SELECT id, name, email, phone, city, state, naics, website, notes
-        FROM vendors
-        WHERE 1=1
-    """
-    args = []
-    if naics:
-        q += " AND (naics LIKE ?)"
-        args.append(f"%{naics.strip()}%")
-    if state:
-        q += " AND (UPPER(state) = ?)"
-        args.append(_normalize_state_abbrev(state))
-    if city_contains:
-        q += " AND (LOWER(city) LIKE ?)"
-        args.append(f"%{city_contains.strip().lower()}%")
-    if kw:
-        q += " AND (LOWER(name) LIKE ? OR LOWER(notes) LIKE ?)"
-        args.extend([f"%{kw.strip().lower()}%", f"%{kw.strip().lower()}%"])
-    q += " ORDER BY name COLLATE NOCASE ASC"
-    try:
-        return pd.read_sql_query(q, conn, params=args)
-    except Exception:
-        # vendors table may not exist yet
-        return pd.DataFrame(columns=["id","name","email","phone","city","state","naics","website","notes"])
-
-def run_subcontractor_finder(conn: sqlite3.Connection) -> None:  # override legacy
-    if not SUBFINDER_SINGLE_SURFACE and _RUN_SUBFINDER_LEGACY:
-        return _RUN_SUBFINDER_LEGACY(conn)
-
-    st.header("Subcontractor Finder")
-    st.caption("Single-surface view. Filter, review, save, and queue vendors for Outreach in one step.")
-
-    # ---- Filter strip
-    ctx = st.session_state.get("rfp_selected_notice", {})
-    default_naics = ctx.get("NAICS") or ""
-    c1, c2, c3, c4 = st.columns([2,2,2,2])
-    with c1:
-        f_naics = st.text_input("NAICS", value=st.session_state.get("filter_naics", default_naics), key="filter_naics")
-    with c2:
-        f_state = st.text_input("State", value=st.session_state.get("filter_state", ""), key="filter_state")
-    with c3:
-        f_city = st.text_input("City contains", value=st.session_state.get("filter_city",""), key="filter_city")
-    with c4:
-        f_kw = st.text_input("Keyword", value=st.session_state.get("filter_kw",""), key="filter_kw")
-
-    df_v = _sf_fetch_vendors(conn, f_naics, f_state, f_city, f_kw)
-
-    # Maintain selection set
-    sel_key = "subfinder_selected_ids"
-    if sel_key not in st.session_state or not isinstance(st.session_state[sel_key], set):
-        st.session_state[sel_key] = set()
-
-    # Layout: results + detail/tools
-    left, right = st.columns([3,2], gap="large")
-
-    with left:
-        st.subheader("Results")
-        st.caption(f"{len(df_v)} vendors matching filters")
-
-        focus_id = st.session_state.get("subfinder_focus_id")
-        if not df_v.empty:
-            # radio for focus
-            options = df_v["id"].astype(int).tolist()
-            labels = [f"{r['name']} — {r.get('city','')}, {r.get('state','')}".strip(" ,") for _, r in df_v.iterrows()]
-            focus_id = st.radio(
-                "Select a vendor to view details",
-                options=options,
-                index=options.index(focus_id) if focus_id in options else 0,
-                format_func=lambda vid: labels[options.index(vid)],
-                key="subfinder_focus_id",
-                horizontal=False
-            )
-
-            st.divider()
-            # selection checkboxes
-            new_selected = set()
-            for _, r in df_v.iterrows():
-                vid = int(r["id"])
-                label = f"{r['name']}  ({r['email'] or 'no email'})"
-                checked = st.checkbox(label, key=f"vend_sel_{vid}", value=(vid in st.session_state[sel_key]))
-                if checked:
-                    new_selected.add(vid)
-            st.session_state[sel_key] = new_selected
-        else:
-            focus_id = None
-            st.info("No vendors match current filters. Import CSV or add a vendor on the right.")
-
-        # Bottom action bar
-        cA, cB = st.columns([2,2])
-        with cA:
-            if st.button("Queue selected for Outreach ▶", use_container_width=True) and st.session_state[sel_key]:
-                ids = sorted(int(x) for x in st.session_state[sel_key])
-                st.session_state['rfq_vendor_ids'] = ids
-                st.success(f"Queued {len(ids)} vendors for Outreach")
-        with cB:
-            st.caption("Selections persist during this session and are available in Outreach.")
-
-    with right:
-        st.subheader("Details / Tools")
-        # Focused vendor details
-        if focus_id:
-            try:
-                row = conn.execute(
-                    "SELECT id, name, email, phone, city, state, naics, website, notes FROM vendors WHERE id=?;", (int(focus_id),)
-                ).fetchone()
-            except Exception:
-                row = None
-            if row:
-                st.markdown(f"**{row['name']}**")
-                st.text(row['phone'] or "")
-                st.text(row['email'] or "")
-                st.text(f"{row['city'] or ''}, {row['state'] or ''}".strip(" ,"))
-                if row['website']:
-                    st.markdown(f"[Website]({row['website']})")
-                notes = st.text_area("Notes", value=row['notes'] or "", height=120, key="sf_notes_edit")
-                if st.button("Save notes", key="sf_save_notes"):
-                    try:
-                        conn.execute("UPDATE vendors SET notes=? WHERE id=?;", (notes, int(focus_id)))
-                        conn.commit()
-                        st.success("Notes saved")
-                    except Exception as e:
-                        st.error(f"Save failed: {e}")
-
-        st.divider()
-        # Import CSV
-        st.caption("Import vendors from CSV. Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
-        up = st.file_uploader("Upload CSV", type=["csv"], key="vendor_csv_phase1")
-        if up and st.button("Import CSV", key="btn_import_csv_phase1"):
-            try:
-                df = pd.read_csv(up)
-                if "name" not in {c.lower() for c in df.columns}:
-                    st.error("CSV must include a 'name' column")
-                else:
-                    df.columns = [c.lower() for c in df.columns]
-                    n = 0
-                    from contextlib import closing
-                    with closing(conn.cursor()) as cur:
-                        for _, r in df.iterrows():
-                            cur.execute(
-                                """
-                                INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                                VALUES(?,?,?,?,?,?,?,?,?,?);
-                                """,
-                                (
-                                    str(r.get("name",""))[:200],
-                                    str(r.get("cage",""))[:20],
-                                    str(r.get("uei",""))[:40],
-                                    str(r.get("naics",""))[:20],
-                                    str(r.get("city",""))[:100],
-                                    str(r.get("state",""))[:10],
-                                    str(r.get("phone",""))[:40],
-                                    str(r.get("email",""))[:120],
-                                    str(r.get("website",""))[:200],
-                                    str(r.get("notes",""))[:500],
-                                ),
-                            )
-                            n += 1
-                    conn.commit()
-                    st.success(f"Imported {n} vendors")
-            except Exception as e:
-                st.error(f"Import failed: {e}")
-
-        st.divider()
-        # Quick add vendor
-        st.caption("Quick add vendor")
-        c1, c2, c3 = st.columns([2,2,2])
-        with c1:
-            v_name = st.text_input("Company name", key="add_name_phase1")
-            v_email = st.text_input("Email", key="add_email_phase1")
-            v_phone = st.text_input("Phone", key="add_phone_phase1")
-        with c2:
-            v_city = st.text_input("City", key="add_city_phase1")
-            v_state = st.text_input("State", key="add_state_phase1")
-            v_naics = st.text_input("NAICS", key="add_naics_phase1")
-        with c3:
-            v_cage = st.text_input("CAGE", key="add_cage_phase1")
-            v_uei = st.text_input("UEI", key="add_uei_phase1")
-            v_site = st.text_input("Website", key="add_site_phase1")
-        v_notes = st.text_area("Notes", height=80, key="add_notes_phase1")
-        if st.button("Save Vendor", key="btn_save_vendor_phase1"):
-            if not (v_name or "").strip():
-                st.error("Name is required")
-            else:
-                try:
-                    from contextlib import closing
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                            VALUES(?,?,?,?,?,?,?,?,?,?);
-                            """,
-                            (
-                                v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(),
-                                v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(),
-                                v_site.strip(), v_notes.strip(),
-                            ),
-                        )
-                    conn.commit()
-                    st.success("Vendor saved")
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
