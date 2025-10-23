@@ -8100,6 +8100,51 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
+def render_outreach_mailmerge(conn):
+    import streamlit as st, pandas as _pd
+    _o3_ensure_schema(conn)
+    st.subheader("Mail Merge & Send")
+    try:
+        _tpl_picker_prefill(conn)
+    except Exception:
+        pass
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
+    rows = _o3_collect_recipients_ui(conn)
+    if rows is not None and not rows.empty and (subj or body):
+        with st.expander("Preview (first 5)", expanded=True):
+            prev = []
+            for _, r in rows.head(5).iterrows():
+                data = {k:str(r.get(k,"") or "") for k in r.index}
+                prev.append({"to": r["email"], "subject": _o3_merge(subj, data), "snippet": _o3_merge(body, data)[:140]})
+            st.dataframe(_pd.DataFrame(prev), use_container_width=True, hide_index=True)
+    st.subheader("Sender")
+    sender = _o3_render_sender_picker()
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if test and rows is not None and not rows.empty:
+        _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
+    if do:
+        if not sender.get("email") or not sender.get("app_password"):
+            st.error("Missing sender credentials")
+        elif rows is None or rows.empty:
+            st.error("No recipients")
+        else:
+            _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
+# === end O3 ===================================================================
+
+
+
+
+
+
+    main()
+
 
 # -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
@@ -8990,47 +9035,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         pass
     st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
     return sent, logs
-
-def render_outreach_mailmerge(conn):
-    import streamlit as st, pandas as _pd
-    _o3_ensure_schema(conn)
-    st.subheader("Mail Merge & Send")
-    try:
-        _tpl_picker_prefill(conn)
-    except Exception:
-        pass
-    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
-    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
-    rows = _o3_collect_recipients_ui(conn)
-    if rows is not None and not rows.empty and (subj or body):
-        with st.expander("Preview (first 5)", expanded=True):
-            prev = []
-            for _, r in rows.head(5).iterrows():
-                data = {k:str(r.get(k,"") or "") for k in r.index}
-                prev.append({"to": r["email"], "subject": _o3_merge(subj, data), "snippet": _o3_merge(body, data)[:140]})
-            st.dataframe(_pd.DataFrame(prev), use_container_width=True, hide_index=True)
-    st.subheader("Sender")
-    sender = _o3_render_sender_picker()
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1:
-        test = st.button("Test run (no send)", key="o3_test")
-    with c2:
-        do = st.button("Send batch", type="primary", key="o3_send")
-    with c3:
-        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
-    if test and rows is not None and not rows.empty:
-        _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
-    if do:
-        if not sender.get("email") or not sender.get("app_password"):
-            st.error("Missing sender credentials")
-        elif rows is None or rows.empty:
-            st.error("No recipients")
-        else:
-            _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
-# === end O3 ===================================================================
-
-
-
 
 def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
