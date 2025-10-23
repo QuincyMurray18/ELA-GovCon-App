@@ -2324,7 +2324,7 @@ def get_db() -> sqlite3.Connection:
                 content TEXT
             );
         """)
-        
+
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfp_files(
@@ -2696,7 +2696,7 @@ def get_db() -> sqlite3.Connection:
         except Exception:
             pass
 
-        
+
         # RTM (Requirements Traceability Matrix)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rtm_requirements(
@@ -2917,7 +2917,7 @@ def extract_text_from_file(path: str) -> str:
                 return ''
     return "\n\n".join(pages)
 
-        
+
 
 def _detect_mime_light(name: str) -> str:
     n = (name or "").lower()
@@ -3356,7 +3356,7 @@ def y55_ai_parse(text: str) -> dict:
     out = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
     t = (text or "").strip()
     if not t:
-        
+
         # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
@@ -3417,13 +3417,13 @@ def y55_ai_parse(text: str) -> dict:
         if not isinstance(out.get("meta"), dict): out["meta"] = {}
         out["title"] = (out.get("title") or "").strip()[:200]
         out["solnum"] = (out.get("solnum") or "").strip()[:80]
-        
+
         # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
 
     except Exception:
-        
+
         # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
@@ -3459,7 +3459,7 @@ def y55_merge_clins(base_rows, ai_rows):
     out = []; seen = set()
     for r in base + ai:
         key = (r["clin"], r["description"], r["qty"], r["unit_price"], r["extended_price"])
-        if key in seen: 
+        if key in seen:
             continue
         seen.add(key); out.append(r)
     return out[:2000]
@@ -3472,7 +3472,7 @@ def y55_merge_dates(base_rows, ai_rows):
     out = []; seen = set()
     for r in base + ai:
         key = (r["label"], r["date_text"])
-        if key in seen: 
+        if key in seen:
             continue
         seen.add(key); out.append(r)
     return out[:300]
@@ -3486,7 +3486,7 @@ def y55_merge_pocs(base_rows, ai_rows):
     out = []; seen = set()
     for r in base + ai:
         key = (r["name"], r["email"], r["phone"])
-        if key in seen: 
+        if key in seen:
             continue
         seen.add(key); out.append(r)
     return out[:300]
@@ -3885,7 +3885,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
     st.header("RFP Analyzer")
     # --- RFP Meta Editor ---
-    
+
     # --- RFP Meta Editor (safe) ---
     try:
         # Determine active RFP id
@@ -3927,7 +3927,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             st.success("Saved")
             st.session_state["current_rfp_id"] = int(_rid)
             st.rerun()
-    
+
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
         _ctx = pd.read_sql_query("SELECT id, title, sam_url FROM rfps ORDER BY id DESC;", conn, params=())
@@ -4198,8 +4198,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             'set_aside': _extract_set_aside(full_text),
                             'place_of_performance': _extract_place(full_text),
                         }
-                        
-                        
+
+
                         l_items, clins, dates, pocs, meta, title, solnum = y55_apply_enhancement(full_text if 'full_text' in locals() else (text if 'text' in locals() else ''), l_items, clins, dates, pocs, meta, title if 'title' in locals() else '', solnum if 'solnum' in locals() else '')
 # X4: persist meta to rfp_meta for combined RFP
                         try:
@@ -4226,7 +4226,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             for pc in pocs:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
-                            
+
                             # X3: store POP / ordering period in meta and key_dates
                             try:
                                 _pop = extract_pop_structure(full_text)
@@ -4285,8 +4285,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             'set_aside': _extract_set_aside(text),
                             'place_of_performance': _extract_place(text),
                         }
-                        
-                        
+
+
                         l_items, clins, dates, pocs, meta, title, solnum = y55_apply_enhancement(full_text if 'full_text' in locals() else (text if 'text' in locals() else ''), l_items, clins, dates, pocs, meta, title if 'title' in locals() else '', solnum if 'solnum' in locals() else '')
 # X4: persist meta to rfp_meta per-file
                         try:
@@ -4375,7 +4375,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
 
 
-    
+
     # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
         y2_ui_threaded_chat(conn)
@@ -4639,8 +4639,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
             key="rfp_data_sel"
         )
-        
-        
+
+
         with st.expander("Acquisition Meta (X4)", expanded=False):
             try:
                 df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
@@ -5075,7 +5075,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         st.write("No obvious flags detected.")
     else:
         st.dataframe(flags, use_container_width=True, hide_index=True)
-    
+
 
 
 
@@ -5260,7 +5260,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
                     st.session_state[key] = (cur + ("\n\n" if cur else "") + str(txt)).strip()
                     st.session_state[f"pb_section_{sec_choice}"] = st.session_state[key]
                     st.success("Inserted into section")
-    
+
 
 # ---------- Subcontractor Finder (Phase D) ----------
     try:
@@ -5479,17 +5479,7 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
-
-        # -- O4 Sender profiles UI --
-        try:
-            o4_sender_accounts_ui(conn)
-        except Exception as _e:
-            try:
-                import streamlit as _st
-                _st.caption(f"O4 sender UI unavailable: {_e}")
-            except Exception:
-                pass
-        # O2: templates picker and manager
+    # O2: templates picker and manager
     try:
         _tpl_picker_prefill(conn)
         with st.expander("Templates", expanded=False):
@@ -6471,7 +6461,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
                 bullets = []
                 for line in blk.split("\n"):
                     line = line.strip()
-                    if not line: 
+                    if not line:
                         continue
                     if not line.startswith("**"):
                         bullets.append(f"- {line}")
@@ -6701,7 +6691,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                                           df_p.loc[df_p["id"]==p_sel, "subtitle"].values[0] if "subtitle" in df_p.columns else "",
                                           _wp_load_paper(conn, int(p_sel)))
                     if exp:
-                        st.success("Exported"); 
+                        st.success("Exported");
                 try:
                     from pathlib import Path as _Path
                     with open(exp, "rb") as _f:
@@ -6978,7 +6968,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                 saved = 0
                 for f in ups:
                     pth = save_uploaded_file(f, subdir="attachments")
-                    if not pth: 
+                    if not pth:
                         continue
                     try:
                         with closing(conn.cursor()) as cur:
@@ -7165,7 +7155,7 @@ def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
 
 def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
     pack = _rfq_pack_by_id(conn, pack_id)
-    if not pack: 
+    if not pack:
         st.error("Pack not found"); return None
     title = pack.get("title") or f"RFQ_{pack_id}"
     # Files to include
@@ -8977,55 +8967,39 @@ def seed_default_templates(conn):
 
 
 
+
 def run_outreach(conn):
+    import streamlit as st
+
+    # O4 badge if present
+    try:
+        _o4_render_badge()
+    except Exception:
+        pass
 
     st.header("Outreach")
-    st.markdown("**O4 — Sending Controls (forced)**")
-    with st.expander("Sender accounts", expanded=True):
-        try:
-            _o4_accounts_ui(conn)
-        except Exception as e:
-            st.warning(f"Sender accounts unavailable: {e}")
-    with st.expander("Opt-outs & compliance", expanded=False):
-        try:
-            _o4_optout_ui(conn)
-        except Exception as e:
-            st.warning(f"Opt-out UI unavailable: {e}")
-    with st.expander("Send audit log", expanded=False):
-        try:
-            _o4_audit_ui(conn)
-        except Exception as e:
-            st.warning(f"Audit UI unavailable: {e}")
-    with st.expander("Mail Merge & Send", expanded=True):
-        try:
+
+    # Sender accounts (O4)
+    try:
+        with st.expander("Sender accounts", expanded=True):
+            o4_sender_accounts_ui(conn)
+    except Exception as e:
+        st.warning(f"O4 sender UI unavailable: {e}")
+
+    # Templates (O2)
+    try:
+        _tpl_picker_prefill(conn)
+        with st.expander("Templates", expanded=False):
+            render_outreach_templates(conn)
+    except Exception:
+        pass
+
+    # Mail merge + send (O3)
+    try:
+        with st.expander("Mail Merge & Send", expanded=True):
             render_outreach_mailmerge(conn)
-        except Exception as e:
-            st.error(f"Mail merge panel error: {e}")
-    st.header("Outreach")
-    # O2: templates seed + picker + manager
-    seed_default_templates(conn)
-    _tpl_picker_prefill(conn)
-    with st.expander("Templates", expanded=False):
-        render_outreach_templates(conn)
-    # Minimal body fields for Subject and Body that use session prefill
-    st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
-    st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
-
-    with st.expander("Sender accounts", expanded=False):
-        _o4_accounts_ui(conn)
-    with st.expander("Opt-outs & compliance", expanded=False):
-        _o4_optout_ui(conn)
-    with st.expander("Send audit log", expanded=False):
-        _o4_audit_ui(conn)
-    render_outreach_mailmerge(conn)
-
-
-# === O3: Outreach Mail Merge + Send (appended) ===============================
-from contextlib import closing as _o3c
-import smtplib as _o3smtp
-from email.mime.text import MIMEText as _O3MIMEText
-from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
-_O4_CONN = None
+    except Exception as e:
+        st.error(f"Mail merge panel error: {e}")
 
 
 def _o3_ensure_schema(conn):
@@ -9355,7 +9329,7 @@ def _o3_render_sender_picker():
 
     conn = globals().get("_O4_CONN")
     if conn is None:
-        st.warning("Internal: sender picker not initialized"); 
+        st.warning("Internal: sender picker not initialized");
         return {"email":"", "app_password":""}
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
@@ -9414,125 +9388,3 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
-
-
-# === O4: SMTP sender profiles (UI + storage) ===
-def _o4_ensure_smtp_schema(conn):
-    try:
-        from contextlib import closing as _closing
-        with _closing(conn.cursor()) as cur:
-            cur.execute("""CREATE TABLE IF NOT EXISTS smtp_profiles(
-                id INTEGER PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL,
-                host TEXT,
-                port INTEGER,
-                tls INTEGER DEFAULT 1,
-                username TEXT,
-                app_password TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            );""")
-            conn.commit()
-    except Exception:
-        pass
-
-def _o4_list_profiles(conn):
-    try:
-        import pandas as _pd
-        return _pd.read_sql_query("SELECT id, name, host, port, tls, username FROM smtp_profiles ORDER BY name;", conn)
-    except Exception:
-        import pandas as _pd
-        return _pd.DataFrame(columns=["id","name","host","port","tls","username"])
-
-def _o4_get_profile(conn, name):
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query("SELECT * FROM smtp_profiles WHERE name=? LIMIT 1;", conn, params=(name,))
-        return df.iloc[0].to_dict() if df is not None and not df.empty else None
-    except Exception:
-        return None
-
-def _o4_upsert_profile(conn, name, host, port, tls, username, app_password):
-    from contextlib import closing as _closing
-    try:
-        now = __import__("datetime").datetime.utcnow().isoformat()
-        with _closing(conn.cursor()) as cur:
-            cur.execute("INSERT INTO smtp_profiles(name, host, port, tls, username, app_password, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?) "
-                        "ON CONFLICT(name) DO UPDATE SET host=excluded.host, port=excluded.port, tls=excluded.tls, username=excluded.username, app_password=excluded.app_password, updated_at=excluded.updated_at;",
-                        (name.strip(), host.strip(), int(port or 587), int(bool(tls)), username.strip(), app_password.strip(), now, now))
-            conn.commit()
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-def _o4_delete_profile(conn, name):
-    from contextlib import closing as _closing
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("DELETE FROM smtp_profiles WHERE name=?;", (name,))
-            conn.commit()
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-def _o4_render_badge():
-    try:
-        import streamlit as _st
-        _st.sidebar.markdown("<div style='padding:4px 8px;border-radius:8px;background:#E6F4EA;color:#0B6623;font-weight:600;display:inline-block;'>O4 Active</div>", unsafe_allow_html=True)
-    except Exception:
-        pass
-
-def o4_sender_accounts_ui(conn):
-    import streamlit as _st
-    _o4_ensure_smtp_schema(conn)
-    _o4_render_badge()
-    with _st.expander("Sender accounts", expanded=True):
-        df = _o4_list_profiles(conn)
-        names = ["— New —"] + (df["name"].tolist() if df is not None and not df.empty else [])
-        pick = _st.selectbox("Profile", options=names, key="o4_pick_profile")
-        edit_new = (pick == "— New —")
-        if edit_new:
-            name = _st.text_input("Profile name", key="o4_name")
-            host = _st.text_input("SMTP host", value="smtp.gmail.com", key="o4_host")
-            port = _st.number_input("Port", min_value=1, max_value=65535, value=587, key="o4_port")
-            tls = _st.checkbox("Use STARTTLS", value=True, key="o4_tls")
-            username = _st.text_input("Gmail address (username)", key="o4_user")
-            app_password = _st.text_input("App password", type="password", key="o4_pass")
-        else:
-            rec = _o4_get_profile(conn, pick) or {}
-            name = pick
-            host = _st.text_input("SMTP host", value=str(rec.get("host") or ""), key="o4_host_existing")
-            port = _st.number_input("Port", min_value=1, max_value=65535, value=int(rec.get("port") or 587), key="o4_port_existing")
-            tls = _st.checkbox("Use STARTTLS", value=bool(int(rec.get("tls") or 1)), key="o4_tls_existing")
-            username = _st.text_input("Gmail address (username)", value=str(rec.get("username") or ""), key="o4_user_existing")
-            app_password = _st.text_input("App password", type="password", key="o4_pass_existing")
-        c1, c2, c3 = _st.columns([1,1,1])
-        with c1:
-            if _st.button("Save/Update", key="o4_save"):
-                ok, msg = _o4_upsert_profile(conn, name, host, port, tls, username, app_password or "")
-                if ok: _st.success("Saved"); _st.session_state["smtp_profile"] = name
-                else: _st.error(f"Save failed: {msg}")
-        with c2:
-            if not edit_new and _st.button("Delete", key="o4_del"):
-                ok, msg = _o4_delete_profile(conn, name)
-                if ok: _st.success("Deleted"); _st.rerun()
-                else: _st.error(f"Delete failed: {msg}")
-        with c3:
-            if _st.button("Use This Sender", key="o4_use"):
-                _st.session_state["smtp_profile"] = name
-                _st.success(f"Active sender: {name}")
-        # Expose fields for mailer code
-        active_name = _st.session_state.get("smtp_profile")
-        active = _o4_get_profile(conn, active_name) if active_name else None
-        if active:
-            for k, v in [
-                ("smtp_name", active.get("name")),
-                ("smtp_host", active.get("host")),
-                ("smtp_port", int(active.get("port") or 587)),
-                ("smtp_tls", bool(int(active.get("tls") or 1))),
-                ("smtp_username", active.get("username")),
-                ("smtp_password", active.get("app_password")),
-            ]:
-                _st.session_state[k] = v
-        _st.caption("Uses Gmail App Passwords. Create one-time per account under Google Account → Security → App passwords.")
-# === end O4 ===
