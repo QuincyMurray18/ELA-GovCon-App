@@ -8203,6 +8203,33 @@ if "_o3_render_sender_picker" not in globals():
             "from_name": "ELA Management"
         }
 
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+    rows = _o3_collect_recipients_ui(conn)
+    import streamlit as st
+    import pandas as _pd
+    rows = _o3_collect_recipients_ui(conn)
+
+
+
+
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+    rows = _o3_collect_recipients_ui(conn)
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+    rows = _o3_collect_recipients_ui(conn)
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+
+    # 1) Pick recipients
+    rows = _o3_collect_recipients_ui(conn)
+
+    # 2) Template fields
     st.subheader("Mail Merge & Send")
     try:
         _tpl_picker_prefill(conn)
@@ -8211,15 +8238,23 @@ if "_o3_render_sender_picker" not in globals():
     subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
     body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
 
+    # 3) Preview
     if rows is not None and not rows.empty and (subj or body):
         with st.expander("Preview (first 5)", expanded=True):
             prev = []
             for _, r in rows.head(5).iterrows():
                 data = {k:str(r.get(k,"") or "") for k in r.index}
-                prev.append({"to": r["email"], "subject": _o3_merge(subj, data), "snippet": _o3_merge(body, data)[:140]})
+                prev.append({
+                    "to": r.get("email",""),
+                    "subject": _o3_merge(subj, data) if " _o3_merge" in globals() else subj,
+                    "snippet": (_o3_merge(body, data) if "_o3_merge" in globals() else body)[:140]
+                })
             st.dataframe(_pd.DataFrame(prev), use_container_width=True, hide_index=True)
+
+    # 4) Sender
     st.subheader("Sender")
     sender = _o3_render_sender_picker()
+
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         test = st.button("Test run (no send)", key="o3_test")
@@ -8227,20 +8262,36 @@ if "_o3_render_sender_picker" not in globals():
         do = st.button("Send batch", type="primary", key="o3_send")
     with c3:
         maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
-    if test and rows is not None and not rows.empty:
-        _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
-    if do:
-        if not sender.get("email") or not sender.get("app_password"):
-            st.error("Missing sender credentials")
-        elif rows is None or rows.empty:
-            st.error("No recipients")
-        else:
-            _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
-# === end O3 ===================================================================
 
-# -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
-
-
+    # 5) Execute
+    if (test or do) and rows is not None and not rows.empty:
+        limit = int(maxn)
+        sent = 0
+        for _, r in rows.iterrows():
+            if sent >= limit:
+                break
+            to_addr = str(r.get("email","") or "").strip()
+            if not to_addr:
+                continue
+            data = {k:str(r.get(k,"") or "") for k in r.index}
+            subj_m = _o3_merge(subj, data) if "_o3_merge" in globals() else subj
+            body_m = _o3_merge(body, data) if "_o3_merge" in globals() else body
+            if test:
+                st.write({ "to": to_addr, "subject": subj_m, "body": body_m[:120] + ("..." if len(body_m)>120 else "") })
+            else:
+                try:
+                    if "_o3_send_one" in globals():
+                        _o3_send_one(sender, to_addr, subj_m, body_m)
+                    elif "_o3_send_batch" in globals():
+                        _o3_send_batch(sender, [{"to": to_addr, "subject": subj_m, "html": body_m}])
+                    else:
+                        st.info("Send function not available in this build.")
+                        break
+                    sent += 1
+                except Exception as e:
+                    st.warning(f"Send failed to {to_addr}: {e}")
+        if do and sent:
+            st.success(f"Sent {sent} emails.")
 if __name__ == "__main__":
     main()
 
@@ -8987,7 +9038,7 @@ def _o3_load_vendors_df(conn):
 
 def _o3_collect_recipients_ui(conn):
     import streamlit as st, pandas as _pd
-
+    _o3_ensure_schema(conn)
     st.subheader("Recipients")
     tabs = st.tabs(["From Vendors","Upload CSV","Manual"])
     all_rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
@@ -9087,7 +9138,7 @@ def _o3_render_sender_picker():
 
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
     import streamlit as st, datetime as _dt, pandas as _pd
-
+    _o3_ensure_schema(conn)
     if rows is None or rows.empty:
         st.error("No recipients"); return 0, []
     blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
