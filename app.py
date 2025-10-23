@@ -2125,7 +2125,7 @@ def find_clins_all(conn: sqlite3.Connection, rfp_id: int) -> int:
         existing = set()
     added = 0
     with closing(conn.cursor()) as cur:
-        for r in rows:
+        for r in _rows:
             key = (r.get("clin",""), r.get("description",""))
             if key in existing:
                 continue
@@ -3125,7 +3125,7 @@ def extract_clins(text: str) -> list:
             })
     seen = set()
     uniq = []
-    for r in rows:
+    for r in _rows:
         if r['clin'] not in seen:
             uniq.append(r)
             seen.add(r['clin'])
@@ -3551,7 +3551,7 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
                 if any([clin, desc, qty, upr, ext]):
                     rows.append({'clin': clin, 'description': desc[:300] if desc else "", 'qty': qty, 'unit': unit, 'unit_price': upr, 'extended_price': ext})
     seen = set(); uniq = []
-    for r in rows:
+    for r in _rows:
         key = (r['clin'], r['description'], r['qty'], r['unit_price'], r['extended_price'])
         if key in seen: continue
         seen.add(key); uniq.append(r)
@@ -7996,7 +7996,8 @@ if _hide_saved:
 
         
     # guard rows and use dict.get to avoid NameError/KeyError
-    rows = (rows or [])
+    _rows = locals().get('rows', st.session_state.get('s1_results') or [])
+_rows = (_rows or [])
     rows = [r for r in rows if isinstance(r, dict) and r.get("place_id") not in ss.get("s1_saved_ids", set())]
     ss["s1_results"] = rows
 
@@ -9836,7 +9837,7 @@ def _s1d_existing_vendor_keys(conn):
             return set(), set()
     by_np = set()
     by_pid = set()
-    for r in rows:
+    for r in _rows:
         name = (r[0] or "").strip().lower()
         ph = _s1d_norm_phone(r[1] or "")
         pid = (r[2] or "").strip()
@@ -9912,7 +9913,7 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
     # Insert
     saved = 0
     with conn:
-        for r in rows:
+        for r in _rows:
             conn.execute("""INSERT INTO vendors_t(name, email, phone, website, city, state, naics, place_id)
                             VALUES(?,?,?,?,?,?,?,?)""",
                          (r.get("name",""), "", r.get("phone",""), r.get("website",""), r.get("city",""), r.get("state",""), "", r.get("place_id","")))
