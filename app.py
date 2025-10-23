@@ -8028,6 +8028,12 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         run_white_paper_builder(conn)
     elif page == "Subcontractor Finder":
         
+        # Ensure S1D wrapper is attached
+        (_ensure_s1d_wired() if callable(globals().get("_ensure_s1d_wired")) else None)
+        if not getattr(globals().get("run_subcontractor_finder"), "_s1d_wrapped", False):
+            globals().get("_wrap_run_subfinder", lambda: None)()
+            fn = globals().get("run_subcontractor_finder")
+            if callable(fn): setattr(fn, "_s1d_wrapped", True)
         st.caption(f"S1D wrapped = {getattr(globals().get('run_subcontractor_finder'), '_s1d_wrapped', False)}")
         globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
         run_subcontractor_finder(conn)
