@@ -8031,7 +8031,6 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         st.caption(f"S1D wrapped = {getattr(globals().get('run_subcontractor_finder'), '_s1d_wrapped', False)}")
 run_subcontractor_finder(conn)
         # S1 Google Places panel
-        globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
     elif page == "Outreach":
         run_outreach(conn)
     elif page == "RFQ Pack":
