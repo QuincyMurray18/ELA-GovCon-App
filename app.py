@@ -6274,24 +6274,40 @@ def _pp_writeup_block(rec: dict) -> str:
     return "\n\n".join(parts)
 
 
-def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
+def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
+    try:
+        import docx  # type: ignore
+    except Exception:
+        try:
+            from docx import Document  # type: ignore
+            import docx  # type: ignore
+        except Exception:
+            import streamlit as st
+            st.error("python-docx is required. pip install python-docx")
+            return None
     try:
         from docx.shared import Inches  # type: ignore
     except Exception:
-        st.error("python-docx is required. pip install python-docx")
+        pass
+    try:
+        doc = docx.Document()
+        doc.add_heading(title or "Win Plan", 0)
+        if subtitle:
+            doc.add_paragraph(subtitle)
+        if isinstance(sections, pd.DataFrame) and not sections.empty:
+            for _, row in sections.iterrows():
+                sec = str(row.get("Section") or row.get("section") or row.get("name") or "Section")
+                body = str(row.get("Content") or row.get("content") or row.get("text") or "")
+                doc.add_heading(sec, level=2)
+                for para in (body or "").split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+        doc.save(path)
+        return path
+    except Exception as e:
+        import streamlit as st
+        st.error(f"DOCX export failed: {e}")
         return None
-    doc = docx.Document()
-    for s in doc.sections:
-        s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
-    doc.add_heading("Past Performance", level=1)
-    for i, rec in enumerate(records, start=1):
-        doc.add_heading(f"{i}. {rec.get('project_title')}", level=2)
-        blk = _pp_writeup_block(rec).replace("**", "")  # simple conversion
-        for para in blk.split("\n\n"):
-            doc.add_paragraph(para)
-    doc.save(path)
-    return path
-
 
 def run_past_performance(conn: sqlite3.Connection) -> None:
     st.header("Past Performance Library")
@@ -6465,29 +6481,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
 
         # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
-        exp = _export_past_perf_docx(out_path, picked)
-        if exp:
-            
-                try:
-                    from pathlib import Path as _Path
-                    with open(exp, "rb") as _f:
-                        _data = _f.read()
-                    _fname = _Path(exp).name or "export.docx"
-                    st.download_button("Download DOCX", data=_data, file_name=_fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                except Exception as _e:
-                    st.error(f"Download failed: {_e}")
-
-
-
-
-
-# ---------- Phase H: White Paper Builder ----------
-def _wp_load_template(conn: sqlite3.Connection, template_id: int) -> pd.DataFrame:
-    return pd.read_sql_query(
-        "SELECT id, position, title, body FROM white_template_sections WHERE template_id=? ORDER BY position ASC;",
-        conn, params=(template_id,)
-    )
-
+        _export_past_perf_docx(out_path, past_perf)
 def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
     return pd.read_sql_query(
         "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
@@ -6496,31 +6490,38 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
 
 def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
+        import docx  # type: ignore
+    except Exception:
+        try:
+            from docx import Document  # type: ignore
+            import docx  # type: ignore
+        except Exception:
+            import streamlit as st
+            st.error("python-docx is required. pip install python-docx")
+            return None
+    try:
+        from docx.shared import Inches  # type: ignore
     except Exception:
         pass
-# from docx import Document  # replaced by 'import docx'
-        from docx.shared import Inches
-    except Exception:
-        st.error("python-docx is required. pip install python-docx")
+    try:
+        doc = docx.Document()
+        doc.add_heading(title or "Win Plan", 0)
+        if subtitle:
+            doc.add_paragraph(subtitle)
+        if isinstance(sections, pd.DataFrame) and not sections.empty:
+            for _, row in sections.iterrows():
+                sec = str(row.get("Section") or row.get("section") or row.get("name") or "Section")
+                body = str(row.get("Content") or row.get("content") or row.get("text") or "")
+                doc.add_heading(sec, level=2)
+                for para in (body or "").split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+        doc.save(path)
+        return path
+    except Exception as e:
+        import streamlit as st
+        st.error(f"DOCX export failed: {e}")
         return None
-    doc = docx.Document()
-    doc.add_heading(title or "White Paper", level=1)
-    if subtitle:
-        p = doc.add_paragraph(subtitle); p.runs[0].italic = True
-    for _, r in sections.sort_values("position").iterrows():
-        doc.add_heading(r.get("title") or "Section", level=2)
-        body = r.get("body") or ""
-        for para in str(body).split("\n\n"):
-            if para.strip():
-                doc.add_paragraph(para.strip())
-        img = r.get("image_path")
-        if img and Path(img).exists():
-            try:
-                doc.add_picture(img, width=Inches(5.5))
-            except Exception:
-                pass
-    doc.save(path)
-    return path
 
 def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     st.header("White Paper Builder")
@@ -9029,3 +9030,37 @@ def render_outreach_mailmerge(conn):
             _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
 # === end O3 ===================================================================
 
+
+
+
+def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
+    try:
+        import docx  # type: ignore
+        from docx.shared import Inches  # type: ignore
+    except Exception:
+        import streamlit as st
+        st.error("python-docx is required. pip install python-docx")
+        return None
+    try:
+        doc = docx.Document()
+        for s in doc.sections:
+            s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
+        doc.add_heading("Past Performance", level=1)
+        for rec in records or []:
+            title = str(rec.get("title") or rec.get("project") or "Project").strip()
+            doc.add_heading(title, level=2)
+            for k in ["customer","period","value","cpars_rating"]:
+                v = rec.get(k)
+                if v:
+                    doc.add_paragraph(f"**{k.title()}:** {v}")
+            body = str(rec.get("summary") or rec.get("description") or rec.get("results") or "").strip()
+            if body:
+                for para in body.split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+        doc.save(path)
+        return path
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Past Performance export failed: {e}")
+        return None
