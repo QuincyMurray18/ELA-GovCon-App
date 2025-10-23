@@ -9014,8 +9014,11 @@ def seed_default_templates(conn):
 
 
 def run_outreach(conn):
+    st.caption("O3 WIRED BUILD — 2025-10-23 03:14:35 UTC")
     import streamlit as st
     st.header("Outreach")
+    with st.expander("Mail Merge & Send", expanded=True):
+        render_outreach_mailmerge(conn)
     st.caption("O2 WIRED BUILD — 2025-10-22")
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
