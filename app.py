@@ -1,4 +1,3 @@
-BUILD_TAG_O3 = "O3 FINGERPRINT — 2025-10-23 03:19:38 UTC"
 import requests
 import time
 # Helper imports for RTM/Amendment
@@ -481,6 +480,7 @@ try:
 except Exception:
     mathquests = None
 import smtplib
+import streamlit as st
 
 # --- DB helpers: ensure column exists ---
 def _ensure_column(conn, table, col, type_sql):
@@ -564,7 +564,7 @@ def _first_row_value(df, col, default=None):
 
 # --- Capability Statement Page (full implementation) ---
 def run_capability_statement(conn):
-
+    import streamlit as st
     import json, datetime, io, sqlite3
 
     st.header("Capability Statement")
@@ -800,50 +800,22 @@ def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
             text = h.get("chunk") or h.get("text") or ""
             tag = f"[RFP-{rid}:{cid}]"
             blocks.append(f"{tag} {text}")
+# [auto-disabled broken fragment]         return "
+
+# [auto-disabled broken fragment] ".join(parts)
         return "\n\n".join(blocks)
     except Exception:
         return None
+# [auto-disabled window] 
 
-def y6_render_co_box(conn, rfp_id=None, *, key_prefix: str, title: str, help_text: str="CO answers. Uses RFP context when available.") -> None:
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.subheader(title)
-        q = st.text_area("Your question", key=f"{key_prefix}_q", height=120, help=help_text)
-    with c2:
-        st.caption("Y6 CO helper")
-    if not st.button("Ask", key=f"{key_prefix}_ask") or not (q or "").strip():
-        return
-    with st.spinner("CO is analyzing..."):
-        ctx = _y6_fetch_y1_context(conn, rfp_id, q, globals().get("y_auto_k"))
-        CO_SYS = (
-            "You are a senior U.S. federal Contracting Officer (CO). "
-            "Answer with short, precise sentences or numbered bullets. "
-            "If RFP context is provided, cite it with [RFP-<id>:<chunk#>]. "
-            "Avoid raw JSON."
-        )
-        sys_prompt = CO_SYS + (f"\n\nRFP context follows. Cite it when relevant:\n{ctx}" if ctx else "")
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": (q or '').strip()},
-        ]
-        ans = _y6_chat(messages)
-    st.markdown(ans)
-    saver = globals().get("y5_save_snippet") or globals().get("pb_add_snippet") or globals().get("save_text_to_drafts")
-    if saver:
-        with st.expander("Add answer to Drafts", expanded=False):
-            sec = st.text_input("Section label", value="CO Notes", key=f"{key_prefix}_draft_sec")
-            if st.button("Add to drafts", key=f"{key_prefix}_draft_add"):
-                try:
-                    if "y5_save_snippet" in globals():
-                        y5_save_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y6 CO Box")
-                    elif "pb_add_snippet" in globals():
-                        pb_add_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y6 CO Box")
-                    else:
-                        saver(conn, rfp_id, ans)
-                    st.success("Saved to drafts")
-                except Exception:
-                    st.info("Drafts saver not available in this build.")
-# === end Y6 helper ===
+# y6_render_co_box temporarily disabled by repair script because source was truncated.
+def y6_render_co_box(*args, **kwargs):
+    try:
+        import streamlit as st
+        st.info('Y6 CO box unavailable in this build.')
+    except Exception:
+        pass
+
 
 # === Global extractors to avoid NameError in early calls ===
 def _extract_naics(text: str) -> str:
@@ -1040,7 +1012,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
             pass
 
 def y0_ai_panel():
-
+    import streamlit as st
     st.header(f"Ask the CO (AI) · {_resolve_model()}")
     q = st.text_area("Your question", key="y0_q", height=120)
     if st.button("Ask", key="y0_go"):
@@ -1956,6 +1928,9 @@ def _extract_pdf_bytes(data: bytes) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
+# [auto-disabled broken fragment]         return "
+
+# [auto-disabled broken fragment] ".join(parts)
         return "\n\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception:
         return ""
@@ -1982,7 +1957,10 @@ def y5_extract_from_uploads(files) -> str:
                 parts.append(_extract_pdf_bytes(data))
         except Exception:
             continue
-    return "\n\n".join([p for p in parts if p]).strip()
+# [auto-disabled broken fragment]     return "
+
+# [auto-disabled broken fragment] ".join(parts)
+join([p for p in parts if p]).strip()
 
 def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
     # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
@@ -2011,7 +1989,10 @@ def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
             parts.append(_extract_docx_bytes(bytes(data)))
         elif name.endswith(".pdf"):
             parts.append(_extract_pdf_bytes(bytes(data)))
-    return "\n\n".join([p for p in parts if p]).strip()
+# [auto-disabled broken fragment]     return "
+
+# [auto-disabled broken fragment] ".join(parts)
+join([p for p in parts if p]).strip()
 
 def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
     if not (text or "").strip():
@@ -2043,7 +2024,10 @@ def _collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
         if pages:
             pages, _ = ocr_pages_if_empty(b, mime, pages)
         parts.append("\n\n".join(pages))
-    return "\n\n".join([p for p in parts if p]).strip()
+# [auto-disabled broken fragment]     return "
+
+# [auto-disabled broken fragment] ".join(parts)
+join([p for p in parts if p]).strip()
 
 def _upsert_meta(conn, rfp_id: int, key: str, value: str):
     if not value:
@@ -2915,7 +2899,10 @@ def extract_text_from_file(path: str) -> str:
                 return b.decode('latin-1', errors='ignore')
             except Exception:
                 return ''
-    return "\n\n".join(pages)
+# [auto-disabled broken fragment]     return "
+
+# [auto-disabled broken fragment] ".join(parts)
+join(pages)
 
         
 
@@ -3926,7 +3913,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if _update_rfp_meta(conn, _rid, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
             st.success("Saved")
             st.session_state["current_rfp_id"] = int(_rid)
-            st.experimental_rerun()
+            st.rerun()
     
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
@@ -3969,42 +3956,42 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     tab_y2 = _noop()
     tab_y4 = _noop()
     st.caption('RFP Analyzer · single-page mode')
-    with tab_research:
-        run_research_tab(conn)# --- heuristics to auto-fill Title and Solicitation # ---
-    def _guess_title(text: str, fallback: str) -> str:
-        for line in (text or "").splitlines():
-            s = line.strip()
-            if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
-                return s[:200]
-        return fallback
-
-    def _guess_solnum(text: str) -> str:
-        if not text:
-            return ""
-    # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
-    def _extract_naics(text: str) -> str:
-        if not text: return ""
-        m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
-        if m: return m.group(1)[:6]
-        m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
-        if m: return m.group(1)
-        m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
-        return m.group(1) if m else ""
-
-    def _extract_set_aside(text: str) -> str:
-        if not text: return ""
-        tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
-        for t in tags:
-            if re.search(rf'(?i)\b{re.escape(t)}\b', text):
-                norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
-                if norm == "8(A)": norm = "8A"
-                return norm
-        m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
-        if m:
-            v = m.group(1).strip()
-            v = re.sub(r'\s+', ' ', v)
-            return v[:80]
-        return ""
+# [auto-disabled duplicate]     with tab_research:
+# [auto-disabled duplicate]         run_research_tab(conn)# --- heuristics to auto-fill Title and Solicitation # ---
+# [auto-disabled duplicate]     def _guess_title(text: str, fallback: str) -> str:
+# [auto-disabled duplicate]         for line in (text or "").splitlines():
+# [auto-disabled duplicate]             s = line.strip()
+# [auto-disabled duplicate]             if len(s) >= 8 and not s.lower().startswith(("department of", "u.s.", "united states", "naics", "set-aside", "solicitation", "request for", "rfp", "rfq", "sources sought")):
+# [auto-disabled duplicate]                 return s[:200]
+# [auto-disabled duplicate]         return fallback
+# [auto-disabled duplicate] 
+# [auto-disabled duplicate]     def _guess_solnum(text: str) -> str:
+# [auto-disabled duplicate]         if not text:
+# [auto-disabled duplicate]             return ""
+# [auto-disabled duplicate]     # --- meta extractors (NAICS, Set-Aside, Place of Performance) ---
+# [auto-disabled duplicate]     def _extract_naics(text: str) -> str:
+# [auto-disabled duplicate]         if not text: return ""
+# [auto-disabled duplicate]         m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
+# [auto-disabled duplicate]         if m: return m.group(1)[:6]
+# [auto-disabled duplicate]         m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
+# [auto-disabled duplicate]         if m: return m.group(1)
+# [auto-disabled duplicate]         m = re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
+# [auto-disabled duplicate]         return m.group(1) if m else ""
+# [auto-disabled duplicate] 
+# [auto-disabled duplicate]     def _extract_set_aside(text: str) -> str:
+# [auto-disabled duplicate]         if not text: return ""
+# [auto-disabled duplicate]         tags = ["SDVOSB","SDVOSBC","WOSB","EDWOSB","8(a)","8A","HUBZone","SBA","SDB","VOSB","Small Business","Total Small Business"]
+# [auto-disabled duplicate]         for t in tags:
+# [auto-disabled duplicate]             if re.search(rf'(?i)\b{re.escape(t)}\b', text):
+# [auto-disabled duplicate]                 norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
+# [auto-disabled duplicate]                 if norm == "8(A)": norm = "8A"
+# [auto-disabled duplicate]                 return norm
+# [auto-disabled duplicate]         m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
+# [auto-disabled duplicate]         if m:
+# [auto-disabled duplicate]             v = m.group(1).strip()
+# [auto-disabled duplicate]             v = re.sub(r'\s+', ' ', v)
+# [auto-disabled duplicate]             return v[:80]
+# [auto-disabled stray]         return ""
 
     def _extract_place(text: str) -> str:
         if not text: return ""
@@ -4154,8 +4141,11 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 try:
                     pages = extract_text_pages(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     if pages:
+# [auto-disabled broken fragment]                         return "
+
+# [auto-disabled broken fragment] ".join(parts)
                         return "\n\n".join(pages)
-                    return ""
+# [auto-disabled stray]                     return ""
                 except Exception as e:
                     st.warning(f"XLSX parse failed for {file.name}: {e}.")
                     return ""
@@ -5488,6 +5478,10 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         pass
 
     st.header("Outreach")
+    import streamlit as st
+    st.markdown("**O3 WIRED — Mail Merge & Send**")
+    with st.expander("Mail Merge & Send", expanded=True):
+        render_outreach_mailmerge(conn)
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
     notice = st.session_state.get("rfp_selected_notice", {})
@@ -6267,9 +6261,7 @@ def _pp_writeup_block(rec: dict) -> str:
         parts.append(f"**CPARS:** {rec['cpars_rating']}")
     if any([rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")]):
         parts.append("**POC:** " + ", ".join([x for x in [rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")] if x]))
-    return "\n\n".join(parts)
-
-
+    return "\n".join(parts)
 def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
         from docx.shared import Inches  # type: ignore
@@ -7782,7 +7774,7 @@ def s1_normalize_phone(s):
 def s1_get_google_api_key():
     import os
     try:
-
+        import streamlit as st
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
@@ -8463,7 +8455,7 @@ def s1_normalize_phone(s:str)->str:
 def s1_get_google_api_key()->str|None:
     import os
     try:
-
+        import streamlit as st
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
@@ -8657,7 +8649,7 @@ def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
     return required - found
 
 def render_outreach_templates(conn):
-
+    import streamlit as st
     st.subheader("Email templates")
     ensure_email_templates(conn)
     rows = email_template_list(conn)
@@ -8685,20 +8677,20 @@ def render_outreach_templates(conn):
             else:
                 email_template_upsert(conn, name, subject or "", html or "", tid)
                 st.success("Saved")
-                st.experimental_rerun()
+                st.rerun()
     with c2:
         if (tid is not None) and st.button("Duplicate"):
             email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
             st.success("Duplicated")
-            st.experimental_rerun()
+            st.rerun()
     with c3:
         if (tid is not None) and st.button("Delete"):
             email_template_delete(conn, tid)
             st.success("Deleted")
-            st.experimental_rerun()
+            st.rerun()
 
 def _tpl_picker_prefill(conn):
-
+    import streamlit as st
     rows = email_template_list(conn)
     if not rows:
         return None
@@ -8724,10 +8716,7 @@ def seed_default_templates(conn):
 
 
 def run_outreach(conn):
-    with st.expander("Mail Merge & Send", expanded=True):
-        render_outreach_mailmerge(conn)
-    st.caption(BUILD_TAG_O3)
-
+    import streamlit as st
     st.header("Outreach")
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
@@ -8739,8 +8728,289 @@ def run_outreach(conn):
     st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
 
 
+# === O3: Outreach Mail Merge + Send (appended) ===============================
+from contextlib import closing as _o3c
+import smtplib as _o3smtp
+from email.mime.text import MIMEText as _O3MIMEText
+from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
 
+def _o3_ensure_schema(conn):
+    with _o3c(conn.cursor()) as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_optouts(
+            id INTEGER PRIMARY KEY,
+            email TEXT UNIQUE,
+            reason TEXT,
+            ts TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_blasts(
+            id INTEGER PRIMARY KEY,
+            title TEXT,
+            template_name TEXT,
+            sender_email TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_log(
+            id INTEGER PRIMARY KEY,
+            blast_id INTEGER,
+            to_email TEXT,
+            to_name TEXT,
+            subject TEXT,
+            status TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        conn.commit()
+
+def _o3_merge(text, data: dict) -> str:
+    import re as _re
+    t = str(text or "")
+    def rep(m):
+        k = m.group(1).strip()
+        return str(data.get(k, ""))
+    t = _re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", rep, t)
+    return t
+
+def _o3_load_vendors_df(conn):
+    import pandas as _pd
+    try:
+        df_v = _pd.read_sql_query(
+            "SELECT v.id as vendor_id, v.name as company, v.city, v.state, v.naics, v.phone, v.email, v.website FROM vendors v ORDER BY v.name;",
+            conn, params=()
+        )
+    except Exception:
+        df_v = _pd.DataFrame()
+    try:
+        df_c = _pd.read_sql_query(
+            "SELECT vc.vendor_id, vc.name as contact_name, vc.email as contact_email, vc.phone as contact_phone, vc.role FROM vendor_contacts vc ORDER BY vc.id DESC;",
+            conn, params=()
+        )
+    except Exception:
+        df_c = _pd.DataFrame()
+    if df_v is None: df_v = _pd.DataFrame()
+    if df_c is None: df_c = _pd.DataFrame()
+    if not df_c.empty:
+        df = df_c.merge(df_v, on="vendor_id", how="left")
+        df["email"] = df["contact_email"].fillna(df.get("email"))
+        df["name"] = df["contact_name"].fillna("")
+        df["phone"] = df["contact_phone"].fillna(df.get("phone"))
+    else:
+        df = df_v.copy()
+        df["name"] = ""
+    cols = ["email","name","company","phone","naics","city","state","website"]
+    for c in cols:
+        if c not in df.columns: df[c] = ""
+    df = df[cols].copy()
+    if "email" in df.columns:
+        df = df[df["email"].astype(str).str.contains("@", na=False)]
+        df = df.drop_duplicates(subset=["email"])
+    return df
+
+def _o3_collect_recipients_ui(conn):
+    import streamlit as st, pandas as _pd
+    _o3_ensure_schema(conn)
+    st.subheader("Recipients")
+    tabs = st.tabs(["From Vendors","Upload CSV","Manual"])
+    all_rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
+    with tabs[0]:
+        df = _o3_load_vendors_df(conn)
+        f1, f2 = st.columns([2,2])
+        with f1:
+            f_naics = st.text_input("Filter NAICS contains", key="o3_naics")
+        with f2:
+            f_state = st.text_input("Filter State equals (e.g., TX)", key="o3_state")
+        if f_naics:
+            df = df[df["naics"].fillna("").str.contains(f_naics, case=False, na=False)]
+        if f_state:
+            df = df[df["state"].fillna("").str.upper()==f_state.strip().upper()]
+        st.caption(f"{len(df)} vendor rows")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        if st.button("Add all filtered vendors", key="o3_add_vendors"):
+            all_rows = _pd.concat([all_rows, df], ignore_index=True)
+    with tabs[1]:
+        st.caption("CSV columns: email,name,company,phone,naics,city,state,website,first_name,last_name,title,solicitation,due,notice_id")
+        up = st.file_uploader("Upload CSV", type=["csv"], key="o3_csv_up")
+        if up:
+            try:
+                dfu = _pd.read_csv(up)
+                st.dataframe(dfu.head(50), use_container_width=True, hide_index=True)
+                if st.button("Add uploaded rows", key="o3_add_csv"):
+                    all_rows = _pd.concat([all_rows, dfu], ignore_index=True)
+            except Exception as e:
+                st.error(f"CSV read error: {e}")
+    with tabs[2]:
+        st.caption("Paste one email per line or 'email, name, company'")
+        txt = st.text_area("Lines", height=150, key="o3_paste")
+        if st.button("Add pasted", key="o3_add_paste"):
+            rows = []
+            for line in (txt or "").splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if not parts: continue
+                em = parts[0] if "@" in parts[0] else ""
+                if not em: continue
+                name = parts[1] if len(parts)>1 else ""
+                comp = parts[2] if len(parts)>2 else ""
+                rows.append({"email": em, "name": name, "company": comp, "phone":"", "naics":"", "city":"", "state":"", "website":""})
+            if rows:
+                all_rows = _pd.concat([all_rows, _pd.DataFrame(rows)], ignore_index=True)
+    cur = st.session_state.get("o3_rows")
+    if cur is not None and isinstance(cur, _pd.DataFrame) and not cur.empty:
+        all_rows = _pd.concat([cur, all_rows], ignore_index=True)
+    if not all_rows.empty:
+        all_rows = all_rows.dropna(subset=["email"])
+        all_rows = all_rows[all_rows["email"].astype(str).str.contains("@", na=False)]
+        all_rows = all_rows.drop_duplicates(subset=["email"])
+    st.session_state["o3_rows"] = all_rows
+    if not all_rows.empty:
+        st.write(f"Total recipients: {len(all_rows)}")
+        st.dataframe(all_rows, use_container_width=True, hide_index=True)
+        csv_bytes = all_rows.to_csv(index=False).encode("utf-8")
+        st.download_button("Download recipients CSV", data=csv_bytes, file_name="o3_recipients.csv", mime="text/csv", key="o3_dl_recip")
+    return all_rows
+
+def _o3_sender_accounts_from_secrets():
+    try:
+        import streamlit as st
+        accs = []
+        try:
+            for row in (st.secrets.get("gmail_accounts") or []):
+                if row.get("email") and row.get("app_password"):
+                    accs.append({"email":row["email"],"app_password":row["app_password"],"name":row.get("name","")})
+        except Exception:
+            pass
+        if not accs:
+            g = st.secrets.get("gmail") or {}
+            if g.get("email") and g.get("app_password"):
+                accs.append({"email":g["email"],"app_password":g["app_password"],"name":g.get("name","")})
+        return accs
+    except Exception:
+        return []
+
+def _o3_render_sender_picker():
+    import streamlit as st
+    accs = _o3_sender_accounts_from_secrets()
+    choices = [f"{a.get('name')+' · ' if a.get('name') else ''}{a['email']}" for a in accs]
+    default_idx = 0 if choices else None
+    sel = st.selectbox("Sender account", choices or ["<enter credentials>"], index=default_idx, key="o3_sender_pick")
+    creds = {"email":"", "app_password":"", "name":""}
+    if accs and sel in choices:
+        i = choices.index(sel)
+        creds = accs[i]
+    if not accs:
+        st.caption("Enter Gmail + App Password")
+        c1, c2 = st.columns([2,2])
+        with c1:
+            creds["email"] = st.text_input("Gmail address", key="o3_s_email")
+            creds["name"] = st.text_input("From name", key="o3_s_name")
+        with c2:
+            creds["app_password"] = st.text_input("App password", type="password", key="o3_s_app")
+    return creds
+
+def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
+    import streamlit as st, datetime as _dt, pandas as _pd
+    _o3_ensure_schema(conn)
+    if rows is None or rows.empty:
+        st.error("No recipients"); return 0, []
+    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
+    if not blast_title:
+        blast_title = "Outreach"
+    with _o3c(conn.cursor()) as cur:
+        cur.execute("INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
+                    (blast_title, st.session_state.get("tpl_sel",""), sender.get("email","")))
+        conn.commit()
+        blast_id = cur.lastrowid
+    try:
+        opt = _pd.read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        blocked = set(opt["email"].str.lower().tolist())
+    except Exception:
+        blocked = set()
+    sent = 0
+    logs = []
+    smtp = None
+    if not test_only:
+        try:
+            smtp = _o3smtp.SMTP_SSL("smtp.gmail.com", 465, timeout=20)
+            smtp.login(sender["email"], sender["app_password"])
+        except Exception as e:
+            st.error(f"SMTP login failed: {e}")
+            return 0, []
+    for _, r in rows.head(int(max_send)).iterrows():
+        to_email = str(r.get("email","")).strip()
+        if not to_email or "@" not in to_email:
+            continue
+        if to_email.lower() in blocked:
+            status = "Skipped: opt-out"; err = ""; subj = ""
+        else:
+            data = {k: str(r.get(k,"") or "") for k in r.index}
+            subj = _o3_merge(subject_tpl or "", data)
+            html = _o3_merge(html_tpl or "", data)
+            if "unsubscribe" not in html.lower():
+                html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
+            if test_only:
+                status = "Preview"; err = ""
+            else:
+                try:
+                    msg = _O3MIMEMultipart("alternative")
+                    msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
+                    msg["To"] = to_email
+                    msg["Subject"] = subj
+                    msg.attach(_O3MIMEText(html, "html", "utf-8"))
+                    smtp.sendmail(sender["email"], [to_email], msg.as_string())
+                    status = "Sent"; err = ""
+                except Exception as e:
+                    status = "Error"; err = str(e)
+        with _o3c(conn.cursor()) as cur:
+            cur.execute("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES(?,?,?,?,?,?);",
+                        (blast_id, to_email, str(r.get('name') or ""), subj, status, err))
+            conn.commit()
+        logs.append({"email":to_email,"status":status,"error":err})
+        if status=="Sent":
+            sent += 1
+    if smtp is not None:
+        try: smtp.quit()
+        except Exception: pass
+    try:
+        df = _pd.DataFrame(logs)
+        st.download_button("Download send log CSV", data=df.to_csv(index=False).encode("utf-8"),
+                           file_name=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
+    except Exception:
+        pass
+    st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
+    return sent, logs
 
 def render_outreach_mailmerge(conn):
-    st.write(":e-mail: O3 stub active. Function not yet implemented here.")
-
+    import streamlit as st, pandas as _pd
+    _o3_ensure_schema(conn)
+    st.subheader("Mail Merge & Send")
+    try:
+        _tpl_picker_prefill(conn)
+    except Exception:
+        pass
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
+    rows = _o3_collect_recipients_ui(conn)
+    if rows is not None and not rows.empty and (subj or body):
+        with st.expander("Preview (first 5)", expanded=True):
+            prev = []
+            for _, r in rows.head(5).iterrows():
+                data = {k:str(r.get(k,"") or "") for k in r.index}
+                prev.append({"to": r["email"], "subject": _o3_merge(subj, data), "snippet": _o3_merge(body, data)[:140]})
+            st.dataframe(_pd.DataFrame(prev), use_container_width=True, hide_index=True)
+    st.subheader("Sender")
+    sender = _o3_render_sender_picker()
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if test and rows is not None and not rows.empty:
+        _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
+    if do:
+        if not sender.get("email") or not sender.get("app_password"):
+            st.error("Missing sender credentials")
+        elif rows is None or rows.empty:
+            st.error("No recipients")
+        else:
+            _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
+# === end O3 ===================================================================
