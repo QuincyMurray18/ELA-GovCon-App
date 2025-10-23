@@ -3848,6 +3848,19 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         
+
+    def _visible_for(title: str) -> bool:
+        t = (title or "").lower()
+        if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
+            return _rfp_flow in ("Deliverables", "Overview")
+        if any(k in t for k in ["ingest", "files for this rfp", "manual text paste", "acquisition meta", "ordering / pop", "file library"]):
+            return _rfp_flow in ("Intake", "Overview")
+        if any(k in t for k in ["find in linked files", "q&a", "search", "semantic", "ask the co"]):
+            return _rfp_flow in ("Analyze", "Overview")
+        if "manual editors" in t:
+            return _rfp_flow in ("Advanced",)
+        return _rfp_flow == "Overview"
+
     def _expand_for(title: str) -> bool:
         t = (title or "").lower()
         if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
@@ -3975,7 +3988,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # Sidebar: amendment diff and impact to-dos
         render_amendment_sidebar(conn, int(rid_p3), sam_url, ttl_hours=int(ttl_hours))
         # Main panel: full RTM coverage editor + metrics
-        with st.expander("Requirements Traceability Matrix (RTM)", expanded=_expand_for("Requirements Traceability Matrix (RTM)")):
+        if _visible_for("Requirements Traceability Matrix (RTM)"):
+            with st.expander("Requirements Traceability Matrix (RTM)", expanded=_expand_for("Requirements Traceability Matrix (RTM)")):
             render_rtm_ui(conn, int(rid_p3))
 
     render_status_and_gaps(conn)
@@ -4075,7 +4089,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         # --- X1 Ingest: File Library + Health ---
         if True:
-            with st.expander("X1 Ingest: File Library + Health", expanded=_expand_for("X1 Ingest: File Library + Health")):
+            if _visible_for("X1 Ingest: File Library + Health"):
+                with st.expander("X1 Ingest: File Library + Health", expanded=_expand_for("X1 Ingest: File Library + Health")):
                 st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X7 applied")
                 try:
                     df_rf_list = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
@@ -4134,7 +4149,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 accept_multiple_files=True,
                 key="rfp_ups"
             )
-            with st.expander("Manual Text Paste (optional)", expanded=_expand_for("Manual Text Paste (optional)")):
+            if _visible_for("Manual Text Paste (optional)"):
+                with st.expander("Manual Text Paste (optional)", expanded=_expand_for("Manual Text Paste (optional)")):
                 pasted = st.text_area("Paste any text to include in parsing", height=150, key="rfp_paste")
             title = st.text_input("RFP Title (used if combining)", key="rfp_title")
             solnum = st.text_input("Solicitation # (used if combining)", key="rfp_solnum")
@@ -4414,7 +4430,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
             df_lm = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
 
-        with st.expander("Q&A Memory (X7)", expanded=_expand_for("Q&A Memory (X7)")):
+        if _visible_for("Q&A Memory (X7)"):
+            with st.expander("Q&A Memory (X7)", expanded=_expand_for("Q&A Memory (X7)")):
             st.caption("Ask questions about this RFP. Answers are pulled from saved checklists, CLINs, dates, POCs, and linked file text. History is saved.")
             q = st.text_input("Your question", key="x7_q")
             ask = st.button("Ask (store)", key="x7_ask")
@@ -4493,7 +4510,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         conn, params=(int(_rid),)
                     )
 
-                    with st.expander("Add to Proposal Drafts", expanded=_expand_for("Add to Proposal Drafts")):
+                    if _visible_for("Add to Proposal Drafts"):
+                        with st.expander("Add to Proposal Drafts", expanded=_expand_for("Add to Proposal Drafts")):
                         sec = st.text_input("Section label", value="Research Notes", key="y5_sec_y1")
                         ans_txt = "".join(acc).strip()
                         if st.button("Add to drafts", key="y5_add_y1"):
@@ -4524,7 +4542,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # ---------------- CLINs / Dates / POCs ----------------
     with tab_data:
         # X2: Files for this RFP
-        with st.expander("Files for this RFP (X2)", expanded=_expand_for("Files for this RFP (X2)")):
+        if _visible_for("Files for this RFP (X2)"):
+            with st.expander("Files for this RFP (X2)", expanded=_expand_for("Files for this RFP (X2)")):
             try:
                 df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
             except Exception as e:
@@ -4599,7 +4618,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     except Exception as e:
                         st.info(f"Inventory export unavailable: {e}")
 
-                with st.expander("Find in linked files (simple)", expanded=_expand_for("Find in linked files (simple)")):
+                if _visible_for("Find in linked files (simple)"):
+                    with st.expander("Find in linked files (simple)", expanded=_expand_for("Find in linked files (simple)")):
                     q = st.text_input("Search phrase", key=f"find_files_{rid}")
                     if q:
                         try:
@@ -4663,7 +4683,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         )
 
 
-        with st.expander("Acquisition Meta (X4)", expanded=_expand_for("Acquisition Meta (X4)")):
+        if _visible_for("Acquisition Meta (X4)"):
+            with st.expander("Acquisition Meta (X4)", expanded=_expand_for("Acquisition Meta (X4)")):
             try:
                 df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
@@ -4679,7 +4700,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 else:
                     st.dataframe(show, use_container_width=True, hide_index=True)
 
-        with st.expander("Ordering / POP (X3)", expanded=_expand_for("Ordering / POP (X3)")):
+        if _visible_for("Ordering / POP (X3)"):
+            with st.expander("Ordering / POP (X3)", expanded=_expand_for("Ordering / POP (X3)")):
             try:
                 df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
@@ -4697,7 +4719,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         import pandas as _pd
         from contextlib import closing as _closing_ed
-        with st.expander("Manual Editors", expanded=_expand_for("Manual Editors")):
+        if _visible_for("Manual Editors"):
+            with st.expander("Manual Editors", expanded=_expand_for("Manual Editors")):
             tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
             with tab_lm:
                 try:
