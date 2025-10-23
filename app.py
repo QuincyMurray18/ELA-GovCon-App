@@ -5488,19 +5488,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         pass
 
     st.header("Outreach")
-
-# O4: sender accounts, opt-outs, audit
-try:
-    st.markdown("**O4 — Sending Controls**")
-    with st.expander("Sender accounts", expanded=False):
-        _o4_accounts_ui(conn)
-    with st.expander("Opt-outs", expanded=False):
-        _o4_optout_ui(conn)
-    with st.expander("Send audit", expanded=False):
-        _o4_audit_ui(conn)
-except Exception:
-    pass
-
     st.markdown("**O3 WIRED — Mail Merge & Send**")
     with st.expander("Mail Merge & Send", expanded=True):
         render_outreach_mailmerge(conn)
@@ -8101,7 +8088,7 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
 def main() -> None:
     conn = get_db()
     global _O4_CONN
-    _O4_CONN = conn
+
     st.title(APP_TITLE)
     st.caption(BUILD_LABEL)
     # Y0 main panel (always on)
@@ -8216,17 +8203,48 @@ if "_o3_render_sender_picker" not in globals():
             "from_name": "ELA Management"
         }
 
+
 def render_outreach_mailmerge(conn):
+    global _O4_CONN
+
     import streamlit as st
-    import pandas as _pd
-    rows = _o3_collect_recipients_ui(conn)
-    import streamlit as st
-    import pandas as _pd
-    rows = _o3_collect_recipients_ui(conn)
-
-
-
-
+    try:
+        _tpl_picker_prefill(conn)
+    except Exception:
+        pass
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
+    try:
+        rows = _o3_collect_recipients_ui(conn)
+    except Exception:
+        rows = None
+    st.subheader("Sender")
+    try:
+        sender = _o3_render_sender_picker()
+    except Exception:
+        sender = {"email":"", "app_password":""}
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if test and rows is not None and hasattr(rows, "empty") and not rows.empty:
+        try:
+            _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
+        except Exception as e:
+            st.error(f"Test send failed: {e}")
+    if do:
+        if not sender.get("email") or not sender.get("app_password"):
+            st.error("Missing sender credentials")
+        elif rows is None or (hasattr(rows, "empty") and rows.empty):
+            st.error("No recipients")
+        else:
+            try:
+                _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
+            except Exception as e:
+                st.error(f"Send failed: {e}")
 def render_outreach_mailmerge(conn):
     import streamlit as st
     import pandas as _pd
