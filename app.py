@@ -8036,6 +8036,17 @@ def router(page: str, conn: sqlite3.Connection) -> None:
             if callable(fn): setattr(fn, "_s1d_wrapped", True)
         st.caption(f"S1D wrapped = {getattr(globals().get('run_subcontractor_finder'), '_s1d_wrapped', False)}")
         globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
+        # S1D diagnostics and forced UI render
+        try:
+            key_ok = False
+            try:
+                key_ok = bool(_s1d_google_key())
+            except Exception:
+                key_ok = False
+            st.caption("S1D key present = " + str(key_ok))
+            globals().get("render_subfinder_s1d", lambda _c: None)(conn)
+        except Exception as e:
+            st.exception(e)
         run_subcontractor_finder(conn)
     elif page == "Outreach":
         run_outreach(conn)
