@@ -8097,6 +8097,23 @@ def main() -> None:
     router(nav(), conn)
 
 
+
+# --- Outreach schema guard: fallback stub used if the full implementation is defined later ---
+if "_o3_ensure_schema" not in globals():
+    def _o3_ensure_schema(conn):
+        try:
+            from contextlib import closing
+            with closing(conn.cursor()) as cur:
+                # Minimal tables used by Outreach features
+                cur.execute("CREATE TABLE IF NOT EXISTS vendors_t (id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT, city TEXT, state TEXT, naics TEXT)")
+                cur.execute("CREATE TABLE IF NOT EXISTS current_tenant (id INTEGER PRIMARY KEY, ctid INTEGER)")
+                cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES (1, 1)")
+                cur.execute("CREATE TABLE IF NOT EXISTS outreach_templates (id INTEGER PRIMARY KEY, name TEXT, subject TEXT, body TEXT)")
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+            conn.commit()
+        except Exception:
+            pass
+
 def render_outreach_mailmerge(conn):
     import streamlit as st, pandas as _pd
     _o3_ensure_schema(conn)
