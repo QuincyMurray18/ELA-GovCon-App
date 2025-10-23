@@ -8000,8 +8000,8 @@ if _hide_saved:
 _rows = (_rows or [])
 _s1_legacy_enrich_and_render(conn)
 if ss.get("s1_page_token"):
-        st.caption("Another page is available. Click Next page to load more.")
-    st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
+    st.caption("Another page is available. Click Next page to load more.")
+st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
     try:
@@ -8921,7 +8921,7 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
     to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
     # [removed duplicate Save selected block]
     if st.session_state.get("s1_page_token"):
-        st.caption("Another page is available. Click Next page to load more.")
+    st.caption(\"Another page is available. Click Next page to load more.\")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 
 
