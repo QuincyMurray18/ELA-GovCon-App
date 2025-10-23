@@ -7991,6 +7991,14 @@ def run_subcontractor_finder_s1_hook(conn):
         pass
 
 
+def _ensure_s1d_wired():
+    wrap = globals().get("_wrap_run_subfinder")
+    if callable(wrap):
+        wrap()
+        fn = globals().get("run_subcontractor_finder")
+        if callable(fn):
+            setattr(fn, "_s1d_wrapped", True)
+
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
         run_sam_watch(conn)
@@ -8016,7 +8024,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
             globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
         with t1:
             # S1 Google Places tab
-            (_ensure_s1d_wired() if callable(globals().get("_ensure_s1d_wired")) else None)
+            _ensure_s1d_wired()
             wrapped = getattr(globals().get("run_subcontractor_finder"), "_s1d_wrapped", False)
             st.caption(f"S1D wrapped = {wrapped}")
             globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
@@ -9715,6 +9723,13 @@ _o6_wrap_o3_send_batch()
 import json as _json, time as _time
 from typing import Any, List, Dict
 import requests as _requests
+
+def _s1d_google_key():
+    try:
+        s = st.secrets
+        return s.get("google", {}).get("api_key") or s.get("GOOGLE_API_KEY")
+    except Exception:
+        return os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_PLACES_API_KEY") or ""
 
 def _s1d_get_api_key():
     try:
