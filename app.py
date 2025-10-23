@@ -5479,7 +5479,19 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
+    # O2: templates picker and manager
+    try:
+        _tpl_picker_prefill(conn)
+        with st.expander("Templates", expanded=False):
+            render_outreach_templates(conn)
+    except Exception:
+        pass
+
     st.header("Outreach")
+    import streamlit as st
+    st.markdown("**O3 WIRED — Mail Merge & Send**")
+    with st.expander("Mail Merge & Send", expanded=True):
+        render_outreach_mailmerge(conn)
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
     notice = st.session_state.get("rfp_selected_notice", {})
@@ -5513,19 +5525,35 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
     st.subheader("Template")
-    st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-    subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
-    body = st.text_area(
-        "Email Body (HTML supported)",
-        value=(
-            "Hello {{company}},<br><br>"
+
+    st.markdown("Use tags: {company}, {email}, {phone}, {naics}, {title}, {solicitation}, {due}, {notice_id}")
+
+    # O2: templates picker and manager
+
+    try:
+
+        _tpl_picker_prefill(conn)
+
+        with st.expander("Templates", expanded=False):
+
+            render_outreach_templates(conn)
+
+    except Exception:
+
+        pass
+
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
+
+    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get("outreach_html", (
+
+        "Hello {{company}},<br><br>"
             "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
             " Responses are due {{due}}. We’d like your quote and capability confirmation."
             "<br><br>Could you reply with pricing and any questions?"
             "<br><br>Thank you,<br>ELA Management"
-        ),
-        height=200,
-    )
+
+    )), height=200)
+
 
     with st.expander("Attachments", expanded=False):
         files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
@@ -6703,7 +6731,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
-            a_subject = st.text_input("Subject", key="act_subject")
+            a_subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
         with a_col2:
             a_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
                                   format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
@@ -8578,3 +8606,424 @@ def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
         conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
+
+
+# === O2: Outreach Templates ====================================================
+def ensure_email_templates(conn):
+    with conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_templates(
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            subject TEXT NOT NULL DEFAULT '',
+            html_body TEXT NOT NULL DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""")
+        conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_email_templates_update
+        AFTER UPDATE ON email_templates
+        BEGIN
+            UPDATE email_templates SET updated_at=CURRENT_TIMESTAMP WHERE id=NEW.id;
+        END;""")
+
+def email_template_list(conn):
+    ensure_email_templates(conn)
+    return conn.execute("SELECT id, name, subject, html_body FROM email_templates ORDER BY name").fetchall()
+
+def email_template_get(conn, template_id:int):
+    ensure_email_templates(conn)
+    return conn.execute("SELECT id, name, subject, html_body FROM email_templates WHERE id=?", (int(template_id),)).fetchone()
+
+def email_template_upsert(conn, name:str, subject:str, html_body:str, template_id:int|None=None):
+    ensure_email_templates(conn)
+    with conn:
+        if template_id:
+            conn.execute("UPDATE email_templates SET name=?, subject=?, html_body=? WHERE id=?",
+                         (name.strip(), subject, html_body, int(template_id)))
+            return template_id
+        conn.execute("""
+            INSERT INTO email_templates(name, subject, html_body)
+            VALUES(?,?,?)
+            ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, html_body=excluded.html_body
+        """, (name.strip(), subject, html_body))
+        return conn.execute("SELECT id FROM email_templates WHERE name=?", (name.strip(),)).fetchone()[0]
+
+def email_template_delete(conn, template_id:int):
+    ensure_email_templates(conn)
+    with conn:
+        conn.execute("DELETE FROM email_templates WHERE id=?", (int(template_id),))
+
+import re as _re_o2
+MERGE_TAGS = {"company","email","title","solicitation","due","notice_id","first_name","last_name","city","state"}
+def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
+    found = set(_re_o2.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", text or ""))
+    return required - found
+
+def render_outreach_templates(conn):
+    import streamlit as st
+    st.subheader("Email templates")
+    ensure_email_templates(conn)
+    rows = email_template_list(conn)
+    names = ["<new>"] + [r[1] for r in rows]
+    sel = st.selectbox("Template", names, key="tpl_sel")
+    if sel == "<new>":
+        tid = None
+        name = st.text_input("Name", key="tpl_name")
+        subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
+        html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
+    else:
+        row = next(r for r in rows if r[1] == sel)
+        tid = row[0]
+        name = st.text_input("Name", value=row[1], key="tpl_name")
+        subject = st.text_input("Subject", value=row[2], key="tpl_subject")
+        html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
+    missing = template_missing_tags((subject or "") + " " + (html or ""))
+    if missing:
+        st.info("Missing merge tags: " + ", ".join(sorted(missing)))
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Save"):
+            if not (name or "").strip():
+                st.error("Name required")
+            else:
+                email_template_upsert(conn, name, subject or "", html or "", tid)
+                st.success("Saved")
+                st.experimental_rerun()
+    with c2:
+        if (tid is not None) and st.button("Duplicate"):
+            email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
+            st.success("Duplicated")
+            st.experimental_rerun()
+    with c3:
+        if (tid is not None) and st.button("Delete"):
+            email_template_delete(conn, tid)
+            st.success("Deleted")
+            st.experimental_rerun()
+
+def _tpl_picker_prefill(conn):
+    import streamlit as st
+    rows = email_template_list(conn)
+    if not rows:
+        return None
+    names = [r[1] for r in rows]
+    choice = st.selectbox("Use template", ["<none>"] + names, key="tpl_pick")
+    if choice != "<none>":
+        row = next(r for r in rows if r[1] == choice)
+        st.session_state["outreach_subject"] = row[2]
+        st.session_state["outreach_html"] = row[3]
+        return row
+    return None
+
+def seed_default_templates(conn):
+    ensure_email_templates(conn)
+    defaults = [
+        ("RFQ Intro", "RFQ: {{title}} {{solicitation}} due {{due}}",
+         "<p>Hello {{first_name}},</p><p>We are collecting quotes for {{title}} under {{solicitation}} due {{due}}.</p><p>Unsubscribe: reply STOP</p>"),
+        ("Follow Up 1", "Follow up on {{title}} RFQ", "<p>Checking in on your quote for {{title}}.</p><p>Unsubscribe: reply STOP</p>")
+    ]
+    for n,s,h in defaults:
+        email_template_upsert(conn, n, s, h, None)
+
+
+
+def run_outreach(conn):
+    import streamlit as st
+    st.header("Outreach")
+    # O2: templates seed + picker + manager
+    seed_default_templates(conn)
+    _tpl_picker_prefill(conn)
+    with st.expander("Templates", expanded=False):
+        render_outreach_templates(conn)
+    # Minimal body fields for Subject and Body that use session prefill
+    st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
+    st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
+
+
+# === O3: Outreach Mail Merge + Send (appended) ===============================
+from contextlib import closing as _o3c
+import smtplib as _o3smtp
+from email.mime.text import MIMEText as _O3MIMEText
+from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
+
+def _o3_ensure_schema(conn):
+    with _o3c(conn.cursor()) as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_optouts(
+            id INTEGER PRIMARY KEY,
+            email TEXT UNIQUE,
+            reason TEXT,
+            ts TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_blasts(
+            id INTEGER PRIMARY KEY,
+            title TEXT,
+            template_name TEXT,
+            sender_email TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_log(
+            id INTEGER PRIMARY KEY,
+            blast_id INTEGER,
+            to_email TEXT,
+            to_name TEXT,
+            subject TEXT,
+            status TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        conn.commit()
+
+def _o3_merge(text, data: dict) -> str:
+    import re as _re
+    t = str(text or "")
+    def rep(m):
+        k = m.group(1).strip()
+        return str(data.get(k, ""))
+    t = _re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", rep, t)
+    return t
+
+def _o3_load_vendors_df(conn):
+    import pandas as _pd
+    try:
+        df_v = _pd.read_sql_query(
+            "SELECT v.id as vendor_id, v.name as company, v.city, v.state, v.naics, v.phone, v.email, v.website FROM vendors v ORDER BY v.name;",
+            conn, params=()
+        )
+    except Exception:
+        df_v = _pd.DataFrame()
+    try:
+        df_c = _pd.read_sql_query(
+            "SELECT vc.vendor_id, vc.name as contact_name, vc.email as contact_email, vc.phone as contact_phone, vc.role FROM vendor_contacts vc ORDER BY vc.id DESC;",
+            conn, params=()
+        )
+    except Exception:
+        df_c = _pd.DataFrame()
+    if df_v is None: df_v = _pd.DataFrame()
+    if df_c is None: df_c = _pd.DataFrame()
+    if not df_c.empty:
+        df = df_c.merge(df_v, on="vendor_id", how="left")
+        df["email"] = df["contact_email"].fillna(df.get("email"))
+        df["name"] = df["contact_name"].fillna("")
+        df["phone"] = df["contact_phone"].fillna(df.get("phone"))
+    else:
+        df = df_v.copy()
+        df["name"] = ""
+    cols = ["email","name","company","phone","naics","city","state","website"]
+    for c in cols:
+        if c not in df.columns: df[c] = ""
+    df = df[cols].copy()
+    if "email" in df.columns:
+        df = df[df["email"].astype(str).str.contains("@", na=False)]
+        df = df.drop_duplicates(subset=["email"])
+    return df
+
+def _o3_collect_recipients_ui(conn):
+    import streamlit as st, pandas as _pd
+    _o3_ensure_schema(conn)
+    st.subheader("Recipients")
+    tabs = st.tabs(["From Vendors","Upload CSV","Manual"])
+    all_rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
+    with tabs[0]:
+        df = _o3_load_vendors_df(conn)
+        f1, f2 = st.columns([2,2])
+        with f1:
+            f_naics = st.text_input("Filter NAICS contains", key="o3_naics")
+        with f2:
+            f_state = st.text_input("Filter State equals (e.g., TX)", key="o3_state")
+        if f_naics:
+            df = df[df["naics"].fillna("").str.contains(f_naics, case=False, na=False)]
+        if f_state:
+            df = df[df["state"].fillna("").str.upper()==f_state.strip().upper()]
+        st.caption(f"{len(df)} vendor rows")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        if st.button("Add all filtered vendors", key="o3_add_vendors"):
+            all_rows = _pd.concat([all_rows, df], ignore_index=True)
+    with tabs[1]:
+        st.caption("CSV columns: email,name,company,phone,naics,city,state,website,first_name,last_name,title,solicitation,due,notice_id")
+        up = st.file_uploader("Upload CSV", type=["csv"], key="o3_csv_up")
+        if up:
+            try:
+                dfu = _pd.read_csv(up)
+                st.dataframe(dfu.head(50), use_container_width=True, hide_index=True)
+                if st.button("Add uploaded rows", key="o3_add_csv"):
+                    all_rows = _pd.concat([all_rows, dfu], ignore_index=True)
+            except Exception as e:
+                st.error(f"CSV read error: {e}")
+    with tabs[2]:
+        st.caption("Paste one email per line or 'email, name, company'")
+        txt = st.text_area("Lines", height=150, key="o3_paste")
+        if st.button("Add pasted", key="o3_add_paste"):
+            rows = []
+            for line in (txt or "").splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if not parts: continue
+                em = parts[0] if "@" in parts[0] else ""
+                if not em: continue
+                name = parts[1] if len(parts)>1 else ""
+                comp = parts[2] if len(parts)>2 else ""
+                rows.append({"email": em, "name": name, "company": comp, "phone":"", "naics":"", "city":"", "state":"", "website":""})
+            if rows:
+                all_rows = _pd.concat([all_rows, _pd.DataFrame(rows)], ignore_index=True)
+    cur = st.session_state.get("o3_rows")
+    if cur is not None and isinstance(cur, _pd.DataFrame) and not cur.empty:
+        all_rows = _pd.concat([cur, all_rows], ignore_index=True)
+    if not all_rows.empty:
+        all_rows = all_rows.dropna(subset=["email"])
+        all_rows = all_rows[all_rows["email"].astype(str).str.contains("@", na=False)]
+        all_rows = all_rows.drop_duplicates(subset=["email"])
+    st.session_state["o3_rows"] = all_rows
+    if not all_rows.empty:
+        st.write(f"Total recipients: {len(all_rows)}")
+        st.dataframe(all_rows, use_container_width=True, hide_index=True)
+        csv_bytes = all_rows.to_csv(index=False).encode("utf-8")
+        st.download_button("Download recipients CSV", data=csv_bytes, file_name="o3_recipients.csv", mime="text/csv", key="o3_dl_recip")
+    return all_rows
+
+def _o3_sender_accounts_from_secrets():
+    try:
+        import streamlit as st
+        accs = []
+        try:
+            for row in (st.secrets.get("gmail_accounts") or []):
+                if row.get("email") and row.get("app_password"):
+                    accs.append({"email":row["email"],"app_password":row["app_password"],"name":row.get("name","")})
+        except Exception:
+            pass
+        if not accs:
+            g = st.secrets.get("gmail") or {}
+            if g.get("email") and g.get("app_password"):
+                accs.append({"email":g["email"],"app_password":g["app_password"],"name":g.get("name","")})
+        return accs
+    except Exception:
+        return []
+
+def _o3_render_sender_picker():
+    import streamlit as st
+    accs = _o3_sender_accounts_from_secrets()
+    choices = [f"{a.get('name')+' · ' if a.get('name') else ''}{a['email']}" for a in accs]
+    default_idx = 0 if choices else None
+    sel = st.selectbox("Sender account", choices or ["<enter credentials>"], index=default_idx, key="o3_sender_pick")
+    creds = {"email":"", "app_password":"", "name":""}
+    if accs and sel in choices:
+        i = choices.index(sel)
+        creds = accs[i]
+    if not accs:
+        st.caption("Enter Gmail + App Password")
+        c1, c2 = st.columns([2,2])
+        with c1:
+            creds["email"] = st.text_input("Gmail address", key="o3_s_email")
+            creds["name"] = st.text_input("From name", key="o3_s_name")
+        with c2:
+            creds["app_password"] = st.text_input("App password", type="password", key="o3_s_app")
+    return creds
+
+def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
+    import streamlit as st, datetime as _dt, pandas as _pd
+    _o3_ensure_schema(conn)
+    if rows is None or rows.empty:
+        st.error("No recipients"); return 0, []
+    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
+    if not blast_title:
+        blast_title = "Outreach"
+    with _o3c(conn.cursor()) as cur:
+        cur.execute("INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
+                    (blast_title, st.session_state.get("tpl_sel",""), sender.get("email","")))
+        conn.commit()
+        blast_id = cur.lastrowid
+    try:
+        opt = _pd.read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        blocked = set(opt["email"].str.lower().tolist())
+    except Exception:
+        blocked = set()
+    sent = 0
+    logs = []
+    smtp = None
+    if not test_only:
+        try:
+            smtp = _o3smtp.SMTP_SSL("smtp.gmail.com", 465, timeout=20)
+            smtp.login(sender["email"], sender["app_password"])
+        except Exception as e:
+            st.error(f"SMTP login failed: {e}")
+            return 0, []
+    for _, r in rows.head(int(max_send)).iterrows():
+        to_email = str(r.get("email","")).strip()
+        if not to_email or "@" not in to_email:
+            continue
+        if to_email.lower() in blocked:
+            status = "Skipped: opt-out"; err = ""; subj = ""
+        else:
+            data = {k: str(r.get(k,"") or "") for k in r.index}
+            subj = _o3_merge(subject_tpl or "", data)
+            html = _o3_merge(html_tpl or "", data)
+            if "unsubscribe" not in html.lower():
+                html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
+            if test_only:
+                status = "Preview"; err = ""
+            else:
+                try:
+                    msg = _O3MIMEMultipart("alternative")
+                    msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
+                    msg["To"] = to_email
+                    msg["Subject"] = subj
+                    msg.attach(_O3MIMEText(html, "html", "utf-8"))
+                    smtp.sendmail(sender["email"], [to_email], msg.as_string())
+                    status = "Sent"; err = ""
+                except Exception as e:
+                    status = "Error"; err = str(e)
+        with _o3c(conn.cursor()) as cur:
+            cur.execute("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES(?,?,?,?,?,?);",
+                        (blast_id, to_email, str(r.get('name') or ""), subj, status, err))
+            conn.commit()
+        logs.append({"email":to_email,"status":status,"error":err})
+        if status=="Sent":
+            sent += 1
+    if smtp is not None:
+        try: smtp.quit()
+        except Exception: pass
+    try:
+        df = _pd.DataFrame(logs)
+        st.download_button("Download send log CSV", data=df.to_csv(index=False).encode("utf-8"),
+                           file_name=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
+    except Exception:
+        pass
+    st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
+    return sent, logs
+
+def render_outreach_mailmerge(conn):
+    import streamlit as st, pandas as _pd
+    _o3_ensure_schema(conn)
+    st.subheader("Mail Merge & Send")
+    try:
+        _tpl_picker_prefill(conn)
+    except Exception:
+        pass
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
+    rows = _o3_collect_recipients_ui(conn)
+    if rows is not None and not rows.empty and (subj or body):
+        with st.expander("Preview (first 5)", expanded=True):
+            prev = []
+            for _, r in rows.head(5).iterrows():
+                data = {k:str(r.get(k,"") or "") for k in r.index}
+                prev.append({"to": r["email"], "subject": _o3_merge(subj, data), "snippet": _o3_merge(body, data)[:140]})
+            st.dataframe(_pd.DataFrame(prev), use_container_width=True, hide_index=True)
+    st.subheader("Sender")
+    sender = _o3_render_sender_picker()
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if test and rows is not None and not rows.empty:
+        _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
+    if do:
+        if not sender.get("email") or not sender.get("app_password"):
+            st.error("Missing sender credentials")
+        elif rows is None or rows.empty:
+            st.error("No recipients")
+        else:
+            _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
+# === end O3 ===================================================================
+
