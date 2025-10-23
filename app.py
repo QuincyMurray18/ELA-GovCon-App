@@ -564,7 +564,7 @@ def _first_row_value(df, col, default=None):
 
 # --- Capability Statement Page (full implementation) ---
 def run_capability_statement(conn):
-
+    import streamlit as st
     import json, datetime, io, sqlite3
 
     st.header("Capability Statement")
@@ -1040,7 +1040,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
             pass
 
 def y0_ai_panel():
-
+    import streamlit as st
     st.header(f"Ask the CO (AI) · {_resolve_model()}")
     q = st.text_area("Your question", key="y0_q", height=120)
     if st.button("Ask", key="y0_go"):
@@ -6281,7 +6281,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
             from docx import Document  # type: ignore
             import docx  # type: ignore
         except Exception:
-
+            import streamlit as st
             st.error("python-docx is required. pip install python-docx")
             return None
     try:
@@ -6304,7 +6304,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
         doc.save(path)
         return path
     except Exception as e:
-
+        import streamlit as st
         st.error(f"DOCX export failed: {e}")
         return None
 
@@ -6495,7 +6495,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
             from docx import Document  # type: ignore
             import docx  # type: ignore
         except Exception:
-
+            import streamlit as st
             st.error("python-docx is required. pip install python-docx")
             return None
     try:
@@ -6518,7 +6518,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
         doc.save(path)
         return path
     except Exception as e:
-
+        import streamlit as st
         st.error(f"DOCX export failed: {e}")
         return None
 
@@ -7788,7 +7788,7 @@ def s1_normalize_phone(s):
 def s1_get_google_api_key():
     import os
     try:
-
+        import streamlit as st
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
@@ -8119,7 +8119,7 @@ if "_o3_ensure_schema" not in globals():
 if "_o3_collect_recipients_ui" not in globals():
     def _o3_collect_recipients_ui(conn):
         try:
-
+            import streamlit as st
             import pandas as _pd
             q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
             params = []
@@ -8154,7 +8154,7 @@ if "_o3_collect_recipients_ui" not in globals():
 # --- Outreach SMTP sender picker: fallback stub if full implementation is defined later ---
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
-
+        import streamlit as st
         from contextlib import closing
         try:
             with closing(conn.cursor()) as cur:
@@ -8612,7 +8612,7 @@ def s1_normalize_phone(s:str)->str:
 def s1_get_google_api_key()->str|None:
     import os
     try:
-
+        import streamlit as st
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
@@ -8819,7 +8819,7 @@ def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
     return required - found
 
 def render_outreach_templates(conn):
-
+    import streamlit as st
     st.subheader("Email templates")
     ensure_email_templates(conn)
     rows = email_template_list(conn)
@@ -8860,7 +8860,7 @@ def render_outreach_templates(conn):
             st.rerun()
 
 def _tpl_picker_prefill(conn):
-
+    import streamlit as st
     rows = email_template_list(conn)
     if not rows:
         return None
@@ -8886,7 +8886,7 @@ def seed_default_templates(conn):
 
 
 def run_outreach(conn):
-
+    import streamlit as st
     st.header("Outreach")
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
@@ -9047,7 +9047,7 @@ def _o3_collect_recipients_ui(conn):
 
 def _o3_sender_accounts_from_secrets():
     try:
-
+        import streamlit as st
         accs = []
         try:
             for row in (st.secrets.get("gmail_accounts") or []):
@@ -9064,7 +9064,7 @@ def _o3_sender_accounts_from_secrets():
         return []
 
 def _o3_render_sender_picker():
-
+    import streamlit as st
     accs = _o3_sender_accounts_from_secrets()
     choices = [f"{a.get('name')+' · ' if a.get('name') else ''}{a['email']}" for a in accs]
     default_idx = 0 if choices else None
@@ -9160,7 +9160,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         import docx  # type: ignore
         from docx.shared import Inches  # type: ignore
     except Exception:
-
+        import streamlit as st
         st.error("python-docx is required. pip install python-docx")
         return None
     try:
@@ -9183,7 +9183,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         doc.save(path)
         return path
     except Exception as e:
-
+        import streamlit as st
         st.error(f"Past Performance export failed: {e}")
         return None
 
@@ -9236,7 +9236,7 @@ def _o4_accounts_ui(conn):
 
 def _o3_render_sender_picker():
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
-
+    import streamlit as st
     conn = globals().get("_O4_CONN")
     if conn is None:
         st.warning("Internal: sender picker not initialized"); 
