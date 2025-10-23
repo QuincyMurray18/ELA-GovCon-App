@@ -7983,8 +7983,22 @@ def s1_render_places_panel(conn, default_addr=None):
             st.error("Some saves failed: " + "; ".join(errors))
 
         
-if hide_saved:
-    rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
+# source flag from session to avoid NameError in any context
+
+
+        
+_hide_saved = bool(st.session_state.get("s1_hide_saved", True))
+
+
+        
+if _hide_saved:
+
+
+        
+    rows = [r for r in rows if r["place_id"] not in ss.get("s1_saved_ids", set())]
+
+
+        
     ss["s1_results"] = rows
 
 # Enrich legacy S1 with phone and website and render clickable links
