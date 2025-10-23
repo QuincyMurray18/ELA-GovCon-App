@@ -3965,8 +3965,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === Phase 3: RTM + Amendment sidebar wiring ===
     # Gated: RTM & Amendments
     if _rfp_flow in ("Deliverables","Intake"):
-
-    try:
+        try:
         _ctx = pd.read_sql_query("SELECT id, title, sam_url FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
         _ctx = pd.DataFrame()
