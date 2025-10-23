@@ -9686,3 +9686,220 @@ def _o6_wrap_o3_send_batch():
 
 _o6_wrap_o3_send_batch()
 # === End O6 ================================================================
+
+
+# === S1D: Subcontractor Finder — dedupe + Google Places pagination ===========
+import json as _json, time as _time
+from typing import Any, List, Dict
+import requests as _requests
+
+def _s1d_get_api_key():
+    try:
+        return st.secrets["google"]["api_key"]
+    except Exception:
+        pass
+    try:
+        return st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        pass
+    return ""
+
+def _s1d_norm_phone(p: str) -> str:
+    import re as _re
+    if not p: return ""
+    digits = "".join(_re.findall(r"\d+", str(p)))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
+
+def _s1d_existing_vendor_keys(conn):
+    # Build keys to detect duplicates: by place_id if present, else name+phone
+    try:
+        rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
+    except Exception:
+        try:
+            rows = conn.execute("SELECT name, COALESCE(phone,''), '' as place_id FROM vendors_t").fetchall()
+        except Exception:
+            return set(), set()
+    by_np = set()
+    by_pid = set()
+    for r in rows:
+        name = (r[0] or "").strip().lower()
+        ph = _s1d_norm_phone(r[1] or "")
+        pid = (r[2] or "").strip()
+        if name or ph:
+            by_np.add((name, ph))
+        if pid:
+            by_pid.add(pid)
+    return by_np, by_pid
+
+def _s1d_geocode(addr: str, key: str):
+    if not addr: return None
+    try:
+        r = _requests.get("https://maps.googleapis.com/maps/api/geocode/json", params={"address": addr, "key": key}, timeout=10)
+        js = r.json()
+        if js.get("status") == "OK" and js.get("results"):
+            loc = js["results"][0]["geometry"]["location"]
+            return float(loc["lat"]), float(loc["lng"])
+    except Exception:
+        return None
+    return None
+
+def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_m: int|None, page_token: str|None, key: str):
+    base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {"query": query, "key": key, "region": "us"}
+    if page_token:
+        params = {"pagetoken": page_token, "key": key}
+    else:
+        if lat is not None and lng is not None and radius_m:
+            params.update({"location": f"{lat},{lng}", "radius": int(radius_m)})
+    r = _requests.get(base, params=params, timeout=12)
+    js = r.json()
+    return js
+
+def _s1d_place_details(pid: str, key: str):
+    try:
+        r = _requests.get("https://maps.googleapis.com/maps/api/place/details/json",
+                          params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
+                          timeout=10)
+        return r.json().get("result", {}) or {}
+    except Exception:
+        return {}
+
+def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
+    # Ensure columns
+    cols = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(vendors_t)").fetchall()}
+    with conn:
+        if "place_id" not in cols:
+            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN place_id TEXT"); 
+            except Exception: pass
+        if "website" not in cols:
+            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN website TEXT");
+            except Exception: pass
+        if "phone" not in cols:
+            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN phone TEXT");
+            except Exception: pass
+    # Insert
+    saved = 0
+    with conn:
+        for r in rows:
+            conn.execute("""INSERT INTO vendors_t(name, email, phone, website, city, state, naics, place_id)
+                            VALUES(?,?,?,?,?,?,?,?)""",
+                         (r.get("name",""), "", r.get("phone",""), r.get("website",""), r.get("city",""), r.get("state",""), "", r.get("place_id","")))
+            saved += 1
+    return saved
+
+def render_subfinder_s1d(conn):
+    st.subheader("S1D — Google Places search with dedupe")
+    key = _s1d_get_api_key()
+    if not key:
+        st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
+        return
+    q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
+    loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
+    lat = lng = None
+    if loc_choice == "Address":
+        addr = st.text_input("Place of performance address")
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
+        if addr:
+            ll = _s1d_geocode(addr, key)
+            if ll: lat, lng = ll
+    else:
+        col1, col2 = st.columns(2)
+        with col1: lat = st.number_input("Latitude", value=38.8951)
+        with col2: lng = st.number_input("Longitude", value=-77.0364)
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
+    radius_m = int(radius_mi * 1609.34)
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        go = st.button("Search", key="s1d_go")
+    with c2:
+        nxt = st.button("Next page", key="s1d_next")
+    # Persist page token
+    tok_key = "s1d_next_token"
+    if go: st.session_state.pop(tok_key, None)
+    js = None
+    try:
+        if go or nxt:
+            tok = st.session_state.get(tok_key) if nxt else None
+            if q:
+                js = _s1d_places_textsearch(q, lat, lng, radius_m, tok, key)
+                if js.get("next_page_token"):
+                    st.session_state[tok_key] = js["next_page_token"]
+                else:
+                    st.session_state.pop(tok_key, None)
+    except Exception as e:
+        st.error(f"Search failed: {e}")
+        return
+    if not js or not js.get("results"):
+        st.info("No results yet. Enter a query and click Search.")
+        return
+    by_np, by_pid = _s1d_existing_vendor_keys(conn)
+    rows = []
+    for r in js["results"]:
+        name = r.get("name","")
+        pid = r.get("place_id","")
+        addr = r.get("formatted_address","")
+        city = state = ""
+        if "," in addr:
+            parts = [p.strip() for p in addr.split(",")]
+            if len(parts)>=2:
+                city = parts[-2]
+                state = parts[-1].split()[0]
+        details = _s1d_place_details(pid, key) if pid else {}
+        phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
+        website = details.get("website") or ""
+        dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
+        rows.append({
+            "name": name, "address": addr, "city": city, "state": state,
+            "phone": phone, "website": website, "place_id": pid,
+            "google_url": details.get("url") or "",
+            "_dup": dup
+        })
+        # be nice to Places
+        _time.sleep(0.05)
+    import pandas as _pd
+    df = _pd.DataFrame(rows)
+    if df.empty:
+        st.info("No results.")
+        return
+    # Show with links and dedupe flags
+    def _mk_link(url, text):
+        if not url: return text
+        return f"<a href='{url}' target='_blank'>{text}</a>"
+    show = df.copy()
+    show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
+    show["website"] = show.apply(lambda r: _mk_link(r["website"], "site") if r["website"] else "", axis=1)
+    show = show[["name","phone","website","address","city","state","place_id","_dup"]]
+    st.markdown("**Results**")
+    st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
+    # Select and save non-duplicates
+    keep = df[~df["_dup"]]
+    if keep.empty:
+        st.success("All results are already in your vendor list.")
+        return
+    st.caption(f"{len(keep)} new vendors can be saved")
+    if st.button("Save all new vendors", key="s1d_save"):
+        n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
+        st.success(f"Saved {n} vendors")
+# === End S1D ================================================================
+
+
+def _wrap_run_subfinder():
+    g = globals()
+    base = g.get("run_subcontractor_finder")
+    if not callable(base) or getattr(base, "_s1d_wrapped", False):
+        return
+    def wrapped(conn):
+        import streamlit as st
+        st.header("Subcontractor Finder")
+        with st.expander("S1D — Google Places & Dedupe", expanded=False):
+            try:
+                render_subfinder_s1d(conn)
+            except Exception as e:
+                st.error(f"S1D error: {e}")
+        base(conn)
+    wrapped._s1d_wrapped = True
+    g["run_subcontractor_finder"] = wrapped
+
+_wrap_run_subfinder()
