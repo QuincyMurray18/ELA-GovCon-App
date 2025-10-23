@@ -8202,7 +8202,7 @@ if "_o3_render_sender_picker" not in globals():
             "from_email": (username or "").strip(),
             "from_name": "ELA Management"
         }
-    _o3_ensure_schema(conn)
+
     st.subheader("Mail Merge & Send")
     try:
         _tpl_picker_prefill(conn)
@@ -8987,7 +8987,7 @@ def _o3_load_vendors_df(conn):
 
 def _o3_collect_recipients_ui(conn):
     import streamlit as st, pandas as _pd
-    _o3_ensure_schema(conn)
+
     st.subheader("Recipients")
     tabs = st.tabs(["From Vendors","Upload CSV","Manual"])
     all_rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
@@ -9087,7 +9087,7 @@ def _o3_render_sender_picker():
 
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
     import streamlit as st, datetime as _dt, pandas as _pd
-    _o3_ensure_schema(conn)
+
     if rows is None or rows.empty:
         st.error("No recipients"); return 0, []
     blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
