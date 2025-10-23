@@ -8087,6 +8087,8 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
 
 def main() -> None:
     conn = get_db()
+    global _O4_CONN
+    _O4_CONN = conn
     st.title(APP_TITLE)
     st.caption(BUILD_LABEL)
     # Y0 main panel (always on)
@@ -8200,8 +8202,6 @@ if "_o3_render_sender_picker" not in globals():
             "from_email": (username or "").strip(),
             "from_name": "ELA Management"
         }
-    global _O4_CONN
-    _O4_CONN = conn
     _o3_ensure_schema(conn)
     st.subheader("Mail Merge & Send")
     try:
@@ -9300,4 +9300,3 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
-
