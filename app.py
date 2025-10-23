@@ -8970,6 +8970,28 @@ def seed_default_templates(conn):
 def run_outreach(conn):
 
     st.header("Outreach")
+    st.markdown("**O4 — Sending Controls (forced)**")
+    with st.expander("Sender accounts", expanded=True):
+        try:
+            _o4_accounts_ui(conn)
+        except Exception as e:
+            st.warning(f"Sender accounts unavailable: {e}")
+    with st.expander("Opt-outs & compliance", expanded=False):
+        try:
+            _o4_optout_ui(conn)
+        except Exception as e:
+            st.warning(f"Opt-out UI unavailable: {e}")
+    with st.expander("Send audit log", expanded=False):
+        try:
+            _o4_audit_ui(conn)
+        except Exception as e:
+            st.warning(f"Audit UI unavailable: {e}")
+    with st.expander("Mail Merge & Send", expanded=True):
+        try:
+            render_outreach_mailmerge(conn)
+        except Exception as e:
+            st.error(f"Mail merge panel error: {e}")
+    st.header("Outreach")
     # O2: templates seed + picker + manager
     seed_default_templates(conn)
     _tpl_picker_prefill(conn)
