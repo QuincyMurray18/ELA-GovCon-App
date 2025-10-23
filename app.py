@@ -1,6 +1,121 @@
 import requests
 import time
 
+
+# ==== Phase 3 hardened tri-pane shim ====
+def _tri_has_symbol(name: str) -> bool:
+    try:
+        return name in globals() and callable(globals()[name])
+    except Exception:
+        return False
+
+def _tri_safe_call(fn_name, *args, **kwargs):
+    try:
+        return globals()[fn_name](*args, **kwargs)
+    except Exception as e:
+        import streamlit as st
+        st.error(f"{fn_name} failed: {e}")
+        try:
+            st.exception(e)
+        except Exception:
+            pass
+        return None
+
+if 'run_rfp_analyzer_tri' not in globals():
+    def run_rfp_analyzer_tri(conn):
+        import streamlit as st
+        st.markdown("### RFP Analyzer")
+        left, mid, right = st.columns([0.26, 0.48, 0.26], gap="small")
+        with left:
+            st.subheader("Files")
+            called = False
+            for cand in ["rfp_files_rail", "rfp_files_ui", "rfp_files_panel", "files_panel", "rfp_upload_and_list"]:
+                if _tri_has_symbol(cand):
+                    _tri_safe_call(cand, conn)
+                    called = True
+                    break
+            if not called:
+                up = st.file_uploader("Add files", type=["pdf","docx","xlsx","csv","txt"], accept_multiple_files=True)
+                if up:
+                    ss = st.session_state.setdefault("tri_rfp_files", [])
+                    for u in up:
+                        ss.append({"name": u.name, "size": u.size})
+                    st.success(f"Added {len(up)} file(s) to session")
+                files = st.session_state.get("tri_rfp_files", [])
+                if files:
+                    st.write({"files": files})
+                else:
+                    st.caption("No files loaded")
+        with mid:
+            st.subheader("RTM")
+            called = False
+            for cand in ["rtm_builder_ui","build_rtm_ui","render_rtm","rtm_panel","run_rtm"]:
+                if _tri_has_symbol(cand):
+                    _tri_safe_call(cand, conn)
+                    called = True
+                    break
+            if not called:
+                st.caption("RTM builder not found. Placeholder.")
+                st.text_area("Requirements", key="tri_rtm_req", height=240, placeholder="Extract and map requirements here.")
+        with right:
+            st.subheader("L & M")
+            called = False
+            for cand in ["lm_checklist_ui","render_lm_checklist","lm_panel","run_l_and_m"]:
+                if _tri_has_symbol(cand):
+                    _tri_safe_call(cand, conn)
+                    called = True
+                    break
+            if not called:
+                items = st.session_state.setdefault("tri_lm_items", ["Conform to page limits","Font/format compliance","Past performance included"])
+                checks = st.session_state.setdefault("tri_lm_checks", [False]*len(items))
+                for i, label in enumerate(items):
+                    checks[i] = st.checkbox(label, value=checks[i], key=f"tri_lm_{i}")
+        st.divider()
+        col_a, col_b, col_c, col_d = st.columns([0.25,0.25,0.25,0.25])
+        with col_a:
+            if st.button("Validate"):
+                did = False
+                for cand in ["validate_rfp_state","validate_rtm_and_lm"]:
+                    if _tri_has_symbol(cand):
+                        _tri_safe_call(cand, conn)
+                        did = True
+                        break
+                if not did:
+                    st.info("No validator found.")
+        with col_b:
+            if st.button("Export RTM"):
+                did = False
+                for cand in ["export_rtm_docx","export_rtm_csv"]:
+                    if _tri_has_symbol(cand):
+                        _tri_safe_call(cand, conn)
+                        did = True
+                        break
+                if not did:
+                    st.info("No RTM export function found.")
+        with col_c:
+            if st.button("Export Proposal"):
+                did = False
+                for cand in ["export_proposal_docx","export_proposal_pdf","proposal_export"]:
+                    if _tri_has_symbol(cand):
+                        _tri_safe_call(cand, conn)
+                        did = True
+                        break
+                if not did:
+                    st.info("No proposal export function found.")
+        with col_d:
+            if st.button("Open CO Chat"):
+                did = False
+                for cand in ["run_co_chat","open_co_chat","ask_ai_with_citations_ui"]:
+                    if _tri_has_symbol(cand):
+                        _tri_safe_call(cand, conn)
+                        did = True
+                        break
+                if not did:
+                    st.info("CO Chat UI not found.")
+# ==== End Phase 3 hardened tri-pane shim ====
+
+
+
 # --- S1D helper: Google API key resolver ---
 def _s1d_google_key():
     try:
