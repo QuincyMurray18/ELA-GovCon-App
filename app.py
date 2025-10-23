@@ -3851,26 +3851,26 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     def _expand_for(title: str) -> bool:
         t = (title or "").lower()
         if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
-            return _rfp_flow in ("Deliverables", "Overview")
+            return _rfp_flow in ("Deliverables",)
         if any(k in t for k in ["ingest", "files for this rfp", "manual text paste", "acquisition meta", "ordering / pop", "file library"]):
-            return _rfp_flow in ("Intake", "Overview")
+            return _rfp_flow in ("Intake",)
         if any(k in t for k in ["find in linked files", "q&a", "search", "semantic", "ask the co"]):
-            return _rfp_flow in ("Analyze", "Overview")
+            return _rfp_flow in ("Analyze",)
         if "manual editors" in t:
             return _rfp_flow in ("Advanced",)
-        return _rfp_flow == "Overview"
+        return False
 
     def _visible_for(title: str) -> bool:
         t = (title or "").lower()
         if any(k in t for k in ["rtm", "proposal", "snippets inbox"]):
-            return _rfp_flow in ("Deliverables", "Overview")
+            return _rfp_flow in ("Deliverables",)
         if any(k in t for k in ["ingest", "files for this rfp", "manual text paste", "acquisition meta", "ordering / pop", "file library"]):
-            return _rfp_flow in ("Intake", "Overview")
+            return _rfp_flow in ("Intake",)
         if any(k in t for k in ["find in linked files", "q&a", "search", "semantic", "ask the co"]):
-            return _rfp_flow in ("Analyze", "Overview")
+            return _rfp_flow in ("Analyze",)
         if "manual editors" in t:
             return _rfp_flow in ("Advanced",)
-        return _rfp_flow == "Overview"
+        return False
         # === One-Page Analyzer (integrated) ===
     try:
         _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
@@ -3878,7 +3878,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         _df_rf_ctx = None
     with st.container():
         _rfp_flow = st.radio("Workflow", ["Overview","Intake","Analyze","Deliverables","Advanced"], index=0, key="rfp_analyzer_flow", horizontal=True)
-        st.caption("RFP Analyzer · single-page mode")
+        if _rfp_flow == "Analyze":
+            st.caption("RFP Analyzer · single-page mode")
         if run_rfp_analyzer_onepage is None:
             st.info("One-Page Analyzer module not found. Place rfp_onepage.py next to this app.")
         elif _df_rf_ctx is None or _df_rf_ctx.empty:
@@ -3962,6 +3963,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             st.rerun()
 
     # === Phase 3: RTM + Amendment sidebar wiring ===
+    # Gated: RTM & Amendments
+    if _rfp_flow in ("Deliverables","Intake"):
+
     try:
         _ctx = pd.read_sql_query("SELECT id, title, sam_url FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
@@ -3990,6 +3994,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             if not _visible_for("Requirements Traceability Matrix (RTM)"):
                 st.empty()
             else:
+            if _rfp_flow == "Deliverables":
+
                 render_rtm_ui(conn, int(rid_p3))
 
     render_status_and_gaps(conn)
@@ -4842,6 +4848,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         except Exception:
             sam_url = ""
         ttl = int(st.session_state.get("cache_ttl_hours", 72)) if "cache_ttl_hours" in st.session_state else 72
+            if _rfp_flow == "Intake":
+
         if sam_url:
             render_amendment_sidebar(conn, rid_int, sam_url, ttl)
 
