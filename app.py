@@ -1,3 +1,140 @@
+
+# ==== Phase 3: Tri-pane RFP Analyzer (prefixed for early availability) ====
+def run_rfp_analyzer_tri(conn):
+    import streamlit as st
+    import pandas as pd
+    st.markdown("### RFP Analyzer")
+
+    # Resolve RFPs
+    try:
+        df = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        try:
+            df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+        except Exception:
+            df = None
+    if df is None or df.empty:
+        st.info("No RFPs found. Use RFP Analyzer ingest to create one.")
+        return
+
+    rid = st.selectbox(
+        "RFP context",
+        options=df["id"].tolist(),
+        format_func=lambda i: f"#{i} — {df.loc[df['id']==i,'title'].values[0]}",
+        key="tri_rfp_sel"
+    )
+    try:
+        st.session_state["current_rfp_id"] = int(rid)
+    except Exception:
+        pass
+
+    left, mid, right = st.columns([0.28, 0.44, 0.28], gap="small")
+
+    # Files rail + CO Chat
+    with left:
+        st.subheader("Files")
+        try:
+            df_files = pd.read_sql_query(
+                "SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                conn, params=(int(rid),)
+            )
+        except Exception:
+            df_files = None
+        if df_files is not None and not df_files.empty:
+            st.dataframe(df_files, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No files stored for this RFP.")
+        st.divider()
+        # CO Chat
+        for cand in ["y6_render_co_box","y2_ui_threaded_chat","ask_ai_with_citations_ui"]:
+            fn = globals().get(cand)
+            if callable(fn):
+                try:
+                    if cand == "y6_render_co_box":
+                        fn(conn, int(rid), key_prefix="tri_co", title="Ask the CO", help_text="Answers use this RFP context.")
+                    elif cand == "y2_ui_threaded_chat":
+                        fn(conn, int(rid), key="tri_co_y2")
+                    else:
+                        fn(conn, int(rid))
+                except Exception as e:
+                    st.error(f"{cand} failed: {e}")
+                break
+        else:
+            st.info("CO Chat UI not available in this build.")
+
+    # RTM
+    with mid:
+        st.subheader("RTM")
+        for cand in ["render_rtm_ui","rtm_builder_ui","build_rtm_ui","render_rtm","rtm_panel","run_rtm"]:
+            fn = globals().get(cand)
+            if callable(fn):
+                try:
+                    fn(conn, int(rid)) if fn.__code__.co_argcount >= 2 else fn(conn)
+                except Exception as e:
+                    st.error(f"{cand} failed: {e}")
+                break
+        else:
+            st.info("RTM UI not available.")
+
+    # L & M
+    with right:
+        st.subheader("L & M")
+        for cand in ["run_lm_checklist","lm_checklist_ui","render_lm_checklist","lm_panel","run_l_and_m"]:
+            fn = globals().get(cand)
+            if callable(fn):
+                try:
+                    fn(conn) if fn.__code__.co_argcount >= 1 else fn()
+                except Exception as e:
+                    st.error(f"{cand} failed: {e}")
+                break
+        else:
+            st.info("L & M UI not available.")
+
+    st.divider()
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        if st.button("Validate L/M Gate"):
+            fn = globals.get("require_LM_minimum") if isinstance(globals, dict) else globals().get("require_LM_minimum")
+            if callable(fn):
+                try:
+                    ok_gate, missing = fn(conn, int(rid))
+                    if ok_gate:
+                        st.success("Validation passed")
+                    else:
+                        st.error("Blocked: " + ", ".join(missing or []))
+                except Exception as e:
+                    st.error(f"Validator failed: {e}")
+            else:
+                st.info("Validator not found.")
+    with c2:
+        if st.button("Export RTM CSV"):
+            fn = globals().get("rtm_export_csv")
+            if callable(fn):
+                try:
+                    path = fn(conn, int(rid))
+                    if path:
+                        st.success("Exported")
+                        st.markdown(f"[Download CSV]({path})")
+                    else:
+                        st.warning("No file produced.")
+                except Exception as e:
+                    st.error(f"RTM export failed: {e}")
+            else:
+                st.info("RTM CSV exporter not found.")
+    with c3:
+        if st.button("Open Proposal Builder"):
+            import streamlit as st
+            st.session_state["go_to_page"] = "Proposal Builder"
+            st.rerun()
+    with c4:
+        if st.button("Open Legacy Analyzer"):
+            fn = globals().get("run_rfp_analyzer")
+            if callable(fn):
+                fn(conn)
+            else:
+                st.info("Legacy analyzer not found.")
+# ==== End Phase 3 prefix ====
+
 import requests
 import time
 
@@ -9999,124 +10136,3 @@ def _wrap_run_subfinder():
     g["run_subcontractor_finder"] = wrapped
 
 _wrap_run_subfinder()
-
-
-
-# ==== Phase 3: RFP Analyzer tri pane — wired to existing functions ====
-def run_rfp_analyzer_tri(conn):
-    import streamlit as st
-    import pandas as pd
-
-    # Resolve RFP list from rfps or rfps_t
-    df = None
-    try:
-        df = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-    except Exception:
-        try:
-            df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
-        except Exception:
-            df = None
-
-    st.markdown("### RFP Analyzer")
-    if df is None or df.empty:
-        st.info("No RFPs yet. Use Parse & Save in the legacy analyzer to create one.")
-        return
-
-    # Choose current RFP and persist to session so L/M reuses it
-    rid = st.selectbox(
-        "RFP context",
-        options=df["id"].tolist(),
-        format_func=lambda i: f"#{i} — {df.loc[df['id']==i,'title'].values[0]}",
-        key="tri_rfp_sel"
-    )
-    try:
-        st.session_state["current_rfp_id"] = int(rid)
-    except Exception:
-        pass
-
-    # Three columns
-    left, mid, right = st.columns([0.28, 0.44, 0.28], gap="small")
-
-    # LEFT: Files rail + CO chat
-    with left:
-        st.subheader("Files")
-        # Show simple listing from rfp_files
-        try:
-            df_files = pd.read_sql_query(
-                "SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-                conn, params=(int(rid),)
-            )
-        except Exception:
-            df_files = None
-        if df_files is not None and not df_files.empty:
-            st.dataframe(df_files, use_container_width=True, hide_index=True)
-        else:
-            st.caption("No files stored for this RFP.")
-        st.divider()
-        # CO Chat wired to Y6
-        if "y6_render_co_box" in globals() and callable(globals()["y6_render_co_box"]):
-            globals()["y6_render_co_box"](conn, int(rid), key_prefix="tri_co", title="Ask the CO", help_text="Answers use this RFP context when possible.")
-        elif "y2_ui_threaded_chat" in globals() and callable(globals()["y2_ui_threaded_chat"]):
-            globals()["y2_ui_threaded_chat"](conn, int(rid), key="tri_co_y2")
-        else:
-            st.info("CO Chat UI not available in this build.")
-
-    # MIDDLE: RTM
-    with mid:
-        st.subheader("RTM")
-        if "render_rtm_ui" in globals() and callable(globals()["render_rtm_ui"]):
-            globals()["render_rtm_ui"](conn, int(rid))
-        else:
-            st.info("RTM UI not available.")
-
-    # RIGHT: L & M
-    with right:
-        st.subheader("L & M")
-        # run_lm_checklist renders its own header. Keep minimal duplication acceptable.
-        if "run_lm_checklist" in globals() and callable(globals()["run_lm_checklist"]):
-            globals()["run_lm_checklist"](conn)
-        else:
-            st.info("L & M UI not available.")
-
-    st.divider()
-    # Bottom bar: Validator and exports
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        if st.button("Validate L/M Gate"):
-            if "require_LM_minimum" in globals():
-                try:
-                    ok_gate, missing = globals()["require_LM_minimum"](conn, int(rid))
-                    if ok_gate:
-                        st.success("Validation passed")
-                    else:
-                        st.error("Blocked: " + ", ".join(missing or []))
-                except Exception as e:
-                    st.error(f"Validator failed: {e}")
-            else:
-                st.info("Validator not found.")
-    with c2:
-        # RTM CSV export
-        if "rtm_export_csv" in globals() and st.button("Export RTM CSV"):
-            try:
-                path = globals()["rtm_export_csv"](conn, int(rid))
-                if path:
-                    st.success("Exported")
-                    st.markdown(f"[Download CSV]({path})")
-                else:
-                    st.warning("No file produced.")
-            except Exception as e:
-                st.error(f"RTM export failed: {e}")
-    with c3:
-        # Open Proposal Builder
-        if st.button("Open Proposal Builder"):
-            st.session_state["go_to_page"] = "Proposal Builder"
-            st.rerun()
-    with c4:
-        # Open legacy Analyzer if needed
-        if st.button("Open Legacy Analyzer"):
-            if "run_rfp_analyzer" in globals():
-                globals()["run_rfp_analyzer"](conn)
-            else:
-                st.info("Legacy analyzer not found.")
-# ==== End Phase 3 tri pane ====
-
