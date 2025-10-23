@@ -1,5 +1,13 @@
 import requests
 import time
+
+# --- S1D helper: Google API key resolver ---
+def _s1d_google_key():
+    try:
+        s = st.secrets
+        return s.get("google", {}).get("api_key") or s.get("GOOGLE_API_KEY")
+    except Exception:
+        return os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_PLACES_API_KEY")
 # Helper imports for RTM/Amendment
 import re as _rtm_re
 import json as _rtm_json
@@ -7991,6 +7999,16 @@ def run_subcontractor_finder_s1_hook(conn):
         pass
 
 
+# --- S1D wrapper ensure ---
+def _ensure_s1d_wired():
+    wrap = globals().get("_wrap_run_subfinder")
+    if callable(wrap):
+        wrap()
+        fn = globals().get("run_subcontractor_finder")
+        if callable(fn):
+            setattr(fn, "_s1d_wrapped", True)
+
+
 def router(page: str, conn: sqlite3.Connection) -> None:
     if page == "SAM Watch":
         run_sam_watch(conn)
@@ -8009,7 +8027,9 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     elif page == "White Paper Builder":
         run_white_paper_builder(conn)
     elif page == "Subcontractor Finder":
-        run_subcontractor_finder(conn)
+        
+        st.caption(f"S1D wrapped = {getattr(globals().get('run_subcontractor_finder'), '_s1d_wrapped', False)}")
+run_subcontractor_finder(conn)
         # S1 Google Places panel
         globals().get("run_subcontractor_finder_s1_hook", lambda _c: None)(conn)
     elif page == "Outreach":
