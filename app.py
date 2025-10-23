@@ -8978,6 +8978,11 @@ def run_outreach(conn):
         pass
 
     st.header("Outreach")
+    with st.expander("Compliance (O6)", expanded=False):
+        render_outreach_o6_compliance(conn)
+
+    # O6: handle unsubscribe links
+    o6_handle_query_unsubscribe(conn)
     with st.expander("Follow-ups & SLA (O5)", expanded=False):
         render_outreach_o5_followups(conn)
 
@@ -9529,3 +9534,155 @@ def render_outreach_o5_followups(conn):
     if st.button("Send due follow-ups", key="o5_send_due"):
         ok, fail = _o5_send_due(conn, limit=200); st.success(f"Sent {ok}, failed {fail}")
 # === End O5 ================================================================
+
+
+# === O6: Compliance — Unsubscribe & Suppression =============================
+import uuid, urllib.parse
+
+def ensure_o6_schema(conn):
+    with conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_optouts(
+            id INTEGER PRIMARY KEY, email TEXT UNIQUE, reason TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_unsub_codes(
+            code TEXT PRIMARY KEY, email TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, used_at TEXT
+        );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS kv_store(
+            k TEXT PRIMARY KEY, v TEXT
+        );""")
+
+def o6_set_base_url(conn, url):
+    with conn:
+        conn.execute("INSERT INTO kv_store(k,v) VALUES('o6_base_url', ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v;", (url,))
+
+def o6_get_base_url(conn):
+    try:
+        cur = conn.execute("SELECT v FROM kv_store WHERE k='o6_base_url' LIMIT 1;")
+        row = cur.fetchone()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+    try:
+        import streamlit as _st
+        return _st.secrets.get("app_base_url", "")
+    except Exception:
+        return ""
+
+def o6_is_suppressed(conn, email):
+    try:
+        em = (email or "").strip().lower()
+        row = conn.execute("SELECT 1 FROM outreach_optouts WHERE lower(email)=? LIMIT 1;", (em,)).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+def o6_add_optout(conn, email, reason="user_unsubscribe"):
+    try:
+        with conn:
+            conn.execute("INSERT INTO outreach_optouts(email,reason) VALUES(?,?) ON CONFLICT(email) DO NOTHING;", ((email or "").strip().lower(), reason))
+    except Exception:
+        pass
+
+def o6_new_code(conn, email):
+    c = uuid.uuid4().hex
+    with conn:
+        conn.execute("INSERT INTO outreach_unsub_codes(code,email) VALUES(?,?)", (c,(email or "").strip().lower()))
+    return c
+
+def o6_unsub_link_for(conn, email):
+    base = o6_get_base_url(conn) or ""
+    if not base:
+        return ""
+    code = o6_new_code(conn, email)
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}unsubscribe={code}"
+
+def o6_handle_query_unsubscribe(conn):
+    try:
+        import streamlit as _st
+        qp = _st.experimental_get_query_params()
+        if "unsubscribe" in qp:
+            code = (qp.get("unsubscribe",[None]) or [None])[0]
+            if code:
+                row = conn.execute("SELECT email FROM outreach_unsub_codes WHERE code=? LIMIT 1;", (code,)).fetchone()
+                if row and row[0]:
+                    email = row[0]
+                    o6_add_optout(conn, email, reason="link_click")
+                    with conn:
+                        conn.execute("UPDATE outreach_unsub_codes SET used_at=CURRENT_TIMESTAMP WHERE code=?", (code,))
+                    _st.success(f"{email} unsubscribed.")
+                    return True
+                else:
+                    _st.warning("Invalid or expired unsubscribe link.")
+                    return True
+        # Also support direct email param
+        if "unsubscribe_email" in qp:
+            email = (qp.get("unsubscribe_email",[None]) or [None])[0]
+            if email:
+                o6_add_optout(conn, email, reason="direct_param")
+                _st.success(f"{email} unsubscribed.")
+                return True
+    except Exception:
+        pass
+    return False
+
+def render_outreach_o6_compliance(conn):
+    ensure_o6_schema(conn)
+    import pandas as _pd
+    st.subheader("O6 — Compliance")
+    base = st.text_input("Unsubscribe base URL", value=o6_get_base_url(conn) or "", help="Example: https://yourapp.yourdomain/")
+    if st.button("Save base URL", key="o6_save_base"):
+        o6_set_base_url(conn, base.strip())
+        st.success("Saved")
+    st.caption("Use {{UNSUB_LINK}} macro in templates. If absent, a default unsubscribe footer will be appended.")
+    # Show list
+    df = _pd.read_sql_query("SELECT email, reason, created_at FROM outreach_optouts ORDER BY created_at DESC LIMIT 500;", conn)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+# Wrap _o3_send_batch to enforce suppression and inject unsubscribe link
+def _o6_wrap_o3_send_batch():
+    g = globals()
+    orig = g.get("_o3_send_batch")
+    if not callable(orig) or getattr(orig, "_o6_wrapped", False):
+        return
+    def wrapped(conn, sender, rows, subj, html, test_only=False, max_send=500):
+        import pandas as _pd
+        ensure_o6_schema(conn)
+        # Filter suppressed
+        if rows is not None and hasattr(rows, "copy"):
+            _rows = rows.copy()
+            if "email" in _rows.columns:
+                mask = _rows["email"].astype(str).str.lower().apply(lambda em: not o6_is_suppressed(conn, em))
+                _rows = _rows[mask]
+            rows = _rows
+        # Inject unsubscribe macro fallback if needed
+        base = o6_get_base_url(conn) or ""
+        def render_html(em):
+            if "{{UNSUB_LINK}}" in (html or ""):
+                link = o6_unsub_link_for(conn, em) if base else ""
+                return (html or "").replace("{{UNSUB_LINK}}", link)
+            else:
+                if not base:
+                    return html
+                link = o6_unsub_link_for(conn, em)
+                footer = f"<hr><p style='font-size:12px;color:#666'>To unsubscribe, click <a href='{link}'>here</a>.</p>"
+                return (html or "") + footer
+        # If rows has emails, send per-row with personalized html; else fallback to original
+        if rows is not None and "email" in getattr(rows, "columns", []):
+            total = 0
+            for _, r in rows.iterrows():
+                em = str(r.get("email") or "").strip()
+                if not em:
+                    continue
+                html_i = render_html(em)
+                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj, html=html_i, test_only=test_only, max_send=1)
+                total += 1
+            return total
+        else:
+            return orig(conn, sender, rows, subj, html, test_only=test_only, max_send=max_send)
+    wrapped._o6_wrapped = True
+    g["_o3_send_batch"] = wrapped
+
+_o6_wrap_o3_send_batch()
+# === End O6 ================================================================
