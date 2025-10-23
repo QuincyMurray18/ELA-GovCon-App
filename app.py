@@ -8097,9 +8097,6 @@ def main() -> None:
     router(nav(), conn)
 
 
-if __name__ == "__main__":
-    main()
-
 def render_outreach_mailmerge(conn):
     import streamlit as st, pandas as _pd
     _o3_ensure_schema(conn)
@@ -8147,6 +8144,12 @@ def render_outreach_mailmerge(conn):
 
 
 # -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
+
+
+if __name__ == "__main__":
+    main()
+    main()
+
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
     st.markdown("### Section Library (Phase V)")
     cols = st.columns([3,2,2])
