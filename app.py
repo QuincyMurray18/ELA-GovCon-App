@@ -7431,6 +7431,20 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     import re as _re
     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
     fn = globals().get(name)
+    # explicit fallbacks for known variant names
+    if not callable(fn):
+        alt = {
+            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
+        }.get((page or "").strip(), [])
+        for a in alt:
+            fn = globals().get(a)
+            if callable(fn):
+                break
+    if not callable(fn):
+        import streamlit as _st
+        _st.warning(f"No handler for page '{page}' resolved as {name}.")
+        return
     _safe_route_call(fn, conn)
     # Hooks
     if (page or "").strip() == "Subcontractor Finder":
@@ -9678,6 +9692,20 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     import re as _re
     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
     fn = globals().get(name)
+    # explicit fallbacks for known variant names
+    if not callable(fn):
+        alt = {
+            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
+        }.get((page or "").strip(), [])
+        for a in alt:
+            fn = globals().get(a)
+            if callable(fn):
+                break
+    if not callable(fn):
+        import streamlit as _st
+        _st.warning(f"No handler for page '{page}' resolved as {name}.")
+        return
     _safe_route_call(fn, conn)
     # Hooks
     if (page or "").strip() == "Subcontractor Finder":
