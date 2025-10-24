@@ -1409,12 +1409,10 @@ def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
             if st.button("Save name", key="y2_save_name"):
                 y2_rename_thread(conn, int(thread_id), new_title or "Untitled")
                 st.success("Renamed")
-                st.rerun()
         with colB:
             if st.button("Delete thread", key="y2_del"):
                 y2_delete_thread(conn, int(thread_id))
                 st.success("Deleted")
-                st.rerun()
     st.checkbox("Research mode (flex)", value=bool(st.session_state.get("y2_flex", False)), key="y2_flex")
     st.subheader("History")
     msgs = y2_get_messages(conn, int(thread_id))
@@ -7360,7 +7358,6 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
             ok = _restore_db_from_upload(conn, up)
             if ok:
                 st.success("Restore completed. Please rerun the app.")
-                st.rerun()
 
     st.divider()
     st.subheader("Export / Import CSV")
@@ -7617,6 +7614,20 @@ if "_o3_render_sender_picker" not in globals():
                 display = st.text_input("Display name")
                 pw = st.text_input("App password", type="password")
                 ok = st.form_submit_button("Save sender")
+                if ok and email:
+                    try:
+                        with conn:
+                            conn.execute("""
+                            INSERT INTO email_accounts(user_email, display_name, app_password)
+                            VALUES(?,?,?)
+                            ON CONFLICT(user_email) DO UPDATE SET
+                                display_name=excluded.display_name,
+                                app_password=excluded.app_password
+                            """, (email.strip(), display or "", pw or ""))
+                        st.success("Saved")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
             if ok and email:
                 conn.execute("INSERT OR REPLACE INTO email_accounts(user_email, display_name, app_password) VALUES(?,?,?)",
                              (email.strip().lower(), display.strip(), pw.strip()))
@@ -8171,7 +8182,6 @@ def render_outreach_templates(conn):
             else:
                 email_template_upsert(conn, name, subject or "", html or "", tid)
                 st.success("Saved")
-                st.rerun()
     with c2:
         if (tid is not None) and st.button("Duplicate"):
             email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
@@ -8658,7 +8668,7 @@ def _o4_accounts_ui(conn):
                         use_ssl=excluded.use_ssl
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
-                st.rerun()
+    st.rerun()
     with c4:
         if st.button("Delete account", key="o4_ac_del"):
             if not email:
@@ -8667,7 +8677,6 @@ def _o4_accounts_ui(conn):
                 with conn:
                     conn.execute("DELETE FROM email_accounts WHERE user_email=?", (email.strip(),))
                 st.success("Deleted")
-                st.rerun()
 
 def _o3_render_sender_picker():
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
@@ -9899,6 +9908,7 @@ except Exception:
 
 
 def o1_sender_accounts_ui(conn):
+    globals()['_O4_CONN'] = conn
     import streamlit as st
     import pandas as _pd
     ensure_outreach_o1_schema(conn)
@@ -9926,6 +9936,7 @@ def o1_sender_accounts_ui(conn):
                     use_ssl=excluded.use_ssl
                 """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
             st.success("Saved")
+    st.rerun()
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         st.dataframe(df, use_container_width=True)
