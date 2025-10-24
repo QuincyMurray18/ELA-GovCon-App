@@ -9551,3 +9551,29 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+
+
+# --- O3 Mail-merge helpers (safe and advisory) ---
+import re as _re_o3
+
+_MERGE_TAG_RE = _re_o3.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
+def _o3_safe_merge(s: str, row: dict) -> str:
+    row = row or {}
+    def _sub(m):
+        k = m.group(1)
+        v = row.get(k)
+        return "" if v is None else str(v)
+    return _MERGE_TAG_RE.sub(_sub, s or "")
+
+def _o3_render_missing_tags(subject: str, html: str):
+    import streamlit as st
+    text = f"{subject or ''} {html or ''}"
+    found = set(m.group(1) for m in _MERGE_TAG_RE.finditer(text))
+    required = {"city","company","due","email","first_name","last_name","notice_id","solicitation","state","title"}
+    missing = sorted(required - found)
+    with st.expander("Template merge tags", expanded=False):
+        if missing:
+            st.caption("Missing merge tags (advisory): " + ", ".join(missing))
+        st.caption("Absent fields merge to blank.")
+
