@@ -4,8 +4,10 @@ _O4_CONN = globals().get("_O4_CONN", None)
 
 def get_o4_conn():
     import streamlit as st
+    import sqlite3
+    from contextlib import closing as _closing
     global _O4_CONN
-    # reuse if cached
+    # reuse cached
     if _O4_CONN:
         try:
             st.session_state["conn"] = _O4_CONN
@@ -20,22 +22,17 @@ def get_o4_conn():
     except Exception:
         pass
     # canonical app DB
-    conn = get_db()
-    _O4_CONN = conn
     try:
-        st.session_state["conn"] = conn
+        conn = get_db()
     except Exception:
-        pass
-    return conn
-    except Exception:
-        pass
-    try:
-        dbp = DB_PATH
-    except Exception:
-        dbp = "./data/app.db"
-    conn = sqlite3.connect(dbp, check_same_thread=False)
-    with _closing(conn.cursor()) as _c:
-        _c.execute("PRAGMA foreign_keys = ON;")
+        # fallback to DB_PATH or default file
+        try:
+            dbp = DB_PATH
+        except Exception:
+            dbp = "./data/app.db"
+        conn = sqlite3.connect(dbp, check_same_thread=False)
+        with _closing(conn.cursor()) as _c:
+            _c.execute("PRAGMA foreign_keys = ON;")
     _O4_CONN = conn
     try:
         st.session_state["conn"] = conn
