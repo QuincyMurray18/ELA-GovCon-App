@@ -7,24 +7,57 @@ def get_o4_conn():
     import sqlite3
     from contextlib import closing as _closing
     global _O4_CONN
-    conn = globals().get("_O4_CONN")
-    if not conn:
+    try:
+        if "conn" in st.session_state and st.session_state.get("conn"):
+            _O4_CONN = st.session_state["conn"]
+            return _O4_CONN
+    except Exception:
+        pass
+    try:
+        conn = get_db()
+        _O4_CONN = conn
         try:
-            if "conn" in st.session_state:
-                conn = st.session_state["conn"]
+            st.session_state["conn"] = conn
         except Exception:
-            conn = None
-    if not conn:
-        try:
-            dbp = DB_PATH  # may be defined elsewhere
-        except Exception:
-            dbp = "./data/app.db"
-        conn = sqlite3.connect(dbp, check_same_thread=False)
-        with _closing(conn.cursor()) as _c:
-            _c.execute("PRAGMA foreign_keys = ON;")
-        globals()["_O4_CONN"] = conn
+            pass
+        return conn
+    except Exception:
+        pass
+    try:
+        dbp = DB_PATH
+    except Exception:
+        dbp = "./data/app.db"
+    conn = sqlite3.connect(dbp, check_same_thread=False)
+    with _closing(conn.cursor()) as _c:
+        _c.execute("PRAGMA foreign_keys = ON;")
+    _O4_CONN = conn
+    try:
+        st.session_state["conn"] = conn
+    except Exception:
+        pass
     return conn
 
+
+def _get_senders(conn):
+    from contextlib import closing as _closing
+    tables = [
+        ("email_accounts", "user_email", "display_name", "app_password"),
+        ("o4_senders", "email", "name", "app_password"),
+        ("senders", "email", "display_name", "app_password"),
+    ]
+    for tbl, c_email, c_name, c_pw in tables:
+        try:
+            with _closing(conn.cursor()) as c:
+                c.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'")
+                if not c.fetchone():
+                    continue
+                c.execute(f"SELECT {c_email}, {c_name}, {c_pw} FROM {tbl} ORDER BY {c_email}")
+                rows = c.fetchall()
+                if rows:
+                    return [(r[0], r[1], r[2] if len(r) > 2 else "") for r in rows]
+        except Exception:
+            continue
+    return []
 def _ensure_email_accounts_schema(conn):
     from contextlib import closing as _closing
     with _closing(conn.cursor()) as _c:
@@ -7570,19 +7603,16 @@ if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
         conn = get_o4_conn()
-        # Try optional schema helper, then ensure table ourselves
         try:
-            ensure_outreach_o1_schema(conn)  # may not exist
+            ensure_outreach_o1_schema(conn)
         except Exception:
             pass
         _ensure_email_accounts_schema(conn)
-        rows = conn.execute(
-            "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
-        ).fetchall()
+        rows = _get_senders(conn)
         choices = [r[0] for r in rows] + ["<add new>"] if rows else ["<add new>"]
         sel = st.selectbox("From account", choices, key="o4_from_addr")
         if sel == "<add new>":
-            st.info("Add a sender in Outreach → Sender accounts")
+            st.info("Add a sender in Outreach \u2192 Sender accounts")
             return {"email": "", "app_password": ""}
         pw = st.text_input("App password", type="password", key="o4_from_pw")
         return {"email": sel, "app_password": pw}
