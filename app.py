@@ -9014,12 +9014,7 @@ def _s1d_norm_phone(p: str) -> str:
     return digits
 
 def _s1d_existing_vendor_keys(conn):
-    # Build keys to detect duplicates: by place_id if present, else name+phone
-    try:
-        rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
-    except Exception:
-        by_np, by_pid = _s1d_select_existing_pairs(conn)
-    return by_np, by_pid
+    return _s1d_select_existing_pairs(conn)
 
 def _s1d_geocode(addr: str, key: str):
     if not addr: return None
@@ -9208,6 +9203,8 @@ def _s1d_select_existing_pairs(conn):
 
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
+    
+    by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = _s1d_get_api_key()
     if not key:
         st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
@@ -9568,6 +9565,8 @@ def __p_s1d_existing(conn):
     return by_np, by_pid
 
 def __p_s1d_ui(conn):
+
+    by_np, by_pid = _s1d_select_existing_pairs(conn)
     _st.subheader("S1D — Google Places & Dedupe")
     key = __p_s1d_key()
     if not key: _st.error("Missing Google API key in secrets"); return
@@ -9707,18 +9706,11 @@ def __e1_norm_phone(p):
     return digits[1:] if len(digits)==11 and digits.startswith("1") else digits
 
 def __e1_existing_vendor_keys(conn):
-    try:
-        rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
-    except Exception:
-        return set(), set()
-    by_np, by_pid = set(), set()
-    for r in rows:
-        by_np.add(((r[0] or "").strip().lower(), __e1_norm_phone(r[1] or "")))
-        pid = (r[2] or "").strip()
-        if pid: by_pid.add(pid)
-    return by_np, by_pid
+    return _s1d_select_existing_pairs(conn)
 
 def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
+
+    by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = __e1_google_api_key()
     if not key:
         _st.error("E1 requires a Google API key in secrets: [google].api_key or GOOGLE_API_KEY")
