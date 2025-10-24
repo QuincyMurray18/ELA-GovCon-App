@@ -5567,22 +5567,22 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             except Exception:
                 df_sel = pd.DataFrame()
 
-        with st.expander("Find vendors (optional)", expanded=(df_sel.empty)):
-            f_naics = st.text_input("NAICS filter", value="")
-            f_state = st.text_input("State filter", value="")
-            if st.button("Load vendors"):
-                q = "SELECT id, name AS company, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
-                params = []
-                if f_naics:
-                    q += " AND naics LIKE ?"; params.append(f"%{f_naics}%")
-                if f_state:
-                    q += " AND state LIKE ?"; params.append(f"%{f_state}%")
-                try:
-                    df_sel = pd.read_sql_query(q + " ORDER BY name;", conn, params=params)
-                except Exception:
-                    df_sel = pd.DataFrame()
+        st.markdown("**Vendor filters (optional)**")
+f_naics = st.text_input("NAICS filter", value="")
+f_state = st.text_input("State filter", value="")
+if st.button("Load vendors", key="load_vendors"):
+    q = "SELECT id, name AS company, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+    params = []
+    if f_naics:
+        q += " AND naics LIKE ?"; params.append(f"%{f_naics}%")
+    if f_state:
+        q += " AND state LIKE ?"; params.append(f"%{f_state}%")
+    try:
+        df_sel = pd.read_sql_query(q + " ORDER BY name;", conn, params=params)
+    except Exception:
+        df_sel = pd.DataFrame()
 
-        # CSV import to append
+# CSV import to append
         up = st.file_uploader("Import recipients CSV (company,email,phone,city,state,naics)", type=["csv"], key="o_recip_csv")
         if up is not None:
             try:
