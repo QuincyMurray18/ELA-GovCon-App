@@ -8215,11 +8215,16 @@ def render_outreach_mailmerge(conn):
     # 3) Sender
     st.subheader("Sender")
     sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
-    # normalize keys
+
+    # normalize and guard
     if sender and "username" in sender and "email" not in sender:
-        sender["email"] = sender.get("username","")
+        sender["email"] = sender.get("username", "")
     if sender and "password" in sender and "app_password" not in sender:
-        sender["app_password"] = sender.get("password","")
+        sender["app_password"] = sender.get("password", "")
+    if not sender.get("email") or not sender.get("app_password"):
+        st.warning("Configure a sender first in Outreach → Sender.")
+        return
+
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         test = st.button("Test run (no send)", key="o3_test")
@@ -8243,7 +8248,53 @@ def render_outreach_mailmerge(conn):
             st.error(f"Send failed: {e}")
 
 
+# --- Sender picker hard-init (global fallback) ---
+if "_o3_render_sender_picker" not in globals():
+    def _o3_render_sender_picker():
+        import streamlit as st
+        from contextlib import closing
+        host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
+        try:
+            if "get_db" in globals():
+                conn2 = get_db()
+                with closing(conn2.cursor()) as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS smtp_settings(
+                            id INTEGER PRIMARY KEY,
+                            label TEXT, host TEXT, port INTEGER,
+                            username TEXT, password TEXT, use_tls INTEGER
+                        )
+                    """)
+                    row = cur.execute(
+                        "SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1"
+                    ).fetchone()
+                if row:
+                    host = row[0] or host
+                    port = int(row[1] or port)
+                    username = row[2] or username
+                    password = row[3] or password
+                    use_tls = bool(row[4] or use_tls)
+        except Exception:
+            pass
+        # session fallbacks
+        username = username or st.session_state.get("smtp_username", "")
+        password = password or st.session_state.get("smtp_password", "")
+        host = st.session_state.get("smtp_host", host)
+        port = int(st.session_state.get("smtp_port", port))
+        use_tls = bool(st.session_state.get("smtp_use_tls", use_tls))
+        if not username or not password:
+            return {}
+        return {
+            "host": host,
+            "port": int(port),
+            "email": username,
+            "app_password": password,
+            "use_tls": bool(use_tls),
+        }
+
 def run_outreach(conn):
+    import streamlit as st
+    globals()["_O4_CONN"] = conn
     import streamlit as st
 
     # O4 badge if present
@@ -8253,6 +8304,11 @@ def run_outreach(conn):
         pass
 
     st.header("Outreach")
+    try:
+        o4_sender_accounts_ui(conn)
+    except Exception:
+        pass
+
     with st.expander("Compliance (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
 
@@ -9784,51 +9840,3 @@ def run_l_and_m_checklist(conn):
 # --- Tab name alias ---
 def run_backup_data(conn):
     return run_backup_and_data(conn)
-
-
-
-# === Outreach: fallback sender picker and guard wrapper =====================
-# Robust fallback picker that reads smtp_settings, only if not provided earlier.
-if "_o3_render_sender_picker" not in globals():
-    def _o3_render_sender_picker():
-        import streamlit as st
-        from contextlib import closing
-        host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
-        try:
-            if "get_db" in globals():
-                conn2 = get_db()
-                with closing(conn2.cursor()) as cur:
-                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                    row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
-                if row:
-                    host = row[0] or host
-                    port = int(row[1] or port)
-                    username = row[2] or username
-                    password = row[3] or password
-                    use_tls = bool(row[4] or use_tls)
-        except Exception:
-            pass
-        if not username or not password:
-            st.error("Sender not configured. Go to Outreach → Sender and Save sender.")
-            return {}
-        st.caption(f"Using {username} via {host}:{int(port)} TLS={'on' if use_tls else 'off'}")
-        return {"host": host, "port": int(port), "email": username, "app_password": password, "use_tls": bool(use_tls)}
-
-# Guard wrapper: ensure sender is configured before original Mail Merge UI runs
-try:
-    _orig__render_outreach_mailmerge = render_outreach_mailmerge
-    def render_outreach_mailmerge(conn):
-        import streamlit as st
-        sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
-        if sender and "username" in sender and "email" not in sender:
-            sender["email"] = sender.get("username","")
-        if sender and "password" in sender and "app_password" not in sender:
-            sender["app_password"] = sender.get("password","")
-        if not sender.get("email") or not sender.get("app_password"):
-            st.warning("Configure a sender first in Outreach → Sender.")
-            return
-        return _orig__render_outreach_mailmerge(conn)
-except Exception:
-    pass
-
-# === End Outreach guard =====================================================
