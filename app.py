@@ -8161,17 +8161,26 @@ def main() -> None:
     except Exception:
         pass
         try:
-        process_outreach_scheduler(conn)
+            process_outreach_scheduler(conn)
+        except Exception as e:
+            print('Outreach scheduler error:', e)
+
         except Exception:
             pass
     except Exception:
         pass
     try:
-        process_outreach_scheduler(conn)
+            process_outreach_scheduler(conn)
+        except Exception as e:
+            print('Outreach scheduler error:', e)
+
     except Exception:
         pass
     try:
-        process_outreach_scheduler(conn)
+            process_outreach_scheduler(conn)
+        except Exception as e:
+            print('Outreach scheduler error:', e)
+
     except Exception:
         pass
     router(nav(), conn)
