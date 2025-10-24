@@ -1595,41 +1595,65 @@ def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k
 
 
 def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5) -> str:
-    """Enforce ≤5 bullets in key sections and a global word cap."""
+    """Enforce ≤5 bullets for key sections and a global word cap."""
     if not text:
         return ""
     lines = text.splitlines()
     out = []
-    headers = ["Strengths:", "Gaps:", "Risks:", "Required fixes:"]
+    sections = {"Strengths:": "Strengths:", "Gaps:": "Gaps:", "Risks:": "Risks:", "Required fixes:": "Required fixes:"}
     current = None
     bullet_count = 0
     i = 0
     while i < len(lines):
         ln = lines[i]
-        s = ln.strip()
-        # Header detection
-        if any(s.lower().startswith(h.lower()) for h in headers):
-            out.append(next(h for h in headers if s.lower().startswith(h.lower())))
-            current = out[-1].rstrip(":").lower()
+        ln_stripped = ln.strip()
+        # detect headers
+        if any(ln_stripped.lower().startswith(h.lower()) for h in sections):
+            current = ln_stripped.split(":")[0].lower()
             bullet_count = 0
+            out.append(ln)
             i += 1
             continue
-        # Bullets within current section
-        if current and s.startswith("-"):
-            if bullet_count < max_bullets:
+        if re.match(r"^(Score:|Conclusion:)", ln_stripped, re.I):
+            current = None
+            out.append(ln)
+            i += 1
+            continue
+        # cap bullets in the four sections
+        if current in {"strengths", "gaps", "risks", "required fixes"}:
+            if re.match(r"^\s*[-*\u2022]\s+", ln):
+                if bullet_count < max_bullets:
+                    out.append(ln)
+                    bullet_count += 1
+                # else drop extra bullets
+            else:
                 out.append(ln)
-            bullet_count += 1
             i += 1
             continue
-        # copy other lines
         out.append(ln)
         i += 1
-    # Enforce word cap
-    words = " ".join(out).split()
+    text2 = "\n".join(out).strip()
+    words = text2.split()
     if len(words) <= max_words:
-        return "\n".join(out).strip()
+        return text2
     return " ".join(words[:max_words]).strip()
 
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
 
 def y4_ui_review(conn: sqlite3.Connection) -> None:
     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
@@ -9508,8 +9532,25 @@ if __name__ == '__main__':
         # fallback: run default entry if main() not defined in this build
         pass
 
+def run_subcontractor_finder_s1_hook(conn):
+    ensure_subfinder_s1_schema(conn)
+    try:
+        s1_render_places_panel(conn)
+    except Exception:
+        pass
 
 
+def router(page: str, conn: sqlite3.Connection) -> None:
+    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
+    import re as _re
+    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
+    fn = globals().get(name)
+    _safe_route_call(fn, conn)
+    # Hooks
+    if (page or "").strip() == "Subcontractor Finder":
+        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
+    if (page or "").strip() == "Proposal Builder":
+        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 
 
 
@@ -9586,6 +9627,13 @@ __e1g = globals()
 if callable(__e1g.get("run_subcontractor_finder")):
     __e1_orig = __e1g["run_subcontractor_finder"]
     def run_subcontractor_finder(conn):
+        st.header("Subcontractor Finder")with st.form("s1d_search"):
+    c1, c2, c3, c4 = st.columns(4)
+    q = c1.text_input("Query", st.session_state.get("s1d_q", ""))
+    radius = c2.number_input("Radius miles", 1, 250, st.session_state.get("s1d_radius", 50))
+    source = c3.selectbox("Source", ["Places", "Web", "CSV", "Saved"], index=st.session_state.get("s1d_source_idx", 0))
+    submit = st.form_submit_button("Search")
+
         try:
             with _st.expander("E1 — Phone + Website enrichment", expanded=True):
                 lat = _st.session_state.get("s1d_lat")
@@ -9601,3 +9649,29 @@ if callable(__e1g.get("run_subcontractor_finder")):
 # =========================
 # END E1 PATCH
 # =========================
+
+
+
+
+def _s1d_dedupe_rows(rows):
+    seen_pid = set()
+    seen_tuple = set()
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        pid = r.get("place_id")
+        name = (r.get("name") or "").strip().lower()
+        phone = (r.get("phone") or "").strip()
+        city = (r.get("city") or "").strip().lower()
+        key_tuple = (name, phone, city)
+        if pid:
+            if pid in seen_pid:
+                continue
+            seen_pid.add(pid)
+        else:
+            if key_tuple in seen_tuple:
+                continue
+            seen_tuple.add(key_tuple)
+        out.append(r)
+    return out
