@@ -7552,8 +7552,9 @@ if "_o3_render_sender_picker" not in globals():
                     host, port, username, password, use_tls = row[0] or host, int(row[1] or port), row[2] or username, row[3] or password, bool(row[4] or use_tls)
         except Exception:
             pass
-        with st.form("o3_sender_picker", clear_on_submit=False):
-            st.text_input("SMTP host", value=host, key="smtp_host")
+        ns = st.session_state.setdefault("o3_form_ns", __import__("uuid").uuid4().hex)
+        ns = st.session_state.setdefault("o3_form_ns", __import__("uuid").uuid4().hex)
+        with st.form(f"o3_sender_picker_{ns}", clear_on_submit=False):
             st.number_input("SMTP port", min_value=1, max_value=65535, value=int(port), key="smtp_port")
             st.text_input("Username", value=username, key="smtp_username")
             st.text_input("App password", type="password", value=password, key="smtp_password")
@@ -8174,7 +8175,8 @@ def o4_sender_accounts_ui(conn):
                     label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
         except Exception:
             pass
-        with _st.form("o4_fallback_sender", clear_on_submit=False):
+        ns = _st.session_state.setdefault("o4_form_ns", __import__("uuid").uuid4().hex)
+        with _st.form(f"o4_fallback_sender_{ns}", clear_on_submit=False):
             label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
             username = _st.text_input("Gmail address", value=username)
             password = _st.text_input("App password", type="password", value=password)
