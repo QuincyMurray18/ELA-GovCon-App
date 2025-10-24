@@ -8161,7 +8161,9 @@ def main() -> None:
     except Exception:
         pass
         try:
-        globals().get('process_outreach_scheduler', lambda _c: None)(conn)
+        process_outreach_scheduler(conn)
+        except Exception:
+            pass
     except Exception:
         pass
     try:
