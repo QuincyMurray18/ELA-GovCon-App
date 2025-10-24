@@ -7649,6 +7649,12 @@ def render_outreach_mailmerge(conn):
     st.subheader("Sender")
     sender = _o3_render_sender_picker()
 
+    
+    # normalize sender keys
+    if sender and "username" in sender and "email" not in sender:
+        sender["email"] = sender.get("username","")
+    if sender and "password" in sender and "app_password" not in sender:
+        sender["app_password"] = sender.get("password","")
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         test = st.button("Test run (no send)", key="o3_test")
@@ -8539,6 +8545,15 @@ def _o3_sender_accounts_from_secrets():
         return []
 
 
+
+# --- O3 SMTP shim (fallback) ---
+try:
+    import _o3smtp  # if provided elsewhere
+except Exception:
+    class _o3smtp:
+        import smtplib as _smtplib
+        SMTP_SSL = _smtplib.SMTP_SSL
+        SMTP = _smtplib.SMTP
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
     import streamlit as st, datetime as _dt, pandas as _pd
     _o3_ensure_schema(conn)
