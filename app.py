@@ -9052,15 +9052,15 @@ def _s1d_place_details(pid: str, key: str):
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
 
 
-# Determine writable table and ensure schema
-tbl = _s1d_vendor_write_table(conn)
-with conn:
-    _s1d_ensure_vendor_table(conn, tbl)
-    # Ensure a partial unique index so NULL place_id is allowed multiple times
-    try:
-        conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {tbl}_place_id_uidx ON {tbl}(place_id) WHERE place_id IS NOT NULL")
-    except Exception:
-        pass
+    # Determine writable table and ensure schema
+    tbl = _s1d_vendor_write_table(conn)
+    with conn:
+        _s1d_ensure_vendor_table(conn, tbl)
+        # Ensure a partial unique index so NULL place_id is allowed multiple times
+        try:
+            conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {tbl}_place_id_uidx ON {tbl}(place_id) WHERE place_id IS NOT NULL")
+        except Exception:
+            pass
 
 def _norm(v):
     s = str(v or "").strip()
