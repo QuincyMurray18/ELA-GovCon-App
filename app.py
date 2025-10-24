@@ -8157,67 +8157,6 @@ def seed_default_templates(conn):
 
 
 # --- O4 wrapper: delegates to __p_o4_ui if present, else shows fallback UI ---
-def o4_sender_accounts_ui(conn):
-    import streamlit as st
-    from contextlib import closing
-    _o4_ensure_sender_schema(conn)
-
-    with st.expander("Sender accounts (O4)", expanded=False):
-        # Existing accounts table
-        with closing(conn.cursor()) as cur:
-            rows = cur.execute("SELECT id, label, username, host, port, use_tls, is_active FROM smtp_accounts ORDER BY is_active DESC, id ASC").fetchall()
-        if rows:
-            cols = st.columns([2,3,3,2,2,2])
-            cols[0].markdown("**Label**"); cols[1].markdown("**Username**"); cols[2].markdown("**Host**"); cols[3].markdown("**Port**"); cols[4].markdown("**TLS**"); cols[5].markdown("**Active**")
-            for rid, label, user, host, port, use_tls, is_active in rows:
-                rcols = st.columns([2,3,3,2,2,2])
-                rcols[0].write(label or "")
-                rcols[1].write(user or "")
-                rcols[2].write(host or "")
-                rcols[3].write(int(port or 0))
-                rcols[4].write("on" if use_tls else "off")
-                if rcols[5].button("Make active" + ("" if not is_active else " ✓"), key=f"o4_make_active_{rid}", disabled=bool(is_active)):
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("UPDATE smtp_accounts SET is_active=0")
-                        cur.execute("UPDATE smtp_accounts SET is_active=1 WHERE id=?", (rid,))
-                        conn.commit()
-                    st.experimental_rerun()
-
-        st.markdown("---")
-        st.markdown("**Add or update account**")
-        import uuid as _uuid
-        _k = f"o4_fallback_sender_{_uuid.uuid4().hex}"
-        with st.form(_k, clear_on_submit=False):
-            c1,c2 = st.columns([2,2])
-            with c1: label = st.text_input("Label", value="Default")
-            with c2: username = st.text_input("Gmail address", value="")
-            c1,c2 = st.columns([2,2])
-            with c1: host = st.text_input("SMTP host", value="smtp.gmail.com")
-            with c2: port = st.number_input("SMTP port", 1, 65535, value=465)
-            c1,c2 = st.columns([2,2])
-            with c1: use_tls = st.checkbox("Use STARTTLS", value=False)
-            with c2: password = st.text_input("App password", type="password", value="")
-            save = st.form_submit_button("Save sender")
-            if save:
-                if not username.strip() or not password.strip():
-                    st.error("Username and app password are required.")
-                else:
-                    try:
-                        with closing(conn.cursor()) as cur:
-                            cur.execute("""INSERT OR REPLACE INTO smtp_accounts(
-                                id, label, host, port, username, password, use_tls, is_active
-                            ) VALUES(
-                                (SELECT id FROM smtp_accounts WHERE username=?),
-                                ?,?,?,?,?,?, COALESCE((SELECT is_active FROM smtp_accounts WHERE username=?), 0)
-                            )""", (username.strip(), label.strip() or "Default", host.strip() or "smtp.gmail.com",
-                                    int(port), username.strip(), password.strip(), 1 if use_tls else 0, username.strip()))
-                            # if none active, make this one active
-                            cur.execute("UPDATE smtp_accounts SET is_active=1 WHERE username=? AND NOT EXISTS(SELECT 1 FROM smtp_accounts WHERE is_active=1)", (username.strip(),))
-                            conn.commit()
-                        st.success("Sender saved")
-                    except Exception as e:
-                        st.error(f"Save failed: {e}")
-
 
 
 def render_outreach_mailmerge(conn):
@@ -8335,6 +8274,68 @@ def _o4_ensure_sender_schema(conn):
         );""")
     conn.commit()
 
+
+def o4_sender_accounts_ui(conn):
+    import streamlit as st
+    from contextlib import closing
+    _o4_ensure_sender_schema(conn)
+    with st.expander("Sender accounts (O4)", expanded=False):
+        with closing(conn.cursor()) as cur:
+            rows = cur.execute("SELECT id, label, username, host, port, use_tls, is_active FROM smtp_accounts ORDER BY is_active DESC, id ASC").fetchall()
+        if rows:
+            hdr = st.columns([2,3,3,2,2,2])
+            hdr[0].markdown("**Label**"); hdr[1].markdown("**Username**"); hdr[2].markdown("**Host**"); hdr[3].markdown("**Port**"); hdr[4].markdown("**TLS**"); hdr[5].markdown("**Active**")
+            for rid, label, user, host, port, use_tls, is_active in rows:
+                cols = st.columns([2,3,3,2,2,2])
+                cols[0].write(label or "")
+                cols[1].write(user or "")
+                cols[2].write(host or "")
+                cols[3].write(int(port or 0))
+                cols[4].write("on" if use_tls else "off")
+                if cols[5].button("Make active" + ("" if not is_active else " ✓"), key=f"o4_make_active_{rid}", disabled=bool(is_active)):
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("UPDATE smtp_accounts SET is_active=0")
+                        cur.execute("UPDATE smtp_accounts SET is_active=1 WHERE id=?", (rid,))
+                        conn.commit()
+                    st.experimental_rerun()
+        st.markdown("---")
+        st.markdown("**Add or update account**")
+        import uuid as _uuid
+        _k = f"o4_sender_form_{_uuid.uuid4().hex}"
+        with st.form(_k, clear_on_submit=False):
+            c1,c2 = st.columns([2,2])
+            with c1: label = st.text_input("Label", value="Default", key=f"o4_label_{_k}")
+            with c2: username = st.text_input("Gmail address", value="", key=f"o4_user_{_k}")
+            c1,c2 = st.columns([2,2])
+            with c1: host = st.text_input("SMTP host", value="smtp.gmail.com", key=f"o4_host_{_k}")
+            with c2: port = st.number_input("SMTP port", 1, 65535, value=465, key=f"o4_port_{_k}")
+            c1,c2 = st.columns([2,2])
+            with c1: use_tls = st.checkbox("Use STARTTLS", value=False, key=f"o4_tls_{_k}")
+            with c2: password = st.text_input("App password", type="password", value="", key=f"o4_pass_{_k}")
+            make_active = st.checkbox("Set as active", value=True, key=f"o4_active_{_k}")
+            save = st.form_submit_button("Save sender")
+            if save:
+                if not username.strip() or not password.strip():
+                    st.error("Username and app password are required.")
+                else:
+                    try:
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("""INSERT OR REPLACE INTO smtp_accounts(
+                                id, label, host, port, username, password, use_tls, is_active
+                            ) VALUES(
+                                (SELECT id FROM smtp_accounts WHERE username=?),
+                                ?,?,?,?,?,?, COALESCE((SELECT is_active FROM smtp_accounts WHERE username=?), 0)
+                            )""", (username.strip(), label.strip() or "Default", host.strip() or "smtp.gmail.com",
+                                    int(port), username.strip(), password.strip(), 1 if use_tls else 0, username.strip()))
+                            if make_active:
+                                cur.execute("UPDATE smtp_accounts SET is_active=0")
+                                cur.execute("UPDATE smtp_accounts SET is_active=1 WHERE username=?", (username.strip(),))
+                            conn.commit()
+                        st.success("Sender saved")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+
+
 def run_outreach(conn):
     import streamlit as st
     globals()["_O4_CONN"] = conn
@@ -8347,8 +8348,12 @@ def run_outreach(conn):
         pass
 
     st.header("Outreach")
-
     o4_sender_accounts_ui(conn)
+
+    try:
+        o4_sender_accounts_ui(conn)
+    except Exception:
+        pass
 
     with st.expander("Compliance (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
@@ -9742,6 +9747,8 @@ def __p_s1d_ui(conn):
 def __p_run_outreach(conn):
     __p_ensure_core(conn)
     _st.header("Outreach")
+    o4_sender_accounts_ui(conn)
+
     try:
         n = __p_db(conn, "SELECT COUNT(1) FROM outreach_sender_accounts").fetchone()[0]
         _st.sidebar.success("O4 Active" if n else "O4 Not Configured")
