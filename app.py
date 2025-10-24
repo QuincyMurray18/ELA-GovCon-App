@@ -9194,11 +9194,10 @@ def _wrap_run_subfinder():
     def wrapped(conn):
         import streamlit as st
         st.header("Subcontractor Finder")
-        with st.expander("S1D — Google Places & Dedupe", expanded=False):
-            try:
-                render_subfinder_s1d(conn)
-            except Exception as e:
-                st.error(f"S1D error: {e}")
+        try:
+            render_subfinder_s1d(conn)
+        except Exception as e:
+            st.error(f"S1D error: {e}")
         base(conn)
     wrapped._s1d_wrapped = True
     g["run_subcontractor_finder"] = wrapped
@@ -9623,55 +9622,5 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
     df["website"] = df.apply(lambda r: _link(r["website"], "site") if r["website"] else "", axis=1)
     _st.write(df[["name","phone","website","address","place_id","_dup"]].to_html(escape=False, index=False), unsafe_allow_html=True)
 
-__e1g = globals()
-if callable(__e1g.get("run_subcontractor_finder")):
-    __e1_orig = __e1g["run_subcontractor_finder"]
-    def run_subcontractor_finder(conn):
-        st.header("Subcontractor Finder")with st.form("s1d_search"):
-    c1, c2, c3, c4 = st.columns(4)
-    q = c1.text_input("Query", st.session_state.get("s1d_q", ""))
-    radius = c2.number_input("Radius miles", 1, 250, st.session_state.get("s1d_radius", 50))
-    source = c3.selectbox("Source", ["Places", "Web", "CSV", "Saved"], index=st.session_state.get("s1d_source_idx", 0))
-    submit = st.form_submit_button("Search")
-
-        try:
-            with _st.expander("E1 — Phone + Website enrichment", expanded=True):
-                lat = _st.session_state.get("s1d_lat")
-                lng = _st.session_state.get("s1d_lng")
-                miles = _st.session_state.get("s1d_radius_miles", 50)
-                query = _st.session_state.get("s1d_query", "")
-                radius_m = float(miles or 50) * 1609.34 if miles else 80467
-                __e1_enrich_and_render(conn, lat=lat, lng=lng, radius_m=radius_m, query=query)
-        except Exception as e:
-            _st.warning(f"E1 enrichment unavailable: {e}")
-        __e1_orig(conn)
-    __e1g["run_subcontractor_finder"] = run_subcontractor_finder
-# =========================
-# END E1 PATCH
 # =========================
 
-
-
-
-def _s1d_dedupe_rows(rows):
-    seen_pid = set()
-    seen_tuple = set()
-    out = []
-    for r in rows or []:
-        if not isinstance(r, dict):
-            continue
-        pid = r.get("place_id")
-        name = (r.get("name") or "").strip().lower()
-        phone = (r.get("phone") or "").strip()
-        city = (r.get("city") or "").strip().lower()
-        key_tuple = (name, phone, city)
-        if pid:
-            if pid in seen_pid:
-                continue
-            seen_pid.add(pid)
-        else:
-            if key_tuple in seen_tuple:
-                continue
-            seen_tuple.add(key_tuple)
-        out.append(r)
-    return out
