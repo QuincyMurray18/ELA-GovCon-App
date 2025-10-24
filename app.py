@@ -1,3 +1,4 @@
+import os, time, json, base64, hmac, hashlib
 import requests
 import time
 # Helper imports for RTM/Amendment
@@ -8795,6 +8796,257 @@ def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
             );
         """)
     conn.commit()
+
+
+# === Phase 2+3: Campaigns + Scheduler + Unsubscribe ===
+def ensure_campaign_schema(conn: sqlite3.Connection) -> None:
+    ensure_outreach_schema(conn)
+    with closing(conn.cursor()) as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS o6_campaigns(
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE,
+                subject TEXT,
+                body_html TEXT,
+                from_account_id INTEGER,
+                rate_per_hour INTEGER NOT NULL DEFAULT 90,
+                daily_cap INTEGER NOT NULL DEFAULT 400,
+                start_at TEXT,
+                status TEXT NOT NULL DEFAULT 'draft',
+                fu1_hours INTEGER,
+                fu2_hours INTEGER,
+                created_at TEXT
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS o7_campaign_recipients(
+                id INTEGER PRIMARY KEY,
+                campaign_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                name TEXT,
+                phone TEXT,
+                city TEXT, state TEXT, naics TEXT,
+                vendor_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                last_attempt_at TEXT,
+                next_action_at TEXT,
+                followup_step INTEGER NOT NULL DEFAULT 0,
+                error_msg TEXT,
+                UNIQUE(campaign_id, email)
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS o8_email_events(
+                id INTEGER PRIMARY KEY,
+                campaign_id INTEGER,
+                recipient_id INTEGER,
+                type TEXT,
+                meta TEXT,
+                created_at TEXT
+            );
+        """)
+        try: cur.execute("ALTER TABLE o3_send_log ADD COLUMN campaign_id INTEGER")
+        except Exception: pass
+        try: cur.execute("ALTER TABLE o3_send_log ADD COLUMN recipient_id INTEGER")
+        except Exception: pass
+    conn.commit()
+
+def _o_now() -> str:
+    import datetime as _dt
+    return _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+def _app_base_url() -> str:
+    try:
+        return st.secrets.get("app_base_url", "")
+    except Exception:
+        return ""
+
+def _app_secret() -> bytes:
+    try:
+        s = st.secrets.get("app_secret") or os.environ.get("APP_SECRET") or "dev"
+    except Exception:
+        s = os.environ.get("APP_SECRET") or "dev"
+    return str(s).encode("utf-8")
+
+def _sign_token(payload: dict) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    sig = hmac.new(_app_secret(), raw, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(raw + b"." + sig).decode("utf-8")
+
+def _verify_token(token: str):
+    try:
+        blob = base64.urlsafe_b64decode(token.encode("utf-8"))
+        raw, sig = blob.rsplit(b".", 1)
+        exp = hmac.new(_app_secret(), raw, hashlib.sha256).digest()
+        if not hmac.compare_digest(exp, sig):
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+def make_unsubscribe_link(campaign_id:int, recipient_id:int, email:str) -> str:
+    tok = _sign_token({"cid": int(campaign_id), "rid": int(recipient_id), "email": (email or '').strip().lower(), "ts": int(time.time())})
+    base = _app_base_url()
+    return (base + "?" if base else "?") + "unsubscribe=" + tok
+
+def handle_outreach_query_params(conn: sqlite3.Connection):
+    try:
+        qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+        if not qp: return
+        tok = qp.get("unsubscribe", [None])[0] if isinstance(qp.get("unsubscribe"), list) else qp.get("unsubscribe")
+        if tok:
+            data = _verify_token(tok)
+            if data and data.get("email"):
+                email = (data["email"] or "").strip().lower()
+                with closing(conn.cursor()) as cur:
+                    cur.execute("INSERT OR IGNORE INTO o5_unsubscribes(email, reason, created_at) VALUES(?,?,?);", (email, "link", _o_now()))
+                    conn.commit()
+                try: st.experimental_set_query_params()
+                except Exception: pass
+                st.success(f"Unsubscribed {email}.")
+    except Exception:
+        pass
+
+def list_campaigns(conn):
+    ensure_campaign_schema(conn)
+    try:
+        return pd.read_sql_query("SELECT * FROM o6_campaigns ORDER BY id DESC;", conn, params=())
+    except Exception:
+        return pd.DataFrame()
+
+def create_campaign(conn, name:str, subject:str, body_html:str, from_account_id:int|None, rate_per_hour:int=90, daily_cap:int=400, start_at:str|None=None, fu1_hours:int|None=72, fu2_hours:int|None=None):
+    ensure_campaign_schema(conn)
+    with closing(conn.cursor()) as cur:
+        cur.execute("""            INSERT INTO o6_campaigns(name, subject, body_html, from_account_id, rate_per_hour, daily_cap, start_at, status, fu1_hours, fu2_hours, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?);
+        """, (name, subject, body_html, from_account_id, int(rate_per_hour), int(daily_cap), start_at, "draft", fu1_hours, fu2_hours, _o_now()))
+        conn.commit()
+
+def update_campaign_status(conn, cid:int, status:str):
+    with closing(conn.cursor()) as cur:
+        cur.execute("UPDATE o6_campaigns SET status=? WHERE id=?;", (status, int(cid)))
+        conn.commit()
+
+def add_recipients_csv(conn, cid:int, csv_text:str) -> tuple[int,int]:
+    import io
+    df = pd.read_csv(io.StringIO(csv_text))
+    cols = [c for c in ["email","name","phone","city","state","naics","vendor_id"] if c in df.columns]
+    if "email" not in cols: return (0,0)
+    df = df[cols].copy()
+    df["email"] = df["email"].fillna("").str.strip().str.lower()
+    df = df[df["email"]!=""].drop_duplicates(subset=["email"])
+    n_in = len(df)
+    with closing(conn.cursor()) as cur:
+        for _, r in df.iterrows():
+            cur.execute("""                INSERT OR IGNORE INTO o7_campaign_recipients(campaign_id, email, name, phone, city, state, naics, vendor_id, status)
+                VALUES(?,?,?,?,?,?,?,?, 'pending');
+            """, (int(cid), r.get("email"), r.get("name"), r.get("phone"), r.get("city"), r.get("state"), r.get("naics"), int(r.get("vendor_id") or 0) or None))
+        conn.commit()
+    n_kept = pd.read_sql_query("SELECT COUNT(*) c FROM o7_campaign_recipients WHERE campaign_id=?", conn, params=(int(cid),)).iloc[0]["c"]
+    return (n_in, int(n_kept))
+
+def _campaign_due_quota(conn, cid:int, rate_per_hour:int, daily_cap:int) -> int:
+    dfh = pd.read_sql_query("SELECT COUNT(*) c FROM o3_send_log WHERE campaign_id=? AND status='sent' AND sent_at >= datetime('now','-1 hour');", conn, params=(int(cid),))
+    dfday = pd.read_sql_query("SELECT COUNT(*) c FROM o3_send_log WHERE campaign_id=? AND status='sent' AND sent_at >= date('now');", conn, params=(int(cid),))
+    sent_hour = int(dfh.iloc[0]["c"]) if not dfh.empty else 0
+    sent_day = int(dfday.iloc[0]["c"]) if not dfday.empty else 0
+    return max(0, min(max(0, int(rate_per_hour)-sent_hour), max(0, int(daily_cap)-sent_day)))
+
+def process_outreach_scheduler(conn: sqlite3.Connection):
+    ensure_campaign_schema(conn)
+    handle_outreach_query_params(conn)
+    dfc = pd.read_sql_query("SELECT * FROM o6_campaigns WHERE status IN ('scheduled','sending');", conn, params=())
+    if dfc.empty: return
+    for _, c in dfc.iterrows():
+        cid = int(c["id"]); rate = int(c.get("rate_per_hour") or 90); cap = int(c.get("daily_cap") or 400)
+        start_at = c.get("start_at")
+        if start_at:
+            try:
+                import pandas as _pd
+                if _pd.Timestamp.utcnow() < _pd.Timestamp(start_at): continue
+            except Exception:
+                pass
+        send_budget = _campaign_due_quota(conn, cid, rate, cap)
+        if send_budget <= 0: continue
+        dfrec = pd.read_sql_query("""            SELECT * FROM o7_campaign_recipients
+            WHERE campaign_id=? AND status IN ('pending','queued','followup_due')
+              AND (next_action_at IS NULL OR next_action_at <= datetime('now'))
+            ORDER BY COALESCE(next_action_at, last_attempt_at, id) ASC
+            LIMIT ?;
+        """, conn, params=(cid, int(send_budget)))
+        if dfrec.empty: continue
+        for _, r in dfrec.iterrows():
+            rid = int(r["id"]); email = (r["email"] or "").strip().lower()
+            if _o_is_unsub(conn, email):
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE o7_campaign_recipients SET status='unsubscribed' WHERE id=?;", (rid,)); conn.commit()
+                continue
+            subject = c.get("subject") or ""; body_html = c.get("body_html") or ""
+            ctx = {k.lower(): r.get(k) for k in ["email","name","phone","city","state","naics"]}
+            notice = st.session_state.get("rfp_selected_notice", {}) or {}
+            try:
+                subj = _o_merge_text(subject, ctx, notice); body = _o_merge_text(body_html, ctx, notice)
+            except Exception:
+                subj = subject; body = body_html
+            try:
+                # Use your existing sender if defined, else fallback noop
+                if 'send_email_smart' in globals():
+                    ok, msg = send_email_smart(conn, email, subj, body, [])
+                else:
+                    ok, msg = True, "noop"
+            except Exception as e:
+                ok, msg = False, str(e)
+            status = "sent" if ok else "error"
+            try:
+                _o_log_send(conn, c.get("from_account_id"), None, email, subj, body, [], None, None, status, msg, None)
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE o3_send_log SET campaign_id=?, recipient_id=? WHERE id=(SELECT MAX(id) FROM o3_send_log);", (cid, rid)); conn.commit()
+            except Exception:
+                pass
+            with closing(conn.cursor()) as cur:
+                if ok:
+                    cur.execute("UPDATE o7_campaign_recipients SET status='sent', last_attempt_at=? WHERE id=?;", (_o_now(), rid)); conn.commit()
+                else:
+                    cur.execute("UPDATE o7_campaign_recipients SET status='error', last_attempt_at=?, error_msg=? WHERE id=?;", (_o_now(), str(msg)[:200], rid)); conn.commit()
+
+def render_campaigns_panel(conn: sqlite3.Connection):
+    ensure_campaign_schema(conn)
+    st.subheader("Campaigns")
+    df = list_campaigns(conn)
+    st.dataframe(df["id name status start_at rate_per_hour daily_cap fu1_hours fu2_hours".split()] if not df.empty else pd.DataFrame(columns=list("id name status start_at".split())), use_container_width=True, hide_index=True)
+    with st.expander("New campaign", expanded=False):
+        name = st.text_input("Name")
+        subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
+        body = st.text_area("Body HTML", height=180, value="Hello {{name or company}},<br><br>We are preparing a competitive quote for {{title}}.")
+        c1, c2, c3 = st.columns([1,1,1])
+        rate = c1.number_input("Rate per hour", 1, 1000, 90, 1)
+        cap = c2.number_input("Daily cap", 1, 5000, 400, 10)
+        fu1 = c3.number_input("Follow-up 1 in hours", 0, 1000, 72, 1)
+        fu2 = st.number_input("Follow-up 2 in hours", 0, 1000, 0, 1)
+        start = st.text_input("Start at UTC (YYYY-MM-DD HH:MM:SS)", value="")
+        if st.button("Create campaign"):
+            if not name.strip():
+                st.error("Name required")
+            else:
+                create_campaign(conn, name.strip(), subj, body, None, int(rate), int(cap), start.strip() or None, int(fu1), int(fu2) or None)
+                st.success("Created"); st.experimental_rerun()
+    if not df.empty:
+        cid = st.selectbox("Open campaign", options=df["id"].tolist(), format_func=lambda i: f"{int(i)} — {df[df['id']==i].iloc[0]['name']}")
+        c = df[df["id"]==cid].iloc[0].to_dict()
+        st.markdown(f"**Status**: {c.get('status')}")
+        dfr = pd.read_sql_query("SELECT id, email, name, status, next_action_at, last_attempt_at, error_msg FROM o7_campaign_recipients WHERE campaign_id=? ORDER BY id DESC LIMIT 500;", conn, params=(int(cid),))
+        st.dataframe(dfr, use_container_width=True, hide_index=True)
+        colA, colB, colC, colD = st.columns([1,1,1,1])
+        if colA.button("Schedule", key=f"camp_sched_{cid}"):
+            update_campaign_status(conn, int(cid), "scheduled"); st.success("Scheduled"); st.experimental_rerun()
+        if colB.button("Pause", key=f"camp_pause_{cid}"):
+            update_campaign_status(conn, int(cid), "paused"); st.info("Paused"); st.experimental_rerun()
+        if colC.button("Resume", key=f"camp_resume_{cid}"):
+            update_campaign_status(conn, int(cid), "sending"); st.success("Resumed"); st.experimental_rerun()
+        if colD.button("Complete", key=f"camp_done_{cid}"):
+            update_campaign_status(conn, int(cid), "completed"); st.warning("Completed"); st.experimental_rerun()
+
+
 
 # === Outreach Phase 2+3: Campaigns, Scheduler, Unsubscribe, Tracking ===
 from typing import Optional, Tuple
