@@ -8160,6 +8160,10 @@ def main() -> None:
         y0_ai_panel()
     except Exception:
         pass
+        try:
+        globals().get('process_outreach_scheduler', lambda _c: None)(conn)
+    except Exception:
+        pass
     router(nav(), conn)
 
 
