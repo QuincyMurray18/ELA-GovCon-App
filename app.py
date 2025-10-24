@@ -8691,12 +8691,17 @@ def _o4_accounts_ui(conn):
 def _o3_render_sender_picker():
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
-    conn = globals().get("_O4_CONN")
+    conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
     if conn is None:
         st.warning("No sender accounts configured");
         return {"email":"", "app_password":""}
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
+    try:
+        import streamlit as st
+        st.caption(f"Loaded {len(rows)} sender account(s) from email_accounts")
+    except Exception:
+        pass
     choices = [r[0] for r in rows] + ["<add new>"]
     default = st.session_state.get("o4_sender_sel", choices[0] if choices else None)
     sel = st.selectbox("From account", choices, key="o4_sender_sel", index=(choices.index(default) if default in choices else 0))
