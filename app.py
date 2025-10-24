@@ -9604,3 +9604,283 @@ def render_campaigns_panel(conn: sqlite3.Connection):
 # ===== PHASE 2+3 OUTREACH END =====
 
 # ==== END ADDED PHASE 2+3 BLOCKS ====
+
+# ================== PHASE 2 + 3 HUB (always visible) ==================
+def _p23_safe_has(name: str):
+    try:
+        return callable(globals().get(name))
+    except Exception:
+        return False
+
+def _p23_render_outreach(conn):
+    # Use existing outreach if present, else no-op panels
+    try:
+        process_outreach_scheduler(conn)
+    except Exception:
+        pass
+    try:
+        render_campaigns_panel(conn)
+    except Exception as e:
+        import streamlit as st
+        st.info(f"Outreach UI unavailable: {e}")
+
+# Minimal analyzer helpers for Phase 2 + 3 if host app lacks them
+import re, io, json, sqlite3, pandas as pd
+from contextlib import closing
+
+def _p23_detect_mime(name: str) -> str:
+    n = (name or "").lower()
+    if n.endswith(".pdf"): return "application/pdf"
+    if n.endswith(".docx"): return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if n.endswith(".xlsx"): return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if n.endswith(".txt"): return "text/plain"
+    return "application/octet-stream"
+
+def _p23_extract_text_pages(file_bytes: bytes, mime: str):
+    out = []
+    m = (mime or "").lower()
+    if "pdf" in m:
+        try:
+            try:
+                from pypdf import PdfReader
+            except Exception:
+                import PyPDF2 as _py
+                PdfReader = _py.PdfReader  # type: ignore
+            reader = PdfReader(io.BytesIO(file_bytes))
+            for p in reader.pages[:100]:
+                try:
+                    out.append(p.extract_text() or "")
+                except Exception:
+                    out.append("")
+        except Exception:
+            pass
+    elif "wordprocessingml" in m or (mime == "" and file_bytes[:4] == b"PK\x03\x04"):
+        try:
+            import docx
+            doc = docx.Document(io.BytesIO(file_bytes))
+            out = ["\n".join(p.text or "" for p in doc.paragraphs)]
+        except Exception:
+            out = []
+    elif "spreadsheetml" in m:
+        try:
+            x = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
+            for sname, df in list(x.items())[:10]:
+                out.append(sname + "\n" + df.fillna("").astype(str).to_csv(sep="\t", index=False))
+        except Exception:
+            out = []
+    elif "text/plain" in m:
+        try:
+            out = [file_bytes.decode("utf-8", errors="ignore")]
+        except Exception:
+            out = [file_bytes.decode("latin-1", errors="ignore")]
+    if not out:
+        try:
+            out = [file_bytes.decode("utf-8", errors="ignore")]
+        except Exception:
+            out = []
+    return out
+
+def _p23_extract_sections_L_M(text: str) -> dict:
+    out = {}
+    if not text: return out
+    mL = re.search(r'(SECTION\s+L[\s\S]*?)(?=SECTION\s+[A-Z]|\Z)', text, re.IGNORECASE)
+    if mL: out['L'] = mL.group(1)
+    mM = re.search(r'(SECTION\s+M[\s\S]*?)(?=SECTION\s+[A-Z]|\Z)', text, re.IGNORECASE)
+    if mM: out['M'] = mM.group(1)
+    return out
+
+def _p23_derive_lm_items(section_text: str) -> list:
+    if not section_text: return []
+    items = []
+    for line in section_text.splitlines():
+        s = line.strip()
+        if len(s) < 4: continue
+        if re.match(r'^([\-\u2022\*]|\(?[a-zA-Z0-9]\)|[0-9]+\.)\s+', s):
+            items.append(s)
+    uniq=[]; seen=set()
+    for it in items:
+        if it not in seen: uniq.append(it); seen.add(it)
+    return uniq[:500]
+
+def _p23_extract_clins(text: str) -> list:
+    if not text: return []
+    lines = text.splitlines(); rows=[]
+    for i, ln in enumerate(lines):
+        m = re.search(r'\bCLIN\s*([A-Z0-9\-]+)', ln, re.IGNORECASE)
+        if m:
+            clin = m.group(1)
+            desc = lines[i+1].strip() if i+1 < len(lines) else ''
+            mqty = re.search(r'\b(QTY|Quantity)[:\s]*([0-9,.]+)', ln + ' ' + desc, re.IGNORECASE)
+            qty = mqty.group(2) if mqty else ''
+            munit = re.search(r'\b(UNIT|Units?)[:\s]*([A-Za-z/]+)', ln + ' ' + desc, re.IGNORECASE)
+            unit = munit.group(2) if munit else ''
+            rows.append({'clin': clin, 'description': desc[:300], 'qty': qty, 'unit': unit, 'unit_price': '', 'extended_price': ''})
+    uniq=[]; seen=set()
+    for r in rows:
+        key = (r['clin'], r['description'])
+        if key in seen: continue
+        seen.add(key); uniq.append(r)
+    return uniq[:500]
+
+def _p23_extract_dates(text: str) -> list:
+    if not text: return []
+    patterns = [
+        r'(Questions(?:\s+Due)?|Q&A(?:\s+Due)?|Inquiry Deadline)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})',
+        r'(Proposals?\s+Due|Offers?\s+Due|Closing Date)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})',
+        r'(Site\s+Visit)[:\s]*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}/\d{1,2}/\d{2,4})'
+    ]
+    out = []
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            out.append({'label': m.group(1).strip(), 'date_text': m.group(2).strip(), 'date_iso': ''})
+    return out[:200]
+
+def _p23_extract_pocs(text: str) -> list:
+    if not text: return []
+    emails = list(set(re.findall(r'[\w\.-]+@[\w\.-]+\.[A-Za-z]{2,}', text)))
+    phones = list(set(re.findall(r'(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s\-]?\d{3}[\s\-]?\d{4}', text)))
+    names = re.findall(r'([A-Z][a-zA-Z\-]+\s+[A-Z][a-zA-Z\-]+)', text)
+    out = []
+    for i in range(max(len(names), len(emails), len(phones))):
+        out.append({'name': names[i] if i < len(names) else '', 'role': 'POC',
+                    'email': emails[i] if i < len(emails) else '', 'phone': phones[i] if i < len(phones) else ''})
+    return out[:100]
+
+def _p23_collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
+    try:
+        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df = pd.DataFrame()
+    parts = []
+    for _, r in (df if (df is not None and not df.empty) else pd.DataFrame()).iterrows():
+        b = r.get("bytes"); mime = r.get("mime") or ""
+        pages = _p23_extract_text_pages(b, mime) or []
+        parts.append("\n\n".join(pages))
+    return "\n\n".join([p for p in parts if p]).strip()
+
+def _p23_extract_naics(text: str) -> str:
+    if not text: return ""
+    m = re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
+    if m: return m.group(1)[:6]
+    m = re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
+    if m: return m.group(1)
+    return ""
+
+def _p23_extract_set_aside(text: str) -> str:
+    if not text: return ""
+    tags = ["SDVOSB","WOSB","EDWOSB","8(a)","8A","HUBZone","VOSB","Small Business","Total Small Business"]
+    for t in tags:
+        if re.search(rf'(?i)\b{t}\b', text):
+            norm = t.upper().replace("(A)","8A").replace("TOTAL SMALL BUSINESS","SMALL BUSINESS")
+            if norm == "8(A)": norm = "8A"
+            return norm
+    m = re.search(r'(?i)Set[- ]Aside\s*[:#]?\s*([A-Za-z0-9 \-/\(\)]+)', text)
+    if m:
+        v = re.sub(r'\s+',' ', m.group(1).strip())
+        return v[:80]
+    return ""
+
+def _p23_require_gate(conn, rfp_id):
+    missing = []
+    try:
+        dfm = pd.read_sql_query("SELECT 1 FROM rfp_sections WHERE rfp_id=? AND section='M' LIMIT 1;", conn, params=(int(rfp_id),))
+        if dfm.empty: missing.append("Section M")
+    except Exception:
+        missing.append("Section M")
+    try:
+        df = pd.read_sql_query("SELECT 1 FROM lm_items WHERE rfp_id=? LIMIT 1;", conn, params=(int(rfp_id),))
+        if df.empty: missing.append("L/M items")
+    except Exception:
+        missing.append("L/M items")
+    return (len(missing)==0, missing)
+
+def _p23_build_basics(conn, rfp_id: int) -> dict:
+    txt = _p23_collect_full_text(conn, int(rfp_id))
+    secs = _p23_extract_sections_L_M(txt)
+    l_items = _p23_derive_lm_items(secs.get("L","")) + _p23_derive_lm_items(secs.get("M",""))
+    clins = _p23_extract_clins(txt); dates = _p23_extract_dates(txt); pocs = _p23_extract_pocs(txt)
+    with closing(conn.cursor()) as cur:
+        for it in l_items:
+            cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?)",
+                        (rfp_id, it, 1 if re.search(r'\b(shall|must|required|mandatory)\b', it, re.I) else 0, "Open"))
+        for r in clins:
+            cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?)",
+                        (rfp_id, r['clin'], r['description'], r['qty'], r['unit'], r['unit_price'], r['extended_price']))
+        for d in dates:
+            cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?)",
+                        (rfp_id, d['label'], d['date_text'], d['date_iso']))
+        for pc in pocs:
+            cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?)",
+                        (rfp_id, pc['name'], pc['role'], pc['email'], pc['phone']))
+        conn.commit()
+    full = txt
+    naics = _p23_extract_naics(full); sa = _p23_extract_set_aside(full)
+    if naics:
+        with closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?)", (rfp_id, "naics", naics)); conn.commit()
+    if sa:
+        with closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?)", (rfp_id, "set_aside", sa)); conn.commit()
+
+def _p23_render_analyzer(conn):
+    import streamlit as st
+    st.subheader("RFP Analyzer · Phase 2 + 3")
+    try:
+        dfr = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        dfr = pd.DataFrame()
+    if dfr.empty:
+        st.info("No RFPs detected in DB. Upload in your normal workflow. Then return here.")
+        return
+    rid = st.selectbox("RFP", options=dfr["id"].tolist(), format_func=lambda i: f"#{i} — {dfr.loc[dfr['id']==i,'title'].values[0]}")
+    if st.button("Build L/M, CLINs, Dates, POCs"):
+        _p23_build_basics(conn, int(rid))
+        st.success("Extracted.")
+
+    # gate and export
+    ok, miss = _p23_require_gate(conn, int(rid))
+    if not ok:
+        st.warning("Gate incomplete: " + ", ".join(miss))
+    # Minimal RTM viewer if host RTM not present
+    try:
+        from collections import defaultdict
+        q = pd.read_sql_query("SELECT id, item_text, status FROM lm_items WHERE rfp_id=?", conn, params=(int(rid),))
+        st.caption(f"L/M items: {len(q)}")
+        st.dataframe(q.tail(200), use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.info(f"RTM view unavailable: {e}")
+
+def render_p23_hub(conn):
+    import streamlit as st
+    st.sidebar.divider()
+    show = st.sidebar.checkbox("Show Phase 2 + 3 tools", value=True, key="p23_show")
+    if not show:
+        return
+    st.markdown("### Phase 2 + 3")
+    tabs = st.tabs(["Outreach", "Analyzer"])
+    with tabs[0]:
+        _p23_render_outreach(conn)
+    with tabs[1]:
+        _p23_render_analyzer(conn)
+
+# Always render Phase 2 + 3 hub after main router, if possible.
+try:
+    # If main() calls router(..., conn), we try to hook from here by redefining main with wrapper.
+    # If not, calling render_p23_hub(conn) again is harmless due to idempotent UI.
+    _orig_main = main
+    def main():
+        conn = get_db() if 'get_db' in globals() else None
+        try:
+            _orig_main()
+        finally:
+            try:
+                if conn is None and 'get_db' in globals():
+                    conn = get_db()
+                if conn is not None:
+                    render_p23_hub(conn)
+            except Exception:
+                pass
+except Exception:
+    # Fallback: if main not defined yet, nothing to do.
+    pass
+
