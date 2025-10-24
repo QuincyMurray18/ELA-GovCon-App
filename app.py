@@ -7625,6 +7625,11 @@ if "_o3_render_sender_picker" not in globals():
                                 app_password=excluded.app_password
                             """, (email.strip(), display or "", pw or ""))
                         st.success("Saved")
+                        try:
+                            import streamlit as st
+                            st.session_state["o4_sender_sel"] = email.strip()
+                        except Exception:
+                            pass
                         st.rerun()
                     except Exception as e:
                         st.error(f"Save failed: {e}")
@@ -8668,6 +8673,11 @@ def _o4_accounts_ui(conn):
                         use_ssl=excluded.use_ssl
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
+    try:
+        import streamlit as st
+        st.session_state["o4_sender_sel"] = email.strip()
+    except Exception:
+        pass
     st.rerun()
     with c4:
         if st.button("Delete account", key="o4_ac_del"):
@@ -8688,7 +8698,8 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
     choices = [r[0] for r in rows] + ["<add new>"]
-    sel = st.selectbox("From account", choices, key="o4_sender_sel")
+    default = st.session_state.get("o4_sender_sel", choices[0] if choices else None)
+    sel = st.selectbox("From account", choices, key="o4_sender_sel", index=(choices.index(default) if default in choices else 0))
     chosen = {"email":"", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
     # Load password and SMTP details
     if sel != "<add new>":
@@ -9936,6 +9947,11 @@ def o1_sender_accounts_ui(conn):
                     use_ssl=excluded.use_ssl
                 """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
             st.success("Saved")
+    try:
+        import streamlit as st
+        st.session_state["o4_sender_sel"] = email.strip()
+    except Exception:
+        pass
     st.rerun()
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
