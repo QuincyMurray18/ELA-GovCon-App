@@ -7535,20 +7535,40 @@ if "_o3_collect_recipients_ui" not in globals():
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
+        import sqlite3
+        from contextlib import closing as _closing
         conn = globals().get("_O4_CONN")
         if conn is None:
             conn = st.session_state.get("conn") if "conn" in st.session_state else None
         if conn is None:
             try:
-                conn = get_db()
+                # Try module DB_PATH first
+                DBP = DB_PATH  # expects module-level DB_PATH
             except Exception:
-                st.error("Internal: sender picker not initialized")
+                # Conservative default
+                DBP = "./data/app.db"
+            try:
+                conn = sqlite3.connect(DBP, check_same_thread=False)
+                with _closing(conn.cursor()) as _c:
+                    _c.execute("PRAGMA foreign_keys = ON;")
+                globals()["_O4_CONN"] = conn
+            except Exception as e:
+                st.error(f"Internal: sender picker not initialized: {e}")
                 return {"email": "", "app_password": ""}
         ensure_outreach_o1_schema(conn)
-        rows = conn.execute(
-            "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
-        ).fetchall()
-        choices = [r[0] for r in rows] + ["<add new>"]
+        try:
+            rows = conn.execute(
+                "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
+            ).fetchall()
+        except Exception:
+            # create table if schema helper was a no-op
+            with _closing(conn.cursor()) as _c:
+                _c.execute("CREATE TABLE IF NOT EXISTS email_accounts(user_email TEXT PRIMARY KEY, display_name TEXT, app_password TEXT)")
+                conn.commit()
+            rows = conn.execute(
+                "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
+            ).fetchall()
+        choices = [r[0] for r in rows] + ["<add new>"] if rows else ["<add new>"]
         sel = st.selectbox("From account", choices, key="o4_from_addr")
         if sel == "<add new>":
             st.info("Add a sender in Outreach → Sender accounts")
