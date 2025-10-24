@@ -9090,11 +9090,79 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
             saved += 1
     return saved
 
+
+def _s1d_render_from_cache(conn, df):
+    import streamlit as st
+    import pandas as _pd
+    if df is None or getattr(df, "empty", True):
+        st.info("No cached results.")
+        if st.button("New search", key="s1d_new_search_empty"):
+            st.session_state.pop("s1d_df", None)
+        return
+    # Show with links and dedupe flags
+    def _mk_link(url, text):
+        if not url: return text
+        return f"<a href='{url}' target='_blank'>{text}</a>"
+    show = df.copy()
+    if "google_url" in show.columns:
+        show["name"] = show.apply(lambda r: _mk_link(r.get("google_url",""), r.get("name","")), axis=1)
+    if "website" in show.columns:
+        show["website"] = show.apply(lambda r: _mk_link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
+    keep = df[~df.get("_dup", _pd.Series([False]*len(df)))].copy() if not df.empty else df
+    # Results table
+    cols = [c for c in ["name","phone","website","address","city","state","place_id","_dup"] if c in show.columns]
+    if cols:
+        st.markdown("**Results**")
+        st.write(show[cols].to_html(escape=False, index=False), unsafe_allow_html=True)
+    # Selection and save
+    if keep.empty:
+        st.success("All results are already in your vendor list.")
+    else:
+        st.caption(f"{len(keep)} new vendors can be saved")
+        if "row_id" not in keep.columns:
+            import hashlib as _h
+            def _mk_id(r):
+                pid = str(r.get("place_id","") or "")
+                if pid: return pid
+                s = f"{r.get('name','')}-{r.get('phone','')}-{r.get('city','')}"
+                return _h.sha1(s.encode()).hexdigest()[:12]
+            keep["row_id"] = keep.apply(_mk_id, axis=1)
+        keep_view = keep[["row_id","name","phone","website","address","city","state","place_id"]].copy()
+        # Restore selection
+        sel_ids = set(st.session_state.get("s1d_selected_ids", []))
+        keep_view.insert(1, "Select", keep_view["row_id"].isin(sel_ids))
+        edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor_cache")
+        new_sel = set(edited.loc[edited["Select"]==True, "row_id"])
+        st.session_state["s1d_selected_ids"] = list(new_sel)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("Save selected", key="s1d_save_selected_cache") and new_sel:
+                sub = keep[keep["row_id"].isin(list(new_sel))].drop(columns=["row_id"], errors="ignore")
+                n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
+                st.success(f"Saved {n} vendors")
+        with c2:
+            if st.button("Save all new vendors", key="s1d_save_all_cache"):
+                sub = keep.drop(columns=["row_id"], errors="ignore")
+                n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
+                st.success(f"Saved {n} vendors")
+        with c3:
+            if st.button("New search", key="s1d_new_search"):
+                st.session_state.pop("s1d_df", None)
+                st.session_state.pop("s1d_selected_ids", None)
+                st.experimental_rerun()
+
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
     key = _s1d_get_api_key()
     if not key:
         st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
+        return
+    # Use cached results if present
+    import pandas as _pd
+    _cache = st.session_state.get("s1d_df")
+    if _cache:
+        df = _pd.DataFrame(_cache)
+        _s1d_render_from_cache(conn, df)
         return
     q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
     loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
@@ -9161,6 +9229,7 @@ def render_subfinder_s1d(conn):
         _time.sleep(0.05)
     import pandas as _pd
     df = _pd.DataFrame(rows)
+    st.session_state["s1d_df"] = df.to_dict("records")
     if df.empty:
         st.info("No results.")
         return
@@ -9630,6 +9699,7 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
         _st.info("No results to enrich.")
         return
     df = _pd.DataFrame(rows)
+    st.session_state["s1d_df"] = df.to_dict("records")
     def _link(u,t): return f"<a href='{u}' target='_blank'>{t}</a>" if u else t
     df["name"] = df.apply(lambda r: _link(r["google_url"], r["name"]), axis=1)
     df["website"] = df.apply(lambda r: _link(r["website"], "site") if r["website"] else "", axis=1)
