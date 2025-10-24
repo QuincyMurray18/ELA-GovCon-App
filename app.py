@@ -9202,12 +9202,26 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
     tbl = _s1d_vendor_write_table(conn)
     with conn:
         _s1d_ensure_vendor_table(conn, tbl)
-    # Insert rows
+    # Insert or update rows keyed by place_id
     saved = 0
     with conn:
         for r in rows or []:
-            conn.execute(f"""                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
+            cur = conn.execute(f"""
+                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                ON CONFLICT(place_id) DO UPDATE SET
+                    name=COALESCE(excluded.name, {tbl}.name),
+                    email=COALESCE(excluded.email, {tbl}.email),
+                    phone=COALESCE(excluded.phone, {tbl}.phone),
+                    website=COALESCE(excluded.website, {tbl}.website),
+                    address=COALESCE(excluded.address, {tbl}.address),
+                    city=COALESCE(excluded.city, {tbl}.city),
+                    state=COALESCE(excluded.state, {tbl}.state),
+                    zip=COALESCE(excluded.zip, {tbl}.zip),
+                    naics=COALESCE(excluded.naics, {tbl}.naics),
+                    notes=CASE WHEN length({tbl}.notes)>0 THEN {tbl}.notes ELSE COALESCE(excluded.notes, {tbl}.notes) END,
+                    lat=COALESCE(excluded.lat, {tbl}.lat),
+                    lon=COALESCE(excluded.lon, {tbl}.lon)
             """, (
                 str(r.get("source","") or ""),
                 str(r.get("place_id","") or ""),
