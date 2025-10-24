@@ -9884,3 +9884,272 @@ except Exception:
     # Fallback: if main not defined yet, nothing to do.
     pass
 
+
+
+# ================== PHASE 5: Gmail SMTP + Templates + Follow-ups + Audit ==================
+import smtplib, ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from contextlib import closing
+
+def ensure_phase5_schema(conn: sqlite3.Connection) -> None:
+    with closing(conn.cursor()) as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS o2_email_templates(
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE,
+                subject TEXT,
+                body_html TEXT,
+                created_at TEXT
+            );
+        """)
+        # Add from_account_id to o6_campaigns if missing
+        try: cur.execute("ALTER TABLE o6_campaigns ADD COLUMN from_account_id INTEGER")
+        except Exception: pass
+    conn.commit()
+
+def p5_save_account(conn: sqlite3.Connection, label, host, port, username, password, from_name, from_email, use_ssl, use_tls):
+    ensure_outreach_schema(conn)
+    with closing(conn.cursor()) as cur:
+        cur.execute("""
+            INSERT INTO o1_email_accounts(label, smtp_host, smtp_port, username, password, from_name, from_email, use_ssl, use_tls, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?, datetime('now'));
+        """, (label, host, int(port), username, password, from_name, from_email, 1 if use_ssl else 0, 1 if use_tls else 0))
+        conn.commit()
+
+def p5_save_template(conn: sqlite3.Connection, name, subject, body_html):
+    ensure_phase5_schema(conn)
+    with closing(conn.cursor()) as cur:
+        cur.execute("""
+            INSERT INTO o2_email_templates(name, subject, body_html, created_at)
+            VALUES(?,?,?, datetime('now'))
+            ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, body_html=excluded.body_html;
+        """, (name.strip(), subject, body_html))
+        conn.commit()
+
+def _p5_get_account(conn: sqlite3.Connection, account_id: int|None):
+    df = pd.read_sql_query("SELECT * FROM o1_email_accounts ORDER BY id;", conn, params=())
+    if df is None or df.empty: return None
+    if account_id:
+        r = df[df["id"]==int(account_id)]
+        if not r.empty: return r.iloc[0].to_dict()
+    return df.iloc[0].to_dict()
+
+def _p5_append_unsub_footer(html: str, link: str) -> str:
+    footer = f"""<hr style="border:none;border-top:1px solid #eee;margin-top:16px">
+    <div style="font-size:12px;color:#666">If you prefer not to receive RFQ outreach from us, <a href="{link}">unsubscribe</a>.</div>"""
+    return (html or "") + footer
+
+# Override sender with real Gmail SMTP
+def send_email_smart(conn, to_email: str, subject: str, html_body: str, attachments: list, account_id: int|None=None, campaign_id: int|None=None, recipient_id: int|None=None):
+    acc = _p5_get_account(conn, account_id)
+    if not acc:
+        return False, "No email account configured"
+    host = acc.get("smtp_host") or "smtp.gmail.com"
+    port = int(acc.get("smtp_port") or 587)
+    username = acc.get("username") or acc.get("from_email")
+    password = acc.get("password") or ""
+    from_name = acc.get("from_name") or ""
+    from_email = acc.get("from_email") or username
+
+    # Unsubscribe link if campaign+recipient present
+    try:
+        unsub = make_unsubscribe_link(int(campaign_id or 0), int(recipient_id or 0), (to_email or ""))
+        html_body = _p5_append_unsub_footer(html_body, unsub)
+    except Exception:
+        pass
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject or ""
+    msg['From'] = f"{from_name} <{from_email}>" if from_name else from_email
+    msg['To'] = to_email
+    msg.attach(MIMEText(html_body or "", 'html'))
+
+    try:
+        context = ssl.create_default_context()
+        if int(acc.get("use_ssl") or 0) == 1:
+            with smtplib.SMTP_SSL(host, port, context=context, timeout=30) as server:
+                server.login(username, password)
+                server.sendmail(from_email, [to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as server:
+                if int(acc.get("use_tls") or 1) == 1:
+                    server.starttls(context=context)
+                server.login(username, password)
+                server.sendmail(from_email, [to_email], msg.as_string())
+        return True, "sent"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+# Override scheduler to support follow-ups using fu1_hours and fu2_hours
+def process_outreach_scheduler(conn: sqlite3.Connection):
+    ensure_campaign_schema(conn); ensure_phase5_schema(conn)
+    handle_outreach_query_params(conn)
+    dfc = pd.read_sql_query("SELECT * FROM o6_campaigns WHERE status IN ('scheduled','sending');", conn, params=())
+    if dfc.empty: return
+    for _, c in dfc.iterrows():
+        cid = int(c["id"]); rate = int(c.get("rate_per_hour") or 90); cap = int(c.get("daily_cap") or 400)
+        start_at = c.get("start_at")
+        fu1 = c.get("fu1_hours"); fu2 = c.get("fu2_hours")
+        if start_at:
+            try:
+                import pandas as _pd
+                if _pd.Timestamp.utcnow() < _pd.Timestamp(start_at): continue
+            except Exception:
+                pass
+        send_budget = _campaign_due_quota(conn, cid, rate, cap)
+        if send_budget <= 0: continue
+
+        dfrec = pd.read_sql_query(
+            """
+            SELECT * FROM o7_campaign_recipients
+            WHERE campaign_id=?
+              AND (
+                    status IN ('pending','queued','followup_due')
+                    OR (status='sent' AND next_action_at IS NOT NULL AND next_action_at <= datetime('now'))
+                  )
+            ORDER BY COALESCE(next_action_at, last_attempt_at, id) ASC
+            LIMIT ?;
+            """, conn, params=(cid, int(send_budget)))
+
+        if dfrec.empty: continue
+
+        for _, r in dfrec.iterrows():
+            rid = int(r["id"]); email = (r["email"] or "").strip().lower()
+            if _o_is_unsub(conn, email):
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE o7_campaign_recipients SET status='unsubscribed' WHERE id=?;", (rid,)); conn.commit()
+                continue
+
+            # Build content
+            subject = c.get("subject") or ""
+            body_html = c.get("body_html") or ""
+            step = int(r.get("followup_step") or 0)
+            if step >= 1:
+                subject = "RE: " + subject
+                body_html = f"<p>Following up on the RFQ below.</p><blockquote>{body_html}</blockquote>"
+
+            ctx = {k.lower(): r.get(k) for k in ["email","name","phone","city","state","naics"]}
+            notice = st.session_state.get("rfp_selected_notice", {}) or {}
+            try:
+                subj = _o_merge_text(subject, ctx, notice); body = _o_merge_text(body_html, ctx, notice)
+            except Exception:
+                subj = subject; body = body_html
+
+            ok, msg = send_email_smart(conn, email, subj, body, [], account_id=int(c.get("from_account_id") or 0) or None, campaign_id=cid, recipient_id=rid)
+            status = "sent" if ok else "error"
+
+            try:
+                _o_log_send(conn, c.get("from_account_id"), None, email, subj, body, [], None, None, status, msg, None)
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE o3_send_log SET campaign_id=?, recipient_id=? WHERE id=(SELECT MAX(id) FROM o3_send_log);", (cid, rid)); conn.commit()
+            except Exception:
+                pass
+
+            with closing(conn.cursor()) as cur:
+                if ok:
+                    # schedule follow-ups
+                    if step == 0 and fu1 and int(fu1) > 0:
+                        cur.execute("UPDATE o7_campaign_recipients SET status='queued', followup_step=1, last_attempt_at=datetime('now'), next_action_at=datetime('now', ? ) WHERE id=?;",
+                                    (f'+{int(fu1)} hours', rid))
+                    elif step == 1 and fu2 and int(fu2) > 0:
+                        cur.execute("UPDATE o7_campaign_recipients SET status='queued', followup_step=2, last_attempt_at=datetime('now'), next_action_at=datetime('now', ? ) WHERE id=?;",
+                                    (f'+{int(fu2)} hours', rid))
+                    else:
+                        cur.execute("UPDATE o7_campaign_recipients SET status='completed', last_attempt_at=datetime('now'), next_action_at=NULL WHERE id=?;", (rid,))
+                    conn.commit()
+                else:
+                    cur.execute("UPDATE o7_campaign_recipients SET status='error', last_attempt_at=datetime('now'), error_msg=? WHERE id=?;", (str(msg)[:200], rid))
+                    conn.commit()
+
+def p5_render_outreach_extras(conn: sqlite3.Connection):
+    ensure_phase5_schema(conn); ensure_outreach_schema(conn)
+    st.markdown("#### Phase 5 · Email accounts, templates, and audit log")
+    col1, col2 = st.columns(2)
+
+    # Accounts
+    with col1.expander("Email accounts (Gmail App Password recommended)", expanded=True):
+        df = pd.read_sql_query("SELECT id, label, from_email, smtp_host, smtp_port, use_tls, use_ssl FROM o1_email_accounts ORDER BY id DESC;", conn, params=())
+        st.dataframe(df, use_container_width=True, hide_index=True) if df is not None and not df.empty else st.caption("No accounts yet.")
+        with st.form("p5_new_acct"):
+            c1, c2 = st.columns(2)
+            label = c1.text_input("Label", value="Gmail")
+            from_name = c2.text_input("From name", value="GovCon Team")
+            from_email = c1.text_input("From email", placeholder="you@company.com")
+            username = c2.text_input("Username", placeholder="you@company.com")
+            password = st.text_input("App Password", type="password")
+            host = c1.text_input("SMTP host", value="smtp.gmail.com")
+            port = c2.number_input("SMTP port", min_value=1, max_value=65535, value=587, step=1)
+            use_tls = st.checkbox("Use STARTTLS", value=True)
+            use_ssl = st.checkbox("Use SSL", value=False)
+            submitted = st.form_submit_button("Save account")
+            if submitted:
+                p5_save_account(conn, label, host, port, username or from_email, password, from_name, from_email, use_ssl, use_tls)
+                st.success("Account saved"); st.experimental_rerun()
+
+    # Templates
+    with col2.expander("Email templates", expanded=True):
+        dft = pd.read_sql_query("SELECT id, name, subject FROM o2_email_templates ORDER BY id DESC;", conn, params=())
+        st.dataframe(dft, use_container_width=True, hide_index=True) if dft is not None and not dft.empty else st.caption("No templates yet.")
+        with st.form("p5_new_tpl"):
+            name = st.text_input("Template name")
+            subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
+            body = st.text_area("Body HTML", height=180, value="Hello {{name}},<br><br>Requesting a quote for {{title}}.")
+            if st.form_submit_button("Save template"):
+                p5_save_template(conn, name, subj, body); st.success("Template saved"); st.experimental_rerun()
+
+    # Link template to campaign and import recipients
+    st.markdown("##### Campaign tools")
+    dfc = pd.read_sql_query("SELECT * FROM o6_campaigns ORDER BY id DESC;", conn, params=())
+    if dfc is not None and not dfc.empty:
+        cid = st.selectbox("Select campaign", options=dfc["id"].tolist(), format_func=lambda i: f"{int(i)} — {dfc[dfc['id']==i].iloc[0]['name']}")
+        c = dfc[dfc["id"]==cid].iloc[0].to_dict()
+        # Choose From account
+        dfacc = pd.read_sql_query("SELECT id, label, from_email FROM o1_email_accounts ORDER BY id;", conn, params=())
+        acct_map = {int(r["id"]): f"{int(r['id'])} — {r['label']} <{r['from_email']}>" for _, r in (dfacc if dfacc is not None else pd.DataFrame()).iterrows()}
+        acct_choice = st.selectbox("From account", options=list(acct_map.keys()) if acct_map else [0], format_func=lambda k: acct_map.get(k, "None"))
+        if acct_choice:
+            with closing(conn.cursor()) as cur:
+                cur.execute("UPDATE o6_campaigns SET from_account_id=? WHERE id=?;", (int(acct_choice), int(cid))); conn.commit()
+        # Apply template
+        dft = pd.read_sql_query("SELECT id, name, subject, body_html FROM o2_email_templates ORDER BY id DESC;", conn, params=())
+        if dft is not None and not dft.empty:
+            tid = st.selectbox("Apply template", options=dft["id"].tolist(), format_func=lambda i: f"{int(i)} — {dft[dft['id']==i].iloc[0]['name']}")
+            if st.button("Apply to campaign"):
+                r = dft[dft["id"]==tid].iloc[0].to_dict()
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE o6_campaigns SET subject=?, body_html=? WHERE id=?;", (r["subject"], r["body_html"], int(cid))); conn.commit()
+                st.success("Template applied")
+        # Import recipients CSV
+        st.markdown("###### Import recipients")
+        up = st.file_uploader("CSV with columns: email, name, phone, city, state, naics, vendor_id", type=["csv"], key=f"p5_csv_{cid}")
+        if up is not None:
+            import io
+            csv_text = up.getvalue().decode("utf-8", errors="ignore")
+            n_in, n_kept = add_recipients_csv(conn, int(cid), csv_text)
+            st.success(f"Parsed {n_in}. Total stored for campaign: {n_kept}.")
+    else:
+        st.caption("Create a campaign first in the Campaigns panel above.")
+
+    # Audit log
+    st.markdown("##### Audit log")
+    dfa = pd.read_sql_query("SELECT sent_at, to_email, subject, status, smtp_response, campaign_id, recipient_id FROM o3_send_log ORDER BY id DESC LIMIT 1000;", conn, params=())
+    st.dataframe(dfa, use_container_width=True, hide_index=True) if dfa is not None and not dfa.empty else st.caption("No sends yet.")
+    if dfa is not None and not dfa.empty:
+        csv = dfa.to_csv(index=False).encode("utf-8")
+        st.download_button("Export audit CSV", data=csv, file_name="outreach_audit.csv", mime="text/csv")
+
+# Hook Phase 5 UI into Outreach tab
+def _p23_render_outreach(conn):
+    try:
+        process_outreach_scheduler(conn)
+    except Exception:
+        pass
+    try:
+        render_campaigns_panel(conn)
+    except Exception as e:
+        st.info(f"Outreach Campaigns panel unavailable: {e}")
+    try:
+        p5_render_outreach_extras(conn)
+    except Exception as e:
+        st.info(f"Phase 5 extras unavailable: {e}")
