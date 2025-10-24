@@ -7535,50 +7535,27 @@ if "_o3_collect_recipients_ui" not in globals():
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
-        from contextlib import closing
-        # Load current
-        host = st.session_state.get("smtp_host","smtp.gmail.com")
-        port = int(st.session_state.get("smtp_port",587))
-        username = st.session_state.get("smtp_username","")
-        password = st.session_state.get("smtp_password","")
-        use_tls = bool(st.session_state.get("smtp_use_tls", True))
-        # Pull from DB if exists
-        try:
-            if "get_db" in globals():
-                conn2 = get_db()
-                with closing(conn2.cursor()) as cur:
-                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                    row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
-                if row:
-                    host, port, username, password, use_tls = row[0] or host, int(row[1] or port), row[2] or username, row[3] or password, bool(row[4] or use_tls)
-        except Exception:
-            pass
-        with st.form("o3_sender_picker", clear_on_submit=False):
-            st.text_input("SMTP host", value=host, key="smtp_host")
-            st.number_input("SMTP port", min_value=1, max_value=65535, value=int(port), key="smtp_port")
-            st.text_input("Username", value=username, key="smtp_username")
-            st.text_input("App password", type="password", value=password, key="smtp_password")
-            st.checkbox("Use STARTTLS", value=bool(use_tls), key="smtp_use_tls")
-            saved = st.form_submit_button("Save sender")
-            if saved and "get_db" in globals():
-                try:
-                    conn2 = get_db()
-                    with closing(conn2.cursor()) as cur:
-                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                        cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
-                                    ("Default", st.session_state["smtp_host"], int(st.session_state["smtp_port"]), st.session_state["smtp_username"], st.session_state["smtp_password"], 1 if st.session_state["smtp_use_tls"] else 0))
-                        conn2.commit()
-                    st.caption("Sender saved")
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
-        return {
-            "host": st.session_state["smtp_host"],
-            "port": int(st.session_state["smtp_port"]),
-            "username": st.session_state["smtp_username"],
-            "password": st.session_state["smtp_password"],
-            "use_tls": bool(st.session_state["smtp_use_tls"]),
-        }
-# === helper: auto-select number of sources to cite ===
+        conn = globals().get("_O4_CONN")
+        if conn is None:
+            conn = st.session_state.get("conn") if "conn" in st.session_state else None
+        if conn is None:
+            try:
+                conn = get_db()
+            except Exception:
+                st.error("Internal: sender picker not initialized")
+                return {"email": "", "app_password": ""}
+        ensure_outreach_o1_schema(conn)
+        rows = conn.execute(
+            "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
+        ).fetchall()
+        choices = [r[0] for r in rows] + ["<add new>"]
+        sel = st.selectbox("From account", choices, key="o4_from_addr")
+        if sel == "<add new>":
+            st.info("Add a sender in Outreach → Sender accounts")
+            return {"email": "", "app_password": ""}
+        pw = st.text_input("App password", type="password", key="o4_from_pw")
+        return {"email": sel, "app_password": pw}
+
 def y_auto_k(text: str) -> int:
     t = (text or "").lower()
     n = len(t)
