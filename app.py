@@ -2878,7 +2878,7 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
                 "SAM Link": sam_url,
             }
         )
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=["place_id","name","address","rating","open_now","phone","website"])
     wanted = [
         "Title", "Solicitation", "Type", "Posted", "Response Due",
         "Set-Aside", "Set-Aside Code", "NAICS", "PSC",
@@ -5576,7 +5576,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 continue
             s = _merge_text(subj, vendor, notice)
             b = _merge_text(body, vendor, notice)
-            success, msg = send_email_smtp(to_email, s, b, attach_paths)
+            success, msg = send_email_smart(conn, to_email, s, b, attach_paths)
             ok += 1 if success else 0
             fail += 0 if success else 1
             log_rows.append({"vendor": vendor.get("name"), "email": to_email, "status": ("sent" if success else msg)})
@@ -7915,7 +7915,7 @@ def s1_render_places_panel(conn, default_addr=None):
         st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
         return
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=["place_id","name","address","rating","open_now","phone","website"])
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     ids = [r["place_id"] for r in rows if r.get("place_id")]
@@ -8564,7 +8564,7 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
             rows.append({"place_id": pid,"name": name,"address": addr,"rating": rating,"open_now": open_now})
     if not rows:
         st.info("No new vendors in this page"); return
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=["place_id","name","address","rating","open_now","phone","website"])
     st.dataframe(df, use_container_width=True, hide_index=True)
     ids = [r["place_id"] for r in rows if r.get("place_id")]
     if not ids: return
@@ -8709,32 +8709,16 @@ def seed_default_templates(conn):
 
 
 
-# === START: Outreach & Subcontractor Enhancements — merged by assistant ===
+# === PHASE 0–1 ADDITIONS (Accounts, Opt-outs, Audit, Places Details) ===
+import sqlite3 as _o_sqlite3
+from contextlib import closing as _o_closing
 
-# safe imports (duplicates are fine)
-import sqlite3
-from contextlib import closing
-import pandas as pd
-import streamlit as st
-from pathlib import Path
-import smtplib, ssl, re, json, hashlib, datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
+def _o_now():
+    import datetime as _dt
+    return _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-# fallback for file uploads if host app did not define it
-if "save_uploaded_file" not in globals():
-    def save_uploaded_file(uploaded_file, subdir="outreach"):
-        base = Path("uploads")/subdir
-        base.mkdir(parents=True, exist_ok=True)
-        file_path = base / uploaded_file.name
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        return str(file_path)
-
-def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
-    with closing(conn.cursor()) as cur:
+def _o_ensure_schema(conn):
+    with _o_closing(conn.cursor()) as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o1_email_accounts(
                 id INTEGER PRIMARY KEY,
@@ -8745,48 +8729,19 @@ def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
                 password TEXT NOT NULL,
                 from_name TEXT,
                 from_email TEXT NOT NULL,
-                use_ssl INTEGER NOT NULL DEFAULT 0,
                 use_tls INTEGER NOT NULL DEFAULT 1,
+                use_ssl INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS o2_templates(
-                id INTEGER PRIMARY KEY,
-                name TEXT UNIQUE,
-                subject TEXT,
-                body_html TEXT,
-                created_at TEXT,
-                updated_at TEXT
             );
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o3_send_log(
                 id INTEGER PRIMARY KEY,
-                account_id INTEGER,
-                vendor_id INTEGER,
                 to_email TEXT,
                 subject TEXT,
-                body_sha256 TEXT,
-                attachments_json TEXT,
-                notice_id TEXT,
-                rfp_id INTEGER,
                 status TEXT,
                 smtp_response TEXT,
-                message_id TEXT,
-                sent_at TEXT,
-                FOREIGN KEY(account_id) REFERENCES o1_email_accounts(id) ON DELETE SET NULL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS o4_followups(
-                id INTEGER PRIMARY KEY,
-                log_id INTEGER NOT NULL,
-                due_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_attempt_at TEXT,
-                FOREIGN KEY(log_id) REFERENCES o3_send_log(id) ON DELETE CASCADE
+                sent_at TEXT
             );
         """)
         cur.execute("""
@@ -8799,431 +8754,168 @@ def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
         """)
     conn.commit()
 
-def _o_now() -> str:
-    return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-def o1_list_accounts(conn):
-    ensure_outreach_schema(conn)
+def _o_list_accounts(conn):
+    _o_ensure_schema(conn)
+    import pandas as _pd
     try:
-        return pd.read_sql_query("SELECT * FROM o1_email_accounts ORDER BY id DESC;", conn, params=())
+        return _pd.read_sql_query("SELECT * FROM o1_email_accounts ORDER BY id DESC;", conn, params=())
     except Exception:
-        return pd.DataFrame()
+        return _pd.DataFrame()
 
-def o1_add_account(conn, label, host, port, username, password, from_name, from_email, use_ssl, use_tls):
-    ensure_outreach_schema(conn)
-    with closing(conn.cursor()) as cur:
+def _o_add_account(conn, label, host, port, username, password, from_name, from_email, use_tls=True, use_ssl=False):
+    _o_ensure_schema(conn)
+    with _o_closing(conn.cursor()) as cur:
         cur.execute("""
-            INSERT INTO o1_email_accounts(label, smtp_host, smtp_port, username, password, from_name, from_email, use_ssl, use_tls, created_at)
+            INSERT INTO o1_email_accounts(label, smtp_host, smtp_port, username, password, from_name, from_email, use_tls, use_ssl, created_at)
             VALUES(?,?,?,?,?,?,?,?,?,?);
-        """, (label, host, int(port), username, password, from_name, from_email, 1 if use_ssl else 0, 1 if use_tls else 0, _o_now()))
+        """, (label, host, int(port), username, password, from_name, from_email, 1 if use_tls else 0, 1 if use_ssl else 0, _o_now()))
         conn.commit()
 
-def o1_delete_account(conn, account_id: int):
-    ensure_outreach_schema(conn)
-    with closing(conn.cursor()) as cur:
+def _o_delete_account(conn, account_id):
+    _o_ensure_schema(conn)
+    with _o_closing(conn.cursor()) as cur:
         cur.execute("DELETE FROM o1_email_accounts WHERE id=?;", (int(account_id),))
         conn.commit()
 
-def o2_list_templates(conn):
-    ensure_outreach_schema(conn)
+def _o_is_unsub(conn, email):
+    _o_ensure_schema(conn)
     try:
-        return pd.read_sql_query("SELECT * FROM o2_templates ORDER BY updated_at DESC, id DESC;", conn, params=())
-    except Exception:
-        return pd.DataFrame()
-
-def o2_save_template(conn, name, subject, body_html):
-    ensure_outreach_schema(conn)
-    now = _o_now()
-    with closing(conn.cursor()) as cur:
-        cur.execute("""
-            INSERT INTO o2_templates(name, subject, body_html, created_at, updated_at)
-            VALUES(?,?,?,?,?)
-            ON CONFLICT(name) DO UPDATE SET subject=excluded.subject, body_html=excluded.body_html, updated_at=excluded.updated_at;
-        """, (name, subject, body_html, now, now))
-        conn.commit()
-
-def o2_delete_template(conn, name):
-    ensure_outreach_schema(conn)
-    with closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM o2_templates WHERE name=?;", (name,))
-        conn.commit()
-
-def _o_merge_text(text: str, vendor: dict, notice: dict) -> str:
-    try:
-        fn = globals().get("_merge_text")
-        if callable(fn):
-            return fn(text, vendor, notice)
-    except Exception:
-        pass
-    d = {}
-    d.update({k.lower(): v for k, v in (vendor or {}).items()})
-    d.update({k.lower(): v for k, v in (notice or {}).items()})
-    def rep(m):
-        key = (m.group(1) or "").strip().lower()
-        return str(d.get(key, ""))
-    return re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", rep, text or "")
-
-def _o_hash_body(html: str) -> str:
-    try:
-        return hashlib.sha256((html or "").encode("utf-8")).hexdigest()
-    except Exception:
-        return ""
-
-def _o_is_unsub(conn, email: str) -> bool:
-    if not (email or "").strip():
-        return False
-    try:
-        df = pd.read_sql_query("SELECT 1 FROM o5_unsubscribes WHERE email=? LIMIT 1;", conn, params=(email.strip().lower(),))
+        import pandas as _pd
+        df = _pd.read_sql_query("SELECT 1 FROM o5_unsubscribes WHERE email=? LIMIT 1;", conn, params=((email or "").strip().lower(),))
         return not df.empty
     except Exception:
         return False
 
-def _o_log_send(conn, account_id, vendor_id, to_email, subject, html, attachments, notice_id, rfp_id, status, smtp_response, message_id):
-    ensure_outreach_schema(conn)
-    with closing(conn.cursor()) as cur:
+def _o_log_send(conn, to_email, subject, status, smtp_response):
+    _o_ensure_schema(conn)
+    with _o_closing(conn.cursor()) as cur:
         cur.execute("""
-            INSERT INTO o3_send_log(account_id, vendor_id, to_email, subject, body_sha256, attachments_json, notice_id, rfp_id, status, smtp_response, message_id, sent_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?);
-        """, (account_id, vendor_id, to_email, subject, _o_hash_body(html), json.dumps(attachments or []), str(notice_id or ""), rfp_id, status, smtp_response or "", message_id or "", _o_now()))
+            INSERT INTO o3_send_log(to_email, subject, status, smtp_response, sent_at)
+            VALUES(?,?,?,?,?);
+        """, (to_email or "", subject or "", status or "", smtp_response or "", _o_now()))
         conn.commit()
 
-def _o_schedule_followup(conn, log_id: int, due_hours: int):
-    ensure_outreach_schema(conn)
-    due_at = (datetime.datetime.utcnow() + datetime.timedelta(hours=int(due_hours))).strftime("%Y-%m-%d %H:%M:%S")
-    with closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO o4_followups(log_id, due_at, status, attempts) VALUES(?,?, 'pending', 0);", (int(log_id), due_at))
-        conn.commit()
-
-def _o_pick_account(conn):
-    df = o1_list_accounts(conn)
-    if df.empty:
-        st.warning("Add an SMTP account first in the Accounts tab.")
-        return None, None
-    ids = df["id"].tolist()
-    def _fmt(i):
-        r = df[df["id"]==i].iloc[0]
-        return f"{r.get('label') or r.get('from_email')} — {r.get('smtp_host')}"
-    sel = st.selectbox("Account", options=ids, format_func=_fmt, key="o_acct_sel")
-    return sel, df[df["id"]==sel].iloc[0].to_dict()
-
-def _o_send_via_smtp(acct: dict, to_email: str, subject: str, html_body: str, attachments: list):
-    host = acct.get("smtp_host"); port = int(acct.get("smtp_port") or 587)
-    user = acct.get("username"); pwd = acct.get("password")
-    from_name = acct.get("from_name") or ""
-    from_email = acct.get("from_email") or user
-    use_ssl = bool(acct.get("use_ssl")); use_tls = bool(acct.get("use_tls"))
-    msg = MIMEMultipart()
-    msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(html_body or "", "html"))
-    for p in attachments or []:
-        try:
-            part = MIMEBase("application", "octet-stream")
-            with open(p, "rb") as f:
-                part.set_payload(f.read())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f'attachment; filename="{Path(p).name}"')
-            msg.attach(part)
-        except Exception:
-            pass
-    resp = ""
-    mid = ""
-    try:
-        if use_ssl:
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(host, port, context=context, timeout=30) as server:
-                server.login(user, pwd)
-                resp = str(server.sendmail(from_email, [to_email], msg.as_string()))
-        else:
-            with smtplib.SMTP(host, port, timeout=30) as server:
-                server.ehlo()
-                if use_tls:
-                    context = ssl.create_default_context()
-                    server.starttls(context=context)
-                    server.ehlo()
-                server.login(user, pwd)
-                resp = str(server.sendmail(from_email, [to_email], msg.as_string()))
-        status = "sent"
-    except Exception as e:
-        status = "error"
-        resp = str(e)
-    return status, resp, mid
-
-def run_outreach(conn: sqlite3.Connection) -> None:
-    ensure_outreach_schema(conn)
-    st.header("Outreach")
-    st.caption("Generate RFQ emails and send via Gmail SMTP with app passwords. Mail-merge from notice metadata. SLA timers, follow-ups, opt-out, and audit log.")
-
-    tabs = st.tabs(["Compose & Send", "Templates", "Accounts", "SLA & Follow-ups", "Opt-out", "Audit Log"])
-
-    # ---- Compose & Send
-    with tabs[0]:
-        notice = st.session_state.get("rfp_selected_notice", {}) or {}
-        vendor_ids = st.session_state.get("rfq_vendor_ids", []) or []
-
-        df_sel = pd.DataFrame()
-        if vendor_ids:
-            ph = ",".join(["?"] * len(vendor_ids))
-            try:
-                df_sel = pd.read_sql_query(f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
-            except Exception:
-                df_sel = pd.DataFrame()
-        if df_sel.empty:
-            st.info("No queued vendors. Use Subcontractor Finder or import a CSV.")
-            f_naics = st.text_input("NAICS filter")
-            f_state = st.text_input("State filter")
-            q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
-            params = []
-            if f_naics:
-                q += " AND naics LIKE ?"; params.append(f"%{f_naics}%")
-            if f_state:
-                q += " AND state LIKE ?"; params.append(f"%{f_state}%")
-            try:
-                df_sel = pd.read_sql_query(q + " ORDER BY name;", conn, params=params)
-            except Exception:
-                df_sel = pd.DataFrame()
-
-        st.subheader("Recipients")
-        up = st.file_uploader("Optionally import recipients CSV (name,email,phone,city,state,naics)", type=["csv"], key="o_recip_csv")
-        if up is not None:
-            try:
-                import pandas as _pd
-                df_up = _pd.read_csv(up)
-                cols = [c for c in ["name","email","phone","city","state","naics"] if c in df_up.columns]
-                if cols:
-                    df_sel = pd.concat([df_sel, df_up[cols].rename(columns=str)], ignore_index=True)
-                    st.success(f"Imported {len(df_up)} rows")
-            except Exception as e:
-                st.error(f"CSV import failed: {e}")
-
-        if not df_sel.empty and "email" in df_sel.columns:
-            df_sel["email"] = df_sel["email"].fillna("").str.strip().str.lower()
-            df_sel = df_sel[df_sel["email"] != ""]
-            df_sel = df_sel.drop_duplicates(subset=["email"])
-
-        if df_sel.empty:
-            st.write("No recipients")
-            return
-        st.dataframe(df_sel, use_container_width=True, hide_index=True)
-
-        st.subheader("Template")
-        st.markdown("Tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-        subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})", key="o_subj")
-        body = st.text_area("Email Body (HTML)", height=220, key="o_body", value=(
-            "Hello {{company}},<br><br>"
-            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
-            " Responses are due {{due}}. We’d like your quote and capability confirmation."
-            "<br><br>Could you reply with pricing and any questions?"
-            "<br><br>Thank you,<br>ELA Management"
-        ))
-
-        with st.expander("Attachments", expanded=False):
-            files = st.file_uploader("Attach files", type=["pdf","docx","xlsx","zip"], accept_multiple_files=True, key="o_att")
-            attach_paths = []
-            if files:
-                for f in files:
-                    pth = save_uploaded_file(f, subdir="outreach")
-                    if pth: attach_paths.append(pth)
-                if attach_paths:
-                    st.success(f"Saved {len(attach_paths)} attachment(s)")
-
-        if st.button("Preview first merge", key="o_prev"):
-            v0 = df_sel.iloc[0].to_dict()
-            st.info(f"Subject → {_o_merge_text(subj, v0, notice)}")
-            st.write(_o_merge_text(body, v0, notice), unsafe_allow_html=True)
-
-        st.subheader("Sender Account")
-        acct_id, acct = _o_pick_account(conn)
-        if not acct:
-            st.stop()
-
-        st.subheader("SLA Follow-up")
-        fk1, fk2 = st.columns([2,2])
-        with fk1:
-            enable_fu = st.checkbox("Schedule a follow-up", value=True, key="o_fu_en")
-        with fk2:
-            fu_hours = st.number_input("Follow-up in hours", min_value=1, max_value=336, value=72, step=1, key="o_fu_h")
-
-        if st.button("Send via SMTP", type="primary", key="o_send"):
-            sent_n = 0; skipped = 0; errs = 0
-            for _, r in df_sel.iterrows():
-                vendor = r.to_dict()
-                to_email = (vendor.get("email") or "").strip().lower()
-                if not to_email:
-                    continue
-                if _o_is_unsub(conn, to_email):
-                    skipped += 1
-                    continue
-                s = _o_merge_text(subj, vendor, notice)
-                b = _o_merge_text(body, vendor, notice)
-                status, resp, mid = _o_send_via_smtp(acct, to_email, s, b, attach_paths)
-                _o_log_send(conn, acct_id, int(vendor.get("id") or 0), to_email, s, b, attach_paths, notice.get("notice_id"), notice.get("rfp_id") or None, status, resp, mid)
-                if status == "sent" and enable_fu:
-                    try:
-                        log_id = int(pd.read_sql_query("SELECT id FROM o3_send_log ORDER BY id DESC LIMIT 1;", conn, params=()).iloc[0]["id"])
-                        _o_schedule_followup(conn, log_id, int(fu_hours))
-                    except Exception:
-                        pass
-                if status == "sent": sent_n += 1
-                else: errs += 1
-            st.success(f"Done. Sent={sent_n}, skipped opt-out={skipped}, errors={errs}")
-
-    with tabs[1]:
-        st.subheader("Email Templates")
-        name = st.text_input("Template Name")
-        subj_t = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})", key="t_subj")
-        body_t = st.text_area("Body (HTML)", height=220, key="t_body")
-        c1, c2 = st.columns([2,2])
-        with c1:
-            if st.button("Save / Update Template"):
-                if name.strip():
-                    o2_save_template(conn, name.strip(), subj_t, body_t); st.success("Saved")
-                else:
-                    st.error("Name required")
-        with c2:
-            if st.button("Delete Template"):
-                if name.strip():
-                    o2_delete_template(conn, name.strip()); st.warning("Deleted")
-        df = o2_list_templates(conn)
-        st.dataframe(df[["id","name","subject","updated_at"]], use_container_width=True, hide_index=True)
-        pick = st.selectbox("Load", options=[None]+df["name"].tolist())
-        if pick:
-            row = df[df["name"]==pick].iloc[0]
-            st.session_state["o_subj"] = row.get("subject") or ""
-            st.session_state["o_body"] = row.get("body_html") or ""
-            st.info("Loaded into Compose tab. Switch back to send.")
-
-    with tabs[2]:
-        st.subheader("SMTP Accounts")
-        st.caption("For Gmail: host smtp.gmail.com, port 587 with TLS, or 465 with SSL. Use an App Password.")
-        df = o1_list_accounts(conn)
+def render_outreach_accounts_panel(conn):
+    """Expander UI to manage SMTP accounts. Falls back to st.secrets if none exist."""
+    import streamlit as st, pandas as pd
+    _o_ensure_schema(conn)
+    with st.expander("SMTP Accounts (Gmail app passwords supported)", expanded=False):
+        df = _o_list_accounts(conn)
         if not df.empty:
             st.dataframe(df[["id","label","from_email","smtp_host","smtp_port","use_tls","use_ssl","created_at"]], use_container_width=True, hide_index=True)
-        with st.form("acct_new"):
+        with st.form("o_add_acct"):
             c = st.columns([2,2,2,2])
             label = c[0].text_input("Label", value="Gmail")
             host = c[1].text_input("SMTP Host", value="smtp.gmail.com")
             port = c[2].number_input("Port", min_value=1, max_value=65535, value=587, step=1)
             use_tls = c[3].checkbox("Use TLS", value=True)
-            user = st.text_input("Username", help="Gmail address")
-            pwd = st.text_input("Password / App Password", type="password")
+            user = st.text_input("Username", help="Your Gmail address")
+            pwd = st.text_input("App Password", type="password")
             from_name = st.text_input("From Name", value="ELA Management")
             from_email = st.text_input("From Email", value=user or "")
             use_ssl = st.checkbox("Use SSL (instead of TLS)", value=False)
-            submitted = st.form_submit_button("Add Account")
+            submitted = st.form_submit_button("Save account")
             if submitted:
                 try:
-                    o1_add_account(conn, label, host, port, user, pwd, from_name, from_email or user, use_ssl, use_tls)
-                    st.success("Account added")
+                    _o_add_account(conn, label, host, port, user, pwd, from_name, from_email or user, use_tls, use_ssl)
+                    st.success("Account saved")
                     st.experimental_rerun()
                 except Exception as e:
-                    st.error(f"Add failed: {e}")
+                    st.error(f"Save failed: {e}")
+        df = _o_list_accounts(conn)
         if not df.empty:
-            del_id = st.selectbox("Delete account", options=[None]+df["id"].tolist())
-            if del_id and st.button("Confirm Delete"):
-                o1_delete_account(conn, int(del_id)); st.warning("Deleted"); st.experimental_rerun()
+            del_id = st.selectbox("Delete account", options=[None]+df["id"].astype(int).tolist())
+            if del_id and st.button("Confirm delete"):
+                _o_delete_account(conn, int(del_id)); st.warning("Deleted"); st.experimental_rerun()
 
-    with tabs[3]:
-        st.subheader("Pending Follow-ups")
-        try:
-            dfp = pd.read_sql_query("""
-                SELECT f.id as fup_id, f.due_at, f.status, l.to_email, l.subject, l.sent_at
-                FROM o4_followups f
-                JOIN o3_send_log l ON l.id=f.log_id
-                WHERE f.status='pending'
-                ORDER BY f.due_at ASC;
-            """, conn, params=())
-        except Exception:
-            dfp = pd.DataFrame()
-        if dfp.empty:
-            st.caption("No pending follow-ups.")
-        else:
-            st.dataframe(dfp, use_container_width=True, hide_index=True)
-            send_due = st.button("Mark due follow-ups as sent now")
-            if send_due:
-                now = _o_now()
-                with closing(conn.cursor()) as cur:
-                    cur.execute("UPDATE o4_followups SET status='sent', last_attempt_at=?, attempts=attempts+1 WHERE status='pending' AND due_at <= ?;", (now, now))
-                    conn.commit()
-                st.success("Marked sent")
-
-    with tabs[4]:
-        st.subheader("Opt-out / Unsubscribe")
-        em = st.text_input("Email to opt-out")
+def render_outreach_optout_panel(conn):
+    import streamlit as st, pandas as pd
+    _o_ensure_schema(conn)
+    with st.expander("Opt‑out list", expanded=False):
+        em = st.text_input("Email to opt‑out")
         reason = st.text_input("Reason (optional)")
-        if st.button("Add opt-out"):
-            with closing(conn.cursor()) as cur:
-                cur.execute("INSERT OR IGNORE INTO o5_unsubscribes(email, reason, created_at) VALUES(?,?,?);", (em.strip().lower(), reason.strip(), _o_now()))
+        if st.button("Add opt‑out"):
+            with _o_closing(conn.cursor()) as cur:
+                cur.execute("INSERT OR IGNORE INTO o5_unsubscribes(email, reason, created_at) VALUES(?,?,?);", ((em or "").strip().lower(), reason.strip(), _o_now()))
                 conn.commit()
-            st.success("Opt-out added")
+            st.success("Opt‑out added")
         try:
-            dfo = pd.read_sql_query("SELECT email, reason, created_at FROM o5_unsubscribes ORDER BY created_at DESC;", conn, params=())
+            df = pd.read_sql_query("SELECT email, reason, created_at FROM o5_unsubscribes ORDER BY created_at DESC;", conn, params=())
         except Exception:
-            dfo = pd.DataFrame()
-        st.dataframe(dfo, use_container_width=True, hide_index=True)
+            df = pd.DataFrame()
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-    with tabs[5]:
-        st.subheader("Send Log")
-        try:
-            dfl = pd.read_sql_query("SELECT id, to_email, subject, status, sent_at, smtp_response FROM o3_send_log ORDER BY id DESC LIMIT 1000;", conn, params=())
-        except Exception:
-            dfl = pd.DataFrame()
-        st.dataframe(dfl, use_container_width=True, hide_index=True)
-
-def s1_save_vendor(conn: sqlite3.Connection, v: dict) -> int:
-    try:
-        name = (v.get("name") or "").strip()
-        email = (v.get("email") or "").strip().lower()
-        phone = (v.get("phone") or "").strip()
-        city = (v.get("city") or "").strip()
-        state = (v.get("state") or "").strip()
-        naics = (v.get("naics") or "").strip()
-        website = (v.get("website") or "").strip()
-        place_id = (v.get("place_id") or "").strip()
-        with closing(conn.cursor()) as cur:
-            if email:
-                cur.execute("SELECT id FROM vendors_t WHERE LOWER(email)=? LIMIT 1;", (email,))
-                row = cur.fetchone()
-                if row: return int(row[0])
-            if website:
-                cur.execute("SELECT id FROM vendors_t WHERE website=? LIMIT 1;", (website,))
-                row = cur.fetchone()
-                if row: return int(row[0])
-            if place_id:
-                cur.execute("SELECT id FROM vendors_t WHERE place_id=? LIMIT 1;", (place_id,))
-                row = cur.fetchone()
-                if row: return int(row[0])
-            # Try insert with created_at. If schema lacks the column, fall back.
+def send_email_smart(conn, to_email: str, subject: str, html_body: str, attachments: list):
+    """Send using selected SMTP account if present, else fallback to secrets. Enforce opt‑out. Log to DB."""
+    if _o_is_unsub(conn, to_email):
+        _o_log_send(conn, to_email, subject, "skipped: opt-out", "suppressed")
+        return True, "skipped: opt-out"
+    # Prefer first saved account
+    df = _o_list_accounts(conn)
+    if df is not None and not df.empty:
+        acct = df.iloc[0].to_dict()
+        import smtplib, ssl
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+        from pathlib import Path as _P
+        msg = MIMEMultipart()
+        msg["From"] = f"{acct.get('from_name') or ''} <{acct.get('from_email')}>"
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html_body or "", "html"))
+        for p in attachments or []:
             try:
-                cur.execute("""
-                    INSERT INTO vendors_t(name, email, phone, city, state, naics, website, place_id, created_at)
-                    VALUES(?,?,?,?,?,?,?,?,?);
-                """, (name, email, phone, city, state, naics, website, place_id, _o_now()))
+                part = MIMEBase("application", "octet-stream")
+                with open(p, "rb") as f:
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{_P(p).name}"')
+                msg.attach(part)
             except Exception:
-                cur.execute("""
-                    INSERT INTO vendors_t(name, email, phone, city, state, naics, website, place_id)
-                    VALUES(?,?,?,?,?,?,?,?);
-                """, (name, email, phone, city, state, naics, website, place_id))
-            vid = cur.lastrowid
-            conn.commit()
-            return int(vid)
+                pass
+        try:
+            if int(acct.get("use_ssl") or 0) == 1:
+                context = ssl.create_default_context()
+                server = smtplib.SMTP_SSL(acct["smtp_host"], int(acct["smtp_port"]), context=context, timeout=30)
+            else:
+                server = smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"]), timeout=30)
+                if int(acct.get("use_tls") or 1) == 1:
+                    context = ssl.create_default_context()
+                    server.starttls(context=context)
+            server.login(acct["username"], acct["password"])
+            server.sendmail(acct["from_email"], [to_email], msg.as_string())
+            server.quit()
+            _o_log_send(conn, to_email, subject, "sent", "ok")
+            return True, "sent"
+        except Exception as e:
+            _o_log_send(conn, to_email, subject, "error", str(e))
+            return False, str(e)
+    # Fallback to existing helper
+    ok, msg = send_email_smtp(to_email, subject, html_body, attachments)
+    _o_log_send(conn, to_email, subject, "sent" if ok else "error", msg)
+    return ok, msg
+
+# Google Places Details for phone + website
+def s1_places_details(place_id: str):
+    key = s1_get_google_api_key()
+    if not key or not place_id:
+        return {}
+    import urllib.parse, urllib.request, json, time
+    base = "https://maps.googleapis.com/maps/api/place/details/json"
+    params = {
+        "place_id": place_id,
+        "fields": "formatted_phone_number,international_phone_number,website",
+        "key": key
+    }
+    url = base + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if (data.get("status") or "").upper() == "OK":
+                return data.get("result") or {}
+            return {}
     except Exception:
-        return 0
-
-def s1_vendor_website_link(url: str) -> str:
-    u = (url or "").strip()
-    if not u:
-        return ""
-    if not re.match(r"^https?://", u, re.I):
-        u = "http://" + u
-    return f'<a href="{u}" target="_blank">{u}</a>'
-
-def s1_merge_places_details(base: dict, details: dict) -> dict:
-    out = dict(base or {})
-    d = details or {}
-    out["phone"] = d.get("formatted_phone_number") or base.get("phone") or ""
-    out["website"] = d.get("website") or base.get("website") or ""
-    return out
-
-# === END: Outreach & Subcontractor Enhancements — merged by assistant ===
+        return {}
+# === END ADDITIONS ===
