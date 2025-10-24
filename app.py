@@ -7495,43 +7495,40 @@ if "_o3_ensure_schema" not in globals():
 # --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
 if "_o3_collect_recipients_ui" not in globals():
     def _o3_collect_recipients_ui(conn):
+        import pandas as _pd
+        q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+        params = []
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            f_naics = st.text_input("NAICS filter", key="o3_f_naics")
+        with c2:
+            f_state = st.text_input("State filter", key="o3_f_state")
+        with c3:
+            f_city = st.text_input("City filter", key="o3_f_city")
+        if f_naics:
+            q += " AND IFNULL(naics,'') LIKE ?"
+            params.append(f"%{f_naics}%")
+        if f_state:
+            q += " AND IFNULL(state,'') LIKE ?"
+            params.append(f"%{f_state}%")
+        if f_city:
+            q += " AND IFNULL(city,'') LIKE ?"
+            params.append(f"%{f_city}%")
         try:
-
-            import pandas as _pd
-            q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
-            params = []
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                f_naics = st.text_input("NAICS filter", key="o3_f_naics")
-            with c2:
-                f_state = st.text_input("State filter", key="o3_f_state")
-            with c3:
-                f_city = st.text_input("City filter", key="o3_f_city")
-            if f_naics:
-                q += " AND IFNULL(naics,'') LIKE ?"
-                params.append(f"%{f_naics}%")
-            if f_state:
-                q += " AND IFNULL(state,'') LIKE ?"
-                params.append(f"%{f_state}%")
-            if f_city:
-                q += " AND IFNULL(city,'') LIKE ?"
-                params.append(f"%{f_city}%")
-
-try:
-    df = _pd.read_sql_query(q + " LIMIT 1;", conn, params=tuple(params))
-    if df is None or df.empty:
-        # fallback to vendors table
-        q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
-        df = _pd.read_sql_query(q, conn, params=params)
+            df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+        except Exception:
+            df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
+        if df is None or df.empty:
+            # fallback to vendors table
+            q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
+            try:
+                df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
             except Exception:
                 df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
-            st.caption(f"{len(df)} vendors match filters")
-            if not df.empty:
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            return df
-        except Exception:
-            return None
-
+        st.caption(f"{len(df)} vendors match filters")
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        return df
 
 # --- Outreach SMTP sender picker: working fallback ---
 if "_o3_render_sender_picker" not in globals():
