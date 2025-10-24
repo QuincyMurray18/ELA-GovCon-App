@@ -5563,8 +5563,10 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 df_sel = pd.read_sql_query(f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
             except Exception:
                 df_sel = pd.DataFrame()
-        if df_sel.empty:
-            st.info("No queued vendors. Use Subcontractor Finder or import a CSV.")
+if df_sel.empty:
+        st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
+else:
+        st.dataframe(df_sel, use_container_width=True, hide_index=True)
             f_naics = st.text_input("NAICS filter")
             f_state = st.text_input("State filter")
             q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
@@ -5597,9 +5599,10 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             df_sel["email"] = df_sel["email"].fillna("").str.strip().str.lower()
             df_sel = df_sel[df_sel["email"] != ""]
             df_sel = df_sel.drop_duplicates(subset=["email"])
-
-        if df_sel.empty:
-    st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
+if df_sel.empty:
+        st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
+else:
+        st.dataframe(df_sel, use_container_width=True, hide_index=True)
         st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
         st.subheader("Template")
@@ -9108,8 +9111,10 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 df_sel = pd.read_sql_query(f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
             except Exception:
                 df_sel = pd.DataFrame()
-        if df_sel.empty:
-            st.info("No queued vendors. Use Subcontractor Finder or import a CSV.")
+if df_sel.empty:
+        st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
+else:
+        st.dataframe(df_sel, use_container_width=True, hide_index=True)
             f_naics = st.text_input("NAICS filter")
             f_state = st.text_input("State filter")
             q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
@@ -9142,9 +9147,10 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             df_sel["email"] = df_sel["email"].fillna("").str.strip().str.lower()
             df_sel = df_sel[df_sel["email"] != ""]
             df_sel = df_sel.drop_duplicates(subset=["email"])
-
-        if df_sel.empty:
-    st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
+if df_sel.empty:
+        st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
+else:
+        st.dataframe(df_sel, use_container_width=True, hide_index=True)
             return
         st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
