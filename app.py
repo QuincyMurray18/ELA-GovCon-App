@@ -54,6 +54,7 @@ def _get_senders(conn):
         ("email_accounts", "user_email", "display_name", "app_password"),
         ("o4_senders", "email", "name", "app_password"),
         ("senders", "email", "display_name", "app_password"),
+        ("smtp_settings", "username", "label", "password"),
     ]
     for tbl, c_email, c_name, c_pw in tables:
         try:
@@ -8696,22 +8697,29 @@ def _o3_render_sender_picker():
         st.warning("No sender accounts configured");
         return {"email":"", "app_password":""}
     ensure_outreach_o1_schema(conn)
-    rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
+    rows = _get_senders(conn)
     try:
         import streamlit as st
-        st.caption(f"Loaded {len(rows)} sender account(s) from email_accounts")
+        st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
         pass
     choices = [r[0] for r in rows] + ["<add new>"]
     default = st.session_state.get("o4_sender_sel", choices[0] if choices else None)
-    sel = st.selectbox("From account", choices, key="o4_sender_sel", index=(choices.index(default) if default in choices else 0))
-    chosen = {"email":"", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
-    # Load password and SMTP details
+    idx = choices.index(default) if default in choices else 0
+    sel = st.selectbox("From account", choices, key="o4_sender_sel", index=idx)
+    chosen = {"email": sel if sel != "<add new>" else "", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
+    # Load password and SMTP details from the unifying table when present
     if sel != "<add new>":
         try:
+            # First try email_accounts
             row = conn.execute("SELECT app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?", (sel,)).fetchone()
             if row:
-                chosen["app_password"], chosen["smtp_host"], chosen["smtp_port"], chosen["use_ssl"] = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 465), int(row[3] or 1)
+                chosen.update({"app_password": row[0] or "", "smtp_host": row[1] or "smtp.gmail.com", "smtp_port": int(row[2] or 465), "use_ssl": int(row[3] or 1)})
+            else:
+                # Fallback to smtp_settings
+                row2 = conn.execute("SELECT password, host, port, use_tls FROM smtp_settings WHERE username=?", (sel,)).fetchone()
+                if row2:
+                    chosen.update({"app_password": row2[0] or "", "smtp_host": row2[1] or "smtp.gmail.com", "smtp_port": int(row2[2] or 587), "use_ssl": int(row2[3] or 1)})
         except Exception:
             pass
     if sel == "<add new>":
