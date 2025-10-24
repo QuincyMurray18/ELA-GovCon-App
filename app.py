@@ -2878,7 +2878,7 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
                 "SAM Link": sam_url,
             }
         )
-    df = pd.DataFrame(rows, columns=["place_id","name","address","rating","open_now","phone","website"])
+    df = pd.DataFrame(rows)
     wanted = [
         "Title", "Solicitation", "Type", "Posted", "Response Due",
         "Set-Aside", "Set-Aside Code", "NAICS", "PSC",
@@ -5491,11 +5491,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
-    
-    # Accounts and opt-out panels
-    render_outreach_accounts_panel(conn)
-    render_outreach_optout_panel(conn)
-notice = st.session_state.get("rfp_selected_notice", {})
+    notice = st.session_state.get("rfp_selected_notice", {})
     vendor_ids: List[int] = st.session_state.get("rfq_vendor_ids", [])
 
     if vendor_ids:
@@ -5580,7 +5576,7 @@ notice = st.session_state.get("rfp_selected_notice", {})
                 continue
             s = _merge_text(subj, vendor, notice)
             b = _merge_text(body, vendor, notice)
-            success, msg = send_email_smart(conn, to_email, s, b, attach_paths)
+            success, msg = send_email_smtp(to_email, s, b, attach_paths)
             ok += 1 if success else 0
             fail += 0 if success else 1
             log_rows.append({"vendor": vendor.get("name"), "email": to_email, "status": ("sent" if success else msg)})
@@ -7858,11 +7854,7 @@ def s1_render_places_panel(conn, default_addr=None):
     ensure_subfinder_s1_schema(conn)
 
     st.markdown("### Google Places search")
-    
-    _api_key = s1_get_google_api_key()
-    if not _api_key:
-        st.warning(\"No Google API key configured. Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY to fetch phone and website.\")
-key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
+    key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
     miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
     q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q", "janitorial"), key="s1_q")
     hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
@@ -7923,7 +7915,7 @@ key_addr = st.text_input("Place of performance address", value=default_addr or "
         st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
         return
 
-    df = pd.DataFrame(rows, columns=["place_id","name","address","rating","open_now","phone","website"])
+    df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     ids = [r["place_id"] for r in rows if r.get("place_id")]
@@ -8572,7 +8564,7 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
             rows.append({"place_id": pid,"name": name,"address": addr,"rating": rating,"open_now": open_now})
     if not rows:
         st.info("No new vendors in this page"); return
-    df = pd.DataFrame(rows, columns=["place_id","name","address","rating","open_now","phone","website"])
+    df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
     ids = [r["place_id"] for r in rows if r.get("place_id")]
     if not ids: return
@@ -8714,216 +8706,3 @@ def seed_default_templates(conn):
     ]
     for n,s,h in defaults:
         email_template_upsert(conn, n, s, h, None)
-
-
-
-# === PHASE 0–1 ADDITIONS (Accounts, Opt-outs, Audit, Places Details) ===
-import sqlite3 as _o_sqlite3
-from contextlib import closing as _o_closing
-
-def _o_now():
-    import datetime as _dt
-    return _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-def _o_ensure_schema(conn):
-    with _o_closing(conn.cursor()) as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS o1_email_accounts(
-                id INTEGER PRIMARY KEY,
-                label TEXT,
-                smtp_host TEXT NOT NULL,
-                smtp_port INTEGER NOT NULL DEFAULT 587,
-                username TEXT NOT NULL,
-                password TEXT NOT NULL,
-                from_name TEXT,
-                from_email TEXT NOT NULL,
-                use_tls INTEGER NOT NULL DEFAULT 1,
-                use_ssl INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS o3_send_log(
-                id INTEGER PRIMARY KEY,
-                to_email TEXT,
-                subject TEXT,
-                status TEXT,
-                smtp_response TEXT,
-                sent_at TEXT
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS o5_unsubscribes(
-                id INTEGER PRIMARY KEY,
-                email TEXT UNIQUE,
-                reason TEXT,
-                created_at TEXT
-            );
-        """)
-    conn.commit()
-
-def _o_list_accounts(conn):
-    _o_ensure_schema(conn)
-    import pandas as _pd
-    try:
-        return _pd.read_sql_query("SELECT * FROM o1_email_accounts ORDER BY id DESC;", conn, params=())
-    except Exception:
-        return _pd.DataFrame()
-
-def _o_add_account(conn, label, host, port, username, password, from_name, from_email, use_tls=True, use_ssl=False):
-    _o_ensure_schema(conn)
-    with _o_closing(conn.cursor()) as cur:
-        cur.execute("""
-            INSERT INTO o1_email_accounts(label, smtp_host, smtp_port, username, password, from_name, from_email, use_tls, use_ssl, created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?);
-        """, (label, host, int(port), username, password, from_name, from_email, 1 if use_tls else 0, 1 if use_ssl else 0, _o_now()))
-        conn.commit()
-
-def _o_delete_account(conn, account_id):
-    _o_ensure_schema(conn)
-    with _o_closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM o1_email_accounts WHERE id=?;", (int(account_id),))
-        conn.commit()
-
-def _o_is_unsub(conn, email):
-    _o_ensure_schema(conn)
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query("SELECT 1 FROM o5_unsubscribes WHERE email=? LIMIT 1;", conn, params=((email or "").strip().lower(),))
-        return not df.empty
-    except Exception:
-        return False
-
-def _o_log_send(conn, to_email, subject, status, smtp_response):
-    _o_ensure_schema(conn)
-    with _o_closing(conn.cursor()) as cur:
-        cur.execute("""
-            INSERT INTO o3_send_log(to_email, subject, status, smtp_response, sent_at)
-            VALUES(?,?,?,?,?);
-        """, (to_email or "", subject or "", status or "", smtp_response or "", _o_now()))
-        conn.commit()
-
-def render_outreach_accounts_panel(conn):
-    """Expander UI to manage SMTP accounts. Falls back to st.secrets if none exist."""
-    import streamlit as st, pandas as pd
-    _o_ensure_schema(conn)
-    with st.expander("SMTP Accounts (Gmail app passwords supported)", expanded=False):
-        df = _o_list_accounts(conn)
-        if not df.empty:
-            st.dataframe(df[["id","label","from_email","smtp_host","smtp_port","use_tls","use_ssl","created_at"]], use_container_width=True, hide_index=True)
-        with st.form("o_add_acct"):
-            c = st.columns([2,2,2,2])
-            label = c[0].text_input("Label", value="Gmail")
-            host = c[1].text_input("SMTP Host", value="smtp.gmail.com")
-            port = c[2].number_input("Port", min_value=1, max_value=65535, value=587, step=1)
-            use_tls = c[3].checkbox("Use TLS", value=True)
-            user = st.text_input("Username", help="Your Gmail address")
-            pwd = st.text_input("App Password", type="password")
-            from_name = st.text_input("From Name", value="ELA Management")
-            from_email = st.text_input("From Email", value=user or "")
-            use_ssl = st.checkbox("Use SSL (instead of TLS)", value=False)
-            submitted = st.form_submit_button("Save account")
-            if submitted:
-                try:
-                    _o_add_account(conn, label, host, port, user, pwd, from_name, from_email or user, use_tls, use_ssl)
-                    st.success("Account saved")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
-        df = _o_list_accounts(conn)
-        if not df.empty:
-            del_id = st.selectbox("Delete account", options=[None]+df["id"].astype(int).tolist())
-            if del_id and st.button("Confirm delete"):
-                _o_delete_account(conn, int(del_id)); st.warning("Deleted"); st.experimental_rerun()
-
-def render_outreach_optout_panel(conn):
-    import streamlit as st, pandas as pd
-    _o_ensure_schema(conn)
-    with st.expander("Opt‑out list", expanded=False):
-        em = st.text_input("Email to opt‑out")
-        reason = st.text_input("Reason (optional)")
-        if st.button("Add opt‑out"):
-            with _o_closing(conn.cursor()) as cur:
-                cur.execute("INSERT OR IGNORE INTO o5_unsubscribes(email, reason, created_at) VALUES(?,?,?);", ((em or "").strip().lower(), reason.strip(), _o_now()))
-                conn.commit()
-            st.success("Opt‑out added")
-        try:
-            df = pd.read_sql_query("SELECT email, reason, created_at FROM o5_unsubscribes ORDER BY created_at DESC;", conn, params=())
-        except Exception:
-            df = pd.DataFrame()
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-def send_email_smart(conn, to_email: str, subject: str, html_body: str, attachments: list):
-    """Send using selected SMTP account if present, else fallback to secrets. Enforce opt‑out. Log to DB."""
-    if _o_is_unsub(conn, to_email):
-        _o_log_send(conn, to_email, subject, "skipped: opt-out", "suppressed")
-        return True, "skipped: opt-out"
-    # Prefer first saved account
-    df = _o_list_accounts(conn)
-    if df is not None and not df.empty:
-        acct = df.iloc[0].to_dict()
-        import smtplib, ssl
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
-        from email.mime.base import MIMEBase
-        from email import encoders
-        from pathlib import Path as _P
-        msg = MIMEMultipart()
-        msg["From"] = f"{acct.get('from_name') or ''} <{acct.get('from_email')}>"
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(html_body or "", "html"))
-        for p in attachments or []:
-            try:
-                part = MIMEBase("application", "octet-stream")
-                with open(p, "rb") as f:
-                    part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f'attachment; filename="{_P(p).name}"')
-                msg.attach(part)
-            except Exception:
-                pass
-        try:
-            if int(acct.get("use_ssl") or 0) == 1:
-                context = ssl.create_default_context()
-                server = smtplib.SMTP_SSL(acct["smtp_host"], int(acct["smtp_port"]), context=context, timeout=30)
-            else:
-                server = smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"]), timeout=30)
-                if int(acct.get("use_tls") or 1) == 1:
-                    context = ssl.create_default_context()
-                    server.starttls(context=context)
-            server.login(acct["username"], acct["password"])
-            server.sendmail(acct["from_email"], [to_email], msg.as_string())
-            server.quit()
-            _o_log_send(conn, to_email, subject, "sent", "ok")
-            return True, "sent"
-        except Exception as e:
-            _o_log_send(conn, to_email, subject, "error", str(e))
-            return False, str(e)
-    # Fallback to existing helper
-    ok, msg = send_email_smtp(to_email, subject, html_body, attachments)
-    _o_log_send(conn, to_email, subject, "sent" if ok else "error", msg)
-    return ok, msg
-
-# Google Places Details for phone + website
-def s1_places_details(place_id: str):
-    key = s1_get_google_api_key()
-    if not key or not place_id:
-        return {}
-    import urllib.parse, urllib.request, json, time
-    base = "https://maps.googleapis.com/maps/api/place/details/json"
-    params = {
-        "place_id": place_id,
-        "fields": "formatted_phone_number,international_phone_number,website",
-        "key": key
-    }
-    url = base + "?" + urllib.parse.urlencode(params)
-    try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if (data.get("status") or "").upper() == "OK":
-                return data.get("result") or {}
-            return {}
-    except Exception:
-        return {}
-# === END ADDITIONS ===
