@@ -8435,11 +8435,10 @@ def _o3_load_vendors_df(conn):
         df["name"] = ""
     cols = ["email","name","company","phone","naics","city","state","website"]
     for c in cols:
-        if c not in df.columns: df[c] = ""
+        if c not in df.columns:
+            df[c] = ""
     df = df[cols].copy()
-    if "email" in df.columns:
-        df = df[df["email"].astype(str).str.contains("@", na=False)]
-        df = df.drop_duplicates(subset=["email"])
+    # No mandatory email filter here. Sending pipeline will skip invalid emails.
     return df
 
 def _o3_collect_recipients_ui(conn):
