@@ -10192,3 +10192,111 @@ def _p23_render_outreach(conn):
         p5_render_outreach_extras(conn)
     except Exception as e:
         st.info(f"Phase 5 extras unavailable: {e}")
+
+
+# ==== PHASE 5 FIX HELPERS: ensure tabs always render ====
+import os, sqlite3, pandas as pd
+from contextlib import closing
+import streamlit as st
+
+def _ensure_data_dir():
+    root = globals().get("DATA_DIR") or os.environ.get("DATA_DIR") or "data"
+    try:
+        os.makedirs(root, exist_ok=True)
+    except Exception:
+        pass
+    return root
+
+def save_uploaded_file(file, subdir="outreach"):
+    base = _ensure_data_dir()
+    folder = os.path.join(base, subdir)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, file.name)
+    with open(path, "wb") as f:
+        f.write(file.getbuffer())
+    return path
+
+def _o_pick_account(conn: sqlite3.Connection):
+    try:
+        df = pd.read_sql_query("SELECT id, label, from_email FROM o1_email_accounts ORDER BY id;", conn, params=())
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty:
+        st.info("No SMTP account configured. Use the Accounts tab.")
+        return None, None
+    options = df["id"].tolist()
+    labels = {int(r["id"]): f"{int(r['id'])} — {r['label']} <{r['from_email']}>" for _, r in df.iterrows()}
+    sel = st.selectbox("From account", options=options, format_func=lambda k: labels.get(k, str(k)))
+    return int(sel), df[df["id"]==sel].iloc[0].to_dict()
+
+def render_outreach_templates(conn: sqlite3.Connection):
+    ensure_phase5_schema(conn)
+    st.subheader("Templates")
+    df = pd.read_sql_query("SELECT id, name, subject FROM o2_email_templates ORDER BY id DESC;", conn, params=())
+    if df is not None and not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    with st.form("tpl_new_edit"):
+        name = st.text_input("Name")
+        subj = st.text_input("Subject")
+        body = st.text_area("Body HTML", height=220)
+        if st.form_submit_button("Save template"):
+            p5_save_template(conn, name, subj, body)
+            st.success("Saved")
+            st.experimental_rerun()
+
+def p5_render_accounts_and_templates(conn: sqlite3.Connection):
+    ensure_outreach_schema(conn); ensure_phase5_schema(conn)
+    st.subheader("SMTP accounts (Gmail App Password recommended)")
+    try:
+        df = pd.read_sql_query("SELECT id, label, from_email, smtp_host, smtp_port, use_tls, use_ssl FROM o1_email_accounts ORDER BY id DESC;", conn, params=())
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No accounts yet.")
+    except Exception as e:
+        st.info(f"Unable to read accounts: {e}")
+    with st.form("acct_new"):
+        c1, c2 = st.columns(2)
+        label = c1.text_input("Label", value="Gmail")
+        from_name = c2.text_input("From name", value="GovCon Team")
+        from_email = c1.text_input("From email", placeholder="you@company.com")
+        username = c2.text_input("Username", placeholder="you@company.com")
+        password = st.text_input("App Password", type="password")
+        host = c1.text_input("SMTP host", value="smtp.gmail.com")
+        port = c2.number_input("SMTP port", min_value=1, max_value=65535, value=587, step=1)
+        use_tls = st.checkbox("Use STARTTLS", value=True)
+        use_ssl = st.checkbox("Use SSL", value=False)
+        if st.form_submit_button("Save account"):
+            p5_save_account(conn, label, host, port, username or from_email, password, from_name, from_email, use_ssl, use_tls)
+            st.success("Account saved"); st.experimental_rerun()
+
+def render_opt_out_panel(conn: sqlite3.Connection):
+    st.subheader("Unsubscribes")
+    try:
+        df = pd.read_sql_query("SELECT email, reason, created_at FROM o5_unsubscribes ORDER BY id DESC;", conn, params=())
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("None yet.")
+    except Exception as e:
+        st.info(f"Unable to read unsubscribes: {e}")
+
+# Safety: minimal campaigns panel if missing
+if 'render_campaigns_panel' not in globals():
+    def render_campaigns_panel(conn: sqlite3.Connection):
+        st.subheader("Campaigns")
+        ensure_campaign_schema(conn)
+        df = pd.read_sql_query("SELECT id, name, status, start_at, rate_per_hour, daily_cap FROM o6_campaigns ORDER BY id DESC;", conn, params=())
+        st.dataframe(df, use_container_width=True, hide_index=True) if df is not None and not df.empty else st.caption("No campaigns yet.")
+        with st.form("camp_new"):
+            name = st.text_input("Campaign name")
+            subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
+            body = st.text_area("Body HTML", height=180, value="Hello {{name}},<br><br>We are preparing a quote for {{title}}.")
+            rate = st.number_input("Rate per hour", 1, 1000, 90, 1)
+            cap = st.number_input("Daily cap", 1, 5000, 400, 10)
+            fu1 = st.number_input("Follow-up 1 in hours", 0, 1000, 72, 1)
+            fu2 = st.number_input("Follow-up 2 in hours", 0, 1000, 0, 1)
+            start = st.text_input("Start at UTC (YYYY-MM-DD HH:MM:SS)", value="")
+            if st.form_submit_button("Create"):
+                create_campaign(conn, name.strip(), subj, body, None, int(rate), int(cap), start.strip() or None, int(fu1), int(fu2) or None)
+                st.success("Created"); st.experimental_rerun()
