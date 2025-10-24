@@ -9532,38 +9532,8 @@ def __p_run_outreach(conn):
         try: __p_o3_ui(conn)
         except Exception as e: _st.error(f"O3 error: {e}")
 
-# ---- Non-destructive wiring into existing router/nav/subfinder ----
-__pg = globals()
-if callable(__pg.get("router")):
-    __orig_router = __pg["router"]
-    def router(page, conn):
-        if page == "Outreach":
-            try: __p_run_outreach(conn); return
-            except Exception as e: _st.error(f"Outreach failed: {e}"); return
-        return __orig_router(page, conn)
-    __pg["router"] = router
+# Removed legacy monkeypatch block at load time
 
-if callable(__pg.get("nav")):
-    __orig_nav = __pg["nav"]
-    def nav():
-        pages = list(__orig_nav())
-        if "Outreach" not in pages: pages.append("Outreach")
-        return pages
-    __pg["nav"] = nav
-
-if callable(__pg.get("run_subcontractor_finder")):
-    __orig_sf = __pg["run_subcontractor_finder"]
-    def run_subcontractor_finder(conn):
-        try:
-            __p_ensure_core(conn)  # ensure vendors_t exists
-            with _st.expander("S1D — Google Places & Dedupe", expanded=False):
-                __p_s1d_ui(conn)
-        except Exception as e:
-            _st.warning(f"S1D unavailable: {e}")
-        __orig_sf(conn)
-    __pg["run_subcontractor_finder"] = run_subcontractor_finder
-# =========================
-# END APPEND-ONLY PATCH
 # =========================
 
 if __name__ == '__main__':
