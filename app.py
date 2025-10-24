@@ -8445,12 +8445,13 @@ except Exception:
         import smtplib as _smtplib
         SMTP_SSL = _smtplib.SMTP_SSL
         SMTP = _smtplib.SMTP
+
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
-    import streamlit as st, datetime as _dt, pandas as _pd
+    import streamlit as st, datetime as _dt, pandas as _pd, socket as _socket
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
         st.error("No recipients"); return 0, []
-    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
+    blast_title = st.text_input("Blast name", value=f"Outreach {time.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
     if not blast_title:
         blast_title = "Outreach"
     with _o3c(conn.cursor()) as cur:
@@ -8460,19 +8461,33 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         blast_id = cur.lastrowid
     try:
         opt = _pd.read_sql_query("SELECT email FROM outreach_optouts;", conn)
-        blocked = set(opt["email"].str.lower().tolist())
+        blocked = set(e.lower().strip() for e in opt['email'].tolist())
     except Exception:
         blocked = set()
     sent = 0
     logs = []
     smtp = None
     if not test_only:
+        # derive SMTP settings from sender
+        host = sender.get("host") or "smtp.gmail.com"
+        port = int(sender.get("port") or 465)
+        use_tls = bool(sender.get("use_tls") or (port == 587))
         try:
-            smtp = _o3smtp.SMTP_SSL("smtp.gmail.com", 465, timeout=20)
-            smtp.login(sender["email"], sender["app_password"])
+            if use_tls or port == 587:
+                smtp = _o3smtp.SMTP(host, port, timeout=20)
+                smtp.ehlo()
+                try:
+                    smtp.starttls()
+                except Exception:
+                    pass
+                smtp.login(sender["email"], sender["app_password"])
+            else:
+                smtp = _o3smtp.SMTP_SSL(host, port, timeout=20)
+                smtp.login(sender["email"], sender["app_password"])
         except Exception as e:
             st.error(f"SMTP login failed: {e}")
             return 0, []
+
     for _, r in rows.head(int(max_send)).iterrows():
         to_email = str(r.get("email","")).strip()
         if not to_email or "@" not in to_email:
