@@ -8170,6 +8170,10 @@ def main() -> None:
         process_outreach_scheduler(conn)
     except Exception:
         pass
+    try:
+        process_outreach_scheduler(conn)
+    except Exception:
+        pass
     router(nav(), conn)
 
 
