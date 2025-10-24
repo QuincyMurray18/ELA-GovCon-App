@@ -20,7 +20,7 @@ except Exception:
     _rtm_st = _Dummy()
 # === PHASE 5: L & M compliance gate ===
 def require_LM_minimum(conn, rfp_id):
-    """
+    f"""
     Returns (ok, missing:list[str]).
     Required: Offers Due date in rfp_meta, Section M present in rfp_sections, >=1 L/M checklist item.
     """
@@ -9018,20 +9018,7 @@ def _s1d_existing_vendor_keys(conn):
     try:
         rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
     except Exception:
-        try:
-            rows = conn.execute("SELECT name, COALESCE(phone,''), '' as place_id FROM vendors_t").fetchall()
-        except Exception:
-            return set(), set()
-    by_np = set()
-    by_pid = set()
-    for r in rows:
-        name = (r[0] or "").strip().lower()
-        ph = _s1d_norm_phone(r[1] or "")
-        pid = (r[2] or "").strip()
-        if name or ph:
-            by_np.add((name, ph))
-        if pid:
-            by_pid.add(pid)
+        by_np, by_pid = _s1d_select_existing_pairs(conn)
     return by_np, by_pid
 
 def _s1d_geocode(addr: str, key: str):
@@ -9068,27 +9055,35 @@ def _s1d_place_details(pid: str, key: str):
         return {}
 
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
-    # Ensure columns
-    cols = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(vendors_t)").fetchall()}
-    with conn:
-        if "place_id" not in cols:
-            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN place_id TEXT"); 
-            except Exception: pass
-        if "website" not in cols:
-            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN website TEXT");
-            except Exception: pass
-        if "phone" not in cols:
-            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN phone TEXT");
-            except Exception: pass
-    # Insert
-    saved = 0
-    with conn:
-        for r in rows:
-            conn.execute("""INSERT INTO vendors_t(name, email, phone, website, city, state, naics, place_id)
-                            VALUES(?,?,?,?,?,?,?,?)""",
-                         (r.get("name",""), "", r.get("phone",""), r.get("website",""), r.get("city",""), r.get("state",""), "", r.get("place_id","")))
-            saved += 1
-    return saved
+
+# Determine writable table and ensure schema
+tbl = _s1d_vendor_write_table(conn)
+with conn:
+    _s1d_ensure_vendor_table(conn, tbl)
+# Insert rows
+saved = 0
+with conn:
+    for r in rows or []:
+        conn.execute(f"""                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+        """, (
+            str(r.get("source","") or ""),
+            str(r.get("place_id","") or ""),
+            str(r.get("name","") or ""),
+            str(r.get("email","") or ""),
+            str(r.get("phone","") or ""),
+            str(r.get("website","") or ""),
+            str(r.get("address","") or ""),
+            str(r.get("city","") or ""),
+            str(r.get("state","") or ""),
+            str(r.get("zip","") or ""),
+            str(r.get("naics_guess","") or r.get("naics","") or ""),
+            str(r.get("notes","") or ""),
+            float(r.get("lat") or 0) if str(r.get("lat") or "").strip() else None,
+            float(r.get("lon") or 0) if str(r.get("lon") or "").strip() else None,
+        ))
+        saved += 1
+return saved
 
 
 def _s1d_render_from_cache(conn, df):
@@ -9124,7 +9119,7 @@ def _s1d_render_from_cache(conn, df):
             def _mk_id(r):
                 pid = str(r.get("place_id","") or "")
                 if pid: return pid
-                s = f"{r.get('name','')}-{r.get('phone','')}-{r.get('city','')}"
+                s = f"{r.get('name',f'')}-{r.get('phone','')}-{r.get('city','')}"
                 return _h.sha1(s.encode()).hexdigest()[:12]
             keep["row_id"] = keep.apply(_mk_id, axis=1)
         keep_view = keep[["row_id","name","phone","website","address","city","state","place_id"]].copy()
@@ -9150,6 +9145,66 @@ def _s1d_render_from_cache(conn, df):
                 st.session_state.pop("s1d_df", None)
                 st.session_state.pop("s1d_selected_ids", None)
                 st.experimental_rerun()
+
+
+def _s1d_vendor_write_table(conn):
+    row = conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name='vendors_t'").fetchone()
+    if row and (row[0] or '').lower() == 'table':
+        return 'vendors_t'
+    if row and (row[0] or '').lower() == 'view':
+        sql = row[2] or ''
+        import re as _re
+        m = _re.search(r'FROM\s+([A-Za-z_][A-Za-z0-9_]*)', sql, flags=_re.IGNORECASE)
+        if m:
+            return m.group(1)
+    # fallback
+    return 'vendors'
+
+def _s1d_ensure_vendor_table(conn, table_name: str):
+    # Create base table if needed
+    conn.execute(f"""        CREATE TABLE IF NOT EXISTS {table_name}(
+            id INTEGER PRIMARY KEY,
+            source TEXT,
+            place_id TEXT,
+            name TEXT,
+            email TEXT,
+            phone TEXT,
+            website TEXT,
+            address TEXT,
+            city TEXT,
+            state TEXT,
+            zip TEXT,
+            naics TEXT,
+            notes TEXT,
+            lat REAL,
+            lon REAL,
+            created_at TEXT
+        )
+    """)
+    # Add missing columns as app evolves
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    needed = [
+        "source","place_id","name","email","phone","website","address","city","state","zip","naics","notes","lat","lon","created_at"
+    ]
+    for c in needed:
+        if c not in cols:
+            try:
+                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {c} TEXT")
+            except Exception:
+                pass
+
+def _s1d_select_existing_pairs(conn):
+    # Prefer vendors_t if present, else fallback to vendors
+    srcs = [("vendors_t","view_or_table"), ("vendors","table")]
+    for name, _ in srcs:
+        row = conn.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone()
+        if row:
+            try:
+                by_np, by_pid = _s1d_select_existing_pairs(conn)
+                return by_np, by_pid
+            except Exception:
+                continue
+    return set(), set()
 
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
@@ -9575,10 +9630,8 @@ def __p_s1d_ui(conn):
     keep=df[~df["_dup"]]
     _st.caption(f"{len(keep)} new vendors can be saved")
     if _st.button("Save all new vendors", key="__p_s1d_save"):
-        for r in keep.to_dict("records"):
-            __p_db(conn,"INSERT INTO vendors_t(name,email,phone,website,city,state,naics,place_id) VALUES(?,?,?,?,?,?,?,?)",
-                   (r["name"],"",r["phone"],r["website"],r["city"],r["state"],"",r["place_id"]))
-        _st.success(f"Saved {len(keep)} new vendors")
+        n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
+        _st.success(f"Saved {n} new vendors")
 
 def __p_run_outreach(conn):
     __p_ensure_core(conn)
