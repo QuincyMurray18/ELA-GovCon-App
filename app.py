@@ -5194,6 +5194,9 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     default_naics = ctx.get("NAICS") or ""
     default_state = ""
 
+    # Default Place of Performance from selected notice if available
+    default_pop = (ctx.get("Place of Performance") or ctx.get("place_of_performance") or ctx.get("POP") or "").strip()
+
     with st.expander("Filters", expanded=True):
         c1, c2, c3, c4 = st.columns([2,2,2,2])
         with c1:
