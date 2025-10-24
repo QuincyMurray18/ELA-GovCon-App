@@ -8383,6 +8383,21 @@ def _o3_ensure_schema(conn):
         );""")
         conn.commit()
 
+
+def _o3_wrap_email_html(html: str) -> str:
+    # Basic, client-safe wrapper to ensure readable default font size.
+    # Uses table layout and inline styles for Gmail/Outlook compatibility.
+    safe = html or ""
+    return (
+        "<!doctype html>"
+        "<html><head><meta charset=\"utf-8\"></head>"
+        "<body style=\"margin:0;padding:0;background:#ffffff;\">"
+        "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+        "<tr><td style=\"font-family: Arial, sans-serif; font-size:16px; line-height:1.5; color:#222222;\">"
+        + safe +
+        "</td></tr></table>"
+        "</body></html>"
+    )
 def _o3_merge(text, data: dict) -> str:
     import re as _re
     t = str(text or "")
@@ -8587,6 +8602,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
                     msg["To"] = to_email
                     msg["Subject"] = subj
+                    html = _o3_wrap_email_html(html)
                     msg.attach(_O3MIMEText(html, "html", "utf-8"))
                     smtp.sendmail(sender["email"], [to_email], msg.as_string())
                     status = "Sent"; err = ""
