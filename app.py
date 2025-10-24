@@ -3926,7 +3926,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if _update_rfp_meta(conn, _rid, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
             st.success("Saved")
             st.session_state["current_rfp_id"] = int(_rid)
-            st.rerun()
+            st.experimental_rerun()
     
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
@@ -5479,6 +5479,8 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 def run_outreach(conn: sqlite3.Connection) -> None:
+    st.session_state.setdefault('outreach_subject','')
+    st.session_state.setdefault('outreach_html','')
     # O2: templates picker and manager
     try:
         _tpl_picker_prefill(conn)
@@ -5486,11 +5488,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             render_outreach_templates(conn)
     except Exception:
         pass
-
     st.header("Outreach")
-    st.markdown("**O3 WIRED — Mail Merge & Send**")
-    with st.expander("Mail Merge & Send", expanded=True):
-        render_outreach_mailmerge(conn)
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
     notice = st.session_state.get("rfp_selected_notice", {})
@@ -5524,35 +5522,19 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
     st.subheader("Template")
-
-    st.markdown("Use tags: {company}, {email}, {phone}, {naics}, {title}, {solicitation}, {due}, {notice_id}")
-
-    # O2: templates picker and manager
-
-    try:
-
-        _tpl_picker_prefill(conn)
-
-        with st.expander("Templates", expanded=False):
-
-            render_outreach_templates(conn)
-
-    except Exception:
-
-        pass
-
-    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
-
-    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get("outreach_html", (
-
-        "Hello {{company}},<br><br>"
+    st.markdown("Use tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
+    subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})")
+    body = st.text_area(
+        "Email Body (HTML supported)",
+        value=(
+            "Hello {{company}},<br><br>"
             "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
             " Responses are due {{due}}. We’d like your quote and capability confirmation."
             "<br><br>Could you reply with pricing and any questions?"
             "<br><br>Thank you,<br>ELA Management"
-
-    )), height=200)
-
+        ),
+        height=200,
+    )
 
     with st.expander("Attachments", expanded=False):
         files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
@@ -6273,40 +6255,24 @@ def _pp_writeup_block(rec: dict) -> str:
     return "\n\n".join(parts)
 
 
-def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
-    try:
-        import docx  # type: ignore
-    except Exception:
-        try:
-            from docx import Document  # type: ignore
-            import docx  # type: ignore
-        except Exception:
-            import streamlit as st
-            st.error("python-docx is required. pip install python-docx")
-            return None
+def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
     try:
         from docx.shared import Inches  # type: ignore
     except Exception:
-        pass
-    try:
-        doc = docx.Document()
-        doc.add_heading(title or "Win Plan", 0)
-        if subtitle:
-            doc.add_paragraph(subtitle)
-        if isinstance(sections, pd.DataFrame) and not sections.empty:
-            for _, row in sections.iterrows():
-                sec = str(row.get("Section") or row.get("section") or row.get("name") or "Section")
-                body = str(row.get("Content") or row.get("content") or row.get("text") or "")
-                doc.add_heading(sec, level=2)
-                for para in (body or "").split("\n\n"):
-                    if para.strip():
-                        doc.add_paragraph(para.strip())
-        doc.save(path)
-        return path
-    except Exception as e:
-        import streamlit as st
-        st.error(f"DOCX export failed: {e}")
+        st.error("python-docx is required. pip install python-docx")
         return None
+    doc = docx.Document()
+    for s in doc.sections:
+        s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
+    doc.add_heading("Past Performance", level=1)
+    for i, rec in enumerate(records, start=1):
+        doc.add_heading(f"{i}. {rec.get('project_title')}", level=2)
+        blk = _pp_writeup_block(rec).replace("**", "")  # simple conversion
+        for para in blk.split("\n\n"):
+            doc.add_paragraph(para)
+    doc.save(path)
+    return path
+
 
 def run_past_performance(conn: sqlite3.Connection) -> None:
     st.header("Past Performance Library")
@@ -6480,7 +6446,29 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
 
         # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
-        _export_past_perf_docx(out_path, past_perf)
+        exp = _export_past_perf_docx(out_path, picked)
+        if exp:
+            
+                try:
+                    from pathlib import Path as _Path
+                    with open(exp, "rb") as _f:
+                        _data = _f.read()
+                    _fname = _Path(exp).name or "export.docx"
+                    st.download_button("Download DOCX", data=_data, file_name=_fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                except Exception as _e:
+                    st.error(f"Download failed: {_e}")
+
+
+
+
+
+# ---------- Phase H: White Paper Builder ----------
+def _wp_load_template(conn: sqlite3.Connection, template_id: int) -> pd.DataFrame:
+    return pd.read_sql_query(
+        "SELECT id, position, title, body FROM white_template_sections WHERE template_id=? ORDER BY position ASC;",
+        conn, params=(template_id,)
+    )
+
 def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
     return pd.read_sql_query(
         "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
@@ -6489,38 +6477,29 @@ def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
 
 def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
     try:
-        import docx  # type: ignore
+# from docx import Document  # replaced by 'import docx'
+        from docx.shared import Inches
     except Exception:
-        try:
-            from docx import Document  # type: ignore
-            import docx  # type: ignore
-        except Exception:
-            import streamlit as st
-            st.error("python-docx is required. pip install python-docx")
-            return None
-    try:
-        from docx.shared import Inches  # type: ignore
-    except Exception:
-        pass
-    try:
-        doc = docx.Document()
-        doc.add_heading(title or "Win Plan", 0)
-        if subtitle:
-            doc.add_paragraph(subtitle)
-        if isinstance(sections, pd.DataFrame) and not sections.empty:
-            for _, row in sections.iterrows():
-                sec = str(row.get("Section") or row.get("section") or row.get("name") or "Section")
-                body = str(row.get("Content") or row.get("content") or row.get("text") or "")
-                doc.add_heading(sec, level=2)
-                for para in (body or "").split("\n\n"):
-                    if para.strip():
-                        doc.add_paragraph(para.strip())
-        doc.save(path)
-        return path
-    except Exception as e:
-        import streamlit as st
-        st.error(f"DOCX export failed: {e}")
+        st.error("python-docx is required. pip install python-docx")
         return None
+    doc = docx.Document()
+    doc.add_heading(title or "White Paper", level=1)
+    if subtitle:
+        p = doc.add_paragraph(subtitle); p.runs[0].italic = True
+    for _, r in sections.sort_values("position").iterrows():
+        doc.add_heading(r.get("title") or "Section", level=2)
+        body = r.get("body") or ""
+        for para in str(body).split("\n\n"):
+            if para.strip():
+                doc.add_paragraph(para.strip())
+        img = r.get("image_path")
+        if img and Path(img).exists():
+            try:
+                doc.add_picture(img, width=Inches(5.5))
+            except Exception:
+                pass
+    doc.save(path)
+    return path
 
 def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     st.header("White Paper Builder")
@@ -6733,7 +6712,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
-            a_subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
+            a_subject = st.text_input("Subject", key="act_subject")
         with a_col2:
             a_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
                                   format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
@@ -8097,154 +8076,11 @@ def main() -> None:
     router(nav(), conn)
 
 
-
-# --- Outreach schema guard: fallback stub used if the full implementation is defined later ---
-if "_o3_ensure_schema" not in globals():
-    def _o3_ensure_schema(conn):
-        try:
-            from contextlib import closing
-            with closing(conn.cursor()) as cur:
-                # Minimal tables used by Outreach features
-                cur.execute("CREATE TABLE IF NOT EXISTS vendors_t (id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT, city TEXT, state TEXT, naics TEXT)")
-                cur.execute("CREATE TABLE IF NOT EXISTS current_tenant (id INTEGER PRIMARY KEY, ctid INTEGER)")
-                cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES (1, 1)")
-                cur.execute("CREATE TABLE IF NOT EXISTS outreach_templates (id INTEGER PRIMARY KEY, name TEXT, subject TEXT, body TEXT)")
-                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-            conn.commit()
-        except Exception:
-            pass
-
-
-# --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
-if "_o3_collect_recipients_ui" not in globals():
-    def _o3_collect_recipients_ui(conn):
-        try:
-            import streamlit as st
-            import pandas as _pd
-            q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
-            params = []
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                f_naics = st.text_input("NAICS filter", key="o3_f_naics")
-            with c2:
-                f_state = st.text_input("State filter", key="o3_f_state")
-            with c3:
-                f_city = st.text_input("City filter", key="o3_f_city")
-            if f_naics:
-                q += " AND IFNULL(naics,'') LIKE ?"
-                params.append(f"%{f_naics}%")
-            if f_state:
-                q += " AND IFNULL(state,'') LIKE ?"
-                params.append(f"%{f_state}%")
-            if f_city:
-                q += " AND IFNULL(city,'') LIKE ?"
-                params.append(f"%{f_city}%")
-            try:
-                df = _pd.read_sql_query(q, conn, params=params)
-            except Exception:
-                df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
-            st.caption(f"{len(df)} vendors match filters")
-            if not df.empty:
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            return df
-        except Exception:
-            return None
-
-
-# --- Outreach SMTP sender picker: fallback stub if full implementation is defined later ---
-if "_o3_render_sender_picker" not in globals():
-    def _o3_render_sender_picker():
-        import streamlit as st
-        from contextlib import closing
-        try:
-            with closing(conn.cursor()) as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                cur.execute("INSERT OR IGNORE INTO smtp_settings(id, host, port, username, password, use_tls) VALUES (1, '', 587, '', '', 1)")
-                row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
-            host, port, username, password, use_tls = row or ("", 587, "", "", 1)
-        except Exception:
-            host, port, username, password, use_tls = "", 587, "", "", 1
-
-        st.caption("SMTP Settings")
-        c1, c2, c3 = st.columns([2,1,1])
-        with c1:
-            host = st.text_input("SMTP host", value=str(host), key="o3_smtp_host")
-        with c2:
-            port = st.number_input("Port", value=int(port or 587), min_value=1, max_value=65535, step=1, key="o3_smtp_port")
-        with c3:
-            use_tls = st.checkbox("Use TLS", value=bool(use_tls), key="o3_smtp_tls")
-
-        c4, c5 = st.columns(2)
-        with c4:
-            username = st.text_input("Username", value=str(username or ""), key="o3_smtp_user")
-        with c5:
-            password = st.text_input("Password", value=str(password or ""), type="password", key="o3_smtp_pass")
-
-        if st.button("Save SMTP", key="o3_smtp_save"):
-            try:
-                from contextlib import closing
-                with closing(conn.cursor()) as cur:
-                    cur.execute("UPDATE smtp_settings SET host=?, port=?, username=?, password=?, use_tls=? WHERE id=1",
-                                (host.strip(), int(port), username.strip(), password, 1 if use_tls else 0))
-                    conn.commit()
-                st.success("Saved SMTP settings")
-            except Exception as e:
-                st.error(f"Save failed: {e}")
-
-        return {
-            "host": host.strip(),
-            "port": int(port or 587),
-            "username": (username or "").strip(),
-            "password": password or "",
-            "use_tls": bool(use_tls),
-            "from_email": (username or "").strip(),
-            "from_name": "ELA Management"
-        }
-def render_outreach_mailmerge(conn):
-    import streamlit as st, pandas as _pd
-    _o3_ensure_schema(conn)
-    st.subheader("Mail Merge & Send")
-    try:
-        _tpl_picker_prefill(conn)
-    except Exception:
-        pass
-    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
-    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
-    rows = _o3_collect_recipients_ui(conn)
-    if rows is not None and not rows.empty and (subj or body):
-        with st.expander("Preview (first 5)", expanded=True):
-            prev = []
-            for _, r in rows.head(5).iterrows():
-                data = {k:str(r.get(k,"") or "") for k in r.index}
-                prev.append({"to": r["email"], "subject": _o3_merge(subj, data), "snippet": _o3_merge(body, data)[:140]})
-            st.dataframe(_pd.DataFrame(prev), use_container_width=True, hide_index=True)
-    st.subheader("Sender")
-    sender = _o3_render_sender_picker()
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1:
-        test = st.button("Test run (no send)", key="o3_test")
-    with c2:
-        do = st.button("Send batch", type="primary", key="o3_send")
-    with c3:
-        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
-    if test and rows is not None and not rows.empty:
-        _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
-    if do:
-        if not sender.get("email") or not sender.get("app_password"):
-            st.error("Missing sender credentials")
-        elif rows is None or rows.empty:
-            st.error("No recipients")
-        else:
-            _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
-# === end O3 ===================================================================
-
-# -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
-
-
 if __name__ == "__main__":
     main()
 
 
+# -------------------- Phase V: Proposal Builder — Section Library / Templates --------------------
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
     st.markdown("### Section Library (Phase V)")
     cols = st.columns([3,2,2])
@@ -8754,6 +8590,7 @@ def o1_delete_email_account(conn, user_email:str):
 
 
 # === O2: Outreach Templates ====================================================
+
 def ensure_email_templates(conn):
     with conn:
         conn.execute("""
@@ -8815,8 +8652,8 @@ def render_outreach_templates(conn):
     if sel == "<new>":
         tid = None
         name = st.text_input("Name", key="tpl_name")
-        subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
-        html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
+        subject = st.text_input("Subject", key="tpl_subject")
+        html = st.text_area("HTML body", key="tpl_html", height=240)
     else:
         row = next(r for r in rows if r[1] == sel)
         tid = row[0]
@@ -8834,17 +8671,17 @@ def render_outreach_templates(conn):
             else:
                 email_template_upsert(conn, name, subject or "", html or "", tid)
                 st.success("Saved")
-                st.rerun()
+                st.experimental_rerun()
     with c2:
         if (tid is not None) and st.button("Duplicate"):
             email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
             st.success("Duplicated")
-            st.rerun()
+            st.experimental_rerun()
     with c3:
         if (tid is not None) and st.button("Delete"):
             email_template_delete(conn, tid)
             st.success("Deleted")
-            st.rerun()
+            st.experimental_rerun()
 
 def _tpl_picker_prefill(conn):
     import streamlit as st
@@ -8869,299 +8706,3 @@ def seed_default_templates(conn):
     ]
     for n,s,h in defaults:
         email_template_upsert(conn, n, s, h, None)
-
-
-
-def run_outreach(conn):
-    import streamlit as st
-    st.header("Outreach")
-    # O2: templates seed + picker + manager
-    seed_default_templates(conn)
-    _tpl_picker_prefill(conn)
-    with st.expander("Templates", expanded=False):
-        render_outreach_templates(conn)
-    # Minimal body fields for Subject and Body that use session prefill
-    st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="outreach_subject_input")
-    st.text_area("Email Body (HTML allowed)", value=st.session_state.get("outreach_html",""), height=240, key="outreach_body_input")
-
-
-# === O3: Outreach Mail Merge + Send (appended) ===============================
-from contextlib import closing as _o3c
-import smtplib as _o3smtp
-from email.mime.text import MIMEText as _O3MIMEText
-from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
-
-def _o3_ensure_schema(conn):
-    with _o3c(conn.cursor()) as cur:
-        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_optouts(
-            id INTEGER PRIMARY KEY,
-            email TEXT UNIQUE,
-            reason TEXT,
-            ts TEXT DEFAULT CURRENT_TIMESTAMP
-        );""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_blasts(
-            id INTEGER PRIMARY KEY,
-            title TEXT,
-            template_name TEXT,
-            sender_email TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_log(
-            id INTEGER PRIMARY KEY,
-            blast_id INTEGER,
-            to_email TEXT,
-            to_name TEXT,
-            subject TEXT,
-            status TEXT,
-            error TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );""")
-        conn.commit()
-
-def _o3_merge(text, data: dict) -> str:
-    import re as _re
-    t = str(text or "")
-    def rep(m):
-        k = m.group(1).strip()
-        return str(data.get(k, ""))
-    t = _re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", rep, t)
-    return t
-
-def _o3_load_vendors_df(conn):
-    import pandas as _pd
-    try:
-        df_v = _pd.read_sql_query(
-            "SELECT v.id as vendor_id, v.name as company, v.city, v.state, v.naics, v.phone, v.email, v.website FROM vendors v ORDER BY v.name;",
-            conn, params=()
-        )
-    except Exception:
-        df_v = _pd.DataFrame()
-    try:
-        df_c = _pd.read_sql_query(
-            "SELECT vc.vendor_id, vc.name as contact_name, vc.email as contact_email, vc.phone as contact_phone, vc.role FROM vendor_contacts vc ORDER BY vc.id DESC;",
-            conn, params=()
-        )
-    except Exception:
-        df_c = _pd.DataFrame()
-    if df_v is None: df_v = _pd.DataFrame()
-    if df_c is None: df_c = _pd.DataFrame()
-    if not df_c.empty:
-        df = df_c.merge(df_v, on="vendor_id", how="left")
-        df["email"] = df["contact_email"].fillna(df.get("email"))
-        df["name"] = df["contact_name"].fillna("")
-        df["phone"] = df["contact_phone"].fillna(df.get("phone"))
-    else:
-        df = df_v.copy()
-        df["name"] = ""
-    cols = ["email","name","company","phone","naics","city","state","website"]
-    for c in cols:
-        if c not in df.columns: df[c] = ""
-    df = df[cols].copy()
-    if "email" in df.columns:
-        df = df[df["email"].astype(str).str.contains("@", na=False)]
-        df = df.drop_duplicates(subset=["email"])
-    return df
-
-def _o3_collect_recipients_ui(conn):
-    import streamlit as st, pandas as _pd
-    _o3_ensure_schema(conn)
-    st.subheader("Recipients")
-    tabs = st.tabs(["From Vendors","Upload CSV","Manual"])
-    all_rows = _pd.DataFrame(columns=["email","name","company","phone","naics","city","state","website"])
-    with tabs[0]:
-        df = _o3_load_vendors_df(conn)
-        f1, f2 = st.columns([2,2])
-        with f1:
-            f_naics = st.text_input("Filter NAICS contains", key="o3_naics")
-        with f2:
-            f_state = st.text_input("Filter State equals (e.g., TX)", key="o3_state")
-        if f_naics:
-            df = df[df["naics"].fillna("").str.contains(f_naics, case=False, na=False)]
-        if f_state:
-            df = df[df["state"].fillna("").str.upper()==f_state.strip().upper()]
-        st.caption(f"{len(df)} vendor rows")
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        if st.button("Add all filtered vendors", key="o3_add_vendors"):
-            all_rows = _pd.concat([all_rows, df], ignore_index=True)
-    with tabs[1]:
-        st.caption("CSV columns: email,name,company,phone,naics,city,state,website,first_name,last_name,title,solicitation,due,notice_id")
-        up = st.file_uploader("Upload CSV", type=["csv"], key="o3_csv_up")
-        if up:
-            try:
-                dfu = _pd.read_csv(up)
-                st.dataframe(dfu.head(50), use_container_width=True, hide_index=True)
-                if st.button("Add uploaded rows", key="o3_add_csv"):
-                    all_rows = _pd.concat([all_rows, dfu], ignore_index=True)
-            except Exception as e:
-                st.error(f"CSV read error: {e}")
-    with tabs[2]:
-        st.caption("Paste one email per line or 'email, name, company'")
-        txt = st.text_area("Lines", height=150, key="o3_paste")
-        if st.button("Add pasted", key="o3_add_paste"):
-            rows = []
-            for line in (txt or "").splitlines():
-                parts = [p.strip() for p in line.split(",")]
-                if not parts: continue
-                em = parts[0] if "@" in parts[0] else ""
-                if not em: continue
-                name = parts[1] if len(parts)>1 else ""
-                comp = parts[2] if len(parts)>2 else ""
-                rows.append({"email": em, "name": name, "company": comp, "phone":"", "naics":"", "city":"", "state":"", "website":""})
-            if rows:
-                all_rows = _pd.concat([all_rows, _pd.DataFrame(rows)], ignore_index=True)
-    cur = st.session_state.get("o3_rows")
-    if cur is not None and isinstance(cur, _pd.DataFrame) and not cur.empty:
-        all_rows = _pd.concat([cur, all_rows], ignore_index=True)
-    if not all_rows.empty:
-        all_rows = all_rows.dropna(subset=["email"])
-        all_rows = all_rows[all_rows["email"].astype(str).str.contains("@", na=False)]
-        all_rows = all_rows.drop_duplicates(subset=["email"])
-    st.session_state["o3_rows"] = all_rows
-    if not all_rows.empty:
-        st.write(f"Total recipients: {len(all_rows)}")
-        st.dataframe(all_rows, use_container_width=True, hide_index=True)
-        csv_bytes = all_rows.to_csv(index=False).encode("utf-8")
-        st.download_button("Download recipients CSV", data=csv_bytes, file_name="o3_recipients.csv", mime="text/csv", key="o3_dl_recip")
-    return all_rows
-
-def _o3_sender_accounts_from_secrets():
-    try:
-        import streamlit as st
-        accs = []
-        try:
-            for row in (st.secrets.get("gmail_accounts") or []):
-                if row.get("email") and row.get("app_password"):
-                    accs.append({"email":row["email"],"app_password":row["app_password"],"name":row.get("name","")})
-        except Exception:
-            pass
-        if not accs:
-            g = st.secrets.get("gmail") or {}
-            if g.get("email") and g.get("app_password"):
-                accs.append({"email":g["email"],"app_password":g["app_password"],"name":g.get("name","")})
-        return accs
-    except Exception:
-        return []
-
-def _o3_render_sender_picker():
-    import streamlit as st
-    accs = _o3_sender_accounts_from_secrets()
-    choices = [f"{a.get('name')+' · ' if a.get('name') else ''}{a['email']}" for a in accs]
-    default_idx = 0 if choices else None
-    sel = st.selectbox("Sender account", choices or ["<enter credentials>"], index=default_idx, key="o3_sender_pick")
-    creds = {"email":"", "app_password":"", "name":""}
-    if accs and sel in choices:
-        i = choices.index(sel)
-        creds = accs[i]
-    if not accs:
-        st.caption("Enter Gmail + App Password")
-        c1, c2 = st.columns([2,2])
-        with c1:
-            creds["email"] = st.text_input("Gmail address", key="o3_s_email")
-            creds["name"] = st.text_input("From name", key="o3_s_name")
-        with c2:
-            creds["app_password"] = st.text_input("App password", type="password", key="o3_s_app")
-    return creds
-
-def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
-    import streamlit as st, datetime as _dt, pandas as _pd
-    _o3_ensure_schema(conn)
-    if rows is None or rows.empty:
-        st.error("No recipients"); return 0, []
-    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
-    if not blast_title:
-        blast_title = "Outreach"
-    with _o3c(conn.cursor()) as cur:
-        cur.execute("INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
-                    (blast_title, st.session_state.get("tpl_sel",""), sender.get("email","")))
-        conn.commit()
-        blast_id = cur.lastrowid
-    try:
-        opt = _pd.read_sql_query("SELECT email FROM outreach_optouts;", conn)
-        blocked = set(opt["email"].str.lower().tolist())
-    except Exception:
-        blocked = set()
-    sent = 0
-    logs = []
-    smtp = None
-    if not test_only:
-        try:
-            smtp = _o3smtp.SMTP_SSL("smtp.gmail.com", 465, timeout=20)
-            smtp.login(sender["email"], sender["app_password"])
-        except Exception as e:
-            st.error(f"SMTP login failed: {e}")
-            return 0, []
-    for _, r in rows.head(int(max_send)).iterrows():
-        to_email = str(r.get("email","")).strip()
-        if not to_email or "@" not in to_email:
-            continue
-        if to_email.lower() in blocked:
-            status = "Skipped: opt-out"; err = ""; subj = ""
-        else:
-            data = {k: str(r.get(k,"") or "") for k in r.index}
-            subj = _o3_merge(subject_tpl or "", data)
-            html = _o3_merge(html_tpl or "", data)
-            if "unsubscribe" not in html.lower():
-                html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
-            if test_only:
-                status = "Preview"; err = ""
-            else:
-                try:
-                    msg = _O3MIMEMultipart("alternative")
-                    msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
-                    msg["To"] = to_email
-                    msg["Subject"] = subj
-                    msg.attach(_O3MIMEText(html, "html", "utf-8"))
-                    smtp.sendmail(sender["email"], [to_email], msg.as_string())
-                    status = "Sent"; err = ""
-                except Exception as e:
-                    status = "Error"; err = str(e)
-        with _o3c(conn.cursor()) as cur:
-            cur.execute("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES(?,?,?,?,?,?);",
-                        (blast_id, to_email, str(r.get('name') or ""), subj, status, err))
-            conn.commit()
-        logs.append({"email":to_email,"status":status,"error":err})
-        if status=="Sent":
-            sent += 1
-    if smtp is not None:
-        try: smtp.quit()
-        except Exception: pass
-    try:
-        df = _pd.DataFrame(logs)
-        st.download_button("Download send log CSV", data=df.to_csv(index=False).encode("utf-8"),
-                           file_name=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
-    except Exception:
-        pass
-    st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
-    return sent, logs
-
-def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
-    try:
-        import docx  # type: ignore
-        from docx.shared import Inches  # type: ignore
-    except Exception:
-        import streamlit as st
-        st.error("python-docx is required. pip install python-docx")
-        return None
-    try:
-        doc = docx.Document()
-        for s in doc.sections:
-            s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
-        doc.add_heading("Past Performance", level=1)
-        for rec in records or []:
-            title = str(rec.get("title") or rec.get("project") or "Project").strip()
-            doc.add_heading(title, level=2)
-            for k in ["customer","period","value","cpars_rating"]:
-                v = rec.get(k)
-                if v:
-                    doc.add_paragraph(f"**{k.title()}:** {v}")
-            body = str(rec.get("summary") or rec.get("description") or rec.get("results") or "").strip()
-            if body:
-                for para in body.split("\n\n"):
-                    if para.strip():
-                        doc.add_paragraph(para.strip())
-        doc.save(path)
-        return path
-    except Exception as e:
-        import streamlit as st
-        st.error(f"Past Performance export failed: {e}")
-        return None
