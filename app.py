@@ -3993,7 +3993,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             if not _visible_for("Requirements Traceability Matrix (RTM)"):
                 st.empty()
             else:
-            if _rfp_flow == "Deliverables":
+    if _rfp_flow == "Deliverables":
 
                 render_rtm_ui(conn, int(rid_p3))
 
