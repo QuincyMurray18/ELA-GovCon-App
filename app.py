@@ -9325,15 +9325,15 @@ def s1_merge_places_details(base: dict, details: dict) -> dict:
     # Emails are not provided by Places API.
     return out
 
-# ---- Outreach helper stubs (only used if missing) ----
+
+# ==== BEGIN ADDED PHASE 2+3 BLOCKS ====
 
 def send_email_smart(conn, to_email: str, subject: str, html_body: str, attachments: list):
-    # Fallback stub: treat as success. Replace with real SMTP sender already present in your app.
+    # Fallback stub. Replace with your real SMTP sender.
     return True, "noop"
 
 
-
-# === Phase 2+3: Campaigns + Scheduler + Unsubscribe ===
+# ===== PHASE 2+3 OUTREACH START =====
 def ensure_campaign_schema(conn: sqlite3.Connection) -> None:
     ensure_outreach_schema(conn)
     with closing(conn.cursor()) as cur:
@@ -9352,7 +9352,7 @@ def ensure_campaign_schema(conn: sqlite3.Connection) -> None:
                 fu2_hours INTEGER,
                 created_at TEXT
             );
-        """ )
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o7_campaign_recipients(
                 id INTEGER PRIMARY KEY,
@@ -9369,7 +9369,7 @@ def ensure_campaign_schema(conn: sqlite3.Connection) -> None:
                 error_msg TEXT,
                 UNIQUE(campaign_id, email)
             );
-        """ )
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o8_email_events(
                 id INTEGER PRIMARY KEY,
@@ -9379,7 +9379,7 @@ def ensure_campaign_schema(conn: sqlite3.Connection) -> None:
                 meta TEXT,
                 created_at TEXT
             );
-        """ )
+        """)
         try: cur.execute("ALTER TABLE o3_send_log ADD COLUMN campaign_id INTEGER")
         except Exception: pass
         try: cur.execute("ALTER TABLE o3_send_log ADD COLUMN recipient_id INTEGER")
@@ -9448,10 +9448,11 @@ def list_campaigns(conn):
 def create_campaign(conn, name:str, subject:str, body_html:str, from_account_id:int|None, rate_per_hour:int=90, daily_cap:int=400, start_at:str|None=None, fu1_hours:int|None=72, fu2_hours:int|None=None):
     ensure_campaign_schema(conn)
     with closing(conn.cursor()) as cur:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO o6_campaigns(name, subject, body_html, from_account_id, rate_per_hour, daily_cap, start_at, status, fu1_hours, fu2_hours, created_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?);
-        """, (name, subject, body_html, from_account_id, int(rate_per_hour), int(daily_cap), start_at, "draft", fu1_hours, fu2_hours, _o_now()))
+            """, (name, subject, body_html, from_account_id, int(rate_per_hour), int(daily_cap), start_at, "draft", fu1_hours, fu2_hours, _o_now()))
         conn.commit()
 
 def update_campaign_status(conn, cid:int, status:str):
@@ -9470,10 +9471,11 @@ def add_recipients_csv(conn, cid:int, csv_text:str) -> tuple[int,int]:
     n_in = len(df)
     with closing(conn.cursor()) as cur:
         for _, r in df.iterrows():
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT OR IGNORE INTO o7_campaign_recipients(campaign_id, email, name, phone, city, state, naics, vendor_id, status)
                 VALUES(?,?,?,?,?,?,?,?, 'pending');
-            """, (int(cid), r.get("email"), r.get("name"), r.get("phone"), r.get("city"), r.get("state"), r.get("naics"), int(r.get("vendor_id") or 0) or None))
+                """, (int(cid), r.get("email"), r.get("name"), r.get("phone"), r.get("city"), r.get("state"), r.get("naics"), int(r.get("vendor_id") or 0) or None))
         conn.commit()
     n_kept = pd.read_sql_query("SELECT COUNT(*) c FROM o7_campaign_recipients WHERE campaign_id=?", conn, params=(int(cid),)).iloc[0]["c"]
     return (n_in, int(n_kept))
@@ -9501,13 +9503,14 @@ def process_outreach_scheduler(conn: sqlite3.Connection):
                 pass
         send_budget = _campaign_due_quota(conn, cid, rate, cap)
         if send_budget <= 0: continue
-        dfrec = pd.read_sql_query("""
+        dfrec = pd.read_sql_query(
+            """
             SELECT * FROM o7_campaign_recipients
             WHERE campaign_id=? AND status IN ('pending','queued','followup_due')
               AND (next_action_at IS NULL OR next_action_at <= datetime('now'))
             ORDER BY COALESCE(next_action_at, last_attempt_at, id) ASC
             LIMIT ?;
-        """, conn, params=(cid, int(send_budget)))
+            """, conn, params=(cid, int(send_budget)))
         if dfrec.empty: continue
         for _, r in dfrec.iterrows():
             rid = int(r["id"]); email = (r["email"] or "").strip().lower()
@@ -9575,4 +9578,6 @@ def render_campaigns_panel(conn: sqlite3.Connection):
             update_campaign_status(conn, int(cid), "sending"); st.success("Resumed"); st.experimental_rerun()
         if colD.button("Complete", key=f"camp_done_{cid}"):
             update_campaign_status(conn, int(cid), "completed"); st.warning("Completed"); st.experimental_rerun()
+# ===== PHASE 2+3 OUTREACH END =====
 
+# ==== END ADDED PHASE 2+3 BLOCKS ====
