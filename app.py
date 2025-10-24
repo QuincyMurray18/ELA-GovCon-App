@@ -1,5 +1,6 @@
 import requests
 import time
+_O4_CONN = None  # global for O4 sender picker
 # Helper imports for RTM/Amendment
 import re as _rtm_re
 import json as _rtm_json
@@ -8204,8 +8205,6 @@ def o4_sender_accounts_ui(conn):
 
 
 def render_outreach_mailmerge(conn):
-    globals()["_O4_CONN"] = conn  # ensure O4 sender picker sees the DB connection
-    globals()["_O4_CONN"] = conn  # ensure O4 sender picker sees the DB connection
     import streamlit as st
     import pandas as _pd
     # 1) Recipients
@@ -9820,8 +9819,6 @@ if "_o3_render_sender_picker" not in globals():
 try:
     _orig__render_outreach_mailmerge = render_outreach_mailmerge
     def render_outreach_mailmerge(conn):
-        globals()["_O4_CONN"] = conn  # ensure O4 sender picker sees the DB connection
-    globals()["_O4_CONN"] = conn  # ensure O4 sender picker sees the DB connection
         import streamlit as st
         sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
         if sender and "username" in sender and "email" not in sender:
