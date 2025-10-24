@@ -9752,3 +9752,12 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
 
 # =========================
 
+# --- Tab name alias ---
+def run_l_and_m_checklist(conn):
+    return run_lm_checklist(conn)
+
+
+# --- Tab name alias ---
+def run_backup_data(conn):
+    return run_backup_and_data(conn)
+
