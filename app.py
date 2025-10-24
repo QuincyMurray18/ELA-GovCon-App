@@ -9056,34 +9056,34 @@ def _s1d_place_details(pid: str, key: str):
 
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
 
-# Determine writable table and ensure schema
-tbl = _s1d_vendor_write_table(conn)
-with conn:
-    _s1d_ensure_vendor_table(conn, tbl)
-# Insert rows
-saved = 0
-with conn:
-    for r in rows or []:
-        conn.execute(f"""                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-        """, (
-            str(r.get("source","") or ""),
-            str(r.get("place_id","") or ""),
-            str(r.get("name","") or ""),
-            str(r.get("email","") or ""),
-            str(r.get("phone","") or ""),
-            str(r.get("website","") or ""),
-            str(r.get("address","") or ""),
-            str(r.get("city","") or ""),
-            str(r.get("state","") or ""),
-            str(r.get("zip","") or ""),
-            str(r.get("naics_guess","") or r.get("naics","") or ""),
-            str(r.get("notes","") or ""),
-            float(r.get("lat") or 0) if str(r.get("lat") or "").strip() else None,
-            float(r.get("lon") or 0) if str(r.get("lon") or "").strip() else None,
-        ))
-        saved += 1
-return saved
+    # Determine writable table and ensure schema
+    tbl = _s1d_vendor_write_table(conn)
+    with conn:
+        _s1d_ensure_vendor_table(conn, tbl)
+    # Insert rows
+    saved = 0
+    with conn:
+        for r in rows or []:
+            conn.execute(f"""                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            """, (
+                str(r.get("source","") or ""),
+                str(r.get("place_id","") or ""),
+                str(r.get("name","") or ""),
+                str(r.get("email","") or ""),
+                str(r.get("phone","") or ""),
+                str(r.get("website","") or ""),
+                str(r.get("address","") or ""),
+                str(r.get("city","") or ""),
+                str(r.get("state","") or ""),
+                str(r.get("zip","") or ""),
+                str(r.get("naics_guess","") or r.get("naics","") or ""),
+                str(r.get("notes","") or ""),
+                float(r.get("lat") or 0) if str(r.get("lat") or "").strip() else None,
+                float(r.get("lon") or 0) if str(r.get("lon") or "").strip() else None,
+            ))
+            saved += 1
+    return saved
 
 
 def _s1d_render_from_cache(conn, df):
