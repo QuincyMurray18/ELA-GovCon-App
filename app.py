@@ -9633,6 +9633,12 @@ def __p_s1d_ui(conn):
         _st.success(f"Saved {n} new vendors")
 
 def __p_run_outreach(conn):
+
+    # O3 • Recipients
+    try:
+        rows = _o3_collect_recipients_ui(conn)
+    except Exception:
+        rows = None
     __p_ensure_core(conn)
     _st.header("Outreach")
     try:
@@ -9656,6 +9662,7 @@ def __p_run_outreach(conn):
 # Removed legacy monkeypatch block at load time
 
 # =========================
+
 
 
 if __name__ == '__main__':
