@@ -45,14 +45,8 @@ def get_o4_conn():
     return conn
 
 def _ensure_email_accounts_schema(conn):
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as c:
-        c.execute("""CREATE TABLE IF NOT EXISTS email_accounts(
-            user_email TEXT PRIMARY KEY,
-            display_name TEXT,
-            app_password TEXT
-        )""")
-        conn.commit()
+    # Unified to O1 schema
+    ensure_outreach_o1_schema(conn)
 
 def _get_senders(conn):
     from contextlib import closing as _closing
@@ -7607,7 +7601,7 @@ if "_o3_collect_recipients_ui" not in globals():
 
 # --- Outreach SMTP sender picker: working fallback ---
 if "_o3_render_sender_picker" not in globals():
-    def _o3_render_sender_picker():
+    def _o3_render_sender_picker_legacy():
         import streamlit as st
         conn = get_o4_conn()
         try:
@@ -8235,7 +8229,7 @@ def o4_sender_accounts_ui(conn):
                     label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
         except Exception:
             pass
-        with _st.form("o4_fallback_sender", clear_on_submit=False):
+        with _st.form("o4_fallback_sender_mm", clear_on_submit=False):
             label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
             username = _st.text_input("Gmail address", value=username)
             password = _st.text_input("App password", type="password", value=password)
@@ -8265,6 +8259,7 @@ def o4_sender_accounts_ui(conn):
 
 
 def render_outreach_mailmerge(conn):
+    globals()['_O4_CONN'] = conn
     import streamlit as st
     import pandas as _pd
     # 1) Recipients
@@ -8686,6 +8681,14 @@ def _o3_render_sender_picker():
     choices = [r[0] for r in rows] + ["<add new>"]
     sel = st.selectbox("From account", choices, key="o4_sender_sel")
     chosen = {"email":"", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
+    # Load password and SMTP details
+    if sel != \"<add new>\":
+        try:
+            row = conn.execute(\"SELECT app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?\", (sel,)).fetchone()
+            if row:
+                chosen[\"app_password\"], chosen[\"smtp_host\"], chosen[\"smtp_port\"], chosen[\"use_ssl\"] = row[0] or \"\", row[1] or \"smtp.gmail.com\", int(row[2] or 465), int(row[3] or 1)
+        except Exception:
+            pass
     if sel == "<add new>":
         st.info("Add an account below in 'Sender accounts'. Then select it here.")
     else:
@@ -9893,3 +9896,38 @@ except Exception:
     pass
 
 # === End Outreach guard =====================================================
+
+
+def o1_sender_accounts_ui(conn):
+    import streamlit as st
+    import pandas as _pd
+    ensure_outreach_o1_schema(conn)
+    st.subheader("Sender accounts")
+    email = st.text_input("Email")
+    display = st.text_input("Display name")
+    app_pw = st.text_input("Gmail App password", type="password")
+    c1,c2,c3 = st.columns(3)
+    with c1: host = st.text_input("SMTP host", value="smtp.gmail.com")
+    with c2: port = st.number_input("SMTP port", 1, 65535, value=465)
+    with c3: ssl = st.checkbox("Use SSL", value=True)
+    if st.button("Save account", key="o4_ac_save"):
+        if not email:
+            st.error("Email required")
+        else:
+            with conn:
+                conn.execute("""
+                INSERT INTO email_accounts(user_email, display_name, app_password, smtp_host, smtp_port, use_ssl)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(user_email) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    app_password=excluded.app_password,
+                    smtp_host=excluded.smtp_host,
+                    smtp_port=excluded.smtp_port,
+                    use_ssl=excluded.use_ssl
+                """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
+            st.success("Saved")
+    try:
+        df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
+        st.dataframe(df, use_container_width=True)
+    except Exception:
+        pass
