@@ -8451,7 +8451,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
         st.error("No recipients"); return 0, []
-    blast_title = st.text_input("Blast name", value=f"Outreach {time.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
+    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
     if not blast_title:
         blast_title = "Outreach"
     with _o3c(conn.cursor()) as cur:
