@@ -8682,11 +8682,11 @@ def _o3_render_sender_picker():
     sel = st.selectbox("From account", choices, key="o4_sender_sel")
     chosen = {"email":"", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
     # Load password and SMTP details
-    if sel != \"<add new>\":
+    if sel != "<add new>":
         try:
-            row = conn.execute(\"SELECT app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?\", (sel,)).fetchone()
+            row = conn.execute("SELECT app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?", (sel,)).fetchone()
             if row:
-                chosen[\"app_password\"], chosen[\"smtp_host\"], chosen[\"smtp_port\"], chosen[\"use_ssl\"] = row[0] or \"\", row[1] or \"smtp.gmail.com\", int(row[2] or 465), int(row[3] or 1)
+                chosen["app_password"], chosen["smtp_host"], chosen["smtp_port"], chosen["use_ssl"] = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 465), int(row[3] or 1)
         except Exception:
             pass
     if sel == "<add new>":
