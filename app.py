@@ -20,7 +20,7 @@ except Exception:
     _rtm_st = _Dummy()
 # === PHASE 5: L & M compliance gate ===
 def require_LM_minimum(conn, rfp_id):
-    f"""
+    """
     Returns (ok, missing:list[str]).
     Required: Offers Due date in rfp_meta, Section M present in rfp_sections, >=1 L/M checklist item.
     """
@@ -9014,7 +9014,25 @@ def _s1d_norm_phone(p: str) -> str:
     return digits
 
 def _s1d_existing_vendor_keys(conn):
-    return _s1d_select_existing_pairs(conn)
+    # Build keys to detect duplicates: by place_id if present, else name+phone
+    try:
+        rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
+    except Exception:
+        try:
+            rows = conn.execute("SELECT name, COALESCE(phone,''), '' as place_id FROM vendors_t").fetchall()
+        except Exception:
+            return set(), set()
+    by_np = set()
+    by_pid = set()
+    for r in rows:
+        name = (r[0] or "").strip().lower()
+        ph = _s1d_norm_phone(r[1] or "")
+        pid = (r[2] or "").strip()
+        if name or ph:
+            by_np.add((name, ph))
+        if pid:
+            by_pid.add(pid)
+    return by_np, by_pid
 
 def _s1d_geocode(addr: str, key: str):
     if not addr: return None
@@ -9049,479 +9067,34 @@ def _s1d_place_details(pid: str, key: str):
     except Exception:
         return {}
 
-
-
-
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
-    tbl = _s1d_vendor_write_table(conn)
+    # Ensure columns
+    cols = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(vendors_t)").fetchall()}
     with conn:
-        _s1d_ensure_vendor_table(conn, tbl)
-        try:
-            conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {tbl}_place_id_uidx ON {tbl}(place_id) WHERE place_id IS NOT NULL")
-        except Exception:
-            pass
-
-    def _norm(v):
-        s = str(v or "").strip()
-        return s if s else None
-
+        if "place_id" not in cols:
+            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN place_id TEXT"); 
+            except Exception: pass
+        if "website" not in cols:
+            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN website TEXT");
+            except Exception: pass
+        if "phone" not in cols:
+            try: conn.execute("ALTER TABLE vendors_t ADD COLUMN phone TEXT");
+            except Exception: pass
+    # Insert
     saved = 0
     with conn:
-        for r in rows or []:
-            pid = _norm(r.get("place_id"))
-            name = _norm(r.get("name"))
-            email = _norm(r.get("email"))
-            phone = _norm(r.get("phone"))
-            website = _norm(r.get("website"))
-            address = _norm(r.get("address"))
-            city = _norm(r.get("city"))
-            state = _norm(r.get("state"))
-            zipc = _norm(r.get("zip"))
-            naics = _norm(r.get("naics_guess") or r.get("naics"))
-            notes = _norm(r.get("notes"))
-            lat = r.get("lat"); lon = r.get("lon")
-            try: lat = float(lat) if lat not in (None, "") else None
-            except Exception: lat = None
-            try: lon = float(lon) if lon not in (None, "") else None
-            except Exception: lon = None
-            source = _norm(r.get("source")) or "places"
-
-            if pid is not None:
-                conn.execute(
-                    f"""
-                    INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                    ON CONFLICT(place_id) DO UPDATE SET
-                        source=COALESCE(excluded.source,{tbl}.source),
-                        name=COALESCE(excluded.name,{tbl}.name),
-                        email=COALESCE(excluded.email,{tbl}.email),
-                        phone=COALESCE(excluded.phone,{tbl}.phone),
-                        website=COALESCE(excluded.website,{tbl}.website),
-                        address=COALESCE(excluded.address,{tbl}.address),
-                        city=COALESCE(excluded.city,{tbl}.city),
-                        state=COALESCE(excluded.state,{tbl}.state),
-                        zip=COALESCE(excluded.zip,{tbl}.zip),
-                        naics=COALESCE(excluded.naics,{tbl}.naics),
-                        notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN excluded.notes ELSE {tbl}.notes END,
-                        lat=COALESCE(excluded.lat,{tbl}.lat),
-                        lon=COALESCE(excluded.lon,{tbl}.lon)
-                    """,
-                    (source, pid, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                )
-                saved += 1
-            else:
-                row = conn.execute(
-                    f"SELECT id FROM {tbl} WHERE lower(COALESCE(name,''))=lower(COALESCE(?,'')) AND COALESCE(phone,'')=COALESCE(?, '') AND lower(COALESCE(city,''))=lower(COALESCE(?,'')) LIMIT 1",
-                    (name or "", phone or "", city or "")
-                ).fetchone()
-                if row:
-                    conn.execute(
-                        f"""UPDATE {tbl} SET
-                            source=COALESCE(?,{tbl}.source),
-                            email=COALESCE(?,{tbl}.email),
-                            website=COALESCE(?,{tbl}.website),
-                            address=COALESCE(?,{tbl}.address),
-                            state=COALESCE(?,{tbl}.state),
-                            zip=COALESCE(?,{tbl}.zip),
-                            naics=COALESCE(?,{tbl}.naics),
-                            notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN ? ELSE {tbl}.notes END,
-                            lat=COALESCE(?,{tbl}.lat),
-                            lon=COALESCE(?,{tbl}.lon)
-                          WHERE id=?""" ,
-                        (source, email, website, address, state, zipc, naics, notes, lat, lon, row[0])
-                    )
-                    saved += 1
-                else:
-                    conn.execute(
-                        f"""
-                        INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                        """,
-                        (source, None, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                    )
-                    saved += 1
+        for r in rows:
+            conn.execute("""INSERT INTO vendors_t(name, email, phone, website, city, state, naics, place_id)
+                            VALUES(?,?,?,?,?,?,?,?)""",
+                         (r.get("name",""), "", r.get("phone",""), r.get("website",""), r.get("city",""), r.get("state",""), "", r.get("place_id","")))
+            saved += 1
     return saved
 
-    def _norm(v):
-        s = str(v or "").strip()
-        return s if s else None
-
-    saved = 0
-    with conn:
-        for r in rows or []:
-            pid = _norm(r.get("place_id"))
-            name = _norm(r.get("name"))
-            email = _norm(r.get("email"))
-            phone = _norm(r.get("phone"))
-            website = _norm(r.get("website"))
-            address = _norm(r.get("address"))
-            city = _norm(r.get("city"))
-            state = _norm(r.get("state"))
-            zipc = _norm(r.get("zip"))
-            naics = _norm(r.get("naics_guess") or r.get("naics"))
-            notes = _norm(r.get("notes"))
-            lat = r.get("lat"); lon = r.get("lon")
-            try: lat = float(lat) if lat not in (None, "") else None
-            except Exception: lat = None
-            try: lon = float(lon) if lon not in (None, "") else None
-            except Exception: lon = None
-            source = _norm(r.get("source")) or "places"
-
-            if pid is not None:
-                conn.execute(
-                    f"""
-                    INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                    ON CONFLICT(place_id) DO UPDATE SET
-                        source=COALESCE(excluded.source,{tbl}.source),
-                        name=COALESCE(excluded.name,{tbl}.name),
-                        email=COALESCE(excluded.email,{tbl}.email),
-                        phone=COALESCE(excluded.phone,{tbl}.phone),
-                        website=COALESCE(excluded.website,{tbl}.website),
-                        address=COALESCE(excluded.address,{tbl}.address),
-                        city=COALESCE(excluded.city,{tbl}.city),
-                        state=COALESCE(excluded.state,{tbl}.state),
-                        zip=COALESCE(excluded.zip,{tbl}.zip),
-                        naics=COALESCE(excluded.naics,{tbl}.naics),
-                        notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN excluded.notes ELSE {tbl}.notes END,
-                        lat=COALESCE(excluded.lat,{tbl}.lat),
-                        lon=COALESCE(excluded.lon,{tbl}.lon)
-                    """,
-                    (source, pid, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                )
-                saved += 1
-            else:
-                row = conn.execute(
-                    f"SELECT id FROM {tbl} WHERE lower(COALESCE(name,''))=lower(COALESCE(?,'')) AND COALESCE(phone,'')=COALESCE(?, '') AND lower(COALESCE(city,''))=lower(COALESCE(?,'')) LIMIT 1",
-                    (name or "", phone or "", city or "")
-                ).fetchone()
-                if row:
-                    conn.execute(
-                        f"""UPDATE {tbl} SET
-                            source=COALESCE(?,{tbl}.source),
-                            email=COALESCE(?,{tbl}.email),
-                            website=COALESCE(?,{tbl}.website),
-                            address=COALESCE(?,{tbl}.address),
-                            state=COALESCE(?,{tbl}.state),
-                            zip=COALESCE(?,{tbl}.zip),
-                            naics=COALESCE(?,{tbl}.naics),
-                            notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN ? ELSE {tbl}.notes END,
-                            lat=COALESCE(?,{tbl}.lat),
-                            lon=COALESCE(?,{tbl}.lon)
-                          WHERE id=?""" ,
-                        (source, email, website, address, state, zipc, naics, notes, lat, lon, row[0])
-                    )
-                    saved += 1
-                else:
-                    conn.execute(
-                        f"""
-                        INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                        """,
-                        (source, None, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                    )
-                    saved += 1
-
-    def _norm(v):
-        s = str(v or "").strip()
-        return s if s else None
-
-    saved = 0
-    with conn:
-        for r in rows or []:
-            pid = _norm(r.get("place_id"))
-            name = _norm(r.get("name"))
-            email = _norm(r.get("email"))
-            phone = _norm(r.get("phone"))
-            website = _norm(r.get("website"))
-            address = _norm(r.get("address"))
-            city = _norm(r.get("city"))
-            state = _norm(r.get("state"))
-            zipc = _norm(r.get("zip"))
-            naics = _norm(r.get("naics_guess") or r.get("naics"))
-            notes = _norm(r.get("notes"))
-            lat = r.get("lat"); lon = r.get("lon")
-            try: lat = float(lat) if lat not in (None, "") else None
-            except Exception: lat = None
-            try: lon = float(lon) if lon not in (None, "") else None
-            except Exception: lon = None
-            source = _norm(r.get("source")) or "places"
-
-            if pid is not None:
-                conn.execute(
-                    f"""
-                    INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                    ON CONFLICT(place_id) DO UPDATE SET
-                        source=COALESCE(excluded.source,{tbl}.source),
-                        name=COALESCE(excluded.name,{tbl}.name),
-                        email=COALESCE(excluded.email,{tbl}.email),
-                        phone=COALESCE(excluded.phone,{tbl}.phone),
-                        website=COALESCE(excluded.website,{tbl}.website),
-                        address=COALESCE(excluded.address,{tbl}.address),
-                        city=COALESCE(excluded.city,{tbl}.city),
-                        state=COALESCE(excluded.state,{tbl}.state),
-                        zip=COALESCE(excluded.zip,{tbl}.zip),
-                        naics=COALESCE(excluded.naics,{tbl}.naics),
-                        notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN excluded.notes ELSE {tbl}.notes END,
-                        lat=COALESCE(excluded.lat,{tbl}.lat),
-                        lon=COALESCE(excluded.lon,{tbl}.lon)
-                    """,
-                    (source, pid, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                )
-                saved += 1
-            else:
-                row = conn.execute(
-                    f"SELECT id FROM {tbl} WHERE lower(COALESCE(name,''))=lower(COALESCE(?,'')) AND COALESCE(phone,'')=COALESCE(?, '') AND lower(COALESCE(city,''))=lower(COALESCE(?,'')) LIMIT 1",
-                    (name or "", phone or "", city or "")
-                ).fetchone()
-                if row:
-                    conn.execute(
-                        f"""UPDATE {tbl} SET
-                            source=COALESCE(?,{tbl}.source),
-                            email=COALESCE(?,{tbl}.email),
-                            website=COALESCE(?,{tbl}.website),
-                            address=COALESCE(?,{tbl}.address),
-                            state=COALESCE(?,{tbl}.state),
-                            zip=COALESCE(?,{tbl}.zip),
-                            naics=COALESCE(?,{tbl}.naics),
-                            notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN ? ELSE {tbl}.notes END,
-                            lat=COALESCE(?,{tbl}.lat),
-                            lon=COALESCE(?,{tbl}.lon)
-                          WHERE id=?""" ,
-                        (source, email, website, address, state, zipc, naics, notes, lat, lon, row[0])
-                    )
-                    saved += 1
-                else:
-                    conn.execute(
-                        f"""
-                        INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                        """,
-                        (source, None, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                    )
-                    saved += 1
-
-def _norm(v):
-    s = str(v or "").strip()
-    return s if s else None
-
-saved = 0
-with conn:
-    for r in rows or []:
-        pid = _norm(r.get("place_id"))
-        name = _norm(r.get("name"))
-        email = _norm(r.get("email"))
-        phone = _norm(r.get("phone"))
-        website = _norm(r.get("website"))
-        address = _norm(r.get("address"))
-        city = _norm(r.get("city"))
-        state = _norm(r.get("state"))
-        zipc = _norm(r.get("zip"))
-        naics = _norm(r.get("naics_guess") or r.get("naics"))
-        notes = _norm(r.get("notes"))
-        lat = r.get("lat"); lon = r.get("lon")
-        try:
-            lat = float(lat) if lat not in (None, "") else None
-        except Exception:
-            lat = None
-        try:
-            lon = float(lon) if lon not in (None, "") else None
-        except Exception:
-            lon = None
-        source = _norm(r.get("source")) or "places"
-
-        if pid is not None:
-            # Upsert on place_id
-            conn.execute(
-                f"""
-                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                ON CONFLICT(place_id) DO UPDATE SET
-                    source=COALESCE(excluded.source,{tbl}.source),
-                    name=COALESCE(excluded.name,{tbl}.name),
-                    email=COALESCE(excluded.email,{tbl}.email),
-                    phone=COALESCE(excluded.phone,{tbl}.phone),
-                    website=COALESCE(excluded.website,{tbl}.website),
-                    address=COALESCE(excluded.address,{tbl}.address),
-                    city=COALESCE(excluded.city,{tbl}.city),
-                    state=COALESCE(excluded.state,{tbl}.state),
-                    zip=COALESCE(excluded.zip,{tbl}.zip),
-                    naics=COALESCE(excluded.naics,{tbl}.naics),
-                    notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN excluded.notes ELSE {tbl}.notes END,
-                    lat=COALESCE(excluded.lat,{tbl}.lat),
-                    lon=COALESCE(excluded.lon,{tbl}.lon)
-                """,
-                (source, pid, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-            )
-            saved += 1
-        else:
-            # Fallback matching by name+phone+city
-            row = conn.execute(
-                f"SELECT id FROM {tbl} WHERE lower(COALESCE(name,''))=lower(COALESCE(?,'')) AND COALESCE(phone,'')=COALESCE(?, '') AND lower(COALESCE(city,''))=lower(COALESCE(?,'')) LIMIT 1",
-                (name or "", phone or "", city or "")
-            ).fetchone()
-            if row:
-                conn.execute(
-                    f"""UPDATE {tbl} SET
-                        source=COALESCE(?,{tbl}.source),
-                        email=COALESCE(?,{tbl}.email),
-                        website=COALESCE(?,{tbl}.website),
-                        address=COALESCE(?,{tbl}.address),
-                        state=COALESCE(?,{tbl}.state),
-                        zip=COALESCE(?,{tbl}.zip),
-                        naics=COALESCE(?,{tbl}.naics),
-                        notes=CASE WHEN {tbl}.notes IS NULL OR {tbl}.notes='' THEN ? ELSE {tbl}.notes END,
-                        lat=COALESCE(?,{tbl}.lat),
-                        lon=COALESCE(?,{tbl}.lon)
-                      WHERE id=?""",
-                    (source, email, website, address, state, zipc, naics, notes, lat, lon, row[0])
-                )
-                saved += 1
-            else:
-                conn.execute(
-                    f"""
-                    INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                    """,
-                    (source, None, name, email, phone, website, address, city, state, zipc, naics, notes, lat, lon)
-                )
-                saved += 1
-
-def _s1d_render_from_cache(conn, df):
-    import streamlit as st
-    import pandas as _pd
-    if df is None or getattr(df, "empty", True):
-        st.info("No cached results.")
-        if st.button("New search", key="s1d_new_search_empty"):
-            st.session_state.pop("s1d_df", None)
-        return
-    # Show with links and dedupe flags
-    def _mk_link(url, text):
-        if not url: return text
-        return f"<a href='{url}' target='_blank'>{text}</a>"
-    show = df.copy()
-    if "google_url" in show.columns:
-        show["name"] = show.apply(lambda r: _mk_link(r.get("google_url",""), r.get("name","")), axis=1)
-    if "website" in show.columns:
-        show["website"] = show.apply(lambda r: _mk_link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
-    keep = df[~df.get("_dup", _pd.Series([False]*len(df)))].copy() if not df.empty else df
-    # Results table
-    cols = [c for c in ["name","phone","website","address","city","state","place_id","_dup"] if c in show.columns]
-    if cols:
-        st.markdown("**Results**")
-        st.write(show[cols].to_html(escape=False, index=False), unsafe_allow_html=True)
-    # Selection and save
-    if keep.empty:
-        st.success("All results are already in your vendor list.")
-    else:
-        st.caption(f"{len(keep)} new vendors can be saved")
-        if "row_id" not in keep.columns:
-            import hashlib as _h
-            def _mk_id(r):
-                pid = str(r.get("place_id","") or "")
-                if pid: return pid
-                s = f"{r.get('name',f'')}-{r.get('phone','')}-{r.get('city','')}"
-                return _h.sha1(s.encode()).hexdigest()[:12]
-            keep["row_id"] = keep.apply(_mk_id, axis=1)
-        keep_view = keep[["row_id","name","phone","website","address","city","state","place_id"]].copy()
-        # Restore selection
-        sel_ids = set(st.session_state.get("s1d_selected_ids", []))
-        keep_view.insert(1, "Select", keep_view["row_id"].isin(sel_ids))
-        edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor_cache")
-        new_sel = set(edited.loc[edited["Select"]==True, "row_id"])
-        st.session_state["s1d_selected_ids"] = list(new_sel)
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Save selected", key="s1d_save_selected_cache") and new_sel:
-                sub = keep[keep["row_id"].isin(list(new_sel))].drop(columns=["row_id"], errors="ignore")
-                n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
-                st.success(f"Saved {n} vendors")
-        with c2:
-            if st.button("Save all new vendors", key="s1d_save_all_cache"):
-                sub = keep.drop(columns=["row_id"], errors="ignore")
-                n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
-                st.success(f"Saved {n} vendors")
-        with c3:
-            if st.button("New search", key="s1d_new_search"):
-                st.session_state.pop("s1d_df", None)
-                st.session_state.pop("s1d_selected_ids", None)
-                st.experimental_rerun()
-
-
-def _s1d_vendor_write_table(conn):
-    row = conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name='vendors_t'").fetchone()
-    if row and (row[0] or '').lower() == 'table':
-        return 'vendors_t'
-    if row and (row[0] or '').lower() == 'view':
-        sql = row[2] or ''
-        import re as _re
-        m = _re.search(r'FROM\s+([A-Za-z_][A-Za-z0-9_]*)', sql, flags=_re.IGNORECASE)
-        if m:
-            return m.group(1)
-    # fallback
-    return 'vendors'
-
-def _s1d_ensure_vendor_table(conn, table_name: str):
-    # Create base table if needed
-    conn.execute(f"""        CREATE TABLE IF NOT EXISTS {table_name}(
-            id INTEGER PRIMARY KEY,
-            source TEXT,
-            place_id TEXT,
-            name TEXT,
-            email TEXT,
-            phone TEXT,
-            website TEXT,
-            address TEXT,
-            city TEXT,
-            state TEXT,
-            zip TEXT,
-            naics TEXT,
-            notes TEXT,
-            lat REAL,
-            lon REAL,
-            created_at TEXT
-        )
-    """)
-    # Add missing columns as app evolves
-    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
-    needed = [
-        "source","place_id","name","email","phone","website","address","city","state","zip","naics","notes","lat","lon","created_at"
-    ]
-    for c in needed:
-        if c not in cols:
-            try:
-                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {c} TEXT")
-            except Exception:
-                pass
-
-def _s1d_select_existing_pairs(conn):
-    # Prefer vendors_t if present, else fallback to vendors
-    srcs = [("vendors_t","view_or_table"), ("vendors","table")]
-    for name, _ in srcs:
-        row = conn.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone()
-        if row:
-            try:
-                by_np, by_pid = _s1d_select_existing_pairs(conn)
-                return by_np, by_pid
-            except Exception:
-                continue
-    return set(), set()
-
 def render_subfinder_s1d(conn):
-    st.subheader("S1D — Subcontractor Finder")
-    
-    by_np, by_pid = _s1d_select_existing_pairs(conn)
+    st.subheader("S1D — Google Places search with dedupe")
     key = _s1d_get_api_key()
     if not key:
         st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
-        return
-    # Use cached results if present
-    import pandas as _pd
-    _cache = st.session_state.get("s1d_df")
-    if _cache:
-        df = _pd.DataFrame(_cache)
-        _s1d_render_from_cache(conn, df)
         return
     q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
     loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
@@ -9588,7 +9161,6 @@ def render_subfinder_s1d(conn):
         _time.sleep(0.05)
     import pandas as _pd
     df = _pd.DataFrame(rows)
-    st.session_state["s1d_df"] = df.to_dict("records")
     if df.empty:
         st.info("No results.")
         return
@@ -9602,28 +9174,15 @@ def render_subfinder_s1d(conn):
     show = show[["name","phone","website","address","city","state","place_id","_dup"]]
     st.markdown("**Results**")
     st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-
-    # Selection and save
-    keep = df[~df["_dup"]].copy()
+    # Select and save non-duplicates
+    keep = df[~df["_dup"]]
     if keep.empty:
         st.success("All results are already in your vendor list.")
         return
     st.caption(f"{len(keep)} new vendors can be saved")
-    # Interactive selection
-    keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
-    keep_view.insert(0, "Select", False)
-    edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
-    sel = edited[edited["Select"]==True]
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
-            n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
-            st.success(f"Saved {n} vendors")
-    with c2:
-        if st.button("Save all new vendors", key="s1d_save_all"):
-            n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
-            st.success(f"Saved {n} vendors")
+    if st.button("Save all new vendors", key="s1d_save"):
+        n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
+        st.success(f"Saved {n} vendors")
 # === End S1D ================================================================
 
 
@@ -9872,8 +9431,6 @@ def __p_s1d_existing(conn):
     return by_np, by_pid
 
 def __p_s1d_ui(conn):
-
-    by_np, by_pid = _s1d_select_existing_pairs(conn)
     _st.subheader("S1D — Google Places & Dedupe")
     key = __p_s1d_key()
     if not key: _st.error("Missing Google API key in secrets"); return
@@ -9936,16 +9493,12 @@ def __p_s1d_ui(conn):
     keep=df[~df["_dup"]]
     _st.caption(f"{len(keep)} new vendors can be saved")
     if _st.button("Save all new vendors", key="__p_s1d_save"):
-        n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
-        _st.success(f"Saved {n} new vendors")
+        for r in keep.to_dict("records"):
+            __p_db(conn,"INSERT INTO vendors_t(name,email,phone,website,city,state,naics,place_id) VALUES(?,?,?,?,?,?,?,?)",
+                   (r["name"],"",r["phone"],r["website"],r["city"],r["state"],"",r["place_id"]))
+        _st.success(f"Saved {len(keep)} new vendors")
 
 def __p_run_outreach(conn):
-
-    # O3 • Recipients
-    try:
-        rows = _o3_collect_recipients_ui(conn)
-    except Exception:
-        rows = None
     __p_ensure_core(conn)
     _st.header("Outreach")
     try:
@@ -9969,7 +9522,6 @@ def __p_run_outreach(conn):
 # Removed legacy monkeypatch block at load time
 
 # =========================
-
 
 
 if __name__ == '__main__':
@@ -10020,11 +9572,18 @@ def __e1_norm_phone(p):
     return digits[1:] if len(digits)==11 and digits.startswith("1") else digits
 
 def __e1_existing_vendor_keys(conn):
-    return _s1d_select_existing_pairs(conn)
+    try:
+        rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
+    except Exception:
+        return set(), set()
+    by_np, by_pid = set(), set()
+    for r in rows:
+        by_np.add(((r[0] or "").strip().lower(), __e1_norm_phone(r[1] or "")))
+        pid = (r[2] or "").strip()
+        if pid: by_pid.add(pid)
+    return by_np, by_pid
 
 def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
-
-    by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = __e1_google_api_key()
     if not key:
         _st.error("E1 requires a Google API key in secrets: [google].api_key or GOOGLE_API_KEY")
@@ -10058,7 +9617,6 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
         _st.info("No results to enrich.")
         return
     df = _pd.DataFrame(rows)
-    st.session_state["s1d_df"] = df.to_dict("records")
     def _link(u,t): return f"<a href='{u}' target='_blank'>{t}</a>" if u else t
     df["name"] = df.apply(lambda r: _link(r["google_url"], r["name"]), axis=1)
     df["website"] = df.apply(lambda r: _link(r["website"], "site") if r["website"] else "", axis=1)
