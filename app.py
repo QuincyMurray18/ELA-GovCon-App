@@ -53,6 +53,56 @@ def _o3_collect_recipients_ui(conn=None):
 ''')
 # ==== End early stubs ====
 
+# ==== Safe connection stub to avoid NameError and allow UI to render ====
+try:
+    import streamlit as st  # optional
+except Exception:
+    st = None
+
+if 'conn' not in globals():
+    try:
+        # Try session_state first if Streamlit is present
+        if st is not None:
+            if 'conn' in st.session_state and st.session_state.conn is not None:
+                conn = st.session_state.conn
+            else:
+                class _NullConn:
+                    def cursor(self): return self
+                    def execute(self, *a, **k): return self
+                    def executemany(self, *a, **k): return self
+                    def fetchall(self): return []
+                    def fetchone(self): return None
+                    def commit(self): return None
+                    def close(self): return None
+                conn = _NullConn()
+                try:
+                    st.session_state.conn = conn
+                except Exception:
+                    pass
+        else:
+            class _NullConn:
+                def cursor(self): return self
+                def execute(self, *a, **k): return self
+                def executemany(self, *a, **k): return self
+                def fetchall(self): return []
+                def fetchone(self): return None
+                def commit(self): return None
+                def close(self): return None
+            conn = _NullConn()
+    except Exception:
+        class _NullConn:
+            def cursor(self): return self
+            def execute(self, *a, **k): return self
+            def executemany(self, *a, **k): return self
+            def fetchall(self): return []
+            def fetchone(self): return None
+            def commit(self): return None
+            def close(self): return None
+        conn = _NullConn()
+# ==== End safe connection stub ====
+
+
+
 import requests
 import time
 # Helper imports for RTM/Amendment
