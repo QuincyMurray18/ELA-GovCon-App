@@ -5491,7 +5491,11 @@ def run_outreach(conn: sqlite3.Connection) -> None:
     st.header("Outreach")
     st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
 
-    notice = st.session_state.get("rfp_selected_notice", {})
+    
+    # Accounts and opt-out panels
+    render_outreach_accounts_panel(conn)
+    render_outreach_optout_panel(conn)
+notice = st.session_state.get("rfp_selected_notice", {})
     vendor_ids: List[int] = st.session_state.get("rfq_vendor_ids", [])
 
     if vendor_ids:
@@ -7854,7 +7858,11 @@ def s1_render_places_panel(conn, default_addr=None):
     ensure_subfinder_s1_schema(conn)
 
     st.markdown("### Google Places search")
-    key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
+    
+    _api_key = s1_get_google_api_key()
+    if not _api_key:
+        st.warning(\"No Google API key configured. Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY to fetch phone and website.\")
+key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
     miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
     q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q", "janitorial"), key="s1_q")
     hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
