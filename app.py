@@ -1,5 +1,39 @@
 import requests
 import time
+_O4_CONN = globals().get("_O4_CONN", None)
+
+def get_o4_conn():
+    import streamlit as st
+    import sqlite3
+    from contextlib import closing as _closing
+    global _O4_CONN
+    conn = globals().get("_O4_CONN")
+    if not conn:
+        try:
+            if "conn" in st.session_state:
+                conn = st.session_state["conn"]
+        except Exception:
+            conn = None
+    if not conn:
+        try:
+            dbp = DB_PATH  # may be defined elsewhere
+        except Exception:
+            dbp = "./data/app.db"
+        conn = sqlite3.connect(dbp, check_same_thread=False)
+        with _closing(conn.cursor()) as _c:
+            _c.execute("PRAGMA foreign_keys = ON;")
+        globals()["_O4_CONN"] = conn
+    return conn
+
+def _ensure_email_accounts_schema(conn):
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as _c:
+        _c.execute("""CREATE TABLE IF NOT EXISTS email_accounts(
+            user_email TEXT PRIMARY KEY,
+            display_name TEXT,
+            app_password TEXT
+        )""")
+        conn.commit()
 _O4_CONN = None  # global for O4 sender picker
 # Helper imports for RTM/Amendment
 import re as _rtm_re
@@ -7535,39 +7569,16 @@ if "_o3_collect_recipients_ui" not in globals():
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
-        import sqlite3
-        from contextlib import closing as _closing
-        conn = globals().get("_O4_CONN")
-        if conn is None:
-            conn = st.session_state.get("conn") if "conn" in st.session_state else None
-        if conn is None:
-            try:
-                # Try module DB_PATH first
-                DBP = DB_PATH  # expects module-level DB_PATH
-            except Exception:
-                # Conservative default
-                DBP = "./data/app.db"
-            try:
-                conn = sqlite3.connect(DBP, check_same_thread=False)
-                with _closing(conn.cursor()) as _c:
-                    _c.execute("PRAGMA foreign_keys = ON;")
-                globals()["_O4_CONN"] = conn
-            except Exception as e:
-                st.error(f"Internal: sender picker not initialized: {e}")
-                return {"email": "", "app_password": ""}
-        ensure_outreach_o1_schema(conn)
+        conn = get_o4_conn()
+        # Try optional schema helper, then ensure table ourselves
         try:
-            rows = conn.execute(
-                "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
-            ).fetchall()
+            ensure_outreach_o1_schema(conn)  # may not exist
         except Exception:
-            # create table if schema helper was a no-op
-            with _closing(conn.cursor()) as _c:
-                _c.execute("CREATE TABLE IF NOT EXISTS email_accounts(user_email TEXT PRIMARY KEY, display_name TEXT, app_password TEXT)")
-                conn.commit()
-            rows = conn.execute(
-                "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
-            ).fetchall()
+            pass
+        _ensure_email_accounts_schema(conn)
+        rows = conn.execute(
+            "SELECT user_email, display_name FROM email_accounts ORDER BY user_email"
+        ).fetchall()
         choices = [r[0] for r in rows] + ["<add new>"] if rows else ["<add new>"]
         sel = st.selectbox("From account", choices, key="o4_from_addr")
         if sel == "<add new>":
@@ -8616,7 +8627,7 @@ def _o3_render_sender_picker():
 
     conn = globals().get("_O4_CONN")
     if conn is None:
-        st.warning("Internal: sender picker not initialized");
+        st.error("No sender accounts configured");
         return {"email":"", "app_password":""}
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
