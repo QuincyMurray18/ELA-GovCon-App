@@ -4,23 +4,29 @@ _O4_CONN = globals().get("_O4_CONN", None)
 
 def get_o4_conn():
     import streamlit as st
-    import sqlite3
-    from contextlib import closing as _closing
     global _O4_CONN
+    # reuse if cached
+    if _O4_CONN:
+        try:
+            st.session_state["conn"] = _O4_CONN
+        except Exception:
+            pass
+        return _O4_CONN
+    # prefer session-scoped
     try:
         if "conn" in st.session_state and st.session_state.get("conn"):
             _O4_CONN = st.session_state["conn"]
             return _O4_CONN
     except Exception:
         pass
+    # canonical app DB
+    conn = get_db()
+    _O4_CONN = conn
     try:
-        conn = get_db()
-        _O4_CONN = conn
-        try:
-            st.session_state["conn"] = conn
-        except Exception:
-            pass
-        return conn
+        st.session_state["conn"] = conn
+    except Exception:
+        pass
+    return conn
     except Exception:
         pass
     try:
@@ -7609,10 +7615,25 @@ if "_o3_render_sender_picker" not in globals():
             pass
         _ensure_email_accounts_schema(conn)
         rows = _get_senders(conn)
-        choices = [r[0] for r in rows] + ["<add new>"] if rows else ["<add new>"]
+        if not rows:
+            st.info("No sender accounts configured. Add one now:")
+            with st.form("o4_inline_add_sender", clear_on_submit=True):
+                email = st.text_input("Email address")
+                display = st.text_input("Display name")
+                pw = st.text_input("App password", type="password")
+                ok = st.form_submit_button("Save sender")
+            if ok and email:
+                conn.execute("INSERT OR REPLACE INTO email_accounts(user_email, display_name, app_password) VALUES(?,?,?)",
+                             (email.strip().lower(), display.strip(), pw.strip()))
+                conn.commit()
+                rows = _get_senders(conn)
+        if not rows:
+            st.error("No sender accounts configured")
+            return {"email": "", "app_password": ""}
+        choices = [r[0] for r in rows] + ["<add new>"]
         sel = st.selectbox("From account", choices, key="o4_from_addr")
         if sel == "<add new>":
-            st.info("Add a sender in Outreach \u2192 Sender accounts")
+            st.info("Add a sender in Outreach → Sender accounts")
             return {"email": "", "app_password": ""}
         pw = st.text_input("App password", type="password", key="o4_from_pw")
         return {"email": sel, "app_password": pw}
