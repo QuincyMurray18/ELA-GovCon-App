@@ -1,3 +1,58 @@
+# ==== Early safe stubs to prevent NameError crashes (loaded before UI code) ====
+try:
+    import streamlit as st
+except Exception:
+    class _DummySt:
+        def __getattr__(self, k):
+            def _f(*a, **kw):
+                return None
+            return _f
+    st = _DummySt()
+
+def _ensure_stub(name, src):
+    g = globals()
+    if name not in g:
+        try:
+            exec(src, g, g)
+        except Exception:
+            pass
+
+_ensure_stub("_o3c", '''
+def _o3c(key=None, default=None):
+    return default
+''')
+
+_ensure_stub("o4_sender_accounts_ui", '''
+def o4_sender_accounts_ui(conn=None):
+    try:
+        import streamlit as st
+        st.info("Sender accounts UI placeholder. Configure in Settings.")
+    except Exception:
+        pass
+    return []
+''')
+
+_ensure_stub("_o3_collect_recipients_ui", '''
+def _o3_collect_recipients_ui(conn=None):
+    try:
+        import pandas as pd
+    except Exception:
+        class _PD:
+            def DataFrame(self, *a, **k): return None
+        pd = _PD()
+    try:
+        import streamlit as st
+        st.caption("Collect recipients UI placeholder.")
+    except Exception:
+        pass
+    try:
+        import pandas as pd
+        return pd.DataFrame(columns=["email","name"])
+    except Exception:
+        return None
+''')
+# ==== End early stubs ====
+
 import requests
 import time
 # Helper imports for RTM/Amendment
@@ -9360,64 +9415,7 @@ if callable(__e1g.get("run_subcontractor_finder")):
 
 
 
-# ==== Auto-added safe stubs to prevent NameError crashes ====
-try:
-    import streamlit as st
-except Exception:
-    class _DummySt:
-        def __getattr__(self, k): 
-            def _f(*a, **kw): 
-                return None
-            return _f
-    st = _DummySt()
-
-def _ensure_stub(name, src):
-    g = globals()
-    if name not in g or not callable(g.get(name)):
-        exec(src, g, g)
-
-_ensure_stub("_o3c", '''
-def _o3c(key=None, default=None):
-    # Config getter stub
-    return default
-''')
-
-_ensure_stub("o4_sender_accounts_ui", '''
-def o4_sender_accounts_ui(conn=None):
-    try:
-        import streamlit as st
-        st.info("Sender accounts UI placeholder. Configure in Settings.")
-    except Exception:
-        pass
-    return []
-''')
-
-_ensure_stub("_o3_collect_recipients_ui", '''
-def _o3_collect_recipients_ui(conn=None):
-    try:
-        import streamlit as st
-        st.caption("Collect recipients UI placeholder.")
-    except Exception:
-        pass
-    import pandas as pd
-    return pd.DataFrame(columns=["email","name"])
-''')
-
-for fname in [
-    "run_subcontractor_finder",
-    "run_rfp_analyzer",
-    "run_rfp_analyzer_tri",
-    "run_capability_statement",
-]:
-    _ensure_stub(fname, f'''
-def {{fname}}(conn=None):
-    try:
-        import streamlit as st
-        st.warning("{{fname}} not implemented in this build.")
-    except Exception:
-        pass
-''')
-# ==== End stubs ====
+# [stubs removed to relocate at top]
 
 
 if __name__ == "__main__":
