@@ -9007,41 +9007,70 @@ def _o6_wrap_o3_send_batch():
     orig = g.get("_o3_send_batch")
     if not callable(orig) or getattr(orig, "_o6_wrapped", False):
         return
-    def wrapped(conn, sender, rows, subj, html, test_only=False, max_send=500):
+    def wrapped(*args, **kwargs):
         import pandas as _pd
+        # Normalize to new signature: (conn, sender, rows_df, subj, html, test_only=False, max_send=500)
+        conn = kwargs.get("conn")
+        sender = kwargs.get("sender")
+        rows = kwargs.get("rows")
+        subj = kwargs.get("subj")
+        html = kwargs.get("html")
+        test_only = kwargs.get("test_only", False)
+        max_send = kwargs.get("max_send", 500)
+
+        # Positional fallbacks
+        if conn is None or sender is None or rows is None or subj is None or html is None:
+            if len(args) >= 5:
+                conn, sender, rows, subj, html = args[:5]
+                if len(args) >= 6: test_only = args[5]
+                if len(args) >= 7: max_send = args[6]
+            elif len(args) == 2:
+                # Old call style: _o3_send_batch(sender, [{to, subject, html}, ...])
+                sender, rows_list = args
+                # Build conn via get_db if available
+                if conn is None and "get_db" in g:
+                    try:
+                        conn = g["get_db"]()
+                    except Exception:
+                        conn = kwargs.get("conn")
+                # Convert rows_list to DataFrame
+                if isinstance(rows_list, list):
+                    rows = _pd.DataFrame(rows_list)
+                elif hasattr(rows_list, "to_dict"):
+                    rows = _pd.DataFrame(rows_list)
+                else:
+                    rows = _pd.DataFrame([])
+                # Derive subj and html defaults per-row later
+                # If provided in kwargs, use them
+                subj = subj or (rows.iloc[0]["subject"] if not rows.empty and "subject" in rows.columns else "")
+                html = html or (rows.iloc[0]["html"] if not rows.empty and "html" in rows.columns else "")
+            else:
+                # Unsupported call pattern
+                raise TypeError("Unsupported _o3_send_batch call signature")
+
+        # Ensure schema and suppression filter
         ensure_o6_schema(conn)
-        # Filter suppressed
         if rows is not None and hasattr(rows, "copy"):
             _rows = rows.copy()
             if "email" in _rows.columns:
                 mask = _rows["email"].astype(str).str.lower().apply(lambda em: not o6_is_suppressed(conn, em))
                 _rows = _rows[mask]
             rows = _rows
-        # Inject unsubscribe macro fallback if needed
-        base = o6_get_base_url(conn) or ""
-        def render_html(em):
-            if "{{UNSUB_LINK}}" in (html or ""):
-                link = o6_unsub_link_for(conn, em) if base else ""
-                return (html or "").replace("{{UNSUB_LINK}}", link)
-            else:
-                if not base:
-                    return html
-                link = o6_unsub_link_for(conn, em)
-                footer = f"<hr><p style='font-size:12px;color:#666'>To unsubscribe, click <a href='{link}'>here</a>.</p>"
-                return (html or "") + footer
-        # If rows has emails, send per-row with personalized html; else fallback to original
-        if rows is not None and "email" in getattr(rows, "columns", []):
+
+        # If subj/html empty but rows contain per-recipient fields, send one by one
+        if (not subj or not html) and rows is not None and not rows.empty and {"subject","html"}.issubset(set(map(str.lower, rows.columns))):
+            # Normalize column names case-insensitively
+            columns = {c.lower(): c for c in rows.columns}
             total = 0
             for _, r in rows.iterrows():
-                em = str(r.get("email") or "").strip()
-                if not em:
-                    continue
-                html_i = render_html(em)
-                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj, html=html_i, test_only=test_only, max_send=1)
+                subj_i = str(r.get(columns.get("subject"), subj) or "")
+                html_i = str(r.get(columns.get("html"), html) or "")
+                # Build single-row frame to keep orig API
+                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj_i, html=html_i, test_only=test_only, max_send=1)
                 total += 1
             return total
-        else:
-            return orig(conn, sender, rows, subj, html, test_only=test_only, max_send=max_send)
+
+        return orig(conn, sender, rows, subj, html, test_only=test_only, max_send=max_send)
     wrapped._o6_wrapped = True
     g["_o3_send_batch"] = wrapped
 
