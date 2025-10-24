@@ -9176,26 +9176,26 @@ def render_subfinder_s1d(conn):
     st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 
-# Selection and save
-keep = df[~df["_dup"]].copy()
-if keep.empty:
-    st.success("All results are already in your vendor list.")
-    return
-st.caption(f"{len(keep)} new vendors can be saved")
-# Interactive selection
-keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
-keep_view.insert(0, "Select", False)
-edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
-sel = edited[edited["Select"]==True]
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
-        n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
-        st.success(f"Saved {n} vendors")
-with c2:
-    if st.button("Save all new vendors", key="s1d_save_all"):
-        n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
-        st.success(f"Saved {n} vendors")
+    # Selection and save
+    keep = df[~df["_dup"]].copy()
+    if keep.empty:
+        st.success("All results are already in your vendor list.")
+        return
+    st.caption(f"{len(keep)} new vendors can be saved")
+    # Interactive selection
+    keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
+    keep_view.insert(0, "Select", False)
+    edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
+    sel = edited[edited["Select"]==True]
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
+            n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
+            st.success(f"Saved {n} vendors")
+    with c2:
+        if st.button("Save all new vendors", key="s1d_save_all"):
+            n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
+            st.success(f"Saved {n} vendors")
 # === End S1D ================================================================
 
 
