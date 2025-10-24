@@ -9286,7 +9286,7 @@ def _s1d_render_from_cache(conn, df):
             if st.button("New search", key="s1d_new_search"):
                 st.session_state.pop("s1d_df", None)
                 st.session_state.pop("s1d_selected_ids", None)
-                st.experimental_rerun()
+        # rerun suppressed to keep table visible
 
 
 def _s1d_vendor_write_table(conn):
