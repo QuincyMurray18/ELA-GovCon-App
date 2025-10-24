@@ -1,170 +1,3 @@
-# ==== Early safe stubs to prevent NameError crashes (loaded before UI code) ====
-try:
-    import streamlit as st
-except Exception:
-    class _DummySt:
-        def __getattr__(self, k):
-            def _f(*a, **kw):
-                return None
-            return _f
-    st = _DummySt()
-
-def _ensure_stub(name, src):
-    g = globals()
-    if name not in g:
-        try:
-            exec(src, g, g)
-        except Exception:
-            pass
-
-_ensure_stub("_o3c", '''
-def _o3c(key=None, default=None):
-    return default
-''')
-
-_ensure_stub("o4_sender_accounts_ui", '''
-def o4_sender_accounts_ui(conn=None):
-    try:
-        import streamlit as st
-        st.info("Sender accounts UI placeholder. Configure in Settings.")
-    except Exception:
-        pass
-    return []
-''')
-
-_ensure_stub("_o3_collect_recipients_ui", '''
-def _o3_collect_recipients_ui(conn=None):
-    try:
-        import pandas as pd
-    except Exception:
-        class _PD:
-            def DataFrame(self, *a, **k): return None
-        pd = _PD()
-    try:
-        import streamlit as st
-        st.caption("Collect recipients UI placeholder.")
-    except Exception:
-        pass
-    try:
-        import pandas as pd
-        return pd.DataFrame(columns=["email","name"])
-    except Exception:
-        return None
-''')
-# ==== End early stubs ====
-
-# ==== Sender picker stubs ====
-def _ensure_stub(name, src):
-    g = globals()
-    if name not in g:
-        try:
-            exec(src, g, g)
-        except Exception:
-            pass
-
-_ensure_stub("_o3_get_sender_accounts", '''
-def _o3_get_sender_accounts(conn=None):
-    try:
-        import streamlit as st
-        accs = []
-        try:
-            accs = st.secrets.get("gmail", {}).get("senders", [])
-        except Exception:
-            accs = []
-        if isinstance(accs, list) and accs:
-            return [a for a in accs if isinstance(a, dict) and a.get("email")]
-        return [{"email":"noreply@example.com","name":"ELA Outreach"}]
-    except Exception:
-        return [{"email":"noreply@example.com","name":"ELA Outreach"}]
-''')
-
-_ensure_stub("_o3_render_sender_picker", '''
-def _o3_render_sender_picker(conn=None):
-    try:
-        import streamlit as st
-        accounts = []
-        try:
-            if "o4_senders" in st.session_state and st.session_state["o4_senders"]:
-                accounts = st.session_state["o4_senders"]
-        except Exception:
-            accounts = []
-        if not accounts:
-            try:
-                accs = st.secrets.get("gmail", {}).get("senders", [])
-                if isinstance(accs, list):
-                    accounts = [a for a in accs if isinstance(a, dict) and a.get("email")]
-            except Exception:
-                accounts = []
-        if not accounts:
-            accounts = [{"email":"noreply@example.com","name":"ELA Outreach"}]
-        options = [f"{a.get('name') or ''} <{a.get('email') or ''}>" for a in accounts]
-        try:
-            idx = st.selectbox("Sender", list(range(len(options))), format_func=lambda i: options[i], index=0)
-        except Exception:
-            idx = 0
-        sel = accounts[idx]
-        class _Sender(dict):
-            def __str__(self): return self.get("email","")
-        return _Sender(sel)
-    except Exception:
-        class _Sender(dict):
-            def __str__(self): return self.get("email","")
-        return _Sender({"email":"noreply@example.com","name":"ELA Outreach"})
-''')
-# ==== End sender picker stubs ====
-
-
-
-# ==== Safe connection stub to avoid NameError and allow UI to render ====
-try:
-    import streamlit as st  # optional
-except Exception:
-    st = None
-
-if 'conn' not in globals():
-    try:
-        # Try session_state first if Streamlit is present
-        if st is not None:
-            if 'conn' in st.session_state and st.session_state.conn is not None:
-                conn = st.session_state.conn
-            else:
-                class _NullConn:
-                    def cursor(self): return self
-                    def execute(self, *a, **k): return self
-                    def executemany(self, *a, **k): return self
-                    def fetchall(self): return []
-                    def fetchone(self): return None
-                    def commit(self): return None
-                    def close(self): return None
-                conn = _NullConn()
-                try:
-                    st.session_state.conn = conn
-                except Exception:
-                    pass
-        else:
-            class _NullConn:
-                def cursor(self): return self
-                def execute(self, *a, **k): return self
-                def executemany(self, *a, **k): return self
-                def fetchall(self): return []
-                def fetchone(self): return None
-                def commit(self): return None
-                def close(self): return None
-            conn = _NullConn()
-    except Exception:
-        class _NullConn:
-            def cursor(self): return self
-            def execute(self, *a, **k): return self
-            def executemany(self, *a, **k): return self
-            def fetchall(self): return []
-            def fetchone(self): return None
-            def commit(self): return None
-            def close(self): return None
-        conn = _NullConn()
-# ==== End safe connection stub ====
-
-
-
 import requests
 import time
 # Helper imports for RTM/Amendment
@@ -1316,11 +1149,28 @@ def _safe_y1_search(conn, rfp_id, query, k=6):
         except NameError:
             return []
 # --- Robust Y1 shim: guarantees y1_search exists ---
-# --- Robust Y1 shim and streaming answer ---
 if 'y1_search' not in globals():
-    def y1_search(conn, rfp_id, q, k=6):
-        # Fallback when Y1 index is unavailable
-        return []
+    def y1_search(conn, rfp_id: int, query: str, k: int = 6):
+        try:
+            snap = _y1_snapshot(conn, int(rfp_id))
+        except Exception:
+            snap = None
+        try:
+            db_path = DB_PATH
+        except Exception:
+            db_path = "data/govcon.db"
+        try:
+            return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
+        except Exception:
+            try:
+                return _y1_search_uncached(conn, int(rfp_id), query or "", int(k))
+            except Exception:
+                return []
+
+
+
+
+
 
 def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
@@ -1334,7 +1184,7 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
         except Exception:
             strict = True
         if strict:
-            yield "[system] Insufficient evidence in linked RFP files. Build or update the search index for this RFP on 'Ask with citations (Y1)', then ask again. General answers are disabled in CO Chat."
+            yield "[system] Insufficient evidence in linked RFP files. Build or Update the search index for this RFP on 'Ask with citations (Y1)', then ask again. General answers are disabled in CO Chat."
             return
         for tok in ask_ai([{"role":"user","content": (question or "").strip()}], temperature=temperature):
             yield tok
@@ -1347,8 +1197,9 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
         ev_lines.append(f"{tag} {src_line} — {snip}")
     evidence = "\n".join(ev_lines)
     user = "QUESTION\n" + (question or "").strip() + "\n\nEVIDENCE\n" + evidence
-    for tok in ask_ai([{ "role":"user", "content": user }], temperature=temperature):
+    for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
         yield tok
+
 def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
     Build a minimal message set for CO chat, embedding local evidence as [C#].
@@ -5243,6 +5094,144 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
+    st.header("Subcontractor Finder")
+    st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
+
+    ctx = st.session_state.get("rfp_selected_notice", {})
+    default_naics = ctx.get("NAICS") or ""
+    default_state = ""
+
+    with st.expander("Filters", expanded=True):
+        c1, c2, c3, c4 = st.columns([2,2,2,2])
+        with c1:
+            f_naics = st.text_input("NAICS", value=default_naics, key="filter_naics")
+        with c2:
+            f_state = st.text_input("State (e.g., TX)", value=default_state, key="filter_state")
+        with c3:
+            f_city = st.text_input("City contains", key="filter_city")
+        with c4:
+            f_kw = st.text_input("Keyword in name/notes", key="filter_kw")
+        st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
+
+    with st.expander("Import Vendors (CSV)", expanded=False):
+        st.caption("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
+        up = st.file_uploader("Upload vendor CSV", type=["csv"], key="vendor_csv")
+        if up and st.button("Import CSV"):
+            try:
+                df = pd.read_csv(up)
+                if "name" not in {c.lower() for c in df.columns}:
+                    st.error("CSV must include a 'name' column")
+                else:
+                    df.columns = [c.lower() for c in df.columns]
+                    n=0
+                    with closing(conn.cursor()) as cur:
+                        for _, r in df.iterrows():
+                            cur.execute(
+                                """
+                                INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
+                                VALUES(?,?,?,?,?,?,?,?,?,?)
+                                ;
+                                """,
+                                (
+                                    str(r.get("name",""))[:200],
+                                    str(r.get("cage",""))[:20],
+                                    str(r.get("uei",""))[:40],
+                                    str(r.get("naics",""))[:20],
+                                    str(r.get("city",""))[:100],
+                                    str(r.get("state",""))[:10],
+                                    str(r.get("phone",""))[:40],
+                                    str(r.get("email",""))[:120],
+                                    str(r.get("website",""))[:200],
+                                    str(r.get("notes",""))[:500],
+                                ),
+                            )
+                            n+=1
+                    conn.commit()
+                    st.success(f"Imported {n} vendors")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+    with st.expander("Add Vendor", expanded=False):
+        c1, c2, c3 = st.columns([2,2,2])
+        with c1:
+            v_name = st.text_input("Company name", key="add_name")
+            v_email = st.text_input("Email", key="add_email")
+            v_phone = st.text_input("Phone", key="add_phone")
+        with c2:
+            v_city = st.text_input("City", key="add_city")
+            v_state = st.text_input("State", key="add_state")
+            v_naics = st.text_input("NAICS", key="add_naics")
+        with c3:
+            v_cage = st.text_input("CAGE", key="add_cage")
+            v_uei = st.text_input("UEI", key="add_uei")
+            v_site = st.text_input("Website", key="add_site")
+        v_notes = st.text_area("Notes", height=80, key="add_notes")
+        if st.button("Save Vendor"):
+            if not v_name.strip():
+                st.error("Name is required")
+            else:
+                try:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
+                            VALUES(?,?,?,?,?,?,?,?,?,?)
+                            ;
+                            """,
+                            (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
+                        )
+                        conn.commit()
+                    st.success("Vendor saved")
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
+
+    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors_t WHERE 1=1"
+    params: List[Any] = []
+    if f_naics:
+        q += " AND (naics LIKE ? )"
+        params.append(f"%{f_naics}%")
+    if f_state:
+        q += " AND (state LIKE ?)"
+        params.append(f"%{f_state}%")
+    if f_city:
+        q += " AND (city LIKE ?)"
+        params.append(f"%{f_city}%")
+    if f_kw:
+        q += " AND (name LIKE ? OR notes LIKE ?)"
+        params.extend([f"%{f_kw}%", f"%{f_kw}%"])
+
+    try:
+        df_v = pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
+    except Exception as e:
+        st.error(f"Query failed: {e}")
+        df_v = pd.DataFrame()
+
+    st.subheader("Vendors")
+    if df_v.empty:
+        st.write("No vendors match filters")
+    else:
+        selected_ids = []
+        for _, row in df_v.iterrows():
+            chk = st.checkbox(f"Select — {row['name']}  ({row['email'] or 'no email'})", key=f"vend_{int(row['id'])}")
+            if chk:
+                selected_ids.append(int(row['id']))
+        c1, c2 = st.columns([2,2])
+        with c1:
+            if st.button("Send to Outreach ▶") and selected_ids:
+                st.session_state['rfq_vendor_ids'] = selected_ids
+                st.success(f"Queued {len(selected_ids)} vendors for Outreach")
+        with c2:
+            st.caption("Selections are stored in session and available in Outreach tab")
+
+
+# ---------- Outreach (Phase D) ----------
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_subcontractor_finder_y6", title="CO guidance for subcontractors")
+    except Exception:
+        pass
+
 def _smtp_settings() -> Dict[str, Any]:
     out = {"host": None, "port": 587, "username": None, "password": None, "from_email": None, "from_name": "ELA Management", "use_tls": True}
     try:
@@ -7429,6 +7418,25 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
+def run_subcontractor_finder_s1_hook(conn):
+    ensure_subfinder_s1_schema(conn)
+    try:
+        s1_render_places_panel(conn)
+    except Exception:
+        pass
+
+
+def router(page: str, conn: sqlite3.Connection) -> None:
+    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
+    import re as _re
+    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
+    fn = globals().get(name)
+    _safe_route_call(fn, conn)
+    # Hooks
+    if (page or "").strip() == "Subcontractor Finder":
+        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
+    if (page or "").strip() == "Proposal Builder":
+        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 def main() -> None:
     conn = get_db()
     global _O4_CONN
@@ -7446,12 +7454,109 @@ def main() -> None:
 
 # --- Outreach schema guard: fallback stub used if the full implementation is defined later ---
 if "_o3_ensure_schema" not in globals():
-# FIXME_AUTOCOMMENTED_DUE_TO_PARSE_ERROR
-# if "_o3_collect_recipients_ui" not in globals():
-# FIXME_AUTOCOMMENTED_DUE_TO_PARSE_ERROR
-# if "_o3_render_sender_picker" not in globals():
-# FIXME_AUTOCOMMENTED_DUE_TO_PARSE_ERROR
-# def render_outreach_mailmerge(conn):
+    def _o3_ensure_schema(conn):
+        try:
+            from contextlib import closing
+            with closing(conn.cursor()) as cur:
+                # Minimal tables used by Outreach features
+                cur.execute("CREATE TABLE IF NOT EXISTS vendors_t (id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT, city TEXT, state TEXT, naics TEXT)")
+                cur.execute("CREATE TABLE IF NOT EXISTS current_tenant (id INTEGER PRIMARY KEY, ctid INTEGER)")
+                cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES (1, 1)")
+                cur.execute("CREATE TABLE IF NOT EXISTS outreach_templates (id INTEGER PRIMARY KEY, name TEXT, subject TEXT, body TEXT)")
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+            conn.commit()
+        except Exception:
+            pass
+
+
+# --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
+if "_o3_collect_recipients_ui" not in globals():
+    def _o3_collect_recipients_ui(conn):
+        try:
+
+            import pandas as _pd
+            q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+            params = []
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                f_naics = st.text_input("NAICS filter", key="o3_f_naics")
+            with c2:
+                f_state = st.text_input("State filter", key="o3_f_state")
+            with c3:
+                f_city = st.text_input("City filter", key="o3_f_city")
+            if f_naics:
+                q += " AND IFNULL(naics,'') LIKE ?"
+                params.append(f"%{f_naics}%")
+            if f_state:
+                q += " AND IFNULL(state,'') LIKE ?"
+                params.append(f"%{f_state}%")
+            if f_city:
+                q += " AND IFNULL(city,'') LIKE ?"
+                params.append(f"%{f_city}%")
+            try:
+                df = _pd.read_sql_query(q, conn, params=params)
+            except Exception:
+                df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
+            st.caption(f"{len(df)} vendors match filters")
+            if not df.empty:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            return df
+        except Exception:
+            return None
+
+
+# --- Outreach SMTP sender picker: fallback stub if full implementation is defined later ---
+if "_o3_render_sender_picker" not in globals():
+    def _o3_render_sender_picker():
+
+        from contextlib import closing
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                cur.execute("INSERT OR IGNORE INTO smtp_settings(id, host, port, username, password, use_tls) VALUES (1, '', 587, '', '', 1)")
+                row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+            host, port, username, password, use_tls = row or ("", 587, "", "", 1)
+        except Exception:
+            host, port, username, password, use_tls = "", 587, "", "", 1
+
+        st.caption("SMTP Settings")
+        c1, c2, c3 = st.columns([2,1,1])
+        with c1:
+            host = st.text_input("SMTP host", value=str(host), key="o3_smtp_host")
+        with c2:
+            port = st.number_input("Port", value=int(port or 587), min_value=1, max_value=65535, step=1, key="o3_smtp_port")
+        with c3:
+            use_tls = st.checkbox("Use TLS", value=bool(use_tls), key="o3_smtp_tls")
+
+        c4, c5 = st.columns(2)
+        with c4:
+            username = st.text_input("Username", value=str(username or ""), key="o3_smtp_user")
+        with c5:
+            password = st.text_input("Password", value=str(password or ""), type="password", key="o3_smtp_pass")
+
+        if st.button("Save SMTP", key="o3_smtp_save"):
+            try:
+                from contextlib import closing
+                with closing(conn.cursor()) as cur:
+                    cur.execute("UPDATE smtp_settings SET host=?, port=?, username=?, password=?, use_tls=? WHERE id=1",
+                                (host.strip(), int(port), username.strip(), password, 1 if use_tls else 0))
+                    conn.commit()
+                st.success("Saved SMTP settings")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+        return {
+            "host": host.strip(),
+            "port": int(port or 587),
+            "username": (username or "").strip(),
+            "password": password or "",
+            "use_tls": bool(use_tls),
+            "from_email": (username or "").strip(),
+            "from_name": "ELA Management"
+        }
+
+
+def render_outreach_mailmerge(conn):
     import streamlit as st
     import pandas as _pd
 
@@ -7626,8 +7731,21 @@ except Exception:
 
 if _st_phase8 is not None:
     @_st_phase8.cache_data(show_spinner=False, ttl=600)
-# FIXME_AUTOCOMMENTED_DUE_TO_PARSE_ERROR
-# else:
+    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
+        import sqlite3 as _sql8
+        # Re-open a read-only connection to keep cache pure
+        try:
+            conn2 = _sql8.connect(db_path, check_same_thread=False)
+        except Exception:
+            conn2 = _sql8.connect(db_path)
+        try:
+            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
+else:
     # Fallback no-cache path when Streamlit not available
     def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
         import sqlite3 as _sql8
@@ -9525,10 +9643,3 @@ if callable(__e1g.get("run_subcontractor_finder")):
 # END E1 PATCH
 # =========================
 
-
-
-# [stubs removed to relocate at top]
-
-
-if __name__ == "__main__":
-    main()
