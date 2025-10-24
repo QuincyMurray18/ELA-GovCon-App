@@ -9553,27 +9553,93 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 
 
-# --- O3 Mail-merge helpers (safe and advisory) ---
-import re as _re_o3
 
-_MERGE_TAG_RE = _re_o3.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+# =========================
+# APPEND-ONLY PATCH • E1 (Google Places enrichment: phone + website hyperlinks)
+# =========================
+import streamlit as _st
+import pandas as _pd
+import re as _re
+import time as _time
 
-def _o3_safe_merge(s: str, row: dict) -> str:
-    row = row or {}
-    def _sub(m):
-        k = m.group(1)
-        v = row.get(k)
-        return "" if v is None else str(v)
-    return _MERGE_TAG_RE.sub(_sub, s or "")
+def __e1_google_api_key():
+    try: return _st.secrets["google"]["api_key"]
+    except Exception:
+        try: return _st.secrets["GOOGLE_API_KEY"]
+        except Exception: return ""
 
-def _o3_render_missing_tags(subject: str, html: str):
-    import streamlit as st
-    text = f"{subject or ''} {html or ''}"
-    found = set(m.group(1) for m in _MERGE_TAG_RE.finditer(text))
-    required = {"city","company","due","email","first_name","last_name","notice_id","solicitation","state","title"}
-    missing = sorted(required - found)
-    with st.expander("Template merge tags", expanded=False):
-        if missing:
-            st.caption("Missing merge tags (advisory): " + ", ".join(missing))
-        st.caption("Absent fields merge to blank.")
+def __e1_norm_phone(p):
+    digits = "".join(_re.findall(r"\d+", str(p or "")))
+    return digits[1:] if len(digits)==11 and digits.startswith("1") else digits
+
+def __e1_existing_vendor_keys(conn):
+    try:
+        rows = conn.execute("SELECT name, COALESCE(phone,''), COALESCE(place_id,'') FROM vendors_t").fetchall()
+    except Exception:
+        return set(), set()
+    by_np, by_pid = set(), set()
+    for r in rows:
+        by_np.add(((r[0] or "").strip().lower(), __e1_norm_phone(r[1] or "")))
+        pid = (r[2] or "").strip()
+        if pid: by_pid.add(pid)
+    return by_np, by_pid
+
+def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
+    key = __e1_google_api_key()
+    if not key:
+        _st.error("E1 requires a Google API key in secrets: [google].api_key or GOOGLE_API_KEY")
+        return
+    if not query:
+        _st.info("Enter a query in your existing finder, then use this enrichment to view details.")
+        return
+    import requests as _rq
+    params={"query":query, "key":key, "region":"us"}
+    if lat is not None and lng is not None:
+        params.update({"location": f"{lat},{lng}", "radius": int(radius_m)})
+    js = _rq.get("https://maps.googleapis.com/maps/api/place/textsearch/json", params=params, timeout=12).json()
+    results = js.get("results", [])
+    by_np, by_pid = __e1_existing_vendor_keys(conn)
+    rows = []
+    for r in results:
+        name = r.get("name",""); pid = r.get("place_id",""); addr = r.get("formatted_address","")
+        phone = ""; website = ""; gurl = ""
+        try:
+            det = _rq.get("https://maps.googleapis.com/maps/api/place/details/json",
+                          params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key}, timeout=10).json().get("result", {}) or {}
+            digits = "".join(_re.findall(r"\\d+", det.get("formatted_phone_number","") or ""))
+            if len(digits)==11 and digits.startswith("1"): digits=digits[1:]
+            phone = digits; website = det.get("website","") or ""; gurl = det.get("url","") or ""
+        except Exception:
+            pass
+        dup = ((name.strip().lower(), phone) in by_np) or (pid in by_pid)
+        rows.append(dict(name=name, phone=phone, website=website, address=addr, place_id=pid, google_url=gurl, _dup=dup))
+        _time.sleep(0.05)
+    if not rows:
+        _st.info("No results to enrich.")
+        return
+    df = _pd.DataFrame(rows)
+    def _link(u,t): return f"<a href='{u}' target='_blank'>{t}</a>" if u else t
+    df["name"] = df.apply(lambda r: _link(r["google_url"], r["name"]), axis=1)
+    df["website"] = df.apply(lambda r: _link(r["website"], "site") if r["website"] else "", axis=1)
+    _st.write(df[["name","phone","website","address","place_id","_dup"]].to_html(escape=False, index=False), unsafe_allow_html=True)
+
+__e1g = globals()
+if callable(__e1g.get("run_subcontractor_finder")):
+    __e1_orig = __e1g["run_subcontractor_finder"]
+    def run_subcontractor_finder(conn):
+        try:
+            with _st.expander("E1 — Phone + Website enrichment", expanded=True):
+                lat = _st.session_state.get("s1d_lat")
+                lng = _st.session_state.get("s1d_lng")
+                miles = _st.session_state.get("s1d_radius_miles", 50)
+                query = _st.session_state.get("s1d_query", "")
+                radius_m = float(miles or 50) * 1609.34 if miles else 80467
+                __e1_enrich_and_render(conn, lat=lat, lng=lng, radius_m=radius_m, query=query)
+        except Exception as e:
+            _st.warning(f"E1 enrichment unavailable: {e}")
+        __e1_orig(conn)
+    __e1g["run_subcontractor_finder"] = run_subcontractor_finder
+# =========================
+# END E1 PATCH
+# =========================
 
