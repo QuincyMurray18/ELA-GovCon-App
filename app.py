@@ -5520,29 +5520,30 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
 
 
 
+
 def run_outreach(conn: sqlite3.Connection) -> None:
     """
     Outreach hub: Phase 2 + 3 + 5.
-    - Compose & Send with mail merge from notice metadata and vendor list.
-    - Templates CRUD.
-    - Accounts (Gmail SMTP with app passwords).
-    - SLA timers and automated follow-ups.
-    - Opt-out links with audit log.
+    Tabs: Compose & Send, Templates, Accounts, SLA & Follow-ups, Opt-out, Audit Log.
     """
-    # Ensure all tables exist
+    # Ensure schemas
     try:
         ensure_outreach_schema(conn)
     except Exception:
         pass
     try:
-        ensure_campaign_schema(conn); ensure_phase5_schema(conn)
+        ensure_campaign_schema(conn)
+    except Exception:
+        pass
+    try:
+        ensure_phase5_schema(conn)
     except Exception:
         pass
 
     st.header("Outreach")
-    st.caption("Generate RFQ emails and send via Gmail SMTP with app passwords. Mail-merge from notice metadata. SLA timers, follow-ups, opt-out, and audit log.")
+    st.caption("Generate RFQs and send via Gmail SMTP. Mail-merge, follow-ups, opt-out, audit.")
 
-    # Scheduler tick
+    # Tick scheduler safely
     try:
         process_outreach_scheduler(conn)
     except Exception:
@@ -5550,19 +5551,169 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
     tabs = st.tabs(["Compose & Send", "Templates", "Accounts", "SLA & Follow-ups", "Opt-out", "Audit Log"])
 
-    # ---- Compose & Send
+    # ---------- Compose & Send
     with tabs[0]:
         notice = st.session_state.get("rfp_selected_notice", {}) or {}
         vendor_ids = st.session_state.get("rfq_vendor_ids", []) or []
 
-        # Build initial recipients from queued vendor_ids or allow filtered pick
+        st.subheader("Recipients")
+
+        # Build from chosen vendor ids if present, else provide simple filters
         df_sel = pd.DataFrame()
         if vendor_ids:
             ph = ",".join(["?"] * len(vendor_ids))
             try:
-                df_sel = pd.read_sql_query(f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
+                df_sel = pd.read_sql_query(f"SELECT id, name AS company, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
             except Exception:
                 df_sel = pd.DataFrame()
+
+        with st.expander("Find vendors (optional)", expanded=(df_sel.empty)):
+            f_naics = st.text_input("NAICS filter", value="")
+            f_state = st.text_input("State filter", value="")
+            if st.button("Load vendors"):
+                q = "SELECT id, name AS company, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+                params = []
+                if f_naics:
+                    q += " AND naics LIKE ?"; params.append(f"%{f_naics}%")
+                if f_state:
+                    q += " AND state LIKE ?"; params.append(f"%{f_state}%")
+                try:
+                    df_sel = pd.read_sql_query(q + " ORDER BY name;", conn, params=params)
+                except Exception:
+                    df_sel = pd.DataFrame()
+
+        # CSV import to append
+        up = st.file_uploader("Import recipients CSV (company,email,phone,city,state,naics)", type=["csv"], key="o_recip_csv")
+        if up is not None:
+            try:
+                _df = pd.read_csv(up)
+                cols = [c for c in ["company","email","phone","city","state","naics"] if c in _df.columns]
+                if cols:
+                    _df = _df[cols].copy()
+                    df_sel = pd.concat([df_sel, _df], ignore_index=True)
+                    st.success(f"Imported {len(_df)} rows")
+            except Exception as e:
+                st.error(f"CSV import failed: {e}")
+
+        # Clean + dedupe by email
+        if "email" in df_sel.columns:
+            df_sel["email"] = df_sel["email"].fillna("").str.strip().str.lower()
+            df_sel = df_sel[df_sel["email"] != ""].drop_duplicates(subset=["email"])
+
+        if df_sel.empty:
+            st.info("No recipients yet. Import a CSV or load vendors above.")
+        else:
+            st.dataframe(df_sel, use_container_width=True, hide_index=True)
+
+        st.subheader("Template")
+        st.markdown("Tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
+        subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})", key="o_subj")
+        body = st.text_area("Email Body (HTML)", height=220, key="o_body", value=(
+            "Hello {{company}},<br><br>"
+            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). "
+            "Responses are due {{due}}. We’d like your quote and capability confirmation."
+            "<br><br>Could you reply with pricing and any questions?"
+            "<br><br>Thank you,<br>ELA Management"
+        ))
+
+        with st.expander("Attachments", expanded=False):
+            files = st.file_uploader("Attach files", type=["pdf","docx","xlsx","zip"], accept_multiple_files=True, key="o_att")
+            attach_paths = []
+            if files:
+                for f in files:
+                    pth = save_uploaded_file(f, subdir="outreach")
+                    if pth: attach_paths.append(pth)
+                if attach_paths:
+                    st.success(f"Saved {len(attach_paths)} attachment(s)")
+
+        st.subheader("Sender Account")
+        acct_id, acct = _o_pick_account(conn)
+        if not acct:
+            st.warning("No SMTP account configured. Use the Accounts tab to add one.")
+
+        c1, c2, c3 = st.columns([2,2,2])
+        with c1:
+            if st.button("Preview first merge"):
+                if not df_sel.empty:
+                    v0 = df_sel.iloc[0].to_dict()
+                    st.info(f"Subject → {_o_merge_text(subj, v0, notice)}")
+                    st.write(_o_merge_text(body, v0, notice), unsafe_allow_html=True)
+                else:
+                    st.info("No recipients to preview.")
+        with c2:
+            if st.button("Export recipients CSV"):
+                path = os.path.join(_ensure_data_dir(), "outreach_recipients.csv")
+                (df_sel if not df_sel.empty else pd.DataFrame(columns=["company","email","phone","city","state","naics"])).to_csv(path, index=False)
+                st.success("Exported recipients CSV")
+                st.markdown(f"[Download recipients CSV]({path})")
+        with c3:
+            do_send = st.button("Send emails (SMTP)", type="primary")
+
+        if do_send:
+            if acct and not df_sel.empty:
+                ok = 0; fail = 0; rows = []
+                for _, row in df_sel.iterrows():
+                    vendor = row.to_dict()
+                    to_email = vendor.get("email","").strip().lower()
+                    if not to_email:
+                        rows.append({"company": vendor.get("company",""), "email": "", "status": "skipped: no email"})
+                        continue
+                    s = _o_merge_text(subj, vendor, notice)
+                    b = _o_merge_text(body, vendor, notice)
+                    success, msg = send_email_smart(conn, to_email, s, b, attach_paths, account_id=acct_id, campaign_id=None, recipient_id=None)
+                    if success: ok += 1
+                    else: fail += 1
+                    rows.append({"company": vendor.get("company",""), "email": to_email, "status": ("sent" if success else msg)})
+                st.success(f"Done. Sent: {ok}  Failed: {fail}")
+                df_log = pd.DataFrame(rows)
+                st.dataframe(df_log, use_container_width=True, hide_index=True)
+                path = os.path.join(_ensure_data_dir(), "outreach_send_log.csv")
+                df_log.to_csv(path, index=False)
+                st.markdown(f"[Download send log]({path})")
+            else:
+                st.warning("Add an account and at least one recipient to send.")
+
+    # ---------- Templates
+    with tabs[1]:
+        try:
+            render_outreach_templates(conn)
+        except Exception as e:
+            st.info(f"Templates unavailable: {e}")
+
+    # ---------- Accounts
+    with tabs[2]:
+        try:
+            p5_render_accounts_and_templates(conn)
+        except Exception as e:
+            st.info(f"Accounts setup unavailable: {e}")
+
+    # ---------- SLA & Follow-ups
+    with tabs[3]:
+        try:
+            render_campaigns_panel(conn)
+        except Exception as e:
+            st.info(f"SLA config unavailable: {e}")
+
+    # ---------- Opt-out
+    with tabs[4]:
+        try:
+            render_opt_out_panel(conn)
+        except Exception as e:
+            st.info(f"Opt-out unavailable: {e}")
+
+    # ---------- Audit Log
+    with tabs[5]:
+        try:
+            dfa = pd.read_sql_query("SELECT sent_at, to_email, subject, status, smtp_response, campaign_id, recipient_id FROM o3_send_log ORDER BY id DESC LIMIT 1000;", conn, params=())
+            if dfa is not None and not dfa.empty:
+                st.dataframe(dfa, use_container_width=True, hide_index=True)
+                csv = dfa.to_csv(index=False).encode("utf-8")
+                st.download_button("Export audit CSV", data=csv, file_name="outreach_audit.csv", mime="text/csv")
+            else:
+                st.caption("No sends yet.")
+        except Exception as e:
+            st.info(f"Audit log unavailable: {e}")
+
 if df_sel.empty:
         st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
 else:
@@ -9090,27 +9241,200 @@ def _o_send_via_smtp(acct: dict, to_email: str, subject: str, html_body: str, at
         resp = str(e)
     return status, resp, mid
 
+
 def run_outreach(conn: sqlite3.Connection) -> None:
-    ensure_outreach_schema(conn)
+    """
+    Outreach hub: Phase 2 + 3 + 5.
+    Tabs: Compose & Send, Templates, Accounts, SLA & Follow-ups, Opt-out, Audit Log.
+    """
+    # Ensure schemas
+    try:
+        ensure_outreach_schema(conn)
+    except Exception:
+        pass
+    try:
+        ensure_campaign_schema(conn)
+    except Exception:
+        pass
+    try:
+        ensure_phase5_schema(conn)
+    except Exception:
+        pass
+
     st.header("Outreach")
-    st.caption("Generate RFQ emails and send via Gmail SMTP with app passwords. Mail-merge from notice metadata. SLA timers, follow-ups, opt-out, and audit log.")
+    st.caption("Generate RFQs and send via Gmail SMTP. Mail-merge, follow-ups, opt-out, audit.")
+
+    # Tick scheduler safely
+    try:
+        process_outreach_scheduler(conn)
+    except Exception:
+        pass
 
     tabs = st.tabs(["Compose & Send", "Templates", "Accounts", "SLA & Follow-ups", "Opt-out", "Audit Log"])
 
-    # ---- Compose & Send
+    # ---------- Compose & Send
     with tabs[0]:
-        # context
         notice = st.session_state.get("rfp_selected_notice", {}) or {}
         vendor_ids = st.session_state.get("rfq_vendor_ids", []) or []
 
-        # recipients
+        st.subheader("Recipients")
+
+        # Build from chosen vendor ids if present, else provide simple filters
         df_sel = pd.DataFrame()
         if vendor_ids:
             ph = ",".join(["?"] * len(vendor_ids))
             try:
-                df_sel = pd.read_sql_query(f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
+                df_sel = pd.read_sql_query(f"SELECT id, name AS company, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});", conn, params=vendor_ids)
             except Exception:
                 df_sel = pd.DataFrame()
+
+        with st.expander("Find vendors (optional)", expanded=(df_sel.empty)):
+            f_naics = st.text_input("NAICS filter", value="")
+            f_state = st.text_input("State filter", value="")
+            if st.button("Load vendors"):
+                q = "SELECT id, name AS company, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+                params = []
+                if f_naics:
+                    q += " AND naics LIKE ?"; params.append(f"%{f_naics}%")
+                if f_state:
+                    q += " AND state LIKE ?"; params.append(f"%{f_state}%")
+                try:
+                    df_sel = pd.read_sql_query(q + " ORDER BY name;", conn, params=params)
+                except Exception:
+                    df_sel = pd.DataFrame()
+
+        # CSV import to append
+        up = st.file_uploader("Import recipients CSV (company,email,phone,city,state,naics)", type=["csv"], key="o_recip_csv")
+        if up is not None:
+            try:
+                _df = pd.read_csv(up)
+                cols = [c for c in ["company","email","phone","city","state","naics"] if c in _df.columns]
+                if cols:
+                    _df = _df[cols].copy()
+                    df_sel = pd.concat([df_sel, _df], ignore_index=True)
+                    st.success(f"Imported {len(_df)} rows")
+            except Exception as e:
+                st.error(f"CSV import failed: {e}")
+
+        # Clean + dedupe by email
+        if "email" in df_sel.columns:
+            df_sel["email"] = df_sel["email"].fillna("").str.strip().str.lower()
+            df_sel = df_sel[df_sel["email"] != ""].drop_duplicates(subset=["email"])
+
+        if df_sel.empty:
+            st.info("No recipients yet. Import a CSV or load vendors above.")
+        else:
+            st.dataframe(df_sel, use_container_width=True, hide_index=True)
+
+        st.subheader("Template")
+        st.markdown("Tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
+        subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})", key="o_subj")
+        body = st.text_area("Email Body (HTML)", height=220, key="o_body", value=(
+            "Hello {{company}},<br><br>"
+            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}}). "
+            "Responses are due {{due}}. We’d like your quote and capability confirmation."
+            "<br><br>Could you reply with pricing and any questions?"
+            "<br><br>Thank you,<br>ELA Management"
+        ))
+
+        with st.expander("Attachments", expanded=False):
+            files = st.file_uploader("Attach files", type=["pdf","docx","xlsx","zip"], accept_multiple_files=True, key="o_att")
+            attach_paths = []
+            if files:
+                for f in files:
+                    pth = save_uploaded_file(f, subdir="outreach")
+                    if pth: attach_paths.append(pth)
+                if attach_paths:
+                    st.success(f"Saved {len(attach_paths)} attachment(s)")
+
+        st.subheader("Sender Account")
+        acct_id, acct = _o_pick_account(conn)
+        if not acct:
+            st.warning("No SMTP account configured. Use the Accounts tab to add one.")
+
+        c1, c2, c3 = st.columns([2,2,2])
+        with c1:
+            if st.button("Preview first merge"):
+                if not df_sel.empty:
+                    v0 = df_sel.iloc[0].to_dict()
+                    st.info(f"Subject → {_o_merge_text(subj, v0, notice)}")
+                    st.write(_o_merge_text(body, v0, notice), unsafe_allow_html=True)
+                else:
+                    st.info("No recipients to preview.")
+        with c2:
+            if st.button("Export recipients CSV"):
+                path = os.path.join(_ensure_data_dir(), "outreach_recipients.csv")
+                (df_sel if not df_sel.empty else pd.DataFrame(columns=["company","email","phone","city","state","naics"])).to_csv(path, index=False)
+                st.success("Exported recipients CSV")
+                st.markdown(f"[Download recipients CSV]({path})")
+        with c3:
+            do_send = st.button("Send emails (SMTP)", type="primary")
+
+        if do_send:
+            if acct and not df_sel.empty:
+                ok = 0; fail = 0; rows = []
+                for _, row in df_sel.iterrows():
+                    vendor = row.to_dict()
+                    to_email = vendor.get("email","").strip().lower()
+                    if not to_email:
+                        rows.append({"company": vendor.get("company",""), "email": "", "status": "skipped: no email"})
+                        continue
+                    s = _o_merge_text(subj, vendor, notice)
+                    b = _o_merge_text(body, vendor, notice)
+                    success, msg = send_email_smart(conn, to_email, s, b, attach_paths, account_id=acct_id, campaign_id=None, recipient_id=None)
+                    if success: ok += 1
+                    else: fail += 1
+                    rows.append({"company": vendor.get("company",""), "email": to_email, "status": ("sent" if success else msg)})
+                st.success(f"Done. Sent: {ok}  Failed: {fail}")
+                df_log = pd.DataFrame(rows)
+                st.dataframe(df_log, use_container_width=True, hide_index=True)
+                path = os.path.join(_ensure_data_dir(), "outreach_send_log.csv")
+                df_log.to_csv(path, index=False)
+                st.markdown(f"[Download send log]({path})")
+            else:
+                st.warning("Add an account and at least one recipient to send.")
+
+    # ---------- Templates
+    with tabs[1]:
+        try:
+            render_outreach_templates(conn)
+        except Exception as e:
+            st.info(f"Templates unavailable: {e}")
+
+    # ---------- Accounts
+    with tabs[2]:
+        try:
+            p5_render_accounts_and_templates(conn)
+        except Exception as e:
+            st.info(f"Accounts setup unavailable: {e}")
+
+    # ---------- SLA & Follow-ups
+    with tabs[3]:
+        try:
+            render_campaigns_panel(conn)
+        except Exception as e:
+            st.info(f"SLA config unavailable: {e}")
+
+    # ---------- Opt-out
+    with tabs[4]:
+        try:
+            render_opt_out_panel(conn)
+        except Exception as e:
+            st.info(f"Opt-out unavailable: {e}")
+
+    # ---------- Audit Log
+    with tabs[5]:
+        try:
+            dfa = pd.read_sql_query("SELECT sent_at, to_email, subject, status, smtp_response, campaign_id, recipient_id FROM o3_send_log ORDER BY id DESC LIMIT 1000;", conn, params=())
+            if dfa is not None and not dfa.empty:
+                st.dataframe(dfa, use_container_width=True, hide_index=True)
+                csv = dfa.to_csv(index=False).encode("utf-8")
+                st.download_button("Export audit CSV", data=csv, file_name="outreach_audit.csv", mime="text/csv")
+            else:
+                st.caption("No sends yet.")
+        except Exception as e:
+            st.info(f"Audit log unavailable: {e}")
+
 if df_sel.empty:
         st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
 else:
