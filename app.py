@@ -3994,8 +3994,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 st.empty()
             else:
     if _rfp_flow == "Deliverables":
-
-                render_rtm_ui(conn, int(rid_p3))
+        render_rtm_ui(conn, int(rid_p3))
 
     render_status_and_gaps(conn)
     from contextlib import contextmanager
