@@ -8162,24 +8162,24 @@ def main() -> None:
         pass
         try:
             process_outreach_scheduler(conn)
-        except Exception as e:
-            print('Outreach scheduler error:', e)
+        except Exception:
+            pass
 
         except Exception:
             pass
     except Exception:
         pass
     try:
-            process_outreach_scheduler(conn)
-        except Exception as e:
-            print('Outreach scheduler error:', e)
+        process_outreach_scheduler(conn)
+    except Exception:
+        pass
 
     except Exception:
         pass
     try:
-            process_outreach_scheduler(conn)
-        except Exception as e:
-            print('Outreach scheduler error:', e)
+        process_outreach_scheduler(conn)
+    except Exception:
+        pass
 
     except Exception:
         pass
