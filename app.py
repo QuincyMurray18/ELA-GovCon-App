@@ -1,3 +1,5 @@
+import os
+DATA_DIR = os.environ.get('DATA_DIR','data')
 import os, time, json, base64, hmac, hashlib
 import requests
 import time
@@ -3880,7 +3882,6 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     st.warning("No readable pages found in linked files.")
                 else:
                     run_rfp_analyzer_onepage(_pages)
-                    st.stop()
     # === end One-Page Analyzer ===
     # === end One‑Page Analyzer ===
 
@@ -5598,9 +5599,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             df_sel = df_sel.drop_duplicates(subset=["email"])
 
         if df_sel.empty:
-            st.write("No recipients")
-            st.stop()
-
+    st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
         st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
         st.subheader("Template")
@@ -5629,8 +5628,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         acct_id, acct = _o_pick_account(conn)
         if not acct:
             st.info("Add an SMTP account under Accounts tab first.")
-            st.stop()
-
         # Actions
         c1, c2, c3 = st.columns([2,2,2])
         with c1:
@@ -5641,7 +5638,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         with c2:
             if st.button("Export recipients CSV"):
                 csv = df_sel.to_csv(index=False)
-                path = os.path.join(DATA_DIR, "outreach_recipients.csv")
+                path = os.path.join(_ensure_data_dir(), "outreach_recipients.csv")
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(csv)
                 st.success("Exported recipients CSV")
@@ -5667,7 +5664,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             st.success(f"Done. Sent: {ok}  Failed: {fail}")
             df_log = pd.DataFrame(log_rows)
             st.dataframe(df_log, use_container_width=True, hide_index=True)
-            path = os.path.join(DATA_DIR, "outreach_send_log.csv")
+            path = os.path.join(_ensure_data_dir(), "outreach_send_log.csv")
             df_log.to_csv(path, index=False)
             st.markdown(f"[Download send log]({path})")
 
@@ -9147,7 +9144,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             df_sel = df_sel.drop_duplicates(subset=["email"])
 
         if df_sel.empty:
-            st.write("No recipients")
+    st.info('No recipients yet. Import a CSV or select vendors with Subcontractor Finder.')
             return
         st.dataframe(df_sel, use_container_width=True, hide_index=True)
 
@@ -9182,8 +9179,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
         st.subheader("Sender Account")
         acct_id, acct = _o_pick_account(conn)
         if not acct:
-            st.stop()
-
         # SLA follow-up options
         st.subheader("SLA Follow-up")
         fk1, fk2 = st.columns([2,2])
