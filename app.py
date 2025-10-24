@@ -2589,6 +2589,15 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+
+# Compatibility shim for vendors_t
+try:
+    with conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS vendors (id INTEGER PRIMARY KEY, name TEXT, cage TEXT, uei TEXT, naics TEXT, city TEXT, state TEXT, phone TEXT, email TEXT, website TEXT, notes TEXT, place_id TEXT UNIQUE)")
+        conn.execute("CREATE VIEW IF NOT EXISTS vendors_t AS SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors")
+except Exception:
+    pass
+
 def _file_hash() -> str:
     try:
         import hashlib
@@ -7507,8 +7516,13 @@ if "_o3_collect_recipients_ui" not in globals():
             if f_city:
                 q += " AND IFNULL(city,'') LIKE ?"
                 params.append(f"%{f_city}%")
-            try:
-                df = _pd.read_sql_query(q, conn, params=params)
+
+try:
+    df = _pd.read_sql_query(q + " LIMIT 1;", conn, params=tuple(params))
+    if df is None or df.empty:
+        # fallback to vendors table
+        q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
+        df = _pd.read_sql_query(q, conn, params=params)
             except Exception:
                 df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
             st.caption(f"{len(df)} vendors match filters")
@@ -7519,9 +7533,44 @@ if "_o3_collect_recipients_ui" not in globals():
             return None
 
 
-# --- Outreach SMTP sender picker: fallback stub if full implementation is defined later ---
+# --- Outreach SMTP sender picker: working fallback ---
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
+        import streamlit as st
+        from contextlib import closing
+        host = st.session_state.get("smtp_host","smtp.gmail.com")
+        port = int(st.session_state.get("smtp_port",587))
+        username = st.session_state.get("smtp_username","")
+        password = st.session_state.get("smtp_password","")
+        use_tls = bool(st.session_state.get("smtp_use_tls", True))
+
+        st.text_input("SMTP host", value=host, key="smtp_host")
+        st.number_input("SMTP port", min_value=1, max_value=65535, value=port, key="smtp_port")
+        st.text_input("Username", value=username, key="smtp_username")
+        st.text_input("App password", type="password", value=password, key="smtp_password")
+        st.checkbox("Use STARTTLS", value=use_tls, key="smtp_use_tls")
+        saved = False
+        try:
+            # Try to persist if a global get_db exists
+            if "get_db" in globals():
+                conn2 = get_db()
+                with closing(conn2.cursor()) as cur:
+                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                    cur.execute("INSERT OR REPLACE INTO smtp_settings(id, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?)",
+                                (st.session_state["smtp_host"], int(st.session_state["smtp_port"]), st.session_state["smtp_username"], st.session_state["smtp_password"], 1 if st.session_state["smtp_use_tls"] else 0))
+                    conn2.commit()
+                    saved = True
+        except Exception:
+            pass
+        if saved:
+            st.caption("Sender settings saved")
+        return {
+            "host": st.session_state["smtp_host"],
+            "port": int(st.session_state["smtp_port"]),
+            "username": st.session_state["smtp_username"],
+            "password": st.session_state["smtp_password"],
+            "use_tls": bool(st.session_state["smtp_use_tls"]),
+        }
 
         from contextlib import closing
         try:
