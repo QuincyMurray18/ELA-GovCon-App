@@ -563,6 +563,183 @@ def _first_row_value(df, col, default=None):
 
 
 # --- Capability Statement Page (full implementation) ---
+def run_capability_statement(conn):
+
+    import json, datetime, io, sqlite3
+
+    st.header("Capability Statement")
+
+    # Ensure table exists
+    cur = conn.cursor()
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS capability_statement(
+                id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+    )
+    conn.commit()
+
+    # Load last saved
+    row = cur.execute("SELECT data_json FROM capability_statement WHERE id=1").fetchone()
+    defaults = {
+        "company_name": "",
+        "tagline": "",
+        "uei": "",
+        "cage": "",
+        "duns": "",
+        "naics": "561720; 561730; 811310",
+        "psc": "",
+        "website": "",
+        "address": "",
+        "phone": "",
+        "email": "",
+        "core_competencies": "- Bullet one\n- Bullet two",
+        "differentiators": "- Fast response\n- Past performance in federal jobs",
+        "past_performance": "- Agency – Project – Year – Value",
+        "soc_codes": "",
+        "set_asides": "SB; WOSB; VOSB",
+        "social": "",
+    }
+    if row:
+        try:
+            defaults.update(json.loads(row[0]))
+        except Exception:
+            pass
+
+    with st.form("cap_stmt_form", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            company_name = st.text_input("Company name", defaults["company_name"])
+            tagline = st.text_input("Tagline", defaults["tagline"])
+            uei = st.text_input("UEI", defaults["uei"])
+            cage = st.text_input("CAGE", defaults["cage"])
+            duns = st.text_input("DUNS", defaults["duns"])
+            naics = st.text_input("NAICS (semicolon separated)", defaults["naics"])
+            psc = st.text_input("PSC (semicolon separated)", defaults["psc"])
+            set_asides = st.text_input("Socioeconomic set-asides", defaults["set_asides"])
+        with col2:
+            website = st.text_input("Website", defaults["website"])
+            address = st.text_area("Address", defaults["address"], height=80)
+            phone = st.text_input("Phone", defaults["phone"])
+            email = st.text_input("Email", defaults["email"])
+            soc_codes = st.text_input("SOC codes", defaults["soc_codes"])
+            social = st.text_input("Social links", defaults["social"])
+
+        core_competencies = st.text_area("Core competencies (bullets)", defaults["core_competencies"], height=120)
+        differentiators = st.text_area("Differentiators (bullets)", defaults["differentiators"], height=120)
+        past_performance = st.text_area("Past performance (bullets)", defaults["past_performance"], height=120)
+
+        submitted = st.form_submit_button("Save and Preview")
+
+    # Build data dict
+    data = {
+        "company_name": company_name if 'company_name' in locals() else defaults["company_name"],
+        "tagline": tagline if 'tagline' in locals() else defaults["tagline"],
+        "uei": uei if 'uei' in locals() else defaults["uei"],
+        "cage": cage if 'cage' in locals() else defaults["cage"],
+        "duns": duns if 'duns' in locals() else defaults["duns"],
+        "naics": naics if 'naics' in locals() else defaults["naics"],
+        "psc": psc if 'psc' in locals() else defaults["psc"],
+        "website": website if 'website' in locals() else defaults["website"],
+        "address": address if 'address' in locals() else defaults["address"],
+        "phone": phone if 'phone' in locals() else defaults["phone"],
+        "email": email if 'email' in locals() else defaults["email"],
+        "core_competencies": core_competencies if 'core_competencies' in locals() else defaults["core_competencies"],
+        "differentiators": differentiators if 'differentiators' in locals() else defaults["differentiators"],
+        "past_performance": past_performance if 'past_performance' in locals() else defaults["past_performance"],
+        "soc_codes": soc_codes if 'soc_codes' in locals() else defaults["soc_codes"],
+        "set_asides": set_asides if 'set_asides' in locals() else defaults["set_asides"],
+        "social": social if 'social' in locals() else defaults["social"],
+    }
+
+    # Save if submitted
+    if 'submitted' in locals() and submitted:
+        cur.execute("INSERT OR REPLACE INTO capability_statement(id, data_json, updated_at) VALUES(1, ?, ?)",
+                    (json.dumps(data), datetime.datetime.utcnow().isoformat()))
+        conn.commit()
+        st.success("Saved.")
+
+    # Preview
+    st.subheader("Preview")
+    md = f"""
+**{data['company_name']}**
+{data['tagline']}
+
+**UEI:** {data['uei']}   **CAGE:** {data['cage']}   **DUNS:** {data['duns']}
+
+**NAICS:** {data['naics']}
+**PSC:** {data['psc']}
+**Set-asides:** {data['set_asides']}
+**SOC:** {data['soc_codes']}
+
+**Website:** {data['website']}   **Phone:** {data['phone']}   **Email:** {data['email']}
+**Address:** {data['address']}
+
+**Core Competencies**
+{data['core_competencies']}
+
+**Differentiators**
+{data['differentiators']}
+
+**Past Performance**
+{data['past_performance']}
+
+**Social**
+{data['social']}
+"""
+    st.markdown(md)
+
+    # Exports
+    colx, coly = st.columns(2)
+    with colx:
+        # Markdown download always available
+        md_bytes = md.encode("utf-8")
+        st.download_button("Download Markdown", data=md_bytes, file_name="Capability_Statement.md", mime="text/markdown")
+
+    with coly:
+        # Try DOCX export
+        try:
+            from docx import Document
+            from docx.shared import Pt, Inches
+            doc = Document()
+            style = doc.styles["Normal"]
+            style.font.name = "Calibri"
+            style.font.size = Pt(10)
+
+            doc.add_heading(data['company_name'], level=1)
+            if data['tagline']:
+                doc.add_paragraph(data['tagline'])
+
+            t = doc.add_table(rows=4, cols=2)
+            t.style = "Light List Accent 1"
+            t.cell(0,0).text = "UEI";    t.cell(0,1).text = data['uei']
+            t.cell(1,0).text = "CAGE";   t.cell(1,1).text = data['cage']
+            t.cell(2,0).text = "NAICS";  t.cell(2,1).text = data['naics']
+            t.cell(3,0).text = "PSC";    t.cell(3,1).text = data['psc']
+
+            doc.add_heading("Core Competencies", level=2)
+            for line in [l.strip("- ").strip() for l in data['core_competencies'].splitlines() if l.strip()]:
+                doc.add_paragraph(line, style="List Bullet")
+
+            doc.add_heading("Differentiators", level=2)
+            for line in [l.strip("- ").strip() for l in data['differentiators'].splitlines() if l.strip()]:
+                doc.add_paragraph(line, style="List Bullet")
+
+            doc.add_heading("Past Performance", level=2)
+            for line in [l.strip("- ").strip() for l in data['past_performance'].splitlines() if l.strip()]:
+                doc.add_paragraph(line, style="List Bullet")
+
+            doc.add_heading("Contact", level=2)
+            doc.add_paragraph(f"Website: {data['website']}")
+            doc.add_paragraph(f"Phone: {data['phone']}  Email: {data['email']}")
+            doc.add_paragraph(f"Address: {data['address']}")
+
+            bio = io.BytesIO()
+            doc.save(bio)
+            st.download_button("Download DOCX", data=bio.getvalue(), file_name="Capability_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.warning("DOCX export unavailable. Install python-docx to enable.")
 
 
 
@@ -786,6 +963,22 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
 
 # === helper: auto-select number of sources to cite (Y1–Y3) ===
 
+def y_auto_k(text: str) -> int:
+    t = (text or '').lower()
+    n = len(t)
+    broad = any(k in t for k in [
+        'overview','summary','summarize','list all','requirements','compliance',
+        'section l','section m','evaluation factors','factors','checklist',
+        'compare','differences','conflict','conflicts','crosswalk','matrix'
+    ])
+    if not t.strip():
+        return 4
+    base = 7 if broad else 4
+    if n > 500:
+        base += 1
+    if n > 1200:
+        base += 1
+    return max(3, min(8, base))
 
 import os
 
@@ -864,6 +1057,9 @@ def y0_ai_panel():
 
 
 # --- key namespacing helper (Phase U) ---
+def ns(*parts) -> str:
+    """Generate stable, unique Streamlit widget keys."""
+    return "k_" + "_".join(str(p) for p in parts if p is not None)
 DATA_DIR = "data"
 DB_PATH = os.path.join(DATA_DIR, "govcon.db")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
@@ -1570,6 +1766,8 @@ def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k
     user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
     return [{"role":"system","content": system}, {"role":"user","content": user}]
 
+def y4_stream_review(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6, temperature: float = 0.1):
+    msgs = _y4_build_messages(conn, int(rfp_id), draft_text or "", k=int(k))
 
 
 def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5) -> str:
@@ -3225,7 +3423,6 @@ def y55_ai_parse(text: str) -> dict:
         return out
 
     except Exception:
-        pass
 
         # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
@@ -5281,6 +5478,140 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
     return out
 
 
+def run_outreach(conn: sqlite3.Connection) -> None:
+    # O2: templates picker and manager
+    try:
+        _tpl_picker_prefill(conn)
+        with st.expander("Templates", expanded=False):
+            render_outreach_templates(conn)
+    except Exception:
+        pass
+
+    st.header("Outreach")
+    st.markdown("**O3 WIRED — Mail Merge & Send**")
+    with st.expander("Mail Merge & Send", expanded=True):
+        render_outreach_mailmerge(conn)
+    st.caption("Mail-merge RFQs to selected vendors. Uses SMTP settings from secrets.")
+
+    notice = st.session_state.get("rfp_selected_notice", {})
+    vendor_ids: List[int] = st.session_state.get("rfq_vendor_ids", [])
+
+    if vendor_ids:
+        ph = ",".join(["?"] * len(vendor_ids))
+        df_sel = pd.read_sql_query(
+            f"SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE id IN ({ph});",
+            conn,
+            params=vendor_ids,
+        )
+    else:
+        st.info("No vendors queued. Use Subcontractor Finder to select vendors, or pick by filter below.")
+        f_naics = st.text_input("NAICS filter")
+        f_state = st.text_input("State filter")
+        q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+        params: List[Any] = []
+        if f_naics:
+            q += " AND naics LIKE ?"
+            params.append(f"%{f_naics}%")
+        if f_state:
+            q += " AND state LIKE ?"
+            params.append(f"%{f_state}%")
+        df_sel = pd.read_sql_query(q + " ORDER BY name;", conn, params=params)
+
+    st.subheader("Recipients")
+    if df_sel.empty:
+        st.write("No recipients")
+        return
+    st.dataframe(df_sel, use_container_width=True, hide_index=True)
+
+    st.subheader("Template")
+
+    st.markdown("Use tags: {company}, {email}, {phone}, {naics}, {title}, {solicitation}, {due}, {notice_id}")
+
+    # O2: templates picker and manager
+
+    try:
+
+        _tpl_picker_prefill(conn)
+
+        with st.expander("Templates", expanded=False):
+
+            render_outreach_templates(conn)
+
+    except Exception:
+
+        pass
+
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject", "RFQ: {{title}} (Solicitation {{solicitation}})"))
+
+    body = st.text_area("Email Body (HTML supported)", value=st.session_state.get("outreach_html", (
+
+        "Hello {{company}},<br><br>"
+            "We are preparing a competitive quote for {{title}} (Solicitation {{solicitation}})."
+            " Responses are due {{due}}. We’d like your quote and capability confirmation."
+            "<br><br>Could you reply with pricing and any questions?"
+            "<br><br>Thank you,<br>ELA Management"
+
+    )), height=200)
+
+
+    with st.expander("Attachments", expanded=False):
+        files = st.file_uploader("Attach files (optional)", type=["pdf", "docx", "xlsx", "zip"], accept_multiple_files=True)
+        attach_paths: List[str] = []
+        if files:
+            for f in files:
+                pth = save_uploaded_file(f, subdir="outreach")
+                if pth:
+                    attach_paths.append(pth)
+            if attach_paths:
+                st.success(f"Saved {len(attach_paths)} attachment(s)")
+
+    c1, c2, c3 = st.columns([2,2,2])
+    with c1:
+        if st.button("Preview first merge"):
+            v0 = df_sel.iloc[0].to_dict()
+            st.info(f"Subject → {_merge_text(subj, v0, notice)}")
+            st.write(_merge_text(body, v0, notice), unsafe_allow_html=True)
+    with c2:
+        if st.button("Export recipients CSV"):
+            csv = df_sel.to_csv(index=False)
+            path = os.path.join(DATA_DIR, "outreach_recipients.csv")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(csv)
+            st.success("Exported recipients CSV")
+            st.markdown(f"[Download recipients CSV]({path})")
+    with c3:
+        sent = st.button("Send emails (SMTP)", type="primary")
+
+    if sent:
+        ok = 0
+        fail = 0
+        log_rows = []
+        for _, row in df_sel.iterrows():
+            vendor = row.to_dict()
+            to_email = vendor.get("email")
+            if not to_email:
+                log_rows.append({"vendor": vendor.get("name"), "email": "", "status": "skipped: no email"})
+                continue
+            s = _merge_text(subj, vendor, notice)
+            b = _merge_text(body, vendor, notice)
+            success, msg = send_email_smtp(to_email, s, b, attach_paths)
+            ok += 1 if success else 0
+            fail += 0 if success else 1
+            log_rows.append({"vendor": vendor.get("name"), "email": to_email, "status": ("sent" if success else msg)})
+        st.success(f"Done. Sent: {ok}  Failed: {fail}")
+        df_log = pd.DataFrame(log_rows)
+        st.dataframe(df_log, use_container_width=True, hide_index=True)
+        path = os.path.join(DATA_DIR, "outreach_send_log.csv")
+        df_log.to_csv(path, index=False)
+        st.markdown(f"[Download send log]({path})")
+
+
+# ---------- Quotes (Phase E) ----------
+    try:
+        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_outreach_y6", title="CO guidance for outreach")
+    except Exception:
+        pass
 
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
@@ -5942,6 +6273,40 @@ def _pp_writeup_block(rec: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame) -> Optional[str]:
+    try:
+        import docx  # type: ignore
+    except Exception:
+        try:
+            from docx import Document  # type: ignore
+            import docx  # type: ignore
+        except Exception:
+
+            st.error("python-docx is required. pip install python-docx")
+            return None
+    try:
+        from docx.shared import Inches  # type: ignore
+    except Exception:
+        pass
+    try:
+        doc = docx.Document()
+        doc.add_heading(title or "Win Plan", 0)
+        if subtitle:
+            doc.add_paragraph(subtitle)
+        if isinstance(sections, pd.DataFrame) and not sections.empty:
+            for _, row in sections.iterrows():
+                sec = str(row.get("Section") or row.get("section") or row.get("name") or "Section")
+                body = str(row.get("Content") or row.get("content") or row.get("text") or "")
+                doc.add_heading(sec, level=2)
+                for para in (body or "").split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+        doc.save(path)
+        return path
+    except Exception as e:
+
+        st.error(f"DOCX export failed: {e}")
+        return None
 
 def run_past_performance(conn: sqlite3.Connection) -> None:
     st.header("Past Performance Library")
@@ -6130,7 +6495,6 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
             from docx import Document  # type: ignore
             import docx  # type: ignore
         except Exception:
-            pass
 
             st.error("python-docx is required. pip install python-docx")
             return None
@@ -6154,7 +6518,6 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
         doc.save(path)
         return path
     except Exception as e:
-        pass
 
         st.error(f"DOCX export failed: {e}")
         return None
@@ -7395,14 +7758,231 @@ def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
+def ensure_subfinder_s1_schema(conn):
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()]
+    except Exception:
+        cols = []
+    with conn:
+        if "place_id" not in cols:
+            try:
+                conn.execute("ALTER TABLE vendors ADD COLUMN place_id TEXT")
+            except Exception:
+                pass
+        if "fit_score" not in cols:
+            try:
+                conn.execute("ALTER TABLE vendors ADD COLUMN fit_score REAL")
+            except Exception:
+                pass
+        if "tags" not in cols:
+            try:
+                conn.execute("ALTER TABLE vendors ADD COLUMN tags TEXT")
+            except Exception:
+                pass
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
 
+def s1_normalize_phone(s):
+    s = (s or "").strip()
+    return "".join(ch for ch in s if ch.isdigit())
 
+def s1_get_google_api_key():
+    import os
+    try:
 
+        if "google" in st.secrets and "api_key" in st.secrets["google"]:
+            return st.secrets["google"]["api_key"]
+        if "google_api_key" in st.secrets:
+            return st.secrets["google_api_key"]
+    except Exception:
+        pass
+    return os.environ.get("GOOGLE_API_KEY")
 
+def s1_geocode_address(address):
+    key = s1_get_google_api_key()
+    if not key:
+        return None
+    import urllib.parse, urllib.request, json
+    params = urllib.parse.urlencode({"address": address, "key": key})
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("results"):
+            loc = data["results"][0]["geometry"]["location"]
+            return float(loc["lat"]), float(loc["lng"])
+    except Exception:
+        return None
+    return None
 
+def s1_places_text_search(query, lat, lon, radius_meters, page_token=None):
+    key = s1_get_google_api_key()
+    if not key:
+        return {"error": "no_api_key"}
+    import urllib.parse, urllib.request, json, time
+    base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {"query": query, "location": f"{lat},{lon}", "radius": radius_meters, "key": key}
+    if page_token:
+        params = {"pagetoken": page_token, "key": key}
+        time.sleep(2.0)  # required by Google
+    url = base + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"error": str(e)}
 
+def s1_vendor_exists(conn, place_id, email, phone):
+    q = "SELECT 1 FROM vendors WHERE 1=0"
+    args = []
+    if place_id:
+        q += " OR place_id=?"; args.append(place_id)
+    if email:
+        q += " OR LOWER(email)=LOWER(?)"; args.append(email.strip())
+    if phone:
+        q += " OR REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?"
+        args.append("%" + s1_normalize_phone(phone) + "%")
+    row = conn.execute(q, tuple(args)).fetchone()
+    return bool(row)
 
+def s1_save_vendor(conn, v):
+    ensure_subfinder_s1_schema(conn)
+    name = v.get("name") or ""
+    pid = v.get("place_id") or None
+    addr = v.get("formatted_address") or ""
+    city, state = None, None
+    phone = v.get("formatted_phone_number") or v.get("international_phone_number") or ""
+    phone = s1_normalize_phone(phone)
+    website = v.get("website") or ""
+    email = v.get("email") or ""
+    with conn:
+        conn.execute("""
+            INSERT INTO vendors(name, city, state, phone, email, website, notes, place_id)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(place_id) DO UPDATE SET
+              name=excluded.name,
+              phone=COALESCE(excluded.phone, vendors.phone),
+              website=COALESCE(excluded.website, vendors.website)
+        """, (name, city, state, phone, email, website, addr, pid))
+    row = conn.execute("SELECT id FROM vendors WHERE place_id=?", (pid,)).fetchone()
+    return row[0] if row else None
 
+def s1_calc_radius_meters(miles):
+    return int(float(miles) * 1609.344)
+
+def s1_render_places_panel(conn, default_addr=None):
+    import streamlit as st, pandas as pd
+
+    ensure_subfinder_s1_schema(conn)
+
+    st.markdown("### Google Places search")
+    key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
+    miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
+    q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q", "janitorial"), key="s1_q")
+    hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
+
+    ss = st.session_state
+    ss.setdefault("s1_page_token", None)
+    ss.setdefault("s1_results", None)         # table rows
+    ss.setdefault("s1_raw_results", None)     # place_id -> raw place
+    ss.setdefault("s1_saved_ids", set())      # saved this session
+
+    colA, colB, colC = st.columns([1,1,1])
+    do_search = colA.button("Search")
+    do_next = colB.button("Next page")
+    do_clear = colC.button("Clear")
+
+    if do_clear:
+        ss["s1_page_token"] = None
+        ss["s1_results"] = None
+        ss["s1_raw_results"] = None
+        ss["s1_saved_ids"] = set()
+
+    # Fetch new page only on explicit action
+    if (do_search or do_next) and key_addr:
+        loc = s1_geocode_address(key_addr)
+        if not loc:
+            st.error("Geocoding failed or API key missing")
+            return
+        lat, lon = loc
+        token = ss.get("s1_page_token") if do_next else None
+        data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
+        if "error" in data:
+            st.error(f"Places error: {data['error']}")
+            return
+        ss["s1_page_token"] = data.get("next_page_token")
+
+        rows = []
+        raw = {}
+        for r in data.get("results", []) or []:
+            pid = r.get("place_id")
+            if not pid:
+                continue
+            raw[pid] = r
+            name = r.get("name")
+            addr = r.get("formatted_address", "")
+            rating = r.get("rating", None)
+            open_now = (r.get("opening_hours") or {}).get("open_now")
+            dup = hide_saved and (s1_vendor_exists(conn, pid, None, None) or pid in ss["s1_saved_ids"])
+            if not dup:
+                rows.append({"place_id": pid, "name": name, "address": addr, "rating": rating, "open_now": open_now})
+        ss["s1_results"] = rows
+        ss["s1_raw_results"] = raw
+
+    rows = ss.get("s1_results") or []
+    raw = ss.get("s1_raw_results") or {}
+
+    if not rows:
+        st.info("No results yet. Enter an address and click Search.")
+        st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
+        return
+
+    df = pd.DataFrame(rows)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    ids = [r["place_id"] for r in rows if r.get("place_id")]
+    if not ids:
+        st.info("No selectable results on this page.")
+        return
+
+    with st.form("s1_save_form", clear_on_submit=False):
+        to_save = st.multiselect(
+            "Select vendors to save",
+            ids,
+            default=[],
+            format_func=lambda x: next((r["name"] for r in rows if r["place_id"] == x), x),
+            key="s1_select_ids"
+        )
+        submit = st.form_submit_button("Save selected to vendors", key="s1_save_selected_form")
+
+    if submit:
+        st.caption(f"Selected count: {len(to_save)}")
+    if submit and to_save:
+        saved = 0
+        errors = []
+        for pid in to_save:
+            r = raw.get(pid)
+            if not r:
+                continue
+            try:
+                s1_save_vendor(conn, r)
+                saved += 1
+                ss["s1_saved_ids"].add(pid)
+            except Exception as e:
+                errors.append(f"{pid}: {e}")
+        if saved:
+            st.success(f"Saved {saved} vendors")
+        if errors:
+            st.error("Some saves failed: " + "; ".join(errors))
+
+        if hide_saved:
+            rows = [r for r in rows if r["place_id"] not in ss["s1_saved_ids"]]
+            ss["s1_results"] = rows
+            df2 = pd.DataFrame(rows) if rows else pd.DataFrame([], columns=["place_id","name","address","rating","open_now"])
+            st.dataframe(df2, use_container_width=True, hide_index=True)
+
+    if ss.get("s1_page_token"):
+        st.caption("Another page is available. Click Next page to load more.")
+    st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
     try:
@@ -7464,6 +8044,45 @@ def router(page: str, conn: sqlite3.Connection) -> None:
 # Behavior:
 # - If y1_search returns no hits for the question, the assistant refuses and instructs the user to build/update the index.
 # - When evidence exists, normal streaming continues with bracketed citations as before.
+def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
+    try:
+        _k = max(3, int(k))
+    except Exception:
+        _k = 6
+    # Require evidence from the indexed RFP chunks
+    _hits = y1_search(conn, int(rfp_id), user_q or "", k=int(_k))
+    if not _hits:
+        msg = ("Insufficient evidence in linked RFP files. "
+               "Build or Update the search index for this RFP on 'Ask with citations (Y1)', then ask again. "
+               "General answers are disabled in CO Chat.")
+        # Persist refusal to the thread for auditability
+        try:
+            y2_append_message(conn, int(thread_id), "assistant", msg)
+        except Exception:
+            pass
+        # Stream the refusal once
+        yield msg
+        return
+
+    # Otherwise continue with the standard message construction which embeds EVIDENCE
+    msgs = _y2_build_messages(conn, int(rfp_id), int(thread_id), user_q or "", k=int(_k))
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        if "model_not_found" in str(_e) or "does not exist" in str(_e):
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        else:
+            yield f"AI unavailable: {type(_e).__name__}: {_e}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
 # === End Y2 LOCK PATCH ===
 
 def main() -> None:
@@ -7585,6 +8204,55 @@ if "_o3_render_sender_picker" not in globals():
         }
 
 
+def render_outreach_mailmerge(conn):
+    global _O4_CONN
+
+    import streamlit as st
+    try:
+        _tpl_picker_prefill(conn)
+    except Exception:
+        pass
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=220, key="o3_body")
+    try:
+        rows = _o3_collect_recipients_ui(conn)
+    except Exception:
+        rows = None
+    st.subheader("Sender")
+    try:
+        sender = _o3_render_sender_picker()
+    except Exception:
+        sender = {"email":"", "app_password":""}
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if test and rows is not None and hasattr(rows, "empty") and not rows.empty:
+        try:
+            _o3_send_batch(conn, sender, rows, subj, body, test_only=True, max_send=int(maxn))
+        except Exception as e:
+            st.error(f"Test send failed: {e}")
+    if do:
+        if not sender.get("email") or not sender.get("app_password"):
+            st.error("Missing sender credentials")
+        elif rows is None or (hasattr(rows, "empty") and rows.empty):
+            st.error("No recipients")
+        else:
+            try:
+                _o3_send_batch(conn, sender, rows, subj, body, test_only=False, max_send=int(maxn))
+            except Exception as e:
+                st.error(f"Send failed: {e}")
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+    rows = _o3_collect_recipients_ui(conn)
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+    rows = _o3_collect_recipients_ui(conn)
 def render_outreach_mailmerge(conn):
     import streamlit as st
     import pandas as _pd
@@ -8492,6 +9160,25 @@ def _o3_sender_accounts_from_secrets():
     except Exception:
         return []
 
+def _o3_render_sender_picker():
+
+    accs = _o3_sender_accounts_from_secrets()
+    choices = [f"{a.get('name')+' · ' if a.get('name') else ''}{a['email']}" for a in accs]
+    default_idx = 0 if choices else None
+    sel = st.selectbox("Sender account", choices or ["<enter credentials>"], index=default_idx, key="o3_sender_pick")
+    creds = {"email":"", "app_password":"", "name":""}
+    if accs and sel in choices:
+        i = choices.index(sel)
+        creds = accs[i]
+    if not accs:
+        st.caption("Enter Gmail + App Password")
+        c1, c2 = st.columns([2,2])
+        with c1:
+            creds["email"] = st.text_input("Gmail address", key="o3_s_email")
+            creds["name"] = st.text_input("From name", key="o3_s_name")
+        with c2:
+            creds["app_password"] = st.text_input("App password", type="password", key="o3_s_app")
+    return creds
 
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
     import streamlit as st, datetime as _dt, pandas as _pd
@@ -8570,7 +9257,6 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         import docx  # type: ignore
         from docx.shared import Inches  # type: ignore
     except Exception:
-        pass
 
         st.error("python-docx is required. pip install python-docx")
         return None
@@ -8594,7 +9280,6 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         doc.save(path)
         return path
     except Exception as e:
-        pass
 
         st.error(f"Past Performance export failed: {e}")
         return None
