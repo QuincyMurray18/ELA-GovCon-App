@@ -1,38 +1,42 @@
 import requests
 import time
+# ==== O4 unified DB + sender helpers ====
+try:
+    DB_PATH
+except NameError:
+    DB_PATH = "./data/app.db"
+
 _O4_CONN = globals().get("_O4_CONN", None)
+
+def ensure_dirs():
+    from pathlib import Path as _Path
+    _Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+def get_db():
+    import sqlite3
+    from contextlib import closing as _closing
+    ensure_dirs()
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    with _closing(conn.cursor()) as cur:
+        cur.execute("PRAGMA foreign_keys = ON;")
+    return conn
 
 def get_o4_conn():
     import streamlit as st
-    import sqlite3
-    from contextlib import closing as _closing
     global _O4_CONN
-    # reuse cached
     if _O4_CONN:
         try:
             st.session_state["conn"] = _O4_CONN
         except Exception:
             pass
         return _O4_CONN
-    # prefer session-scoped
     try:
         if "conn" in st.session_state and st.session_state.get("conn"):
             _O4_CONN = st.session_state["conn"]
             return _O4_CONN
     except Exception:
         pass
-    # canonical app DB
-    try:
-        conn = get_db()
-    except Exception:
-        # fallback to DB_PATH or default file
-        try:
-            dbp = DB_PATH
-        except Exception:
-            dbp = "./data/app.db"
-        conn = sqlite3.connect(dbp, check_same_thread=False)
-        with _closing(conn.cursor()) as _c:
-            _c.execute("PRAGMA foreign_keys = ON;")
+    conn = get_db()
     _O4_CONN = conn
     try:
         st.session_state["conn"] = conn
@@ -40,6 +44,15 @@ def get_o4_conn():
         pass
     return conn
 
+def _ensure_email_accounts_schema(conn):
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS email_accounts(
+            user_email TEXT PRIMARY KEY,
+            display_name TEXT,
+            app_password TEXT
+        )""")
+        conn.commit()
 
 def _get_senders(conn):
     from contextlib import closing as _closing
@@ -51,7 +64,7 @@ def _get_senders(conn):
     for tbl, c_email, c_name, c_pw in tables:
         try:
             with _closing(conn.cursor()) as c:
-                c.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'")
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tbl,))
                 if not c.fetchone():
                     continue
                 c.execute(f"SELECT {c_email}, {c_name}, {c_pw} FROM {tbl} ORDER BY {c_email}")
@@ -61,16 +74,7 @@ def _get_senders(conn):
         except Exception:
             continue
     return []
-def _ensure_email_accounts_schema(conn):
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as _c:
-        _c.execute("""CREATE TABLE IF NOT EXISTS email_accounts(
-            user_email TEXT PRIMARY KEY,
-            display_name TEXT,
-            app_password TEXT
-        )""")
-        conn.commit()
-_O4_CONN = None  # global for O4 sender picker
+# ==== end O4 helpers ====
 # Helper imports for RTM/Amendment
 import re as _rtm_re
 import json as _rtm_json
@@ -7630,7 +7634,7 @@ if "_o3_render_sender_picker" not in globals():
         choices = [r[0] for r in rows] + ["<add new>"]
         sel = st.selectbox("From account", choices, key="o4_from_addr")
         if sel == "<add new>":
-            st.info("Add a sender in Outreach → Sender accounts")
+            st.info("Add a sender in Outreach -> Sender accounts")
             return {"email": "", "app_password": ""}
         pw = st.text_input("App password", type="password", key="o4_from_pw")
         return {"email": sel, "app_password": pw}
@@ -7777,7 +7781,7 @@ def test_seed_cases():
 
     import sqlite3
     from contextlib import closing as _closing
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
         conn.commit()
@@ -8675,7 +8679,7 @@ def _o3_render_sender_picker():
 
     conn = globals().get("_O4_CONN")
     if conn is None:
-        st.error("No sender accounts configured");
+        st.warning("Internal: sender picker not initialized");
         return {"email":"", "app_password":""}
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
