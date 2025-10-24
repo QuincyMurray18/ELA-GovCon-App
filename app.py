@@ -8709,17 +8709,32 @@ def seed_default_templates(conn):
 
 
 
-# === Outreach & Subcontractor Enhancements — merged by assistant ===
+# === START: Outreach & Subcontractor Enhancements — merged by assistant ===
 
-import smtplib, ssl
+# safe imports (duplicates are fine)
+import sqlite3
+from contextlib import closing
+import pandas as pd
+import streamlit as st
+from pathlib import Path
+import smtplib, ssl, re, json, hashlib, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 
+# fallback for file uploads if host app did not define it
+if "save_uploaded_file" not in globals():
+    def save_uploaded_file(uploaded_file, subdir="outreach"):
+        base = Path("uploads")/subdir
+        base.mkdir(parents=True, exist_ok=True)
+        file_path = base / uploaded_file.name
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        return str(file_path)
+
 def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
     with closing(conn.cursor()) as cur:
-        # Accounts for SMTP (Gmail app password supported). Store minimally. User is responsible for securing secrets.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o1_email_accounts(
                 id INTEGER PRIMARY KEY,
@@ -8735,7 +8750,6 @@ def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
                 created_at TEXT
             );
         """)
-        # Templates
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o2_templates(
                 id INTEGER PRIMARY KEY,
@@ -8746,7 +8760,6 @@ def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
                 updated_at TEXT
             );
         """)
-        # Send log (audit)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o3_send_log(
                 id INTEGER PRIMARY KEY,
@@ -8765,19 +8778,17 @@ def ensure_outreach_schema(conn: sqlite3.Connection) -> None:
                 FOREIGN KEY(account_id) REFERENCES o1_email_accounts(id) ON DELETE SET NULL
             );
         """)
-        # Follow-ups with SLA
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o4_followups(
                 id INTEGER PRIMARY KEY,
                 log_id INTEGER NOT NULL,
                 due_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending', -- pending, sent, canceled
+                status TEXT NOT NULL DEFAULT 'pending',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_attempt_at TEXT,
                 FOREIGN KEY(log_id) REFERENCES o3_send_log(id) ON DELETE CASCADE
             );
         """)
-        # Opt-outs
         cur.execute("""
             CREATE TABLE IF NOT EXISTS o5_unsubscribes(
                 id INTEGER PRIMARY KEY,
@@ -8816,7 +8827,7 @@ def o1_delete_account(conn, account_id: int):
 def o2_list_templates(conn):
     ensure_outreach_schema(conn)
     try:
-        return pd.read_sql_query("SELECT * FROM o2_templates ORDER BY updated_at DESC NULLS LAST, id DESC;", conn, params=())
+        return pd.read_sql_query("SELECT * FROM o2_templates ORDER BY updated_at DESC, id DESC;", conn, params=())
     except Exception:
         return pd.DataFrame()
 
@@ -8838,7 +8849,6 @@ def o2_delete_template(conn, name):
         conn.commit()
 
 def _o_merge_text(text: str, vendor: dict, notice: dict) -> str:
-    # Prefer existing merge function if present
     try:
         fn = globals().get("_merge_text")
         if callable(fn):
@@ -8917,7 +8927,6 @@ def _o_send_via_smtp(acct: dict, to_email: str, subject: str, html_body: str, at
             msg.attach(part)
         except Exception:
             pass
-    # Send
     resp = ""
     mid = ""
     try:
@@ -8950,11 +8959,9 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
     # ---- Compose & Send
     with tabs[0]:
-        # context
         notice = st.session_state.get("rfp_selected_notice", {}) or {}
         vendor_ids = st.session_state.get("rfq_vendor_ids", []) or []
 
-        # recipients
         df_sel = pd.DataFrame()
         if vendor_ids:
             ph = ",".join(["?"] * len(vendor_ids))
@@ -8978,7 +8985,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 df_sel = pd.DataFrame()
 
         st.subheader("Recipients")
-        # Import CSV for mass emails
         up = st.file_uploader("Optionally import recipients CSV (name,email,phone,city,state,naics)", type=["csv"], key="o_recip_csv")
         if up is not None:
             try:
@@ -8991,7 +8997,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             except Exception as e:
                 st.error(f"CSV import failed: {e}")
 
-        # Clean + dedupe recipients by email
         if not df_sel.empty and "email" in df_sel.columns:
             df_sel["email"] = df_sel["email"].fillna("").str.strip().str.lower()
             df_sel = df_sel[df_sel["email"] != ""]
@@ -9004,7 +9009,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
 
         st.subheader("Template")
         st.markdown("Tags: {{company}}, {{email}}, {{phone}}, {{city}}, {{state}}, {{naics}}, {{title}}, {{solicitation}}, {{due}}, {{notice_id}}")
-        # Default subject/body
         subj = st.text_input("Subject", value="RFQ: {{title}} (Solicitation {{solicitation}})", key="o_subj")
         body = st.text_area("Email Body (HTML)", height=220, key="o_body", value=(
             "Hello {{company}},<br><br>"
@@ -9029,13 +9033,11 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             st.info(f"Subject → {_o_merge_text(subj, v0, notice)}")
             st.write(_o_merge_text(body, v0, notice), unsafe_allow_html=True)
 
-        # Account selection
         st.subheader("Sender Account")
         acct_id, acct = _o_pick_account(conn)
         if not acct:
             st.stop()
 
-        # SLA follow-up options
         st.subheader("SLA Follow-up")
         fk1, fk2 = st.columns([2,2])
         with fk1:
@@ -9056,11 +9058,8 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 s = _o_merge_text(subj, vendor, notice)
                 b = _o_merge_text(body, vendor, notice)
                 status, resp, mid = _o_send_via_smtp(acct, to_email, s, b, attach_paths)
-                # Log
                 _o_log_send(conn, acct_id, int(vendor.get("id") or 0), to_email, s, b, attach_paths, notice.get("notice_id"), notice.get("rfp_id") or None, status, resp, mid)
-                # Schedule follow-up
                 if status == "sent" and enable_fu:
-                    # fetch log_id just inserted
                     try:
                         log_id = int(pd.read_sql_query("SELECT id FROM o3_send_log ORDER BY id DESC LIMIT 1;", conn, params=()).iloc[0]["id"])
                         _o_schedule_followup(conn, log_id, int(fu_hours))
@@ -9070,7 +9069,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 else: errs += 1
             st.success(f"Done. Sent={sent_n}, skipped opt-out={skipped}, errors={errs}")
 
-    # ---- Templates
     with tabs[1]:
         st.subheader("Email Templates")
         name = st.text_input("Template Name")
@@ -9096,7 +9094,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             st.session_state["o_body"] = row.get("body_html") or ""
             st.info("Loaded into Compose tab. Switch back to send.")
 
-    # ---- Accounts
     with tabs[2]:
         st.subheader("SMTP Accounts")
         st.caption("For Gmail: host smtp.gmail.com, port 587 with TLS, or 465 with SSL. Use an App Password.")
@@ -9122,13 +9119,11 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                     st.experimental_rerun()
                 except Exception as e:
                     st.error(f"Add failed: {e}")
-        # Delete
         if not df.empty:
             del_id = st.selectbox("Delete account", options=[None]+df["id"].tolist())
             if del_id and st.button("Confirm Delete"):
                 o1_delete_account(conn, int(del_id)); st.warning("Deleted"); st.experimental_rerun()
 
-    # ---- SLA & Follow-ups
     with tabs[3]:
         st.subheader("Pending Follow-ups")
         try:
@@ -9153,7 +9148,6 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                     conn.commit()
                 st.success("Marked sent")
 
-    # ---- Opt-out
     with tabs[4]:
         st.subheader("Opt-out / Unsubscribe")
         em = st.text_input("Email to opt-out")
@@ -9163,14 +9157,12 @@ def run_outreach(conn: sqlite3.Connection) -> None:
                 cur.execute("INSERT OR IGNORE INTO o5_unsubscribes(email, reason, created_at) VALUES(?,?,?);", (em.strip().lower(), reason.strip(), _o_now()))
                 conn.commit()
             st.success("Opt-out added")
-        # List
         try:
             dfo = pd.read_sql_query("SELECT email, reason, created_at FROM o5_unsubscribes ORDER BY created_at DESC;", conn, params=())
         except Exception:
             dfo = pd.DataFrame()
         st.dataframe(dfo, use_container_width=True, hide_index=True)
 
-    # ---- Audit Log
     with tabs[5]:
         st.subheader("Send Log")
         try:
@@ -9179,12 +9171,7 @@ def run_outreach(conn: sqlite3.Connection) -> None:
             dfl = pd.DataFrame()
         st.dataframe(dfl, use_container_width=True, hide_index=True)
 
-# Subcontractor Finder: strengthen de-duplication and website hyperlinking when saving vendors.
 def s1_save_vendor(conn: sqlite3.Connection, v: dict) -> int:
-    """
-    Upsert vendor into vendors_t with de-duplication by email, website, and place_id if available.
-    v keys expected: name, email, phone, city, state, naics, website, place_id
-    """
     try:
         name = (v.get("name") or "").strip()
         email = (v.get("email") or "").strip().lower()
@@ -9195,26 +9182,29 @@ def s1_save_vendor(conn: sqlite3.Connection, v: dict) -> int:
         website = (v.get("website") or "").strip()
         place_id = (v.get("place_id") or "").strip()
         with closing(conn.cursor()) as cur:
-            # Try email
             if email:
                 cur.execute("SELECT id FROM vendors_t WHERE LOWER(email)=? LIMIT 1;", (email,))
                 row = cur.fetchone()
                 if row: return int(row[0])
-            # Try website
             if website:
                 cur.execute("SELECT id FROM vendors_t WHERE website=? LIMIT 1;", (website,))
                 row = cur.fetchone()
                 if row: return int(row[0])
-            # Try place_id
             if place_id:
                 cur.execute("SELECT id FROM vendors_t WHERE place_id=? LIMIT 1;", (place_id,))
                 row = cur.fetchone()
                 if row: return int(row[0])
-            # Insert new
-            cur.execute("""
-                INSERT INTO vendors_t(name, email, phone, city, state, naics, website, place_id, created_at)
-                VALUES(?,?,?,?,?,?,?,?,?);
-            """, (name, email, phone, city, state, naics, website, place_id, _o_now()))
+            # Try insert with created_at. If schema lacks the column, fall back.
+            try:
+                cur.execute("""
+                    INSERT INTO vendors_t(name, email, phone, city, state, naics, website, place_id, created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?);
+                """, (name, email, phone, city, state, naics, website, place_id, _o_now()))
+            except Exception:
+                cur.execute("""
+                    INSERT INTO vendors_t(name, email, phone, city, state, naics, website, place_id)
+                    VALUES(?,?,?,?,?,?,?,?);
+                """, (name, email, phone, city, state, naics, website, place_id))
             vid = cur.lastrowid
             conn.commit()
             return int(vid)
@@ -9229,11 +9219,11 @@ def s1_vendor_website_link(url: str) -> str:
         u = "http://" + u
     return f'<a href="{u}" target="_blank">{u}</a>'
 
-# Hook: if a Places details result has website or formatted_phone_number, prefer those fields.
 def s1_merge_places_details(base: dict, details: dict) -> dict:
     out = dict(base or {})
     d = details or {}
     out["phone"] = d.get("formatted_phone_number") or base.get("phone") or ""
     out["website"] = d.get("website") or base.get("website") or ""
-    # Emails are not provided by Places API.
     return out
+
+# === END: Outreach & Subcontractor Enhancements — merged by assistant ===
