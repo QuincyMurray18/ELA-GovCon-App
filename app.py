@@ -1149,9 +1149,13 @@ def _safe_y1_search(conn, rfp_id, query, k=6):
         except NameError:
             return []
 # --- Robust Y1 shim: guarantees y1_search exists ---
+# --- Robust Y1 shim and streaming answer ---
 if 'y1_search' not in globals():
-# FIXME_AUTOCOMMENTED_DUE_TO_PARSE_ERROR
-# def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
+    def y1_search(conn, rfp_id, q, k=6):
+        # Fallback when Y1 index is unavailable
+        return []
+
+def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
     Streams a CO-style answer grounded in top-k chunk hits with [C#] citations.
     Falls back to general answer if no hits.
@@ -1163,7 +1167,7 @@ if 'y1_search' not in globals():
         except Exception:
             strict = True
         if strict:
-            yield "[system] Insufficient evidence in linked RFP files. Build or Update the search index for this RFP on 'Ask with citations (Y1)', then ask again. General answers are disabled in CO Chat."
+            yield "[system] Insufficient evidence in linked RFP files. Build or update the search index for this RFP on 'Ask with citations (Y1)', then ask again. General answers are disabled in CO Chat."
             return
         for tok in ask_ai([{"role":"user","content": (question or "").strip()}], temperature=temperature):
             yield tok
@@ -1176,9 +1180,8 @@ if 'y1_search' not in globals():
         ev_lines.append(f"{tag} {src_line} — {snip}")
     evidence = "\n".join(ev_lines)
     user = "QUESTION\n" + (question or "").strip() + "\n\nEVIDENCE\n" + evidence
-    for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
+    for tok in ask_ai([{ "role":"user", "content": user }], temperature=temperature):
         yield tok
-
 def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
     Build a minimal message set for CO chat, embedding local evidence as [C#].
