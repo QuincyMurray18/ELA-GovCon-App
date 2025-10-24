@@ -5171,6 +5171,21 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+
+def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
+    import math
+    import streamlit as st
+    n = 0 if df is None else len(df)
+    page_size = max(5, int(page_size or 25))
+    pages = max(1, math.ceil((n or 0) / page_size))
+    page = int(st.session_state.get(page_key, 1))
+    if page < 1: page = 1
+    if page > pages: page = pages
+    start = (page - 1) * page_size
+    end = start + page_size
+    view = df.iloc[start:end].copy() if df is not None else df
+    st.session_state[page_key] = page
+    return view, page, pages
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
