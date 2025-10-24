@@ -8202,6 +8202,47 @@ def o4_sender_accounts_ui(conn):
         except Exception:
             pass
 
+
+def render_outreach_mailmerge(conn):
+    import streamlit as st
+    import pandas as _pd
+    # 1) Recipients
+    rows = _o3_collect_recipients_ui(conn) if "_o3_collect_recipients_ui" in globals() else None
+    st.subheader("Mail Merge & Send")
+    # 2) Template inputs
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML Body", value=st.session_state.get("outreach_body",""), height=260, key="o3_body")
+    # 3) Sender
+    st.subheader("Sender")
+    sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
+    # normalize keys
+    if sender and "username" in sender and "email" not in sender:
+        sender["email"] = sender.get("username","")
+    if sender and "password" in sender and "app_password" not in sender:
+        sender["app_password"] = sender.get("password","")
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if (test or do) and rows is not None and hasattr(rows, "empty") and not rows.empty:
+        try:
+            if "_o3_send_batch" in globals():
+                if test:
+                    st.info("Test run: rendering only, no SMTP.")
+                    # call with test_only=True
+                    out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn))
+                else:
+                    out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn))
+                st.success("Send function executed")
+            else:
+                st.warning("Send function not available in this build.")
+        except Exception as e:
+            st.error(f"Send failed: {e}")
+
+
 def run_outreach(conn):
     import streamlit as st
 
