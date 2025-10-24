@@ -7534,48 +7534,115 @@ if "_o3_collect_recipients_ui" not in globals():
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
-        # defaults
-        host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
-        # prefer active account from DB, then legacy
+        from contextlib import closing
+        # Load current
+        host = st.session_state.get("smtp_host","smtp.gmail.com")
+        port = int(st.session_state.get("smtp_port",587))
+        username = st.session_state.get("smtp_username","")
+        password = st.session_state.get("smtp_password","")
+        use_tls = bool(st.session_state.get("smtp_use_tls", True))
+        # Pull from DB if exists
         try:
             if "get_db" in globals():
                 conn2 = get_db()
-                from contextlib import closing
                 with closing(conn2.cursor()) as cur:
-                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_accounts (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT UNIQUE, password TEXT, use_tls INTEGER, is_active INTEGER DEFAULT 0)")
-                    cur.execute("SELECT host, port, username, password, use_tls FROM smtp_accounts WHERE is_active=1 ORDER BY id DESC LIMIT 1")
-                    row = cur.fetchone()
-                    if not row:
-                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                        row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                    row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
                 if row:
                     host, port, username, password, use_tls = row[0] or host, int(row[1] or port), row[2] or username, row[3] or password, bool(row[4] or use_tls)
         except Exception:
             pass
-        # session fallbacks
-        username = username or st.session_state.get("smtp_username", "")
-        password = password or st.session_state.get("smtp_password", "")
-        host = st.session_state.get("smtp_host", host)
-        port = int(st.session_state.get("smtp_port", port))
-        use_tls = bool(st.session_state.get("smtp_use_tls", use_tls))
-        # UI form with unique key
-        import uuid as _uuid
-        _k2 = f"o3_sender_picker_{_uuid.uuid4().hex}"
-        with st.form(_k2, clear_on_submit=False):
+        with st.form("o3_sender_picker", clear_on_submit=False):
             st.text_input("SMTP host", value=host, key="smtp_host")
             st.number_input("SMTP port", min_value=1, max_value=65535, value=int(port), key="smtp_port")
             st.text_input("Username", value=username, key="smtp_username")
             st.text_input("App password", type="password", value=password, key="smtp_password")
             st.checkbox("Use STARTTLS", value=bool(use_tls), key="smtp_use_tls")
-            st.form_submit_button("Save sender")
+            saved = st.form_submit_button("Save sender")
+            if saved and "get_db" in globals():
+                try:
+                    conn2 = get_db()
+                    with closing(conn2.cursor()) as cur:
+                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                        cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
+                                    ("Default", st.session_state["smtp_host"], int(st.session_state["smtp_port"]), st.session_state["smtp_username"], st.session_state["smtp_password"], 1 if st.session_state["smtp_use_tls"] else 0))
+                        conn2.commit()
+                    st.caption("Sender saved")
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
         return {
             "host": st.session_state["smtp_host"],
             "port": int(st.session_state["smtp_port"]),
-            "email": st.session_state["smtp_username"],
-            "app_password": st.session_state["smtp_password"],
+            "username": st.session_state["smtp_username"],
+            "password": st.session_state["smtp_password"],
             "use_tls": bool(st.session_state["smtp_use_tls"]),
         }
+# === helper: auto-select number of sources to cite ===
+def y_auto_k(text: str) -> int:
+    t = (text or "").lower()
+    n = len(t)
+    broad = any(k in t for k in [
+        "overview", "summary", "summarize", "list all", "requirements", "compliance",
+        "section l", "section m", "evaluation factors", "factors", "checklist",
+        "compare", "differences", "conflict", "conflicts", "crosswalk", "matrix"
+    ])
+    if not t.strip():
+        return 4
+    base = 7 if broad else 4
+    if n > 500:
+        base += 1
+    if n > 1200:
+        base += 1
+    return max(3, min(8, base))
 
+
+# === PHASE 8: Latency and UX ===
+# Memoize y1_search by (rfp_id, query) and a snapshot of the chunks table to keep cache fresh.
+def _y1_snapshot(conn, rfp_id: int) -> str:
+    try:
+        df = pd.read_sql_query(
+            "SELECT COUNT(1) AS c, COALESCE(MAX(id),0) AS m FROM rfp_chunks WHERE rfp_id=?;",
+            conn, params=(int(rfp_id),)
+        )
+        c = int(df.iloc[0]["c"]) if df is not None and not df.empty else 0
+        m = int(df.iloc[0]["m"]) if df is not None and not df.empty else 0
+        return f"{c}:{m}"
+    except Exception:
+        return "0:0"
+
+try:
+    import streamlit as _st_phase8
+except Exception:
+    _st_phase8 = None
+
+if _st_phase8 is not None:
+    @_st_phase8.cache_data(show_spinner=False, ttl=600)
+    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
+        import sqlite3 as _sql8
+        # Re-open a read-only connection to keep cache pure
+        try:
+            conn2 = _sql8.connect(db_path, check_same_thread=False)
+        except Exception:
+            conn2 = _sql8.connect(db_path)
+        try:
+            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
+else:
+    # Fallback no-cache path when Streamlit not available
+    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
+        import sqlite3 as _sql8
+        conn2 = _sql8.connect(db_path, check_same_thread=False)
+        try:
+            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
 
 def y1_search(conn, rfp_id: int, query: str, k: int = 6):
     # Compute snapshot to invalidate cache if chunks changed
@@ -8090,6 +8157,50 @@ def seed_default_templates(conn):
 
 
 # --- O4 wrapper: delegates to __p_o4_ui if present, else shows fallback UI ---
+def o4_sender_accounts_ui(conn):
+    try:
+        return __p_o4_ui(conn)  # provided by O4 module when available
+    except Exception:
+        import streamlit as _st
+        from contextlib import closing
+        _st.info("O4 sender accounts fallback UI loaded.")
+        # Load existing if any
+        host, port, username, password, use_tls = "smtp.gmail.com", 587, "", "", True
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                row = cur.execute("SELECT label, host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+                if row:
+                    label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
+        except Exception:
+            pass
+        with _st.form("o4_fallback_sender", clear_on_submit=False):
+            label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
+            username = _st.text_input("Gmail address", value=username)
+            password = _st.text_input("App password", type="password", value=password)
+            c1,c2 = _st.columns(2)
+            with c1: host = _st.text_input("SMTP host", value=host)
+            with c2: port = _st.number_input("SMTP port", 1, 65535, value=int(port))
+            use_tls = _st.checkbox("Use STARTTLS", value=bool(use_tls))
+            saved = _st.form_submit_button("Save sender")
+            if saved:
+                try:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                        cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
+                                    (label.strip() or "Default", host.strip(), int(port), username.strip(), password.strip(), 1 if use_tls else 0))
+                        conn.commit()
+                    _st.success("Sender saved")
+                except Exception as e:
+                    _st.error(f"Save failed: {e}")
+        # Show current
+        try:
+            with closing(conn.cursor()) as cur:
+                row = cur.execute("SELECT label, username, host, port, use_tls FROM smtp_settings WHERE id=1").fetchone()
+            if row:
+                _st.caption(f"Active: {row[0]} — {row[1]} via {row[2]}:{row[3]} TLS={'on' if row[4] else 'off'}")
+        except Exception:
+            pass
 
 
 def render_outreach_mailmerge(conn):
@@ -8104,15 +8215,6 @@ def render_outreach_mailmerge(conn):
     # 3) Sender
     st.subheader("Sender")
     sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
-    # normalize and guard
-    if sender and "username" in sender and "email" not in sender:
-        sender["email"] = sender.get("username","")
-    if sender and "password" in sender and "app_password" not in sender:
-        sender["app_password"] = sender.get("password","")
-    if not sender.get("email") or not sender.get("app_password"):
-        st.warning("Configure a sender first in Outreach → Sender.")
-        return
-
     # normalize keys
     if sender and "username" in sender and "email" not in sender:
         sender["email"] = sender.get("username","")
@@ -8141,130 +8243,7 @@ def render_outreach_mailmerge(conn):
             st.error(f"Send failed: {e}")
 
 
-# --- Sender picker fallback (clean) ---
-if "_o3_render_sender_picker" not in globals():
-    def _o3_render_sender_picker():
-        import streamlit as st
-        from contextlib import closing
-        # defaults
-        host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
-        # load active from DB or legacy row
-        try:
-            if "get_db" in globals():
-                conn2 = get_db()
-                with closing(conn2.cursor()) as cur:
-                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_accounts (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT UNIQUE, password TEXT, use_tls INTEGER, is_active INTEGER DEFAULT 0)")
-                    row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_accounts WHERE is_active=1 ORDER BY id DESC LIMIT 1").fetchone()
-                    if not row:
-                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                        row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
-                if row:
-                    host, port, username, password, use_tls = row[0] or host, int(row[1] or port), row[2] or username, row[3] or password, bool(row[4] or use_tls)
-        except Exception:
-            pass
-        # session fallbacks
-        username = username or st.session_state.get("smtp_username", "")
-        password = password or st.session_state.get("smtp_password", "")
-        host = st.session_state.get("smtp_host", host)
-        port = int(st.session_state.get("smtp_port", port))
-        use_tls = bool(st.session_state.get("smtp_use_tls", use_tls))
-        # simple form with per-render unique key to avoid duplicates
-        import uuid as _uuid
-        _k = f"o3_sender_picker_{_uuid.uuid4().hex}"
-        with st.form(_k, clear_on_submit=False):
-            st.text_input("SMTP host", value=host, key="smtp_host")
-            st.number_input("SMTP port", min_value=1, max_value=65535, value=int(port), key="smtp_port")
-            st.text_input("Username", value=username, key="smtp_username")
-            st.text_input("App password", type="password", value=password, key="smtp_password")
-            st.checkbox("Use STARTTLS", value=bool(use_tls), key="smtp_use_tls")
-            st.form_submit_button("Save sender")
-        return {
-            "host": st.session_state["smtp_host"],
-            "port": int(st.session_state["smtp_port"]),
-            "email": st.session_state["smtp_username"],
-            "app_password": st.session_state["smtp_password"],
-            "use_tls": bool(st.session_state["smtp_use_tls"]),
-        }
-
-def o4_sender_accounts_ui(conn):
-    import streamlit as st
-    from contextlib import closing
-
-    with st.expander("Sender accounts (O4)", expanded=False):
-        # List accounts
-        with closing(conn.cursor()) as cur:
-            cur.execute("""CREATE TABLE IF NOT EXISTS smtp_accounts(
-                id INTEGER PRIMARY KEY,
-                label TEXT,
-                host TEXT,
-                port INTEGER,
-                username TEXT UNIQUE,
-                password TEXT,
-                use_tls INTEGER,
-                is_active INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )""")
-            rows = cur.execute(
-                "SELECT id, label, username, host, port, use_tls, is_active "
-                "FROM smtp_accounts ORDER BY is_active DESC, id ASC"
-            ).fetchall()
-
-        if rows:
-            hdr = st.columns([2,3,3,2,2,2])
-            hdr[0].markdown("**Label**"); hdr[1].markdown("**Username**"); hdr[2].markdown("**Host**")
-            hdr[3].markdown("**Port**"); hdr[4].markdown("**TLS**"); hdr[5].markdown("**Active**")
-            for rid, label, user, host, port, use_tls, is_active in rows:
-                cols = st.columns([2,3,3,2,2,2])
-                cols[0].write(label or ""); cols[1].write(user or "")
-                cols[2].write(host or "");  cols[3].write(int(port or 0))
-                cols[4].write("on" if use_tls else "off")
-                if cols[5].button("Make active" + ("" if not is_active else " ✓"),
-                                   key=f"o4_make_active_{rid}", disabled=bool(is_active)):
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("UPDATE smtp_accounts SET is_active=0")
-                        cur.execute("UPDATE smtp_accounts SET is_active=1 WHERE id=?", (rid,))
-                        conn.commit()
-                    st.experimental_rerun()
-
-        st.markdown("---")
-        st.markdown("**Add or update account**")
-        import uuid as _uuid
-        _k = f"o4_sender_form_{_uuid.uuid4().hex}"
-        with st.form(_k, clear_on_submit=False):
-            c1,c2 = st.columns([2,2])
-            with c1: label = st.text_input("Label", value="Default", key=f"o4_label_{_k}")
-            with c2: username = st.text_input("Gmail address", value="", key=f"o4_user_{_k}")
-            c1,c2 = st.columns([2,2])
-            with c1: host = st.text_input("SMTP host", value="smtp.gmail.com", key=f"o4_host_{_k}")
-            with c2: port = st.number_input("SMTP port", 1, 65535, value=465, key=f"o4_port_{_k}")
-            c1,c2 = st.columns([2,2])
-            with c1: use_tls = st.checkbox("Use STARTTLS", value=False, key=f"o4_tls_{_k}")
-            with c2: password = st.text_input("App password", type="password", value="", key=f"o4_pass_{_k}")
-            make_active = st.checkbox("Set as active", value=True, key=f"o4_active_{_k}")
-            save = st.form_submit_button("Save sender")
-
-        if save:
-            if not username.strip() or not password.strip():
-                st.error("Username and app password are required.")
-            else:
-                with closing(conn.cursor()) as cur:
-                    cur.execute("""INSERT OR REPLACE INTO smtp_accounts(
-                          id, label, host, port, username, password, use_tls, is_active
-                        ) VALUES(
-                          (SELECT id FROM smtp_accounts WHERE username=?),
-                          ?,?,?,?,?,?, COALESCE((SELECT is_active FROM smtp_accounts WHERE username=?), 0)
-                        )""",
-                        (username.strip(), label.strip() or "Default", host.strip() or "smtp.gmail.com",
-                         int(port), username.strip(), password.strip(), 1 if use_tls else 0, username.strip()))
-                    if make_active:
-                        cur.execute("UPDATE smtp_accounts SET is_active=0")
-                        cur.execute("UPDATE smtp_accounts SET is_active=1 WHERE username=?", (username.strip(),))
-                    conn.commit()
-                st.success("Sender saved")
-
 def run_outreach(conn):
-    import streamlit as st
-    globals()["_O4_CONN"] = conn
     import streamlit as st
 
     # O4 badge if present
@@ -8274,13 +8253,6 @@ def run_outreach(conn):
         pass
 
     st.header("Outreach")
-    o4_sender_accounts_ui(conn)
-
-    try:
-        o4_sender_accounts_ui(conn)
-    except Exception:
-        pass
-
     with st.expander("Compliance (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
 
@@ -9673,8 +9645,6 @@ def __p_s1d_ui(conn):
 def __p_run_outreach(conn):
     __p_ensure_core(conn)
     _st.header("Outreach")
-    o4_sender_accounts_ui(conn)
-
     try:
         n = __p_db(conn, "SELECT COUNT(1) FROM outreach_sender_accounts").fetchone()[0]
         _st.sidebar.success("O4 Active" if n else "O4 Not Configured")
@@ -9814,3 +9784,51 @@ def run_l_and_m_checklist(conn):
 # --- Tab name alias ---
 def run_backup_data(conn):
     return run_backup_and_data(conn)
+
+
+
+# === Outreach: fallback sender picker and guard wrapper =====================
+# Robust fallback picker that reads smtp_settings, only if not provided earlier.
+if "_o3_render_sender_picker" not in globals():
+    def _o3_render_sender_picker():
+        import streamlit as st
+        from contextlib import closing
+        host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
+        try:
+            if "get_db" in globals():
+                conn2 = get_db()
+                with closing(conn2.cursor()) as cur:
+                    cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                    row = cur.execute("SELECT host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+                if row:
+                    host = row[0] or host
+                    port = int(row[1] or port)
+                    username = row[2] or username
+                    password = row[3] or password
+                    use_tls = bool(row[4] or use_tls)
+        except Exception:
+            pass
+        if not username or not password:
+            st.error("Sender not configured. Go to Outreach → Sender and Save sender.")
+            return {}
+        st.caption(f"Using {username} via {host}:{int(port)} TLS={'on' if use_tls else 'off'}")
+        return {"host": host, "port": int(port), "email": username, "app_password": password, "use_tls": bool(use_tls)}
+
+# Guard wrapper: ensure sender is configured before original Mail Merge UI runs
+try:
+    _orig__render_outreach_mailmerge = render_outreach_mailmerge
+    def render_outreach_mailmerge(conn):
+        import streamlit as st
+        sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
+        if sender and "username" in sender and "email" not in sender:
+            sender["email"] = sender.get("username","")
+        if sender and "password" in sender and "app_password" not in sender:
+            sender["app_password"] = sender.get("password","")
+        if not sender.get("email") or not sender.get("app_password"):
+            st.warning("Configure a sender first in Outreach → Sender.")
+            return
+        return _orig__render_outreach_mailmerge(conn)
+except Exception:
+    pass
+
+# === End Outreach guard =====================================================
