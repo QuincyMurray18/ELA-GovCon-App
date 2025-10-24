@@ -7655,8 +7655,6 @@ def render_outreach_mailmerge(conn):
                     st.warning(f"Send failed to {to_addr}: {e}")
         if do and sent:
             st.success(f"Sent {sent} emails.")
-if __name__ == "__main__":
-    main()
 
 
 def pb_phase_v_section_library(conn: sqlite3.Connection) -> None:
@@ -9567,3 +9565,6 @@ if callable(__pg.get("run_subcontractor_finder")):
 # =========================
 # END APPEND-ONLY PATCH
 # =========================
+
+if __name__ == '__main__':
+    main()
