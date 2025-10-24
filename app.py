@@ -8519,6 +8519,13 @@ except Exception:
         SMTP = _smtplib.SMTP
 
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
+    # Ensure required email and SMTP aliases are available
+    try:
+        from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
+        from email.mime.text import MIMEText as _O3MIMEText
+        import smtplib as _o3smtp
+    except Exception:
+        pass
     import streamlit as st, datetime as _dt, pandas as _pd, socket as _socket
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
