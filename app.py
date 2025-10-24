@@ -53,6 +53,68 @@ def _o3_collect_recipients_ui(conn=None):
 ''')
 # ==== End early stubs ====
 
+# ==== Sender picker stubs ====
+def _ensure_stub(name, src):
+    g = globals()
+    if name not in g:
+        try:
+            exec(src, g, g)
+        except Exception:
+            pass
+
+_ensure_stub("_o3_get_sender_accounts", '''
+def _o3_get_sender_accounts(conn=None):
+    try:
+        import streamlit as st
+        accs = []
+        try:
+            accs = st.secrets.get("gmail", {}).get("senders", [])
+        except Exception:
+            accs = []
+        if isinstance(accs, list) and accs:
+            return [a for a in accs if isinstance(a, dict) and a.get("email")]
+        return [{"email":"noreply@example.com","name":"ELA Outreach"}]
+    except Exception:
+        return [{"email":"noreply@example.com","name":"ELA Outreach"}]
+''')
+
+_ensure_stub("_o3_render_sender_picker", '''
+def _o3_render_sender_picker(conn=None):
+    try:
+        import streamlit as st
+        accounts = []
+        try:
+            if "o4_senders" in st.session_state and st.session_state["o4_senders"]:
+                accounts = st.session_state["o4_senders"]
+        except Exception:
+            accounts = []
+        if not accounts:
+            try:
+                accs = st.secrets.get("gmail", {}).get("senders", [])
+                if isinstance(accs, list):
+                    accounts = [a for a in accs if isinstance(a, dict) and a.get("email")]
+            except Exception:
+                accounts = []
+        if not accounts:
+            accounts = [{"email":"noreply@example.com","name":"ELA Outreach"}]
+        options = [f"{a.get('name') or ''} <{a.get('email') or ''}>" for a in accounts]
+        try:
+            idx = st.selectbox("Sender", list(range(len(options))), format_func=lambda i: options[i], index=0)
+        except Exception:
+            idx = 0
+        sel = accounts[idx]
+        class _Sender(dict):
+            def __str__(self): return self.get("email","")
+        return _Sender(sel)
+    except Exception:
+        class _Sender(dict):
+            def __str__(self): return self.get("email","")
+        return _Sender({"email":"noreply@example.com","name":"ELA Outreach"})
+''')
+# ==== End sender picker stubs ====
+
+
+
 # ==== Safe connection stub to avoid NameError and allow UI to render ====
 try:
     import streamlit as st  # optional
