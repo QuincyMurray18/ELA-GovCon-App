@@ -8679,7 +8679,7 @@ def _o3_render_sender_picker():
 
     conn = globals().get("_O4_CONN")
     if conn is None:
-        st.warning("Internal: sender picker not initialized");
+        st.warning("No sender accounts configured");
         return {"email":"", "app_password":""}
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name FROM email_accounts ORDER BY user_email").fetchall()
