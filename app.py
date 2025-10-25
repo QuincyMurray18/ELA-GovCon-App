@@ -9362,105 +9362,100 @@ def _s1d_select_existing_pairs(conn):
                 continue
     return set(), set()
 
-
 def render_subfinder_s1d(conn):
-    ss = _s1d_state()
-
-    st.subheader("Subcontractor Finder (S1D)")
-    with st.container(border=True):
-        cols = st.columns([4,2,2])
-        with cols[0]:
-            q = st.text_input("Search vendors", value=ss["s1d_query"], key="s1d_query_box", help="Name, keyword, or city")
-            if q != ss["s1d_query"]:
-                st.session_state["s1d_query"] = q
-                st.session_state["s1d_page"] = 0
-        with cols[1]:
-            miles = st.number_input("Radius (miles)", min_value=5, max_value=200, value=50, step=5, key="s1d_radius")
-        with cols[2]:
-            st.caption("Saved vendors are de-duplicated by place_id or name+phone.")
-
-    # Fetch rows from your existing source function if available
-    fetch = globals().get("_s1d_fetch_rows")
-    rows = []
-    if callable(fetch):
-        try:
-            rows = fetch(ss.get("s1d_query",""), int(miles)) or []
-        except Exception:
-            rows = []
-    # fallback: try local vendors table filtered by query
-    if not rows:
-        try:
-            import pandas as _pd
-            if ss["s1d_query"].strip():
-                rows = _pd.read_sql_query("SELECT place_id, name, phone, email, website, 'local' AS source FROM vendors WHERE name LIKE ? ORDER BY name LIMIT 1000;",
-                                          conn, params=(f"%{ss['s1d_query']}%",)).to_dict("records")
-            else:
-                rows = _pd.read_sql_query("SELECT place_id, name, phone, email, website, 'local' AS source FROM vendors ORDER BY id DESC LIMIT 1000;", conn).to_dict("records")
-        except Exception:
-            rows = []
-
-    # Remove items already saved if session tracks them
-    try:
-        rows = [r for r in rows if isinstance(r, dict) and r.get("place_id") not in ss.get("s1_saved_ids", set())]
-    except Exception:
-        pass
-
-    total = len(rows)
-    page, size, pages = _s1d_pager(total)
-    start = page * size
-    end = min(total, start + size)
-    view = rows[start:end]
-
+    st.subheader("S1D — Subcontractor Finder")
+    
+    by_np, by_pid = _s1d_select_existing_pairs(conn)
+    key = _s1d_get_api_key()
+    if not key:
+        st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
+        return
+    # Use cached results if present
     import pandas as _pd
-    df = _pd.DataFrame(view)
-    # Ensure editable columns exist
-    for col in ["email","phone","website"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    st.caption("Edit email or phone in-line. Click Save edits to persist.")
-    edited = st.data_editor(
-        df,
-        key=f"s1d_editor_{page}",
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "name": st.column_config.TextColumn(disabled=True),
-            "place_id": st.column_config.TextColumn(disabled=True),
-            "website": st.column_config.TextColumn(help="Can be pasted or edited"),
-            "email": st.column_config.TextColumn(help="Add or fix missing email"),
-            "phone": st.column_config.TextColumn(help="Add or fix missing phone"),
-        },
-    )
-
-    c1, c2, c3 = st.columns([2,2,6])
+    _cache = st.session_state.get("s1d_df")
+    if _cache:
+        df = _pd.DataFrame(_cache)
+        _s1d_render_from_cache(conn, df)
+        return
+    q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
+    loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
+    lat = lng = None
+    if loc_choice == "Address":
+        addr = st.text_input("Place of performance address")
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
+        if addr:
+            ll = _s1d_geocode(addr, key)
+            if ll: lat, lng = ll
+    else:
+        col1, col2 = st.columns(2)
+        with col1: lat = st.number_input("Latitude", value=38.8951)
+        with col2: lng = st.number_input("Longitude", value=-77.0364)
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
+    radius_m = int(radius_mi * 1609.34)
+    c1, c2, c3 = st.columns([1,1,2])
     with c1:
-        save_edits = st.button("Save edits", type="primary", key=f"s1d_save_edits_{page}")
+        go = st.button("Search", key="s1d_go")
     with c2:
-        select_all = st.checkbox("Queue all on page", key=f"s1d_select_all_{page}")
-
-    # Debounced save to prevent double click behavior
-    if save_edits and _s1d_debounce(0.8):
-        saved = _s1d_vendor_write_table(conn, edited)
-        st.success(f"Saved {saved} row(s)")
-        # Track saved place_ids to avoid duplicates on next query
-        for _, r in edited.iterrows():
-            pid = (r.get("place_id") or "").strip()
-            if pid:
-                ss["s1_saved_ids"].add(pid)
-        st.rerun()
-
-    # Export selected vendors to Outreach queue if your app has such a function
-    push = globals().get("o3_queue_vendors_from_df") or globals().get("outreach_queue_from_df")
-    if callable(push):
-        if st.button("Send selection to Outreach", key=f"s1d_push_{page}"):
-            subset = edited if select_all else edited  # could add checkbox column later
-            try:
-                n = int(push(conn, subset))
-            except Exception:
-                n = 0
-            st.success(f"Queued {n} vendor(s) for Outreach")
-
+        nxt = st.button("Next page", key="s1d_next")
+    # Persist page token
+    tok_key = "s1d_next_token"
+    if go: st.session_state.pop(tok_key, None)
+    js = None
+    try:
+        if go or nxt:
+            tok = st.session_state.get(tok_key) if nxt else None
+            if q:
+                js = _s1d_places_textsearch(q, lat, lng, radius_m, tok, key)
+                if js.get("next_page_token"):
+                    st.session_state[tok_key] = js["next_page_token"]
+                else:
+                    st.session_state.pop(tok_key, None)
+    except Exception as e:
+        st.error(f"Search failed: {e}")
+        return
+    if not js or not js.get("results"):
+        st.info("No results yet. Enter a query and click Search.")
+        return
+    by_np, by_pid = _s1d_existing_vendor_keys(conn)
+    rows = []
+    for r in js["results"]:
+        name = r.get("name","")
+        pid = r.get("place_id","")
+        addr = r.get("formatted_address","")
+        city = state = ""
+        if "," in addr:
+            parts = [p.strip() for p in addr.split(",")]
+            if len(parts)>=2:
+                city = parts[-2]
+                state = parts[-1].split()[0]
+        details = _s1d_place_details(pid, key) if pid else {}
+        phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
+        website = details.get("website") or ""
+        dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
+        rows.append({
+            "name": name, "address": addr, "city": city, "state": state,
+            "phone": phone, "website": website, "place_id": pid,
+            "google_url": details.get("url") or "",
+            "_dup": dup
+        })
+        # be nice to Places
+        _time.sleep(0.05)
+    import pandas as _pd
+    df = _pd.DataFrame(rows)
+    st.session_state["s1d_df"] = df.to_dict("records")
+    if df.empty:
+        st.info("No results.")
+        return
+    # Show with links and dedupe flags
+    def _mk_link(url, text):
+        if not url: return text
+        return f"<a href='{url}' target='_blank'>{text}</a>"
+    show = df.copy()
+    show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
+    show["website"] = show.apply(lambda r: _mk_link(r["website"], "site") if r["website"] else "", axis=1)
+    show = show[["name","phone","website","address","city","state","place_id","_dup"]]
+    st.markdown("**Results**")
+    st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 
     # Selection and save
@@ -10030,115 +10025,3 @@ def o1_sender_accounts_ui(conn):
         st.dataframe(df, use_container_width=True)
     except Exception:
         pass
-
-
-# === BEGIN S1D_UTILS ===
-
-import time as _s1d_time
-from contextlib import closing as _s1d_closing
-
-def _s1d_state():
-    if "s1d_query" not in st.session_state: st.session_state["s1d_query"] = ""
-    if "s1d_page" not in st.session_state: st.session_state["s1d_page"] = 0
-    if "s1d_page_size" not in st.session_state: st.session_state["s1d_page_size"] = 25
-    if "s1d_last_save_ts" not in st.session_state: st.session_state["s1d_last_save_ts"] = 0.0
-    if "s1_saved_ids" not in st.session_state: st.session_state["s1_saved_ids"] = set()
-    return st.session_state
-
-def _s1d_set_page(i:int):
-    st.session_state["s1d_page"] = max(0, int(i))
-
-def _s1d_pager(total:int):
-    ss = _s1d_state()
-    page = int(ss["s1d_page"]); size = int(ss["s1d_page_size"])
-    pages = max(1, (total + size - 1)//size)
-    col1, col2, col3, col4 = st.columns([1,1,4,1])
-    with col1:
-        if st.button("Prev", key=f"s1d_prev", use_container_width=True) and page>0:
-            _s1d_set_page(page-1)
-            st.rerun()
-    with col2:
-        if st.button("Next", key=f"s1d_next", use_container_width=True) and page<pages-1:
-            _s1d_set_page(page+1)
-            st.rerun()
-    with col3:
-        st.caption(f"Page {page+1} of {pages}  •  {total} rows")
-    with col4:
-        new_ps = st.selectbox("Page size", [10,25,50,100], index=[10,25,50,100].index(size) if size in [10,25,50,100] else 1, key="s1d_ps")
-        if new_ps != size:
-            st.session_state["s1d_page_size"] = int(new_ps)
-            st.session_state["s1d_page"] = 0
-            st.rerun()
-    return page, size, pages
-
-def _s1d_debounce(seconds:float=0.6)->bool:
-    now = _s1d_time.time()
-    last = float(st.session_state.get("s1d_last_save_ts", 0.0))
-    if now - last < float(seconds):
-        return False
-    st.session_state["s1d_last_save_ts"] = now
-    return True
-
-def _s1d_vendor_write_table(conn, df):
-    # Persist edited email/phone and new vendors
-    saved = 0
-    with _s1d_closing(conn.cursor()) as cur:
-        # ensure table exists
-        cur.execute("""CREATE TABLE IF NOT EXISTS vendors(
-            id INTEGER PRIMARY KEY,
-            place_id TEXT,
-            name TEXT,
-            phone TEXT,
-            email TEXT,
-            website TEXT,
-            source TEXT,
-            created_at TEXT
-        );""")
-        # unique on place_id if present
-        try:
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_vendors_place ON vendors(place_id);")
-        except Exception:
-            pass
-        # upsert rows
-        for _, r in df.iterrows():
-            pid = (r.get("place_id") or "").strip()
-            name = (r.get("name") or "").strip()
-            phone = (r.get("phone") or "").strip()
-            email = (r.get("email") or "").strip()
-            website = (r.get("website") or "").strip()
-            src = (r.get("source") or "S1D").strip()
-            if not (pid or name):
-                continue
-            try:
-                cur.execute("""INSERT INTO vendors(place_id, name, phone, email, website, source, created_at)
-                               VALUES(?,?,?,?,?,?,datetime('now'))
-                               ON CONFLICT(place_id) DO UPDATE SET
-                                   name=excluded.name,
-                                   phone=COALESCE(excluded.phone, vendors.phone),
-                                   email=COALESCE(excluded.email, vendors.email),
-                                   website=COALESCE(excluded.website, vendors.website),
-                                   source=excluded.source;""",
-                            (pid or None, name, phone or None, email or None, website or None, src))
-                saved += 1
-            except Exception:
-                # fallback when no place_id
-                try:
-                    cur.execute("""INSERT INTO vendors(name, phone, email, website, source, created_at)
-                                   VALUES(?,?,?,?,?,datetime('now'));""",
-                                (name, phone or None, email or None, website or None, src))
-                    saved += 1
-                except Exception:
-                    pass
-    conn.commit()
-    return saved
-
-# === END S1D_UTILS ===
-
-
-# === BEGIN MIN_ROUTER_S1D ===
-
-def router(active_page, conn):
-    if str(active_page).lower() in {"s1d","subcontractor finder","subs"}:
-        return render_subfinder_s1d(conn)
-
-# === END MIN_ROUTER_S1D ===
