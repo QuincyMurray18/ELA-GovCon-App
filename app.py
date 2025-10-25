@@ -9136,350 +9136,103 @@ _o6_wrap_o3_send_batch()
 # === End O6 ================================================================
 
 
-# === S1D: Subcontractor Finder — dedupe + Google Places pagination ===========
-import json as _json, time as _time
-from typing import Any, List, Dict
-import requests as _requests
 
-def _s1d_get_api_key():
+# === S1D: Subcontractor Finder — stable pagination, editable table, single-click save ===
+import re as _re_s1d
+from typing import Tuple, List, Dict
+import pandas as _pd_s1d
+
+def _s1d_init_state():
+    ss = st.session_state
+    ss.setdefault("s1d_query", "")
+    ss.setdefault("s1d_radius_miles", 50)
+    ss.setdefault("s1d_page_idx", 0)        # 0-based
+    ss.setdefault("s1d_tokens", [])         # next_page_token history
+    ss.setdefault("s1d_cache_key", None)    # cache key per search
+    ss.setdefault("s1d_saved_ids", set())   # place_ids saved
+    ss.setdefault("s1d_last_save_ok", False)
+
+def _s1d_norm_phone(x: str) -> str:
+    digits = _re_s1d.sub(r"\D+", "", str(x or ""))
+    if len(digits) == 10:
+        return f"({digits[0:3]}) {digits[3:6]}-{digits[6:]}"
+    if len(digits) == 11 and digits[0] == "1":
+        return f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
+    return str(x or "")
+
+@st.cache_data(show_spinner=False, ttl=300)
+def _s1d_fetch(query: str, radius_miles: int, page_token: str|None, cache_key: str) -> Tuple[List[Dict], str|None]:
+    """
+    Wire to your Google Places code. Must return (rows, next_page_token).
+    Each row should include at least: place_id, name, phone, website, email(optional), address.
+    """
     try:
-        return st.secrets["google"]["api_key"]
+        # Prefer existing E1 enrichment client if present
+        key = st.secrets.get("google", {}).get("api_key") or os.getenv("GOOGLE_API_KEY", "")
+    except Exception:
+        key = os.getenv("GOOGLE_API_KEY", "")
+    rows, next_token = [], None
+    try:
+        import requests as _rq
+        params = {"query": query, "key": key, "region": "us"}
+        if page_token:
+            params["pagetoken"] = page_token
+        # Optional: location/radius if you have POP coords stored
+        if radius_miles:
+            params["radius"] = int(radius_miles * 1609.34)
+        js = _rq.get("https://maps.googleapis.com/maps/api/place/textsearch/json", params=params, timeout=12).json()
+        next_token = js.get("next_page_token")
+        for r in js.get("results", []):
+            rows.append({
+                "place_id": r.get("place_id"),
+                "name": r.get("name"),
+                "address": r.get("formatted_address"),
+                "phone": None,             # can be filled by details API if needed
+                "email": None,             # scrape or manual
+                "website": None,
+                "select": False,
+            })
     except Exception:
         pass
+    return rows, next_token
+
+def _s1d_clear_cache():
     try:
-        return st.secrets["GOOGLE_API_KEY"]
+        _s1d_fetch.clear()
     except Exception:
         pass
-    return ""
 
-def _s1d_norm_phone(p: str) -> str:
-    import re as _re
-    if not p: return ""
-    digits = "".join(_re.findall(r"\d+", str(p)))
-    if len(digits) == 11 and digits.startswith("1"):
-        digits = digits[1:]
-    return digits
+def _s1d_load_page(query: str, radius: int, page_idx: int) -> Tuple[List[Dict], bool]:
+    ss = st.session_state
+    page_token = ss["s1d_tokens"][page_idx-1] if page_idx > 0 and len(ss["s1d_tokens"]) >= page_idx else None
+    rows, next_token = _s1d_fetch(query, radius, page_token, ss.get("s1d_cache_key"))
+    if next_token and (len(ss["s1d_tokens"]) <= page_idx):
+        ss["s1d_tokens"].append(next_token)
+    return rows, bool(next_token)
 
-def _s1d_existing_vendor_keys(conn):
-    return _s1d_select_existing_pairs(conn)
-
-def _s1d_geocode(addr: str, key: str):
-    if not addr: return None
+def _s1d_save_rows(conn, df: _pd_s1d.DataFrame) -> bool:
     try:
-        r = _requests.get("https://maps.googleapis.com/maps/api/geocode/json", params={"address": addr, "key": key}, timeout=10)
-        js = r.json()
-        if js.get("status") == "OK" and js.get("results"):
-            loc = js["results"][0]["geometry"]["location"]
-            return float(loc["lat"]), float(loc["lng"])
-    except Exception:
-        return None
-    return None
-
-def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_m: int|None, page_token: str|None, key: str):
-    base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {"query": query, "key": key, "region": "us"}
-    if page_token:
-        params = {"pagetoken": page_token, "key": key}
-    else:
-        if lat is not None and lng is not None and radius_m:
-            params.update({"location": f"{lat},{lng}", "radius": int(radius_m)})
-    r = _requests.get(base, params=params, timeout=12)
-    js = r.json()
-    return js
-
-def _s1d_place_details(pid: str, key: str):
-    try:
-        r = _requests.get("https://maps.googleapis.com/maps/api/place/details/json",
-                          params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
-                          timeout=10)
-        return r.json().get("result", {}) or {}
-    except Exception:
-        return {}
-
-def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
-
-    # Determine writable table and ensure schema
-    tbl = _s1d_vendor_write_table(conn)
-    with conn:
-        _s1d_ensure_vendor_table(conn, tbl)
-    # Insert or update rows keyed by place_id
-    saved = 0
-    with conn:
-        for r in rows or []:
-            cur = conn.execute(f"""
-                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                ON CONFLICT(place_id) DO UPDATE SET
-                    name=COALESCE(excluded.name, {tbl}.name),
-                    email=COALESCE(excluded.email, {tbl}.email),
-                    phone=COALESCE(excluded.phone, {tbl}.phone),
-                    website=COALESCE(excluded.website, {tbl}.website),
-                    address=COALESCE(excluded.address, {tbl}.address),
-                    city=COALESCE(excluded.city, {tbl}.city),
-                    state=COALESCE(excluded.state, {tbl}.state),
-                    zip=COALESCE(excluded.zip, {tbl}.zip),
-                    naics=COALESCE(excluded.naics, {tbl}.naics),
-                    notes=CASE WHEN length({tbl}.notes)>0 THEN {tbl}.notes ELSE COALESCE(excluded.notes, {tbl}.notes) END,
-                    lat=COALESCE(excluded.lat, {tbl}.lat),
-                    lon=COALESCE(excluded.lon, {tbl}.lon)
-            """, (
-                str(r.get("source","") or ""),
-                str(r.get("place_id","") or ""),
-                str(r.get("name","") or ""),
-                str(r.get("email","") or ""),
-                str(r.get("phone","") or ""),
-                str(r.get("website","") or ""),
-                str(r.get("address","") or ""),
-                str(r.get("city","") or ""),
-                str(r.get("state","") or ""),
-                str(r.get("zip","") or ""),
-                str(r.get("naics_guess","") or r.get("naics","") or ""),
-                str(r.get("notes","") or ""),
-                float(r.get("lat") or 0) if str(r.get("lat") or "").strip() else None,
-                float(r.get("lon") or 0) if str(r.get("lon") or "").strip() else None,
-            ))
-            saved += 1
-    return saved
-
-
-def _s1d_render_from_cache(conn, df):
-    import streamlit as st
-    import pandas as _pd
-    if df is None or getattr(df, "empty", True):
-        st.info("No cached results.")
-        if st.button("New search", key="s1d_new_search_empty"):
-            st.session_state.pop("s1d_df", None)
-        return
-    # Show with links and dedupe flags
-    def _mk_link(url, text):
-        if not url: return text
-        return f"<a href='{url}' target='_blank'>{text}</a>"
-    show = df.copy()
-    if "google_url" in show.columns:
-        show["name"] = show.apply(lambda r: _mk_link(r.get("google_url",""), r.get("name","")), axis=1)
-    if "website" in show.columns:
-        show["website"] = show.apply(lambda r: _mk_link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
-    keep = df[~df.get("_dup", _pd.Series([False]*len(df)))].copy() if not df.empty else df
-    # Results table
-    cols = [c for c in ["name","phone","website","address","city","state","place_id","_dup"] if c in show.columns]
-    if cols:
-        st.markdown("**Results**")
-        st.write(show[cols].to_html(escape=False, index=False), unsafe_allow_html=True)
-    # Selection and save
-    if keep.empty:
-        st.success("All results are already in your vendor list.")
-    else:
-        st.caption(f"{len(keep)} new vendors can be saved")
-        if "row_id" not in keep.columns:
-            import hashlib as _h
-            def _mk_id(r):
-                pid = str(r.get("place_id","") or "")
-                if pid: return pid
-                s = f"{r.get('name',f'')}-{r.get('phone','')}-{r.get('city','')}"
-                return _h.sha1(s.encode()).hexdigest()[:12]
-            keep["row_id"] = keep.apply(_mk_id, axis=1)
-        keep_view = keep[["row_id","name","phone","website","address","city","state","place_id"]].copy()
-        # Restore selection
-        sel_ids = set(st.session_state.get("s1d_selected_ids", []))
-        keep_view.insert(1, "Select", keep_view["row_id"].isin(sel_ids))
-        edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor_cache")
-        new_sel = set(edited.loc[edited["Select"]==True, "row_id"])
-        st.session_state["s1d_selected_ids"] = list(new_sel)
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Save selected", key="s1d_save_selected_cache") and new_sel:
-                sub = keep[keep["row_id"].isin(list(new_sel))].drop(columns=["row_id"], errors="ignore")
-                n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
-                st.success(f"Saved {n} vendors")
-        with c2:
-            if st.button("Save all new vendors", key="s1d_save_all_cache"):
-                sub = keep.drop(columns=["row_id"], errors="ignore")
-                n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
-                st.success(f"Saved {n} vendors")
-        with c3:
-            if st.button("New search", key="s1d_new_search"):
-                st.session_state.pop("s1d_df", None)
-                st.session_state.pop("s1d_selected_ids", None)
-        # rerun suppressed to keep table visible
-
-
-def _s1d_vendor_write_table(conn):
-    row = conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name='vendors_t'").fetchone()
-    if row and (row[0] or '').lower() == 'table':
-        return 'vendors_t'
-    if row and (row[0] or '').lower() == 'view':
-        sql = row[2] or ''
-        import re as _re
-        m = _re.search(r'FROM\s+([A-Za-z_][A-Za-z0-9_]*)', sql, flags=_re.IGNORECASE)
-        if m:
-            return m.group(1)
-    # fallback
-    return 'vendors'
-
-def _s1d_ensure_vendor_table(conn, table_name: str):
-    # Create base table if needed
-    conn.execute(f"""        CREATE TABLE IF NOT EXISTS {table_name}(
-            id INTEGER PRIMARY KEY,
-            source TEXT,
-            place_id TEXT,
-            name TEXT,
-            email TEXT,
-            phone TEXT,
-            website TEXT,
-            address TEXT,
-            city TEXT,
-            state TEXT,
-            zip TEXT,
-            naics TEXT,
-            notes TEXT,
-            lat REAL,
-            lon REAL,
-            created_at TEXT
-        )
-    """)
-    # Add missing columns as app evolves
-    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
-    needed = [
-        "source","place_id","name","email","phone","website","address","city","state","zip","naics","notes","lat","lon","created_at"
-    ]
-    for c in needed:
-        if c not in cols:
-            try:
-                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {c} TEXT")
-            except Exception:
-                pass
-
-def _s1d_select_existing_pairs(conn):
-    # Prefer vendors_t if present, else fallback to vendors
-    srcs = [("vendors_t","view_or_table"), ("vendors","table")]
-    for name, _ in srcs:
-        row = conn.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone()
-        if row:
-            try:
-                by_np, by_pid = _s1d_select_existing_pairs(conn)
-                return by_np, by_pid
-            except Exception:
-                continue
-    return set(), set()
-
-def render_subfinder_s1d(conn):
-    st.subheader("S1D — Subcontractor Finder")
-    
-    by_np, by_pid = _s1d_select_existing_pairs(conn)
-    key = _s1d_get_api_key()
-    if not key:
-        st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
-        return
-    # Use cached results if present
-    import pandas as _pd
-    _cache = st.session_state.get("s1d_df")
-    if _cache:
-        df = _pd.DataFrame(_cache)
-        _s1d_render_from_cache(conn, df)
-        return
-    q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
-    loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
-    lat = lng = None
-    if loc_choice == "Address":
-        addr = st.text_input("Place of performance address")
-        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
-        if addr:
-            ll = _s1d_geocode(addr, key)
-            if ll: lat, lng = ll
-    else:
-        col1, col2 = st.columns(2)
-        with col1: lat = st.number_input("Latitude", value=38.8951)
-        with col2: lng = st.number_input("Longitude", value=-77.0364)
-        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
-    radius_m = int(radius_mi * 1609.34)
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1:
-        go = st.button("Search", key="s1d_go")
-    with c2:
-        nxt = st.button("Next page", key="s1d_next")
-    # Persist page token
-    tok_key = "s1d_next_token"
-    if go: st.session_state.pop(tok_key, None)
-    js = None
-    try:
-        if go or nxt:
-            tok = st.session_state.get(tok_key) if nxt else None
-            if q:
-                js = _s1d_places_textsearch(q, lat, lng, radius_m, tok, key)
-                if js.get("next_page_token"):
-                    st.session_state[tok_key] = js["next_page_token"]
-                else:
-                    st.session_state.pop(tok_key, None)
+        if df is None or df.empty:
+            return True
+        cols = [c.lower() for c in df.columns]
+        # Minimal schema insert. Change to your vendors table schema.
+        with conn:
+            cur = conn.cursor()
+            for r in df.to_dict("records"):
+                cur.execute("""
+                    INSERT INTO vendors(place_id, name, phone, email, website, address)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(place_id) DO UPDATE SET
+                        name=excluded.name,
+                        phone=excluded.phone,
+                        email=excluded.email,
+                        website=excluded.website,
+                        address=excluded.address;
+                """, (r.get("place_id"), r.get("name"), r.get("phone"), r.get("email"), r.get("website"), r.get("address")))
+        return True
     except Exception as e:
-        st.error(f"Search failed: {e}")
-        return
-    if not js or not js.get("results"):
-        st.info("No results yet. Enter a query and click Search.")
-        return
-    by_np, by_pid = _s1d_existing_vendor_keys(conn)
-    rows = []
-    for r in js["results"]:
-        name = r.get("name","")
-        pid = r.get("place_id","")
-        addr = r.get("formatted_address","")
-        city = state = ""
-        if "," in addr:
-            parts = [p.strip() for p in addr.split(",")]
-            if len(parts)>=2:
-                city = parts[-2]
-                state = parts[-1].split()[0]
-        details = _s1d_place_details(pid, key) if pid else {}
-        phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
-        website = details.get("website") or ""
-        dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
-        rows.append({
-            "name": name, "address": addr, "city": city, "state": state,
-            "phone": phone, "website": website, "place_id": pid,
-            "google_url": details.get("url") or "",
-            "_dup": dup
-        })
-        # be nice to Places
-        _time.sleep(0.05)
-    import pandas as _pd
-    df = _pd.DataFrame(rows)
-    st.session_state["s1d_df"] = df.to_dict("records")
-    if df.empty:
-        st.info("No results.")
-        return
-    # Show with links and dedupe flags
-    def _mk_link(url, text):
-        if not url: return text
-        return f"<a href='{url}' target='_blank'>{text}</a>"
-    show = df.copy()
-    show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
-    show["website"] = show.apply(lambda r: _mk_link(r["website"], "site") if r["website"] else "", axis=1)
-    show = show[["name","phone","website","address","city","state","place_id","_dup"]]
-    st.markdown("**Results**")
-    st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-
-    # Selection and save
-    keep = df[~df["_dup"]].copy()
-    if keep.empty:
-        st.success("All results are already in your vendor list.")
-        return
-    st.caption(f"{len(keep)} new vendors can be saved")
-    # Interactive selection
-    keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
-    keep_view.insert(0, "Select", False)
-    edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
-    sel = edited[edited["Select"]==True]
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
-            n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
-            st.success(f"Saved {n} vendors")
-    with c2:
-        if st.button("Save all new vendors", key="s1d_save_all"):
-            n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
-            st.success(f"Saved {n} vendors")
-# === End S1D ================================================================
-
+        st.error(f"S1D save error: {e}")
+        return False
 
 def _wrap_run_subfinder():
     g = globals()
@@ -10025,151 +9778,3 @@ def o1_sender_accounts_ui(conn):
         st.dataframe(df, use_container_width=True)
     except Exception:
         pass
-
-
-# ---------- S1D: state + helpers (pagination, stable search bar, single-click save, manual edits) ----------
-import re as _re_s1d
-from typing import Tuple, List, Dict
-
-def _s1d_init_state():
-    ss = st.session_state
-    ss.setdefault("s1d_query", "")
-    ss.setdefault("s1d_radius_miles", 50)
-    ss.setdefault("s1d_page_idx", 0)
-    ss.setdefault("s1d_tokens", [])
-    ss.setdefault("s1d_cache_key", None)
-    ss.setdefault("s1d_saved_ids", set())
-    ss.setdefault("s1d_last_save_ok", False)
-
-def _s1d_norm_phone(x: str) -> str:
-    digits = _re_s1d.sub(r"\D+", "", x or "")
-    if len(digits) == 10:
-        return f"({{digits[0:3]}}) {{digits[3:6]}}-{{digits[6:]}}"
-    if len(digits) == 11 and digits[0] == "1":
-        return f"+1 ({{digits[1:4]}}) {{digits[4:7]}}-{{digits[7:]}}"
-    return x or ""
-
-@st.cache_data(show_spinner=False, ttl=300)
-def _s1d_fetch(query: str, radius_miles: int, page_token: str|None, cache_key: str) -> Tuple[List[Dict], str|None]:
-    """
-    Return rows and next_page_token. Replace body with your Google Places fetch that respects next_page_token.
-    Expected row keys: place_id, name, phone, website, email (optional), address, etc.
-    """
-    rows = []
-    next_token = None
-    return rows, next_token
-
-def _s1d_clear_cache():
-    try:
-        _s1d_fetch.clear()
-    except Exception:
-        pass
-
-def _s1d_load_page(query: str, radius: int, page_idx: int) -> Tuple[List[Dict], bool]:
-    ss = st.session_state
-    page_token = ss["s1d_tokens"][page_idx-1] if page_idx > 0 and len(ss["s1d_tokens"]) >= page_idx else None
-    rows, next_token = _s1d_fetch(query, radius, page_token, ss.get("s1d_cache_key"))
-    if next_token and (len(ss["s1d_tokens"]) <= page_idx):
-        ss["s1d_tokens"].append(next_token)
-    return rows, bool(next_token)
-
-def _s1d_save_rows(conn, df):
-    """
-    Implement DB upserts here. Use place_id as unique key. This function returns True on success.
-    """
-    # Example placeholder:
-    # with conn:
-    #     for r in df.to_dict("records"):
-    #         upsert_vendor(conn, r)
-    return True
-
-def run_s1d(conn):
-    import pandas as _pd_s1d
-
-    _s1d_init_state()
-    ss = st.session_state
-
-    with st.form(key="s1d_search_form", clear_on_submit=False):
-        c1, c2, c3, c4 = st.columns([4,2,1,1])
-        with c1:
-            st.text_input("Search", key="s1d_query", placeholder="electrician dallas tx")
-        with c2:
-            st.number_input("Radius (miles)", min_value=1, max_value=200, step=5, key="s1d_radius_miles")
-        with c3:
-            search = st.form_submit_button("Search")
-        with c4:
-            reset = st.form_submit_button("Reset")
-
-    if search:
-        ss["s1d_page_idx"] = 0
-        ss["s1d_tokens"] = []
-        ss["s1d_cache_key"] = f"{ss['s1d_query']}|{ss['s1d_radius_miles']}"
-        _s1d_clear_cache()
-    if reset:
-        ss["s1d_query"] = ""
-        ss["s1d_radius_miles"] = 50
-        ss["s1d_page_idx"] = 0
-        ss["s1d_tokens"] = []
-        ss["s1d_cache_key"] = f"reset"
-        _s1d_clear_cache()
-
-    rows, has_next = _s1d_load_page(ss["s1d_query"], ss["s1d_radius_miles"], ss["s1d_page_idx"])
-    rows = [r for r in rows if isinstance(r, dict) and r.get("place_id") not in ss["s1d_saved_ids"]]
-
-    df = _pd_s1d.DataFrame(rows)
-    for col, default in [("email", None), ("phone", None), ("website", None), ("select", False)]:
-        if col not in df.columns:
-            df[col] = default
-
-    if "phone" in df.columns:
-        df["phone"] = df["phone"].map(_s1d_norm_phone)
-
-    st.caption(f"Page {ss['s1d_page_idx']+1}")
-    edited_df = st.data_editor(
-        df,
-        key=f"s1d_editor_p{ss['s1d_page_idx']}",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "select": st.column_config.CheckboxColumn("Select"),
-            "email": st.column_config.TextColumn("Email"),
-            "phone": st.column_config.TextColumn("Phone"),
-            "website": st.column_config.LinkColumn("Website"),
-        }
-    )
-
-    n1, n2, n3, n4 = st.columns([1,1,3,2])
-    with n1:
-        if st.button("Prev", disabled=ss["s1d_page_idx"] == 0, key="s1d_prev"):
-            ss["s1d_page_idx"] -= 1
-            st.experimental_rerun()
-    with n2:
-        if st.button("Next", disabled=not has_next, key="s1d_next"):
-            ss["s1d_page_idx"] += 1
-            st.experimental_rerun()
-    with n4:
-        if st.button("Save selected", key="s1d_save"):
-            try:
-                to_save = edited_df[edited_df.get("select", False) == True].copy()
-            except Exception:
-                to_save = edited_df.copy()
-            ok = _s1d_save_rows(conn, to_save)
-            ss["s1d_last_save_ok"] = bool(ok)
-            if ok and "place_id" in to_save.columns:
-                try:
-                    ss["s1d_saved_ids"].update(set([pid for pid in to_save["place_id"].tolist() if pid]))
-                except Exception:
-                    pass
-            if ok:
-                st.success("Saved")
-            else:
-                st.error("Save failed")
-
-    if ss.get("s1d_last_save_ok"):
-        st.caption("Saved successfully.")
-
-# Optional compatibility alias if old code calls a different function name.
-if "run_subcontractor_finder" not in globals():
-    def run_subcontractor_finder(conn):
-        return run_s1d(conn)
-# ---------- end S1D patch ----------
