@@ -1,3 +1,6 @@
+def render_subfinder_s1d(conn):
+    return run_s1d(conn)
+
 import requests
 import time
 # ==== O4 unified DB + sender helpers ====
