@@ -9778,3 +9778,8 @@ def o1_sender_accounts_ui(conn):
         st.dataframe(df, use_container_width=True)
     except Exception:
         pass
+
+
+# --- Compatibility wrapper for legacy call sites ---
+def render_subfinder_s1d(conn):
+    return run_s1d(conn)
