@@ -10025,3 +10025,212 @@ def o1_sender_accounts_ui(conn):
         st.dataframe(df, use_container_width=True)
     except Exception:
         pass
+
+
+
+# ==== S1D PATCHES BEGIN ====
+# Pagination stability + single-click save + editable email/phone.
+
+def _s1d_ensure_vendor_table(conn):
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS vendors (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        phone TEXT,
+        email TEXT,
+        website TEXT,
+        address TEXT,
+        city TEXT,
+        state TEXT,
+        place_id TEXT UNIQUE
+    )""")
+    cols = {r[1] for r in cur.execute("PRAGMA table_info(vendors)").fetchall()}
+    for col, ddl in [
+        ("email", "ALTER TABLE vendors ADD COLUMN email TEXT"),
+        ("phone", "ALTER TABLE vendors ADD COLUMN phone TEXT"),
+        ("website", "ALTER TABLE vendors ADD COLUMN website TEXT"),
+        ("address", "ALTER TABLE vendors ADD COLUMN address TEXT"),
+        ("city", "ALTER TABLE vendors ADD COLUMN city TEXT"),
+        ("state", "ALTER TABLE vendors ADD COLUMN state TEXT"),
+        ("place_id", "ALTER TABLE vendors ADD COLUMN place_id TEXT UNIQUE")
+    ]:
+        if col not in cols:
+            try:
+                cur.execute(ddl)
+            except Exception:
+                pass
+    conn.commit()
+
+def _s1d_existing_vendor_keys(conn):
+    cur = conn.cursor()
+    try:
+        rows = cur.execute("SELECT LOWER(COALESCE(name,'')), COALESCE(phone,''), COALESCE(place_id,'') FROM vendors").fetchall()
+    except Exception:
+        rows = []
+    by_np = {(name, phone) for (name, phone, _pid) in rows}
+    by_pid = {pid for (_name, _phone, pid) in rows if pid}
+    return by_np, by_pid
+
+def _s1d_save_new_vendors(conn, rows):
+    cur = conn.cursor()
+    n = 0
+    for r in rows:
+        cur.execute(
+            """INSERT INTO vendors(name, phone, email, website, address, city, state, place_id)
+               VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(place_id) DO UPDATE SET
+                 name=excluded.name,
+                 phone=excluded.phone,
+                 email=excluded.email,
+                 website=excluded.website,
+                 address=excluded.address,
+                 city=excluded.city,
+                 state=excluded.state
+            """,
+            (
+                r.get("name"), r.get("phone"), r.get("email"),
+                r.get("website"), r.get("address"), r.get("city"),
+                r.get("state"), r.get("place_id")
+            )
+        )
+        n += 1
+    conn.commit()
+    return n
+
+def _s1d_render_from_cache(conn, df):
+    import streamlit as st
+    import pandas as pd
+    if "_dup" not in df.columns:
+        try:
+            by_np, by_pid = _s1d_existing_vendor_keys(conn)
+        except Exception:
+            by_np, by_pid = set(), set()
+        def _is_dup(row):
+            name = (row.get("name") or "").strip().lower()
+            phone = row.get("phone") or ""
+            pid = row.get("place_id") or ""
+            return (name, phone) in by_np or (pid in by_pid)
+        df["_dup"] = df.apply(_is_dup, axis=1)
+
+    keep = df[df["_dup"] == False].copy()
+    if keep.empty:
+        st.success("All results are already in your vendor list.")
+        return
+
+    st.caption(f"{len(keep)} new vendors can be saved")
+    view = keep[["name","phone","email","website","address","city","state","place_id"]].fillna("")
+    view.insert(0, "Select", False)
+
+    with st.form("s1d_save_form"):
+        edited = st.data_editor(view, hide_index=True, key="s1d_editor")
+        c1, c2 = st.columns(2)
+        with c1:
+            save_sel = st.form_submit_button("Save selected")
+        with c2:
+            save_all = st.form_submit_button("Save all new vendors")
+
+    if save_sel:
+        sel = edited[edited["Select"]==True].drop(columns=["Select"])
+        if not sel.empty:
+            n = _s1d_save_new_vendors(conn, sel.to_dict("records"))
+            st.success(f"Saved {n} vendors")
+            _ids = set((r.get("place_id") or "") for r in sel.to_dict("records"))
+            left = df[~df["place_id"].isin(_ids)].copy()
+            st.session_state["s1d_df"] = left.to_dict("records")
+    if save_all:
+        n = _s1d_save_new_vendors(conn, view.drop(columns=["Select"]).to_dict("records"))
+        st.success(f"Saved {n} vendors")
+        _ids = set((r.get("place_id") or "") for r in view.to_dict("records"))
+        left = df[~df["place_id"].isin(_ids)].copy()
+        st.session_state["s1d_df"] = left.to_dict("records")
+
+def render_subfinder_s1d(conn):
+    import streamlit as st
+    st.subheader("S1D — Subcontractor Finder")
+    try:
+        _s1d_ensure_vendor_table(conn)
+    except Exception:
+        pass
+
+    key = _s1d_get_api_key()
+    if not key:
+        st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
+        return
+
+    q = st.text_input("Search query", key="s1d_q", placeholder="e.g. HVAC contractors, plumbing, IT services")
+    loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True, key="s1d_loc_choice")
+    lat = lng = None
+    if loc_choice == "Address":
+        addr = st.text_input("Place of performance address", key="s1d_addr")
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50, key="s1d_radius_mi")
+        if addr:
+            ll = _s1d_geocode(addr, key)
+            if ll: 
+                lat, lng = ll
+    else:
+        c1, c2 = st.columns(2)
+        with c1: lat = st.number_input("Latitude", value=38.8951, key="s1d_lat")
+        with c2: lng = st.number_input("Longitude", value=-77.0364, key="s1d_lng")
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50, key="s1d_radius_mi_latlng")
+    radius_m = int((radius_mi or 0) * 1609.34)
+
+    b1, b2, _ = st.columns([1,1,2])
+    with b1: go = st.button("Search", key="s1d_go")
+    with b2: nxt = st.button("Next page", key="s1d_next")
+
+    tok_key = "s1d_next_token"
+    if go:
+        st.session_state.pop(tok_key, None)
+
+    js = None
+    try:
+        if go or nxt:
+            tok = st.session_state.get(tok_key) if nxt else None
+            if q:
+                js = _s1d_places_textsearch(q, lat, lng, radius_m, tok, key)
+                if js.get("next_page_token"):
+                    st.session_state[tok_key] = js["next_page_token"]
+                else:
+                    st.session_state.pop(tok_key, None)
+            if js and js.get("results"):
+                by_np, by_pid = _s1d_existing_vendor_keys(conn)
+                rows = []
+                for r in js["results"]:
+                    name = r.get("name","") or ""
+                    pid = r.get("place_id","") or ""
+                    addr = r.get("formatted_address","") or ""
+                    city = state = ""
+                    if "," in addr:
+                        parts = [p.strip() for p in addr.split(",")]
+                        if len(parts) >= 2:
+                            city = parts[-2]
+                            state = parts[-1].split()[0]
+                    details = _s1d_place_details(pid, key) if pid else {}
+                    phone = _s1d_norm_phone(details.get("formatted_phone_number","") or "")
+                    website = details.get("website") or ""
+                    dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
+                    rows.append({
+                        "name": name, "address": addr, "city": city, "state": state,
+                        "phone": phone, "email": "", "website": website, "place_id": pid,
+                        "google_url": details.get("url") or "", "_dup": dup
+                    })
+                import pandas as _pd
+                df = _pd.DataFrame(rows)
+                if nxt and "s1d_df" in st.session_state and st.session_state["s1d_df"]:
+                    prev = _pd.DataFrame(st.session_state["s1d_df"])
+                    df = _pd.concat([prev, df], ignore_index=True)
+                st.session_state["s1d_df"] = df.to_dict("records")
+    except Exception as e:
+        st.error(f"Search failed: {e}")
+        return
+
+    import pandas as _pd
+    cache = st.session_state.get("s1d_df") or []
+    df = _pd.DataFrame(cache)
+    if df.empty:
+        st.info("No results yet. Enter a query and click Search.")
+        return
+
+    _s1d_render_from_cache(conn, df)
+
+# ==== S1D PATCHES END ====
