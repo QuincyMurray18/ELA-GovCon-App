@@ -1,3 +1,14 @@
+
+def y3_get_rfp_files(_conn: sqlite3.Connection, rfp_id: int) -> List[Tuple[int, str, bytes]]:
+    """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
+    try:
+        from contextlib import closing as _closing
+        with _closing(_conn.cursor()) as cur:
+            cur.execute("SELECT id, file_name, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
+            return cur.fetchall() or []
+    except Exception:
+        return []
+
 import requests
 import time
 # ==== O4 unified DB + sender helpers ====
