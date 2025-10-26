@@ -3575,6 +3575,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
         with e6:
             pass
+        hide_saved = st.checkbox("Hide items already saved in Deals/Pipeline", value=True, key="sam_hide_saved")
 
         ptype_map = {
             "Pre-solicitation": "p",
