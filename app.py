@@ -3738,7 +3738,13 @@ if _has_rows:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
                         try:
                             from contextlib import closing as _closing
-                            with _closing(conn.cursor()) as cur:
+                            _db = globals().get('conn')
+                            _owned = False
+                            if _db is None:
+                                import sqlite3
+                                _owned = True
+                                _db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                            with _closing(_db.cursor()) as cur:
                                 cur.execute(
                                     """
                                     INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
@@ -3758,10 +3764,33 @@ if _has_rows:
                                         row.get("SAM Link") or "",
                                     ),
                                 )
-                                conn.commit()
+                                deal_id = cur.lastrowid
+                                _db.commit()
+                            # Optional: create an RFP shell and try to fetch attachments
+                            try:
+                                with _closing(_db.cursor()) as cur:
+                                    cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
+                                    rfp_id = cur.lastrowid
+                                    _db.commit()
+                                try:
+                                    for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
+                                        try:
+                                            save_rfp_file_db(_db, rfp_id, fname, fbytes)
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
                             st.success("Saved to Deals")
                         except Exception as e:
-                            st.error(f"Failed to save deal: {e}")
+                            st.error("Failed to save deal: %s" % (e,))
+                        finally:
+                            try:
+                                if _owned:
+                                    _db.close()
+                            except Exception:
+                                pass
                 with c5:
                     if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
                         try:
