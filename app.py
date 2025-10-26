@@ -196,7 +196,7 @@ def _now_iso():
         return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return ""
-def _ensure_rtm_schema(conn: sqlite3.Connection) -> None:
+def _ensure_rtm_schema(conn: "sqlite3.Connection") -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("SELECT 1 FROM rtm_requirements LIMIT 1;")
@@ -208,7 +208,7 @@ def _ensure_rtm_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int = 800) -> int:
+def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: int = 800) -> int:
     """
     Seed RTM from L/M checklist and SOW-style shall/must statements in rfp_chunks.
     Returns number of rows inserted (new).
@@ -269,7 +269,7 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
     conn.commit()
     return inserted
 
-def rtm_metrics(conn: sqlite3.Connection, rfp_id: int) -> dict:
+def rtm_metrics(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     q = pd.read_sql_query("""
         SELECT r.id, r.source_type, r.status, COUNT(l.id) AS links
         FROM rtm_requirements r
@@ -289,7 +289,7 @@ def rtm_metrics(conn: sqlite3.Connection, rfp_id: int) -> dict:
         by_type[t] = {"total": ct, "covered": cv, "coverage": (cv/ct if ct else 0.0)}
     return {"total": total, "covered": covered, "coverage": (covered/total if total else 0.0), "by_type": by_type}
 
-def rtm_export_csv(conn: sqlite3.Connection, rfp_id: int) -> str:
+def rtm_export_csv(conn: "sqlite3.Connection", rfp_id: int) -> str:
     q = pd.read_sql_query("""
         SELECT r.id, r.req_key, r.source_type, r.source_file, r.page, r.text, r.status,
                COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '; '), '') AS evidence
@@ -305,7 +305,7 @@ def rtm_export_csv(conn: sqlite3.Connection, rfp_id: int) -> str:
         return fn
     except Exception:
         return ""
-def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
+def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
     # Unique key namespace to avoid duplicate element IDs
     _ns = int(st.session_state.get('rtm_ui_ns', 0))
     st.session_state['rtm_ui_ns'] = _ns + 1
@@ -423,7 +423,7 @@ def _parse_sam_text_to_facts(txt: str) -> dict:
     if forms: d["forms"] = sorted(set([f"{a}-{b}" for a,b in forms]))[:50]
     return d
 
-def sam_snapshot(conn: sqlite3.Connection, rfp_id: int, url: str, ttl_hours: int = 72) -> dict:
+def sam_snapshot(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: int = 72) -> dict:
     out = {"url": url, "facts": {}, "sha256": "", "cached": False, "text": ""}
     if not (url or "").strip():
         return out
@@ -458,7 +458,7 @@ def _facts_diff(old: dict, new: dict) -> dict:
             diffs[k] = {"old": ov, "new": nv}
     return diffs
 
-def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, ttl_hours: int = 72) -> None:
+def render_amendment_sidebar(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: int = 72) -> None:
     if not (url or "").strip():
         return
     with st.sidebar.expander("Amendments · SAM Analyzer", expanded=True):
@@ -963,7 +963,7 @@ def ensure_dirs() -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(UPLOADS_DIR, exist_ok=True)
 # === Y1: Retrieval (chunks • embeddings • citations) ===
-def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
+def _ensure_y1_schema(conn: "sqlite3.Connection") -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("""
@@ -1119,7 +1119,7 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
         i = max(j - overlap, j)
     return chunks
 
-def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
+def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     _ensure_y1_schema(conn)
     try:
         df = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
@@ -1165,7 +1165,7 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                     conn.commit()
                 added += 1
     return {"ok": True, "added": added, "skipped": skipped}
-def _y1_search_uncached(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
+def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
     if not (query or "").strip():
         return []
@@ -1244,7 +1244,7 @@ if 'y1_search' not in globals():
                 return _y1_search_uncached(conn, int(rfp_id), query or "", int(k))
             except Exception:
                 return []
-def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
+def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
     Streams a CO-style answer grounded in top-k chunk hits with [C#] citations.
     Falls back to general answer if no hits.
@@ -1272,7 +1272,7 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
     for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
         yield tok
 
-def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6):
+def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
     Build a minimal message set for CO chat, embedding local evidence as [C#].
     Returns a list of chat messages (no system role; ask_ai adds SYSTEM_CO).
@@ -1289,7 +1289,7 @@ def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, us
     user = "QUESTION\n" + (q_in or "Provide a CO Readout.") + "\n\nEVIDENCE\n" + (evidence or "(none)")
     msgs = [{"role":"user","content": user}]
     return msgs
-def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
+def _ensure_y2_schema(conn: "sqlite3.Connection") -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("""
@@ -1315,7 +1315,7 @@ def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-def y2_list_threads(conn: sqlite3.Connection, rfp_id: int):
+def y2_list_threads(conn: "sqlite3.Connection", rfp_id: int):
     _ensure_y2_schema(conn)
     try:
         df = pd.read_sql_query(
@@ -1336,7 +1336,7 @@ def y2_list_threads(conn: sqlite3.Connection, rfp_id: int):
         })
     return out
 
-def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "CO guidance") -> int:
+def y2_create_thread(conn: "sqlite3.Connection", rfp_id: int, title: str = "CO guidance") -> int:
     _ensure_y2_schema(conn)
     from datetime import datetime as _dt
     now = _dt.utcnow().isoformat()
@@ -1346,7 +1346,7 @@ def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "CO gui
         conn.commit()
         return int(cur.lastrowid)
 
-def y2_get_messages(conn: sqlite3.Connection, thread_id: int):
+def y2_get_messages(conn: "sqlite3.Connection", thread_id: int):
     _ensure_y2_schema(conn)
     try:
         df = pd.read_sql_query(
@@ -1359,7 +1359,7 @@ def y2_get_messages(conn: sqlite3.Connection, thread_id: int):
         return []
     return [{"role": str(r["role"]), "content": str(r["content"])} for _, r in df.iterrows()]
 
-def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, content: str) -> None:
+def y2_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
     _ensure_y2_schema(conn)
     from datetime import datetime as _dt
     now = _dt.utcnow().isoformat()
@@ -1371,13 +1371,13 @@ def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, conte
         )
         conn.commit()
 
-def y2_rename_thread(conn: sqlite3.Connection, thread_id: int, new_title: str) -> None:
+def y2_rename_thread(conn: "sqlite3.Connection", thread_id: int, new_title: str) -> None:
     _ensure_y2_schema(conn)
     with closing(conn.cursor()) as cur:
         cur.execute("UPDATE y2_threads SET title=? WHERE id=?;", ((new_title or "Untitled").strip(), int(thread_id)))
         conn.commit()
 
-def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
+def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
     _ensure_y2_schema(conn)
     with closing(conn.cursor()) as cur:
         cur.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
@@ -1385,7 +1385,7 @@ def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
         conn.commit()
 # === end Y2 thread storage helpers ===
 
-def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
+def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     st.caption("CO Chat with memory. Threads are stored per RFP.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -1537,7 +1537,7 @@ def research_extract_excerpt(text: str, query: str, window: int = 380) -> str:
 
 
 # === Y3: Proposal drafting from evidence (per-RFP) ===
-def _y3_collect_ctx(conn: sqlite3.Connection, rfp_id: int, max_items: int = 20) -> dict:
+def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20) -> dict:
     ctx: dict = {}
     try:
         df_items = pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
@@ -1565,7 +1565,7 @@ def _y3_collect_ctx(conn: sqlite3.Connection, rfp_id: int, max_items: int = 20) 
         ctx["title"] = ""; ctx["solnum"] = ""
     return ctx
 
-def _y3_build_messages(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
+def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     ctx = _y3_collect_ctx(conn, int(rfp_id))
     q = f"{section_title} Section L Section M instructions {ctx.get('title','')} {ctx.get('solnum','')}"
     hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
@@ -1607,7 +1607,7 @@ Write a structured section with a short lead paragraph, 3–6 bullets, and an op
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 
-def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
+def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
     msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
     model_name = _resolve_model()
@@ -1632,7 +1632,7 @@ def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, n
 # === end Y3 ===
 
 # === Y4: CO Review (scored compliance with citations) ===
-def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
+def _y4_build_messages(conn: "sqlite3.Connection", rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
     """
     Build messages for a Contracting Officer style review.
     Output must include: Score 0–100, Strengths, Gaps, Risks, Required fixes, and short Conclusion.
@@ -1731,7 +1731,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
         except Exception:
             pass
 
-def y4_ui_review(conn: sqlite3.Connection) -> None:
+def y4_ui_review(conn: "sqlite3.Connection") -> None:
     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -1807,7 +1807,7 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
 from contextlib import closing
 import io
 
-def ensure_y5_tables(conn: sqlite3.Connection) -> None:
+def ensure_y5_tables(conn: "sqlite3.Connection") -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute(
@@ -1882,7 +1882,7 @@ def y5_extract_from_uploads(files) -> str:
             continue
     return "\n\n".join([p for p in parts if p]).strip()
 
-def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
+def y5_extract_from_rfp(conn: "sqlite3.Connection", rfp_id: int) -> str:
     # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
     try:
         df = pd.read_sql_query(
@@ -1911,7 +1911,7 @@ def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
             parts.append(_extract_pdf_bytes(bytes(data)))
     return "\n\n".join([p for p in parts if p]).strip()
 
-def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
+def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
     if not (text or "").strip():
         return
     try:
@@ -1930,7 +1930,7 @@ def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: s
 
 
 # === Phase 2: Dedicated finders and status chips ===
-def _collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
+def _collect_full_text(conn: "sqlite3.Connection", rfp_id: int) -> str:
     try:
         df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
@@ -1952,7 +1952,7 @@ def _upsert_meta(conn, rfp_id: int, key: str, value: str):
         cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), key, value))
         conn.commit()
 
-def find_due_date(conn: sqlite3.Connection, rfp_id: int) -> str:
+def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
     # Check SAM facts first
     try:
         row = pd.read_sql_query("SELECT extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)).iloc[0]
@@ -1976,7 +1976,7 @@ def find_due_date(conn: sqlite3.Connection, rfp_id: int) -> str:
         _upsert_meta(conn, int(rfp_id), "offers_due", dd); return dd
     return ""
 
-def find_naics_setaside(conn: sqlite3.Connection, rfp_id: int) -> dict:
+def find_naics_setaside(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     full = _collect_full_text(conn, int(rfp_id))
     naics = _extract_naics(full)
     set_aside = _extract_set_aside(full)
@@ -1984,14 +1984,14 @@ def find_naics_setaside(conn: sqlite3.Connection, rfp_id: int) -> dict:
     if set_aside: _upsert_meta(conn, int(rfp_id), "set_aside", set_aside)
     return {"naics": naics, "set_aside": set_aside}
 
-def find_pop(conn: sqlite3.Connection, rfp_id: int) -> dict:
+def find_pop(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     full = _collect_full_text(conn, int(rfp_id))
     pop = extract_pop_structure(full) or {}
     for k, v in pop.items():
         _upsert_meta(conn, int(rfp_id), k, str(v))
     return pop
 
-def find_section_M(conn: sqlite3.Connection, rfp_id: int) -> int:
+def find_section_M(conn: "sqlite3.Connection", rfp_id: int) -> int:
     full = _collect_full_text(conn, int(rfp_id))
     sec = extract_sections_L_M(full)
     cnt = 0
@@ -2007,7 +2007,7 @@ def find_section_M(conn: sqlite3.Connection, rfp_id: int) -> int:
         conn.commit()
     return cnt
 
-def find_clins_all(conn: sqlite3.Connection, rfp_id: int) -> int:
+def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
     full = _collect_full_text(conn, int(rfp_id))
     rows = extract_clins(full)
     try:
@@ -2033,7 +2033,7 @@ def _parse_money(x):
         return float(s) if s else 0.0
     except Exception:
         return 0.0
-def clin_totals_df(conn: sqlite3.Connection, rfp_id: int):
+def clin_totals_df(conn: "sqlite3.Connection", rfp_id: int):
     try:
         df = pd.read_sql_query("SELECT clin, description, qty, unit_price, extended_price FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
@@ -2056,7 +2056,7 @@ def clin_totals_df(conn: sqlite3.Connection, rfp_id: int):
     df["qty_num"] = qn; df["unit_price_num"] = up; df["extended_num"] = ext
     return df
 
-def render_status_and_gaps(conn: sqlite3.Connection) -> None:
+def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
     st.subheader("Status & Gaps")
     try:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
@@ -2141,7 +2141,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
 
 
 
-def get_db() -> sqlite3.Connection:
+def get_db() -> "sqlite3.Connection":
     ensure_dirs()
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with closing(conn.cursor()) as cur:
@@ -2945,7 +2945,7 @@ def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
     except Exception:
         return pages_text, 0
 
-def save_rfp_file_db(conn: sqlite3.Connection, rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
+def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
     """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
     mime = _detect_mime_light(name)
     sha = compute_sha256(file_bytes)
@@ -3469,7 +3469,7 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
 
 
 # -------------------- Modules --------------------
-def run_contacts(conn: sqlite3.Connection) -> None:
+def run_contacts(conn: "sqlite3.Connection") -> None:
     st.header("Contacts")
     with st.form("add_contact", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 2, 2])
@@ -3509,7 +3509,7 @@ def run_contacts(conn: sqlite3.Connection) -> None:
         pass
 
 
-def run_deals(conn: sqlite3.Connection) -> None:
+def run_deals(conn: "sqlite3.Connection") -> None:
     st.header("Deals")
     with st.form("add_deal", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
@@ -3557,7 +3557,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 # ---------- SAM Watch (Phase A) ----------
 
-def run_sam_watch(conn: sqlite3.Connection) -> None:
+def run_sam_watch(conn: "sqlite3.Connection") -> None:
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -3798,7 +3798,7 @@ if results_df is not None and not results_df.empty:
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
             y6_render_co_box(conn, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
 
-def run_research_tab(conn: sqlite3.Connection) -> None:
+def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/...")
     ttl = st.number_input("Cache TTL (hours)", min_value=1, max_value=168, value=24, step=1)
@@ -3817,7 +3817,7 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
                 st.markdown(f"[Open cached text]({rec['path']})")
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
-def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
+def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
 
         # === One-Page Analyzer (integrated) ===
     try:
@@ -4825,7 +4825,7 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
 
 
 
-def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
+def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataFrame:
     """
     Robust loader:
       1) If tenancy views exist (lm_items_t/lm_meta_t), use them.
@@ -4941,7 +4941,7 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _load_rfp_context(conn: sqlite3.Connection, rfp_id: int) -> dict:
+def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     try:
         rf = pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
     except Exception:
@@ -4956,7 +4956,7 @@ def _load_rfp_context(conn: sqlite3.Connection, rfp_id: int) -> dict:
     return {"rfp": meta, "sections": sections, "items": df_items}
 
 
-def run_lm_checklist(conn: sqlite3.Connection) -> None:
+def run_lm_checklist(conn: "sqlite3.Connection") -> None:
 
     st.header("L and M Checklist")
     rfp_id = st.session_state.get('current_rfp_id')
@@ -5196,7 +5196,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     doc.save(path)
     return path
 
-def run_proposal_builder(conn: sqlite3.Connection) -> None:
+def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
@@ -5322,7 +5322,7 @@ def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     view = df.iloc[start:end].copy() if df is not None else df
     st.session_state[page_key] = page
     return view, page, pages
-def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
+def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
@@ -5552,7 +5552,7 @@ def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optiona
         return float(qty) * float(unit_price)
     except Exception:
         return None
-def run_quote_comparison(conn: sqlite3.Connection) -> None:
+def run_quote_comparison(conn: "sqlite3.Connection") -> None:
     st.header("Quote Comparison")
     df = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
@@ -5675,7 +5675,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Pricing Calculator (Phase E) ----------
-def _scenario_summary(conn: sqlite3.Connection, scenario_id: int) -> Dict[str, float]:
+def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str, float]:
     dl = pd.read_sql_query("SELECT hours, rate, fringe_pct FROM pricing_labor WHERE scenario_id=?;", conn, params=(scenario_id,))
     other = pd.read_sql_query("SELECT cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
     base = pd.read_sql_query("SELECT overhead_pct, gna_pct, fee_pct, contingency_pct FROM pricing_scenarios WHERE id=?;", conn, params=(scenario_id,))
@@ -5703,7 +5703,7 @@ def _scenario_summary(conn: sqlite3.Connection, scenario_id: int) -> Dict[str, f
     }
 
 
-def run_pricing_calculator(conn: sqlite3.Connection) -> None:
+def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     st.header("Pricing Calculator")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
@@ -5800,7 +5800,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Win Probability (Phase E) ----------
-def _price_competitiveness(conn: sqlite3.Connection, rfp_id: int, our_total: Optional[float]) -> Optional[float]:
+def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
     df = pd.read_sql_query("""
         SELECT q.vendor, SUM(l.extended_price) AS total
         FROM quotes q JOIN quote_lines l ON q.id = l.quote_id
@@ -5823,7 +5823,7 @@ def _price_competitiveness(conn: sqlite3.Connection, rfp_id: int, our_total: Opt
     return 0.0
 
 
-def run_win_probability(conn: sqlite3.Connection) -> None:
+def run_win_probability(conn: "sqlite3.Connection") -> None:
     st.header("Win Probability")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
@@ -5901,7 +5901,7 @@ def run_win_probability(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase F: Chat Assistant (rules-based over DB) ----------
-def _kb_search(conn: sqlite3.Connection, rfp_id: Optional[int], query: str) -> Dict[str, Any]:
+def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) -> Dict[str, Any]:
     q = query.lower()
     res: Dict[str, Any] = {}
     # RFP sections
@@ -5973,7 +5973,7 @@ def _kb_search(conn: sqlite3.Connection, rfp_id: Optional[int], query: str) -> D
     return res
 
 
-def run_chat_assistant(conn: sqlite3.Connection) -> None:
+def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     st.header("Chat Assistant (DB-aware)")
     st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
@@ -6088,7 +6088,7 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
     return path
 
 
-def _orig_run_capability_statement(conn: sqlite3.Connection) -> None:
+def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
     st.header("Capability Statement")
     st.caption("Store your company profile and export a polished 1-page DOCX capability statement.")
 
@@ -6212,7 +6212,7 @@ def _pp_writeup_block(rec: dict) -> str:
 
 
 
-def run_past_performance(conn: sqlite3.Connection) -> None:
+def run_past_performance(conn: "sqlite3.Connection") -> None:
     st.header("Past Performance Library")
     st.caption("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
 
@@ -6389,7 +6389,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
         _export_past_perf_docx(out_path, past_perf)
-def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
+def _wp_load_paper(conn: "sqlite3.Connection", paper_id: int) -> pd.DataFrame:
     return pd.read_sql_query(
         "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
         conn, params=(paper_id,)
@@ -6435,7 +6435,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
         st.error(f"DOCX export failed: {e}")
         return None
 
-def run_white_paper_builder(conn: sqlite3.Connection) -> None:
+def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
     st.header("White Paper Builder")
     st.caption("Templates → Drafts → DOCX export. Can include images per section.")
 
@@ -6636,7 +6636,7 @@ def _stage_probability(stage: str) -> int:
     }
     return mapping.get(stage or "", 10)
 
-def run_crm(conn: sqlite3.Connection) -> None:
+def run_crm(conn: "sqlite3.Connection") -> None:
     st.header("CRM")
     tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
 
@@ -6805,7 +6805,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
 
 
 
-def _ensure_files_table(conn: sqlite3.Connection) -> None:
+def _ensure_files_table(conn: "sqlite3.Connection") -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("""
@@ -6841,7 +6841,7 @@ def _detect_mime(name: str) -> str:
     return "application/octet-stream"
 
 
-def run_file_manager(conn: sqlite3.Connection) -> None:
+def run_file_manager(conn: "sqlite3.Connection") -> None:
     _ensure_files_table(conn)
     st.header("File Manager")
     st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
@@ -7053,14 +7053,14 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase L: RFQ Pack ----------
-def _rfq_pack_by_id(conn: sqlite3.Connection, pid: int) -> dict | None:
+def _rfq_pack_by_id(conn: "sqlite3.Connection", pid: int) -> dict | None:
     df = pd.read_sql_query("SELECT * FROM rfq_packs_t WHERE id=?;", conn, params=(pid,))
     return None if df.empty else df.iloc[0].to_dict()
 
-def _rfq_lines(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
+def _rfq_lines(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
-def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
+def _rfq_vendors(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
     q = """
         SELECT rv.id, rv.vendor_id, v.name, v.email, v.phone
         FROM rfq_vendors_t rv
@@ -7072,10 +7072,10 @@ def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
         return pd.read_sql_query(q, conn, params=(pid,))
     except Exception:
         return pd.DataFrame(columns=["id","vendor_id","name","email","phone"])
-def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
+def _rfq_attachments(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
-def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
+def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
     pack = _rfq_pack_by_id(conn, pack_id)
     if not pack:
         st.error("Pack not found"); return None
@@ -7138,7 +7138,7 @@ def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
     except Exception:
         pass
 
-def run_rfq_pack(conn: sqlite3.Connection) -> None:
+def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.header("RFQ Pack")
     st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
 
@@ -7341,14 +7341,14 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
                 st.success("Exported"); st.markdown(f"[Download CSV]({path})")
 
 
-def _db_path_from_conn(conn: sqlite3.Connection) -> str:
+def _db_path_from_conn(conn: "sqlite3.Connection") -> str:
     try:
         df = pd.read_sql_query("PRAGMA database_list;", conn, params=())
         p = df[df["name"]=="main"]["file"].values[0]
         return p or str(Path(DATA_DIR) / "app.db")
     except Exception:
         return str(Path(DATA_DIR) / "app.db")
-def migrate(conn: sqlite3.Connection) -> None:
+def migrate(conn: "sqlite3.Connection") -> None:
     """Lightweight idempotent migrations and indices."""
     with closing(conn.cursor()) as cur:
         # read current version
@@ -7393,7 +7393,7 @@ def migrate(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase N: Backup & Data ----------
-def _current_tenant(conn: sqlite3.Connection) -> int:
+def _current_tenant(conn: "sqlite3.Connection") -> int:
     try:
         return int(pd.read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn, params=()).iloc[0]["ctid"])
     except Exception:
@@ -7401,7 +7401,7 @@ def _current_tenant(conn: sqlite3.Connection) -> int:
 def _safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s or "")
 
-def _backup_db(conn: sqlite3.Connection) -> Optional[str]:
+def _backup_db(conn: "sqlite3.Connection") -> Optional[str]:
     # Prefer VACUUM INTO; fallback to file copy using sqlite3 backup API
     db_path = _db_path_from_conn(conn)
     ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -7426,7 +7426,7 @@ def _backup_db(conn: sqlite3.Connection) -> Optional[str]:
         except Exception:
             pass
 
-def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
+def _restore_db_from_upload(conn: "sqlite3.Connection", upload) -> bool:
     # Use backup API to copy uploaded DB into main DB file
     db_path = _db_path_from_conn(conn)
     tmp = Path(DATA_DIR) / ("restore_" + _safe_name(upload.name))
@@ -7450,7 +7450,7 @@ def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
     except Exception:
         pass
 
-def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool = True) -> Optional[str]:
+def _export_table_csv(conn: "sqlite3.Connection", table_or_view: str, scoped: bool = True) -> Optional[str]:
     name = table_or_view
     if scoped and not name.endswith("_t"):
         # if a view exists, prefer it
@@ -7474,7 +7474,7 @@ def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool
     except Exception:
         pass
 
-def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scoped_to_current: bool=True) -> int:
+def _import_csv_into_table(conn: "sqlite3.Connection", csv_file, table: str, scoped_to_current: bool=True) -> int:
     # Read CSV and insert rows. If tenant_id missing and scoped, stamp with current tenant.
     try:
         df = pd.read_csv(io.BytesIO(csv_file.getbuffer()))
@@ -7516,7 +7516,7 @@ def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scope
     except Exception:
         pass
 
-def run_backup_and_data(conn: sqlite3.Connection) -> None:
+def run_backup_and_data(conn: "sqlite3.Connection") -> None:
     st.header("Backup & Data")
     st.caption("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
 
@@ -7668,7 +7668,7 @@ def nav() -> str:
 
 
 
-def render_workspace_switcher(conn: sqlite3.Connection) -> None:
+def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
     with st.sidebar.expander("Workspace", expanded=True):
         try:
             df_tenants = pd.read_sql_query("SELECT id, name FROM tenants ORDER BY id;", conn, params=())
@@ -7714,7 +7714,7 @@ def run_subcontractor_finder_s1_hook(conn):
     except Exception:
         pass
 
-def router(page: str, conn: sqlite3.Connection) -> None:
+def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
     import re as _re
     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
@@ -9057,7 +9057,7 @@ from email.mime.multipart import MIMEMultipart
 def _o5_now_iso():
     return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-def ensure_o5_schema(conn: sqlite3.Connection) -> None:
+def ensure_o5_schema(conn: "sqlite3.Connection") -> None:
     with conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS outreach_sequences(
             id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL
@@ -10081,7 +10081,7 @@ def run_subcontractor_finder_s1_hook(conn):
     except Exception:
         pass
 
-def router(page: str, conn: sqlite3.Connection) -> None:
+def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
     import re as _re
     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
