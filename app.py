@@ -2707,59 +2707,6 @@ def get_sam_api_key() -> Optional[str]:
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-
-def sam_try_fetch_attachments(notice_id: str, api_key: str | None = None):
-    """
-    Best-effort: fetch attachment files for a SAM notice.
-    Returns a list of (filename, bytes). Safe to call; swallows network errors.
-    """
-    files = []
-    try:
-        import requests
-        try:
-            r = requests.get(f"https://sam.gov/api/prod/opps/v3/opportunities/{notice_id}", timeout=20)
-            js = r.json() if hasattr(r, "json") else None
-        except Exception:
-            js = None
-
-        urls = []
-        def walk(x):
-            try:
-                from collections.abc import Mapping
-            except Exception:
-                Mapping = dict
-            if isinstance(x, Mapping):
-                lower = {str(k).lower(): v for k, v in x.items()}
-                name = lower.get("filename") or lower.get("file_name") or lower.get("name")
-                href = lower.get("url") or lower.get("uri") or lower.get("href") or lower.get("downloadurl") or lower.get("fileurl")
-                if (name and href and isinstance(href, str) and href.startswith("http")):
-                    urls.append((str(name), href))
-                for v in x.values():
-                    walk(v)
-            elif isinstance(x, (list, tuple)):
-                for v in x:
-                    walk(v)
-
-        if js:
-            walk(js)
-
-        seen = set()
-        for name, u in urls:
-            if u in seen:
-                continue
-            seen.add(u)
-            try:
-                resp = requests.get(u, timeout=30)
-                status = int(getattr(resp, "status_code", 0))
-                content = getattr(resp, "content", b"")
-                if status == 200 and content:
-                    files.append((name, content))
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return files
-
 def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
     api_key = params.get("api_key")
     if not api_key:
@@ -3707,30 +3654,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         st.session_state.pop("sam_selected_idx", None)
         st.success(f"Fetched {len(results_df)} notices")
 
-# normalize results_df safely
-
-if 'results_df' not in locals():
-
-    try:
-
-        results_df = st.session_state.get('sam_results_df')
-
-    except Exception:
-
-        results_df = None
-
-_has_rows = False
-
-try:
-
-    _has_rows = (results_df is not None) and hasattr(results_df, 'empty') and (not results_df.empty)
-
-except Exception:
-
-    _has_rows = False
-
-if _has_rows:
-
+if results_df is not None and not results_df.empty:
         # --- List view with pagination (Phase Sam Watch: Part 1) ---
         # Reset page if not set
         if "sam_page" not in st.session_state:
@@ -3790,47 +3714,32 @@ if _has_rows:
                         st.rerun()
                 with c4:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
-                        from contextlib import closing as _closing
                         try:
-                            _db = globals().get("conn")
-                            _owned = False
-                            if _db is None:
-                                _owned = True
-                                _db = sqlite3.connect(DB_PATH, check_same_thread=False)
-                            with _closing(_db.cursor()) as cur:
+                            from contextlib import closing as _closing
+                            with _closing(conn.cursor()) as cur:
                                 cur.execute(
-                                    "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
-                                    "VALUES (?,?,?,?,?,?,?,?,?,?,?);",
-                                    (row.get("Title") or "", row.get("Agency Path") or "", "Bidding", None, row.get("Notice ID") or "", row.get("Solicitation") or "", row.get("Posted") or "", row.get("Response Due") or "", row.get("NAICS") or "", row.get("PSC") or "", row.get("SAM Link") or ""),
+                                    """
+                                    INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                    """,
+                                    (
+                                        row.get("Title") or "",
+                                        row.get("Agency Path") or "",
+                                        "Bidding",
+                                        None,
+                                        row.get("Notice ID") or "",
+                                        row.get("Solicitation") or "",
+                                        row.get("Posted") or "",
+                                        row.get("Response Due") or "",
+                                        row.get("NAICS") or "",
+                                        row.get("PSC") or "",
+                                        row.get("SAM Link") or "",
+                                    ),
                                 )
-                                deal_id = cur.lastrowid
-                                _db.commit()
-                            rfp_id = None
-                            try:
-                                with _closing(_db.cursor()) as cur:
-                                    cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get("Title") or "", row.get("Solicitation") or "", row.get("Notice ID") or "", row.get("SAM Link") or "", ""))
-                                    rfp_id = cur.lastrowid
-                                    _db.commit()
-                            except Exception:
-                                pass
-                            try:
-                                _api_key = st.session_state.get("temp_sam_key") or None
-                                for fname, fbytes in sam_try_fetch_attachments(str(row.get("Notice ID") or ""), _api_key) or []:
-                                    try:
-                                        save_rfp_file_db(_db, rfp_id, fname, fbytes)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            st.success("Saved to Deals" + (" and fetched attachments" if rfp_id else ""))
+                                conn.commit()
+                            st.success("Saved to Deals")
                         except Exception as e:
                             st.error(f"Failed to save deal: {e}")
-                        finally:
-                            try:
-                                if _owned:
-                                    _db.close()
-                            except Exception:
-                                pass
                 with c5:
                     if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
                         try:
@@ -3860,11 +3769,13 @@ if _has_rows:
                     st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
-                        try:
-                            _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-                            y6_render_co_box((conn if 'conn' in globals() else sqlite3.connect(DB_PATH, check_same_thread=False)), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
-                        except Exception:
-                            pass
+                # CO Q&A helper
+                try:
+                    _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+                    y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+                except Exception:
+                    pass
+
 def run_research_tab(conn: sqlite3.Connection) -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/...")
