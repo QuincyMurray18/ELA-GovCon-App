@@ -3677,150 +3677,150 @@ def run_sam_watch(conn: "sqlite3.Connection") -> None:
         st.session_state.pop("sam_selected_idx", None)
         st.success(f"Fetched {len(results_df)} notices")
 
-# Normalize results_df from session_state if missing
+    # Normalize results_df from session_state if missing
 
-if "results_df" not in locals():
+    if "results_df" not in locals():
+
+        try:
+
+            results_df = st.session_state.get("sam_results_df")
+
+        except Exception:
+
+            results_df = None
 
     try:
 
-        results_df = st.session_state.get("sam_results_df")
+        import pandas as pd  # ensure pd alias exists
 
     except Exception:
 
-        results_df = None
+        pass
 
-try:
+    if isinstance(results_df, pd.DataFrame) and not results_df.empty:
+            # --- List view with pagination (Phase Sam Watch: Part 1) ---
+            # Reset page if not set
+            if "sam_page" not in st.session_state:
+                st.session_state["sam_page"] = 1
+            # Compute pages based on current limit control
+            try:
+                page_size = int(limit)
+            except Exception:
+                page_size = 100
+            total = len(results_df)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            cur_page = int(st.session_state.get("sam_page", 1))
+            # Clamp page
+            if cur_page < 1:
+                cur_page = 1
+            if cur_page > total_pages:
+                cur_page = total_pages
+            st.session_state["sam_page"] = cur_page
 
-    import pandas as pd  # ensure pd alias exists
+            # Pager controls
+            p1, p2, p3 = st.columns([1, 3, 1])
+            with p1:
+                if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
+                    st.session_state["sam_page"] = cur_page - 1
+                    st.rerun()
+            with p2:
+                st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
+            with p3:
+                if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
+                    st.session_state["sam_page"] = cur_page + 1
+                    st.rerun()
 
-except Exception:
+            start_i = (cur_page - 1) * page_size
+            end_i = min(start_i + page_size, total)
 
-    pass
-
-if isinstance(results_df, pd.DataFrame) and not results_df.empty:
-        # --- List view with pagination (Phase Sam Watch: Part 1) ---
-        # Reset page if not set
-        if "sam_page" not in st.session_state:
-            st.session_state["sam_page"] = 1
-        # Compute pages based on current limit control
-        try:
-            page_size = int(limit)
-        except Exception:
-            page_size = 100
-        total = len(results_df)
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        cur_page = int(st.session_state.get("sam_page", 1))
-        # Clamp page
-        if cur_page < 1:
-            cur_page = 1
-        if cur_page > total_pages:
-            cur_page = total_pages
-        st.session_state["sam_page"] = cur_page
-
-        # Pager controls
-        p1, p2, p3 = st.columns([1, 3, 1])
-        with p1:
-            if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
-                st.session_state["sam_page"] = cur_page - 1
-                st.rerun()
-        with p2:
-            st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
-        with p3:
-            if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
-                st.session_state["sam_page"] = cur_page + 1
-                st.rerun()
-
-        start_i = (cur_page - 1) * page_size
-        end_i = min(start_i + page_size, total)
-
-        # Render list cards instead of table
-        for i in range(start_i, end_i):
-            row = results_df.iloc[i]
-            with st.container():
-                st.markdown(f"**{row['Title']}**")
-                meta_line = " | ".join([
-                    f"Solicitation: {row.get('Solicitation') or '—'}",
-                    f"Type: {row.get('Type') or '—'}",
-                    f"Set-Aside: {row.get('Set-Aside') or '—'}",
-                    f"NAICS: {row.get('NAICS') or '—'}",
-                    f"PSC: {row.get('PSC') or '—'}",
-                ])
-                st.caption(meta_line)
-                st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
-                if row.get('SAM Link'):
-                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
-
-                c3, c4, c5 = st.columns([2, 2, 2])
-                with c3:
-                    if st.button("View details", key=f"sam_view_{i}"):
-                        st.session_state["sam_selected_idx"] = i
-                        st.rerun()
-                with c4:
-                    if st.button("Add to Deals", key=f"add_to_deals_{i}"):
-                        try:
-                            from contextlib import closing as _closing
-                            with _closing(conn.cursor()) as cur:
-                                cur.execute(
-                                    """
-                                    INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                    """,
-                                    (
-                                        row.get("Title") or "",
-                                        row.get("Agency Path") or "",
-                                        "Bidding",
-                                        None,
-                                        row.get("Notice ID") or "",
-                                        row.get("Solicitation") or "",
-                                        row.get("Posted") or "",
-                                        row.get("Response Due") or "",
-                                        row.get("NAICS") or "",
-                                        row.get("PSC") or "",
-                                        row.get("SAM Link") or "",
-                                    ),
-                                )
-                                conn.commit()
-                            st.success("Saved to Deals")
-                        except Exception as e:
-                            st.error(f"Failed to save deal: {e}")
-                        except Exception:
-                            pass
-                with c5:
-                    if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
-                        try:
-                            st.session_state["rfp_selected_notice"] = row.to_dict()
-                            st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-                        except Exception as _e:
-                            st.error(f"Unable to push to RFP Analyzer: {_e}")
-                        except Exception:
-                            pass
-
-                st.divider()
-
-        # Selected details section (sticky below list)
-        sel_idx = st.session_state.get("sam_selected_idx")
-        if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
-            row = results_df.iloc[sel_idx]
-            with st.expander("Opportunity Details", expanded=True):
-                c1, c2 = st.columns([3, 2])
-                with c1:
-                    st.write(f"**Title:** {row.get('Title') or ''}")
-                    st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
-                    st.write(f"**Type:** {row.get('Type') or '—'}")
-                    st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
-                    st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
-                    st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
-                with c2:
-                    st.write(f"**Posted:** {row.get('Posted') or '—'}")
-                    st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
-                    st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
+            # Render list cards instead of table
+            for i in range(start_i, end_i):
+                row = results_df.iloc[i]
+                with st.container():
+                    st.markdown(f"**{row['Title']}**")
+                    meta_line = " | ".join([
+                        f"Solicitation: {row.get('Solicitation') or '—'}",
+                        f"Type: {row.get('Type') or '—'}",
+                        f"Set-Aside: {row.get('Set-Aside') or '—'}",
+                        f"NAICS: {row.get('NAICS') or '—'}",
+                        f"PSC: {row.get('PSC') or '—'}",
+                    ])
+                    st.caption(meta_line)
+                    st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
-            try:
-                _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-                y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
-            except Exception:
-                pass
+
+                    c3, c4, c5 = st.columns([2, 2, 2])
+                    with c3:
+                        if st.button("View details", key=f"sam_view_{i}"):
+                            st.session_state["sam_selected_idx"] = i
+                            st.rerun()
+                    with c4:
+                        if st.button("Add to Deals", key=f"add_to_deals_{i}"):
+                            try:
+                                from contextlib import closing as _closing
+                                with _closing(conn.cursor()) as cur:
+                                    cur.execute(
+                                        """
+                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                        """,
+                                        (
+                                            row.get("Title") or "",
+                                            row.get("Agency Path") or "",
+                                            "Bidding",
+                                            None,
+                                            row.get("Notice ID") or "",
+                                            row.get("Solicitation") or "",
+                                            row.get("Posted") or "",
+                                            row.get("Response Due") or "",
+                                            row.get("NAICS") or "",
+                                            row.get("PSC") or "",
+                                            row.get("SAM Link") or "",
+                                        ),
+                                    )
+                                    conn.commit()
+                                st.success("Saved to Deals")
+                            except Exception as e:
+                                st.error(f"Failed to save deal: {e}")
+                            except Exception:
+                                pass
+                    with c5:
+                        if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
+                            try:
+                                st.session_state["rfp_selected_notice"] = row.to_dict()
+                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                            except Exception as _e:
+                                st.error(f"Unable to push to RFP Analyzer: {_e}")
+                            except Exception:
+                                pass
+
+                    st.divider()
+
+            # Selected details section (sticky below list)
+            sel_idx = st.session_state.get("sam_selected_idx")
+            if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
+                row = results_df.iloc[sel_idx]
+                with st.expander("Opportunity Details", expanded=True):
+                    c1, c2 = st.columns([3, 2])
+                    with c1:
+                        st.write(f"**Title:** {row.get('Title') or ''}")
+                        st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
+                        st.write(f"**Type:** {row.get('Type') or '—'}")
+                        st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
+                        st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
+                        st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
+                    with c2:
+                        st.write(f"**Posted:** {row.get('Posted') or '—'}")
+                        st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
+                        st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
+                        if row.get('SAM Link'):
+                            st.markdown(f"[Open in SAM]({row['SAM Link']})")
+                try:
+                    _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+                    y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+                except Exception:
+                    pass
 
 def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
