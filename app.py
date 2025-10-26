@@ -1,64 +1,3 @@
-
-def extract_attachment_urls_from_record(rec):
-    """
-    Traverse a raw SAM record to find attachment/document URLs.
-    Returns list of (filename, url). Very defensive.
-    """
-    out = []
-    try:
-        from collections.abc import Mapping
-    except Exception:
-        Mapping = dict
-
-    def add(name, url):
-        try:
-            if not isinstance(url, str):
-                return
-            u = url.strip()
-            if not u.startswith("http"):
-                return
-            n = (name or "").strip()
-            if not n:
-                # derive from URL
-                n = u.split("/")[-1].split("?")[0] or "file"
-            out.append((n, u))
-        except Exception:
-            pass
-
-    def walk(x, kpath=""):
-        try:
-            if isinstance(x, Mapping):
-                # normalize keys -> lower
-                lower = {str(k).lower(): v for k, v in x.items()}
-                # common patterns
-                if "url" in lower or "href" in lower or "uri" in lower or "downloadurl" in lower or "fileurl" in lower:
-                    url = lower.get("url") or lower.get("href") or lower.get("uri") or lower.get("downloadurl") or lower.get("fileurl")
-                    name = lower.get("filename") or lower.get("file_name") or lower.get("name") or lower.get("title")
-                    add(name, url)
-                # dive deeper
-                for v in x.values():
-                    walk(v, kpath)
-            elif isinstance(x, (list, tuple)):
-                for v in x:
-                    walk(v, kpath)
-        except Exception:
-            pass
-
-    try:
-        walk(rec)
-    except Exception:
-        pass
-
-    # de-dupe by URL
-    seen = set()
-    deduped = []
-    for name, url in out:
-        if url in seen:
-            continue
-        seen.add(url)
-        deduped.append((name, url))
-    return deduped
-
 import requests
 import time
 # ==== O4 unified DB + sender helpers ====
@@ -3714,30 +3653,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         st.session_state["sam_page"] = 1
         st.session_state.pop("sam_selected_idx", None)
         st.success(f"Fetched {len(results_df)} notices")
-
-# normalize results_df safely
-
-if 'results_df' not in locals():
-
-    try:
-
-        results_df = st.session_state.get('sam_results_df')
-
-    except Exception:
-
-        results_df = None
-
-_has_rows = False
-
-try:
-
-    _has_rows = (results_df is not None) and hasattr(results_df, 'empty') and (not results_df.empty)
-
-except Exception:
-
-    _has_rows = False
-
-if _has_rows:
+if results_df is not None and not results_df.empty:
         # --- List view with pagination (Phase Sam Watch: Part 1) ---
         # Reset page if not set
         if "sam_page" not in st.session_state:
@@ -3799,13 +3715,7 @@ if _has_rows:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
                         try:
                             from contextlib import closing as _closing
-                            _db = globals().get('conn')
-                            _owned = False
-                            if _db is None:
-                                import sqlite3
-                                _owned = True
-                                _db = sqlite3.connect(DB_PATH, check_same_thread=False)
-                            with _closing(_db.cursor()) as cur:
+                            with _closing(conn.cursor()) as cur:
                                 cur.execute(
                                     """
                                     INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
@@ -3825,33 +3735,10 @@ if _has_rows:
                                         row.get("SAM Link") or "",
                                     ),
                                 )
-                                deal_id = cur.lastrowid
-                                _db.commit()
-                            # Optional: create an RFP shell and try to fetch attachments
-                            try:
-                                with _closing(_db.cursor()) as cur:
-                                    cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
-                                    rfp_id = cur.lastrowid
-                                    _db.commit()
-                                try:
-                                    for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
-                                        try:
-                                            save_rfp_file_db(_db, rfp_id, fname, fbytes)
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
+                                conn.commit()
                             st.success("Saved to Deals")
                         except Exception as e:
-                            st.error("Failed to save deal: %s" % (e,))
-                        finally:
-                            try:
-                                if _owned:
-                                    _db.close()
-                            except Exception:
-                                pass
+                            st.error(f"Failed to save deal: {e}")
                 with c5:
                     if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
                         try:
@@ -3859,69 +3746,6 @@ if _has_rows:
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                         except Exception as _e:
                             st.error(f"Unable to push to RFP Analyzer: {_e}")
-
-                # Inline details view for the selected card
-                try:
-                    _sel = st.session_state.get("sam_selected_idx")
-                except Exception:
-                    _sel = None
-                if _sel == i:
-                    with st.container(border=True):
-                        st.write("**Details**")
-                        _raw = None
-                        try:
-                            for _rec in st.session_state.get("sam_records_raw", []) or []:
-                                _nid = str(_rec.get("noticeId") or _rec.get("id") or "")
-                                if _nid == str(row.get("Notice ID") or ""):
-                                    _raw = _rec
-                                    break
-                        except Exception:
-                            _raw = None
-                
-                        def _gx(obj, *keys, default=""):
-                            try:
-                                for k in keys:
-                                    if obj is None:
-                                        return default
-                                    obj = obj.get(k)
-                                return obj if obj is not None else default
-                            except Exception:
-                                return default
-                
-                        desc = row.get("Description") or _gx(_raw, "description", default="")
-                        pop_city = _gx(_raw, "placeOfPerformance", "city", default="")
-                        pop_state = _gx(_raw, "placeOfPerformance", "state", default="")
-                        pop = ", ".join([p for p in [pop_city, pop_state] if p])
-                
-                        st.write(f"**Solicitation:** {row.get('Solicitation') or ''}")
-                        st.write(f"**Set-Aside:** {row.get('Set-Aside') or ''}")
-                        st.write(f"**PSC:** {row.get('PSC') or ''}     **NAICS:** {row.get('NAICS') or ''}")
-                        st.write(f"**Place of Performance:** {pop}")
-                        st.write(f"**Posted:** {row.get('Posted') or ''}     **Due:** {row.get('Response Due') or ''}")
-                        if desc:
-                            with st.expander("Description"):
-                                st.write(desc)
-                
-                        try:
-                            from contextlib import closing as _closing
-                            _db = globals().get("conn") or sqlite3.connect(DB_PATH, check_same_thread=False)
-                            with _closing(_db.cursor()) as cur:
-                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
-                                r = cur.fetchone()
-                                if r:
-                                    _rfp_id = r[0]
-                                    cur.execute("SELECT file_name, length(file_bytes) FROM rfp_files WHERE rfp_id=?", (_rfp_id,))
-                                    _files = cur.fetchall()
-                                    if _files:
-                                        st.write("**Attachments on file:**")
-                                        for fn, ln in _files:
-                                            st.write(f"- {fn} ({ln or 0} bytes)")
-                        except Exception:
-                            pass
-                
-                        link = row.get("SAM Link") or ""
-                        if link:
-                            st.markdown(f"[Open on SAM.gov]({link})")
 
                 st.divider()
 
@@ -3944,12 +3768,13 @@ if _has_rows:
                     st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
-                # CO Q&A helper
-                try:
-                    _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-                    y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
-                except Exception:
-                    pass
+                    # CO Q&A helper
+                    try:
+                        _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+                        y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+                    except Exception:
+                        pass
+
 
 def run_research_tab(conn: sqlite3.Connection) -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
