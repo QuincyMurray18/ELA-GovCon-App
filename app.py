@@ -3677,7 +3677,27 @@ def run_sam_watch(conn: "sqlite3.Connection") -> None:
         st.session_state.pop("sam_selected_idx", None)
         st.success(f"Fetched {len(results_df)} notices")
 
-if results_df is not None and not results_df.empty:
+# Normalize results_df from session_state if missing
+
+if "results_df" not in locals():
+
+    try:
+
+        results_df = st.session_state.get("sam_results_df")
+
+    except Exception:
+
+        results_df = None
+
+try:
+
+    import pandas as pd  # ensure pd alias exists
+
+except Exception:
+
+    pass
+
+if isinstance(results_df, pd.DataFrame) and not results_df.empty:
         # --- List view with pagination (Phase Sam Watch: Part 1) ---
         # Reset page if not set
         if "sam_page" not in st.session_state:
