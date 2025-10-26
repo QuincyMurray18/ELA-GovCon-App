@@ -1,3 +1,64 @@
+
+def extract_attachment_urls_from_record(rec):
+    """
+    Traverse a raw SAM record to find attachment/document URLs.
+    Returns list of (filename, url). Very defensive.
+    """
+    out = []
+    try:
+        from collections.abc import Mapping
+    except Exception:
+        Mapping = dict
+
+    def add(name, url):
+        try:
+            if not isinstance(url, str):
+                return
+            u = url.strip()
+            if not u.startswith("http"):
+                return
+            n = (name or "").strip()
+            if not n:
+                # derive from URL
+                n = u.split("/")[-1].split("?")[0] or "file"
+            out.append((n, u))
+        except Exception:
+            pass
+
+    def walk(x, kpath=""):
+        try:
+            if isinstance(x, Mapping):
+                # normalize keys -> lower
+                lower = {str(k).lower(): v for k, v in x.items()}
+                # common patterns
+                if "url" in lower or "href" in lower or "uri" in lower or "downloadurl" in lower or "fileurl" in lower:
+                    url = lower.get("url") or lower.get("href") or lower.get("uri") or lower.get("downloadurl") or lower.get("fileurl")
+                    name = lower.get("filename") or lower.get("file_name") or lower.get("name") or lower.get("title")
+                    add(name, url)
+                # dive deeper
+                for v in x.values():
+                    walk(v, kpath)
+            elif isinstance(x, (list, tuple)):
+                for v in x:
+                    walk(v, kpath)
+        except Exception:
+            pass
+
+    try:
+        walk(rec)
+    except Exception:
+        pass
+
+    # de-dupe by URL
+    seen = set()
+    deduped = []
+    for name, url in out:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append((name, url))
+    return deduped
+
 import requests
 import time
 # ==== O4 unified DB + sender helpers ====
