@@ -1,27 +1,4 @@
-
-def y3_get_rfp_files(_conn, rfp_id: int):
-    """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
-    try:
-        from contextlib import closing as _closing
-        with _closing(_conn.cursor()) as cur:
-            cur.execute("SELECT id, file_name, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
-            return cur.fetchall() or []
-    except Exception:
-        return []
-
 import requests
-
-def _uniq_key(base: str, rfp_id: int) -> str:
-    """Return a unique (but stable per render) Streamlit key to avoid duplicates."""
-    try:
-        k = f"__uniq_counter_{base}_{rfp_id}"
-        n = int(st.session_state.get(k, 0))
-        st.session_state[k] = n + 1
-        return f"{base}_{rfp_id}_{n}"
-    except Exception:
-        # Fallback if session_state isn't available
-        import time
-        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
 import time
 # ==== O4 unified DB + sender helpers ====
 try:
@@ -488,7 +465,7 @@ def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, tt
         return
     with st.sidebar.expander("Amendments · SAM Analyzer", expanded=True):
         st.caption("Tracks changes in Brief, Factors, Clauses, Dates, Forms.")
-        if st.button("Fetch SAM snapshot", key=_uniq_key("sam_fetch", int(rfp_id))):
+        if st.button("Fetch SAM snapshot", key=f"sam_fetch_{rfp_id}"):
             snap = sam_snapshot(conn, int(rfp_id), url, ttl_hours)
             st.success(f"Snapshot stored. Cached={snap.get('cached')}")
         # Last two snapshots
@@ -2811,75 +2788,6 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
     return df[wanted] if not df.empty else df
 
 
-
-
-def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
-    """Best-effort attempt to fetch attachments for a SAM notice.
-    Returns list of (filename, bytes). Falls back to saving the notice description HTML
-    when public attachment download isn't available.
-    """
-    import io, zipfile, os
-    files: List[Tuple[str, bytes]] = []
-    if not notice_id:
-        return files
-
-    # Attempt 1: Use Opportunity Management API 'download all' if system creds are present.
-    sys_key = None
-    sys_auth = None
-    try:
-        sys_key = (st.secrets.get("sam", {}).get("system_api_key")
-                   or st.secrets.get("SAM_SYSTEM_API_KEY")
-                   or os.getenv("SAM_SYSTEM_API_KEY"))
-        sys_auth = (st.secrets.get("sam", {}).get("system_auth")
-                    or st.secrets.get("SAM_SYSTEM_AUTH")
-                    or os.getenv("SAM_SYSTEM_AUTH"))
-    except Exception:
-        # Fall back to env only
-        sys_key = os.getenv("SAM_SYSTEM_API_KEY")
-        sys_auth = os.getenv("SAM_SYSTEM_AUTH")
-
-    try:
-        if sys_key and sys_auth:
-            # Per docs: GET /{opportunityId}/resources/download/zip with Authorization header
-            url = f"https://api.sam.gov/prod/opportunity/v1/api/{notice_id}/resources/download/zip"
-            params = {"api_key": sys_key}
-            headers = {"Authorization": sys_auth}
-            r = requests.get(url, headers=headers, params=params, timeout=60)
-            if r.ok and (r.headers.get("content-type","").lower().endswith("zip") or r.content[:2] == b'PK'):
-                zf = zipfile.ZipFile(io.BytesIO(r.content))
-                for zi in zf.infolist():
-                    if zi.is_dir():
-                        continue
-                    try:
-                        data = zf.read(zi)
-                        files.append((os.path.basename(zi.filename) or "attachment.bin", data))
-                    except Exception:
-                        continue
-                if files:
-                    return files
-            else:
-                # If unauthorized or not found, silently fall back
-                pass
-    except Exception:
-        # Swallow and fall back
-        pass
-
-    # Attempt 2: Save description HTML as a helpful "attachment"
-    try:
-        api_key = get_sam_api_key()
-        desc_url = f"https://api.sam.gov/prod/opportunities/v1/noticedesc"
-        params = {"noticeid": notice_id}
-        if api_key:
-            params["api_key"] = api_key
-        resp = requests.get(desc_url, params=params, timeout=30)
-        if resp.ok and resp.text:
-            files.append((f"{notice_id}_description.html", resp.text.encode("utf-8", errors="ignore")))
-    except Exception:
-        pass
-
-    return files
-
-
 # ---------------------- Phase B: RFP parsing helpers ----------------------
 def _safe_import_pdf_extractors():
     if _pypdf is not None:
@@ -3023,7 +2931,27 @@ def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
     except Exception:
         return pages_text, 0
 
-def save_rfp_file_db(conn: sqlite3.Connection, rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
+def save_rfp_file_db(
+def _fetch_and_save_attachments(_db, notice_id: str, rfp_id: int) -> int:
+    """Download attachments for a notice and save into rfp_files; returns count saved."""
+    saved = 0
+    try:
+        for fname, fbytes in sam_try_fetch_attachments(str(notice_id)) or []:
+            try:
+                # de-dupe by file name for this rfp_id
+                from contextlib import closing as _closing
+                with _closing(_db.cursor()) as cur:
+                    cur.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND file_name=? LIMIT 1", (rfp_id, fname))
+                    if cur.fetchone():
+                        continue
+                save_rfp_file_db(_db, rfp_id, fname, fbytes)
+                saved += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return saved
+conn: sqlite3.Connection, rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
     """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
     mime = _detect_mime_light(name)
     sha = compute_sha256(file_bytes)
@@ -3864,19 +3792,17 @@ if _has_rows:
                                     cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
                                     rfp_id = cur.lastrowid
                                     _db.commit()
-                                att_saved = 0
                                 try:
                                     for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
                                         try:
                                             save_rfp_file_db(_db, rfp_id, fname, fbytes)
-                                            att_saved += 1
                                         except Exception:
                                             pass
                                 except Exception:
                                     pass
                             except Exception:
                                 pass
-                            st.success(f"Saved to Deals{' · ' + str(att_saved) + ' attachment(s) pulled' if att_saved else ''}")
+                            st.success("Saved to Deals")
                         except Exception as e:
                             st.error("Failed to save deal: %s" % (e,))
                         finally:
@@ -3943,7 +3869,7 @@ if _has_rows:
                                 r = cur.fetchone()
                                 if r:
                                     _rfp_id = r[0]
-                                    cur.execute("SELECT file_name, length(bytes) FROM rfp_files WHERE rfp_id=?", (_rfp_id,))
+                                    cur.execute("SELECT file_name, length(file_bytes) FROM rfp_files WHERE rfp_id=?", (_rfp_id,))
                                     _files = cur.fetchall()
                                     if _files:
                                         st.write("**Attachments on file:**")
@@ -3984,6 +3910,34 @@ if _has_rows:
                 except Exception:
                     pass
 
+                    # Manual fetch attachments button
+                    try:
+                        _notice_id = str(row.get("Notice ID") or "")
+                        if _notice_id:
+                            if st.button("Fetch attachments now", key=_uniq_key("fetch_attach", int('0'+_notice_id))):
+                                from contextlib import closing as _closing
+                                _db = globals().get("conn")
+                                _owned = False
+                                if _db is None:
+                                    import sqlite3
+                                    _db = sqlite3.connect(DB_PATH, check_same_thread=False); _owned = True
+                                # ensure an RFP record exists for this notice
+                                with _closing(_db.cursor()) as cur:
+                                    cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (_notice_id,))
+                                    r = cur.fetchone()
+                                    if r: _rfp_id = int(r[0])
+                                    else:
+                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                                    (row.get('Title') or '', row.get('Solicitation') or '', _notice_id, row.get('SAM Link') or '', ''))
+                                        _rfp_id = int(cur.lastrowid); _db.commit()
+                                _count = _fetch_and_save_attachments(_db, _notice_id, _rfp_id)
+                                if _owned:
+                                    try: _db.close()
+                                    except Exception: pass
+                                st.success(f"Fetched {_count} attachment(s).")
+                                st.experimental_rerun()
+                    except Exception:
+                        pass
 def run_research_tab(conn: sqlite3.Connection) -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/...")
@@ -4334,26 +4288,6 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             else:
                 if mode == "Combine all into one RFP":
                     text_parts = []
-                    # Include DB-saved attachments (rfp_files) as inputs too
-                    try:
-                        class _MemFile:
-                            def __init__(self, name, data):
-                                self.name = name
-                                self._data = data
-                            def read(self):
-                                return self._data
-                            def getbuffer(self):
-                                import io
-                                return io.BytesIO(self._data)
-                        _db_files = []
-                        try:
-                            for _fid, _fn, _bts in y3_get_rfp_files(conn, int(_rid)) or []:
-                                _db_files.append(_MemFile(_fn, _bts))
-                        except Exception:
-                            _db_files = []
-                        ups = (ups or []) + _db_files
-                    except Exception:
-                        pass
                     for f in ups or []:
                         text_parts.append(_read_file(f))
                     if pasted:
