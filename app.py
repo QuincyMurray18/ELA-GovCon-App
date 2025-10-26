@@ -1,5 +1,5 @@
 
-def y3_get_rfp_files(_conn: sqlite3.Connection, rfp_id: int) -> List[Tuple[int, str, bytes]]:
+def y3_get_rfp_files(_conn, rfp_id: int):
     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
     try:
         from contextlib import closing as _closing
@@ -10,6 +10,18 @@ def y3_get_rfp_files(_conn: sqlite3.Connection, rfp_id: int) -> List[Tuple[int, 
         return []
 
 import requests
+
+def _uniq_key(base: str, rfp_id: int) -> str:
+    """Return a unique (but stable per render) Streamlit key to avoid duplicates."""
+    try:
+        k = f"__uniq_counter_{base}_{rfp_id}"
+        n = int(st.session_state.get(k, 0))
+        st.session_state[k] = n + 1
+        return f"{base}_{rfp_id}_{n}"
+    except Exception:
+        # Fallback if session_state isn't available
+        import time
+        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
 import time
 # ==== O4 unified DB + sender helpers ====
 try:
@@ -476,7 +488,7 @@ def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, tt
         return
     with st.sidebar.expander("Amendments · SAM Analyzer", expanded=True):
         st.caption("Tracks changes in Brief, Factors, Clauses, Dates, Forms.")
-        if st.button("Fetch SAM snapshot", key=f"sam_fetch_{rfp_id}"):
+        if st.button("Fetch SAM snapshot", key=_uniq_key("sam_fetch", int(rfp_id))):
             snap = sam_snapshot(conn, int(rfp_id), url, ttl_hours)
             st.success(f"Snapshot stored. Cached={snap.get('cached')}")
         # Last two snapshots
@@ -4322,6 +4334,26 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             else:
                 if mode == "Combine all into one RFP":
                     text_parts = []
+                    # Include DB-saved attachments (rfp_files) as inputs too
+                    try:
+                        class _MemFile:
+                            def __init__(self, name, data):
+                                self.name = name
+                                self._data = data
+                            def read(self):
+                                return self._data
+                            def getbuffer(self):
+                                import io
+                                return io.BytesIO(self._data)
+                        _db_files = []
+                        try:
+                            for _fid, _fn, _bts in y3_get_rfp_files(conn, int(_rid)) or []:
+                                _db_files.append(_MemFile(_fn, _bts))
+                        except Exception:
+                            _db_files = []
+                        ups = (ups or []) + _db_files
+                    except Exception:
+                        pass
                     for f in ups or []:
                         text_parts.append(_read_file(f))
                     if pasted:
