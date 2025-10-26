@@ -10088,6 +10088,28 @@ import pandas as _pd
 import re as _re
 import time as _time
 
+def _fetch_and_save_attachments(_db, notice_id: str, rfp_id: int) -> int:
+    """Download attachments for a notice and save into rfp_files; returns count saved."""
+    saved = 0
+    try:
+        for fname, fbytes in sam_try_fetch_attachments(str(notice_id)) or []:
+            try:
+                # de-dupe by file name for this rfp_id
+                from contextlib import closing as _closing
+                with _closing(_db.cursor()) as cur:
+                    cur.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND file_name=? LIMIT 1", (rfp_id, fname))
+                    if cur.fetchone():
+                        continue
+                save_rfp_file_db(_db, rfp_id, fname, fbytes)
+                saved += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return saved
+
+
+
 def __e1_google_api_key():
     try: return _st.secrets["google"]["api_key"]
     except Exception:
