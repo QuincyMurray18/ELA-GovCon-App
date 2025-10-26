@@ -882,6 +882,7 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
 import os
 
 def _resolve_model():
+    """Resolve the OpenAI model name from secrets/env with sane defaults."""
     # Priority: Streamlit secrets -> env var -> safe default
     try:
         import streamlit as st  # noqa: F401
@@ -896,7 +897,6 @@ def _resolve_model():
         pass
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-_ai_client = None
 def get_ai():
     import streamlit as st  # ensure st exists
     global _ai_client
@@ -3654,7 +3654,6 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         st.session_state.pop("sam_selected_idx", None)
         st.success(f"Fetched {len(results_df)} notices")
 
-    if (results_df is 
 if results_df is not None and not results_df.empty:
         # --- List view with pagination (Phase Sam Watch: Part 1) ---
         # Reset page if not set
@@ -3770,9 +3769,12 @@ if results_df is not None and not results_df.empty:
                     st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
-un_sam_watch_y6", title="Ask the CO about this opportunity")
-    except Exception:
-        pass
+try:
+    _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+    y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid,
+        key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+except Exception:
+    pass
 
 def run_research_tab(conn: sqlite3.Connection) -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
