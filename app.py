@@ -3816,7 +3816,11 @@ if isinstance(results_df, pd.DataFrame) and not results_df.empty:
                     st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
-            y6_render_co_box(conn, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+            try:
+                _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+                y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+            except Exception:
+                pass
 
 def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
