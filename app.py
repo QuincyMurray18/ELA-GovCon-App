@@ -5,8 +5,6 @@ try:
     DB_PATH
 except NameError:
     DB_PATH = "./data/app.db"
-except Exception:
-    pass
 
 _O4_CONN = globals().get("_O4_CONN", None)
 
@@ -31,7 +29,6 @@ def get_o4_conn():
             st.session_state["conn"] = _O4_CONN
         except Exception:
             pass
-
         return _O4_CONN
     try:
         if "conn" in st.session_state and st.session_state.get("conn"):
@@ -39,14 +36,12 @@ def get_o4_conn():
             return _O4_CONN
     except Exception:
         pass
-
     conn = get_db()
     _O4_CONN = conn
     try:
         st.session_state["conn"] = conn
     except Exception:
         pass
-
     return conn
 
 def _ensure_email_accounts_schema(conn):
@@ -93,8 +88,6 @@ try:
 except Exception:
     class _Dummy: pass
     _rtm_st = _Dummy()
-except Exception:
-    pass
 # === PHASE 5: L & M compliance gate ===
 def require_LM_minimum(conn, rfp_id):
     f"""
@@ -142,8 +135,6 @@ def _safe_route_call(fn, *a, **kw):
     except Exception as _e:
         import streamlit as _st
         _st.error(f"Page failed: {type(_e).__name__}: {_e}")
-    except Exception:
-        pass
     return None
 
 # --- O3 helper: safe cursor context ---
@@ -157,15 +148,13 @@ def _o3c(cursor):
             cursor.close()
         except Exception:
             pass
-# SYNTAX AUTO-COMMENTED:     except Exception:
-        pass
-
 def _migrate_deals_columns(conn):
     """
     Add columns used by Deals and SAM Watch if missing. Idempotent.
     """
     try:
         import pandas as _pd
+        from contextlib import closing
         cur_cols = _pd.read_sql_query("PRAGMA table_info(deals);", conn)
         have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
     except Exception:
@@ -191,12 +180,26 @@ def _migrate_deals_columns(conn):
     _add("naics", "naics TEXT")
     _add("psc", "psc TEXT")
 
+
+
+# Bridge names
+sqlite3 = _rtm_sqlite3
+pd = _rtm_pd
+st = _rtm_st
+re = _rtm_re
+json = _rtm_json
+hashlib = _rtm_hashlib
+closing = _rtm_closing
+
+# === RTM + Amendment helpers ===
+
 def _now_iso():
     try:
         return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return ""
-def _ensure_rtm_schema(conn: "sqlite3.Connection") -> None:
+
+def _ensure_rtm_schema(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("SELECT 1 FROM rtm_requirements LIMIT 1;")
@@ -205,10 +208,8 @@ def _ensure_rtm_schema(conn: "sqlite3.Connection") -> None:
             cur.execute("CREATE TABLE IF NOT EXISTS rtm_requirements(id INTEGER PRIMARY KEY, rfp_id INTEGER, req_key TEXT, source_type TEXT, source_file TEXT, page INTEGER, text TEXT, status TEXT, created_at TEXT, updated_at TEXT);")
             cur.execute("CREATE TABLE IF NOT EXISTS rtm_links(id INTEGER PRIMARY KEY, rtm_id INTEGER, link_type TEXT, target TEXT, note TEXT, created_at TEXT, updated_at TEXT);")
             conn.commit()
-    except Exception:
-        pass
 
-def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: int = 800) -> int:
+def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int = 800) -> int:
     """
     Seed RTM from L/M checklist and SOW-style shall/must statements in rfp_chunks.
     Returns number of rows inserted (new).
@@ -269,7 +270,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
     conn.commit()
     return inserted
 
-def rtm_metrics(conn: "sqlite3.Connection", rfp_id: int) -> dict:
+def rtm_metrics(conn: sqlite3.Connection, rfp_id: int) -> dict:
     q = pd.read_sql_query("""
         SELECT r.id, r.source_type, r.status, COUNT(l.id) AS links
         FROM rtm_requirements r
@@ -289,7 +290,7 @@ def rtm_metrics(conn: "sqlite3.Connection", rfp_id: int) -> dict:
         by_type[t] = {"total": ct, "covered": cv, "coverage": (cv/ct if ct else 0.0)}
     return {"total": total, "covered": covered, "coverage": (covered/total if total else 0.0), "by_type": by_type}
 
-def rtm_export_csv(conn: "sqlite3.Connection", rfp_id: int) -> str:
+def rtm_export_csv(conn: sqlite3.Connection, rfp_id: int) -> str:
     q = pd.read_sql_query("""
         SELECT r.id, r.req_key, r.source_type, r.source_file, r.page, r.text, r.status,
                COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '; '), '') AS evidence
@@ -305,7 +306,8 @@ def rtm_export_csv(conn: "sqlite3.Connection", rfp_id: int) -> str:
         return fn
     except Exception:
         return ""
-def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
+
+def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
     # Unique key namespace to avoid duplicate element IDs
     _ns = int(st.session_state.get('rtm_ui_ns', 0))
     st.session_state['rtm_ui_ns'] = _ns + 1
@@ -423,7 +425,7 @@ def _parse_sam_text_to_facts(txt: str) -> dict:
     if forms: d["forms"] = sorted(set([f"{a}-{b}" for a,b in forms]))[:50]
     return d
 
-def sam_snapshot(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: int = 72) -> dict:
+def sam_snapshot(conn: sqlite3.Connection, rfp_id: int, url: str, ttl_hours: int = 72) -> dict:
     out = {"url": url, "facts": {}, "sha256": "", "cached": False, "text": ""}
     if not (url or "").strip():
         return out
@@ -458,7 +460,7 @@ def _facts_diff(old: dict, new: dict) -> dict:
             diffs[k] = {"old": ov, "new": nv}
     return diffs
 
-def render_amendment_sidebar(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: int = 72) -> None:
+def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, ttl_hours: int = 72) -> None:
     if not (url or "").strip():
         return
     with st.sidebar.expander("Amendments · SAM Analyzer", expanded=True):
@@ -517,7 +519,6 @@ def feature_flag(name: str, default: bool=False) -> bool:
             val = _os.environ[env_key]
     except Exception:
         pass
-
     if val is None:
         try:
             import streamlit as _st  # type: ignore
@@ -526,7 +527,6 @@ def feature_flag(name: str, default: bool=False) -> bool:
                 val = sec.get(name)
         except Exception:
             pass
-
     if isinstance(val, str):
         return val.lower() in {"1","true","yes","on"}
     if isinstance(val, bool):
@@ -632,6 +632,8 @@ def _ctxd(ctx, key):
         return ctx.get(key, _CTX_DEFAULTS.get(key))
     except Exception:
         return _CTX_DEFAULTS.get(key)
+
+
 # --- Safe DataFrame helpers ---
 def _is_df(obj):
     try:
@@ -639,6 +641,7 @@ def _is_df(obj):
         return isinstance(obj, pd.DataFrame)
     except Exception:
         return False
+
 def _df_nonempty(df):
     return _is_df(df) and not df.empty
 
@@ -648,7 +651,6 @@ def _first_row_value(df, col, default=None):
             return df.iloc[0][col]
     except Exception:
         pass
-
     return default
 
 
@@ -667,7 +669,6 @@ def _y6_resolve_openai_client():
             return get_ai_client()
     except Exception:
         pass
-
     from openai import OpenAI  # type: ignore
     import os as _os
     key = (
@@ -690,6 +691,7 @@ def _y6_chat(messages):
         return resp.choices[0].message.content.strip()
     except Exception:
         return "AI response unavailable."
+
 def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
     if not (conn and rfp_id):
         return None
@@ -703,7 +705,6 @@ def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
                 k = int(max(3, min(12, k_auto_fn(question))))
             except Exception:
                 pass
-
         hits = y1(conn, int(rfp_id), question or "", k=k) or []
         if not hits:
             return None
@@ -797,6 +798,7 @@ try:
     from rfp_onepage import run_rfp_analyzer_onepage
 except Exception:
     run_rfp_analyzer_onepage = None
+
 # --- Optional PDF backends for Phase X1 ---
 try:
     import pdfplumber as _pdfplumber  # type: ignore
@@ -809,6 +811,10 @@ except Exception:
         import pypdf as _pypdf  # type: ignore
     except Exception:
         _pypdf = None
+
+
+
+
 # --- hashing helper ---
 def compute_sha256(b: bytes) -> str:
     try:
@@ -816,8 +822,6 @@ def compute_sha256(b: bytes) -> str:
     except Exception:
         import hashlib as _h
         return _h.sha256(b or b"").hexdigest()
-    except Exception:
-        pass
 
 # Phase X unified settings
 from types import SimpleNamespace as _NS
@@ -828,6 +832,7 @@ def getenv_int(name: str, default: int) -> int:
         return int(os.environ.get(name, default))
     except Exception:
         return default
+
 SETTINGS = _NS(
     APP_NAME=os.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
     APP_VERSION=os.environ.get("ELA_APP_VERSION", "X-Base"),
@@ -867,6 +872,7 @@ try:
     from openai import OpenAI as _Y0OpenAI
 except Exception:
     _Y0OpenAI = None
+
 SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
              "Flag non-compliance. Be concise. If evidence is missing, say so.")
 
@@ -876,6 +882,7 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
 import os
 
 def _resolve_model():
+    """Resolve the OpenAI model name from secrets/env with sane defaults."""
     # Priority: Streamlit secrets -> env var -> safe default
     try:
         import streamlit as st  # noqa: F401
@@ -890,7 +897,6 @@ def _resolve_model():
         pass
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-_ai_client = None
 def get_ai():
     import streamlit as st  # ensure st exists
     global _ai_client
@@ -924,8 +930,6 @@ def ask_ai(messages, tools=None, temperature=0.2):
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
-    except Exception:
-        pass
     for ch in resp:
         try:
             delta = ch.choices[0].delta
@@ -963,7 +967,7 @@ def ensure_dirs() -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(UPLOADS_DIR, exist_ok=True)
 # === Y1: Retrieval (chunks • embeddings • citations) ===
-def _ensure_y1_schema(conn: "sqlite3.Connection") -> None:
+def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("""
@@ -984,6 +988,7 @@ def _ensure_y1_schema(conn: "sqlite3.Connection") -> None:
     except Exception:
         pass
 
+
 def _resolve_embed_model() -> str:
     try:
         import streamlit as _st
@@ -993,7 +998,6 @@ def _resolve_embed_model() -> str:
                 return v.strip()
     except Exception:
         pass
-
     return os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 # === PHASE 6: Embedding cache (sha256 of model:text) ===
 def _embed_cache_dir() -> str:
@@ -1002,7 +1006,6 @@ def _embed_cache_dir() -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-
     return d
 
 def _embed_cache_key(model: str, text: str) -> str:
@@ -1028,7 +1031,6 @@ def _embed_cache_get(model: str, texts: list[str]) -> tuple[list[list[float]|Non
                 continue
         except Exception:
             pass
-
         out.append(None)
         missing.append(i)
     return out, missing
@@ -1043,7 +1045,6 @@ def _embed_cache_put(model: str, texts: list[str], vecs: list[list[float]]) -> N
                 json.dump(v, fh)
         except Exception:
             pass
-
 # === end PHASE 6 helpers ===
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
@@ -1069,8 +1070,6 @@ def _embed_texts(texts: list[str]) -> list[list[float]]:
         except Exception:
             # fallback: return empty vecs for missing
             new_vecs = [[] for _ in to_compute]
-        except Exception:
-            pass
 
     # merge back preserving order
     out: list[list[float]] = []
@@ -1098,8 +1097,6 @@ def _cos_sim(u: list[float], v: list[float]) -> float:
             num += x*y; su += x*x; sv += y*y
         den = (su**0.5) * (sv**0.5)
         return (num / den) if den else 0.0
-    except Exception:
-        pass
 
 def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[str]:
     t = (text or "").strip()
@@ -1119,14 +1116,12 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
         i = max(j - overlap, j)
     return chunks
 
-def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
+def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     _ensure_y1_schema(conn)
     try:
         df = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    except Exception:
-        pass
     if df is None or df.empty:
         return {"ok": False, "error": "No linked files"}
     added = 0
@@ -1155,7 +1150,6 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
                             continue
                 except Exception:
                     pass
-
                 emb = _embed_texts([ch])[0]
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
@@ -1165,7 +1159,7 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
                     conn.commit()
                 added += 1
     return {"ok": True, "added": added, "skipped": skipped}
-def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: int = 6) -> list[dict]:
+def _y1_search_uncached(conn: sqlite3.Connection, rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
     if not (query or "").strip():
         return []
@@ -1224,8 +1218,6 @@ def _safe_y1_search(conn, rfp_id, query, k=6):
             return _y1_search_uncached(conn, int(rfp_id), query or "", int(k)) or []
         except NameError:
             return []
-        except Exception:
-            pass
 # --- Robust Y1 shim: guarantees y1_search exists ---
 if 'y1_search' not in globals():
     def y1_search(conn, rfp_id: int, query: str, k: int = 6):
@@ -1244,7 +1236,13 @@ if 'y1_search' not in globals():
                 return _y1_search_uncached(conn, int(rfp_id), query or "", int(k))
             except Exception:
                 return []
-def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
+
+
+
+
+
+
+def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
     Streams a CO-style answer grounded in top-k chunk hits with [C#] citations.
     Falls back to general answer if no hits.
@@ -1272,7 +1270,7 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
         yield tok
 
-def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
+def _y2_build_messages(conn: sqlite3.Connection, rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
     Build a minimal message set for CO chat, embedding local evidence as [C#].
     Returns a list of chat messages (no system role; ask_ai adds SYSTEM_CO).
@@ -1289,7 +1287,7 @@ def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, 
     user = "QUESTION\n" + (q_in or "Provide a CO Readout.") + "\n\nEVIDENCE\n" + (evidence or "(none)")
     msgs = [{"role":"user","content": user}]
     return msgs
-def _ensure_y2_schema(conn: "sqlite3.Connection") -> None:
+def _ensure_y2_schema(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("""
@@ -1315,7 +1313,7 @@ def _ensure_y2_schema(conn: "sqlite3.Connection") -> None:
     except Exception:
         pass
 
-def y2_list_threads(conn: "sqlite3.Connection", rfp_id: int):
+def y2_list_threads(conn: sqlite3.Connection, rfp_id: int):
     _ensure_y2_schema(conn)
     try:
         df = pd.read_sql_query(
@@ -1336,7 +1334,7 @@ def y2_list_threads(conn: "sqlite3.Connection", rfp_id: int):
         })
     return out
 
-def y2_create_thread(conn: "sqlite3.Connection", rfp_id: int, title: str = "CO guidance") -> int:
+def y2_create_thread(conn: sqlite3.Connection, rfp_id: int, title: str = "CO guidance") -> int:
     _ensure_y2_schema(conn)
     from datetime import datetime as _dt
     now = _dt.utcnow().isoformat()
@@ -1346,7 +1344,7 @@ def y2_create_thread(conn: "sqlite3.Connection", rfp_id: int, title: str = "CO g
         conn.commit()
         return int(cur.lastrowid)
 
-def y2_get_messages(conn: "sqlite3.Connection", thread_id: int):
+def y2_get_messages(conn: sqlite3.Connection, thread_id: int):
     _ensure_y2_schema(conn)
     try:
         df = pd.read_sql_query(
@@ -1359,7 +1357,7 @@ def y2_get_messages(conn: "sqlite3.Connection", thread_id: int):
         return []
     return [{"role": str(r["role"]), "content": str(r["content"])} for _, r in df.iterrows()]
 
-def y2_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
+def y2_append_message(conn: sqlite3.Connection, thread_id: int, role: str, content: str) -> None:
     _ensure_y2_schema(conn)
     from datetime import datetime as _dt
     now = _dt.utcnow().isoformat()
@@ -1371,13 +1369,13 @@ def y2_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, con
         )
         conn.commit()
 
-def y2_rename_thread(conn: "sqlite3.Connection", thread_id: int, new_title: str) -> None:
+def y2_rename_thread(conn: sqlite3.Connection, thread_id: int, new_title: str) -> None:
     _ensure_y2_schema(conn)
     with closing(conn.cursor()) as cur:
         cur.execute("UPDATE y2_threads SET title=? WHERE id=?;", ((new_title or "Untitled").strip(), int(thread_id)))
         conn.commit()
 
-def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
+def y2_delete_thread(conn: sqlite3.Connection, thread_id: int) -> None:
     _ensure_y2_schema(conn)
     with closing(conn.cursor()) as cur:
         cur.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
@@ -1385,7 +1383,7 @@ def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
         conn.commit()
 # === end Y2 thread storage helpers ===
 
-def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
+def y2_ui_threaded_chat(conn: sqlite3.Connection) -> None:
     st.caption("CO Chat with memory. Threads are stored per RFP.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -1457,7 +1455,6 @@ def _research_cache_dir() -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-
     return d
 
 def _sha16(s: str) -> str:
@@ -1466,6 +1463,7 @@ def _sha16(s: str) -> str:
         return hashlib.sha256((s or "").encode("utf-8")).hexdigest()[:16]
     except Exception:
         return str(abs(hash((s or ""))))[:16]
+
 def research_fetch(url: str, ttl_hours: int = 24) -> dict:
     """
     Fetch a URL with simple on-disk cache.
@@ -1510,7 +1508,6 @@ def research_fetch(url: str, ttl_hours: int = 24) -> dict:
                 json.dump({"url": url, "status": status, "ts": time.time(), "path": txt_path}, fh)
         except Exception:
             pass
-
         out.update({"status": status, "text": text, "path": txt_path})
         return out
     except Exception as e:
@@ -1537,7 +1534,7 @@ def research_extract_excerpt(text: str, query: str, window: int = 380) -> str:
 
 
 # === Y3: Proposal drafting from evidence (per-RFP) ===
-def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20) -> dict:
+def _y3_collect_ctx(conn: sqlite3.Connection, rfp_id: int, max_items: int = 20) -> dict:
     ctx: dict = {}
     try:
         df_items = pd.read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
@@ -1565,7 +1562,7 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
         ctx["title"] = ""; ctx["solnum"] = ""
     return ctx
 
-def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
+def _y3_build_messages(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     ctx = _y3_collect_ctx(conn, int(rfp_id))
     q = f"{section_title} Section L Section M instructions {ctx.get('title','')} {ctx.get('solnum','')}"
     hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
@@ -1607,7 +1604,7 @@ Write a structured section with a short lead paragraph, 3–6 bullets, and an op
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 
-def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
+def y3_stream_draft(conn: sqlite3.Connection, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
     msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
     model_name = _resolve_model()
@@ -1619,8 +1616,6 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
-    except Exception:
-        pass
     for ch in resp:
         try:
             delta = ch.choices[0].delta
@@ -1628,11 +1623,10 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
                 yield delta.content
         except Exception:
             pass
-
 # === end Y3 ===
 
 # === Y4: CO Review (scored compliance with citations) ===
-def _y4_build_messages(conn: "sqlite3.Connection", rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
+def _y4_build_messages(conn: sqlite3.Connection, rfp_id: int, draft_text: str, k: int = 6) -> list[dict]:
     """
     Build messages for a Contracting Officer style review.
     Output must include: Score 0–100, Strengths, Gaps, Risks, Required fixes, and short Conclusion.
@@ -1721,8 +1715,6 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"; return
-    except Exception:
-        pass
     for ch in resp:
         try:
             delta = ch.choices[0].delta
@@ -1731,7 +1723,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
         except Exception:
             pass
 
-def y4_ui_review(conn: "sqlite3.Connection") -> None:
+def y4_ui_review(conn: sqlite3.Connection) -> None:
     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -1807,7 +1799,7 @@ def y4_ui_review(conn: "sqlite3.Connection") -> None:
 from contextlib import closing
 import io
 
-def ensure_y5_tables(conn: "sqlite3.Connection") -> None:
+def ensure_y5_tables(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute(
@@ -1851,6 +1843,7 @@ def _extract_docx_bytes(data: bytes) -> str:
         return "\n".join(p.text for p in doc.paragraphs)
     except Exception:
         return ""
+
 def _extract_pdf_bytes(data: bytes) -> str:
     try:
         from pypdf import PdfReader
@@ -1858,6 +1851,7 @@ def _extract_pdf_bytes(data: bytes) -> str:
         return "\n\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception:
         return ""
+
 def y5_extract_from_uploads(files) -> str:
     if not files:
         return ""
@@ -1882,7 +1876,7 @@ def y5_extract_from_uploads(files) -> str:
             continue
     return "\n\n".join([p for p in parts if p]).strip()
 
-def y5_extract_from_rfp(conn: "sqlite3.Connection", rfp_id: int) -> str:
+def y5_extract_from_rfp(conn: sqlite3.Connection, rfp_id: int) -> str:
     # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
     try:
         df = pd.read_sql_query(
@@ -1911,7 +1905,7 @@ def y5_extract_from_rfp(conn: "sqlite3.Connection", rfp_id: int) -> str:
             parts.append(_extract_pdf_bytes(bytes(data)))
     return "\n\n".join([p for p in parts if p]).strip()
 
-def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
+def y5_save_snippet(conn: sqlite3.Connection, rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
     if not (text or "").strip():
         return
     try:
@@ -1923,14 +1917,13 @@ def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text:
             conn.commit()
     except Exception:
         pass
-
 # === end Y5 ===
 
 
 
 
 # === Phase 2: Dedicated finders and status chips ===
-def _collect_full_text(conn: "sqlite3.Connection", rfp_id: int) -> str:
+def _collect_full_text(conn: sqlite3.Connection, rfp_id: int) -> str:
     try:
         df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
@@ -1952,7 +1945,7 @@ def _upsert_meta(conn, rfp_id: int, key: str, value: str):
         cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), key, value))
         conn.commit()
 
-def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
+def find_due_date(conn: sqlite3.Connection, rfp_id: int) -> str:
     # Check SAM facts first
     try:
         row = pd.read_sql_query("SELECT extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)).iloc[0]
@@ -1963,7 +1956,6 @@ def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
             return dd
     except Exception:
         pass
-
     # Search chunks
     try:
         dfc = pd.read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
@@ -1976,7 +1968,7 @@ def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
         _upsert_meta(conn, int(rfp_id), "offers_due", dd); return dd
     return ""
 
-def find_naics_setaside(conn: "sqlite3.Connection", rfp_id: int) -> dict:
+def find_naics_setaside(conn: sqlite3.Connection, rfp_id: int) -> dict:
     full = _collect_full_text(conn, int(rfp_id))
     naics = _extract_naics(full)
     set_aside = _extract_set_aside(full)
@@ -1984,14 +1976,14 @@ def find_naics_setaside(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     if set_aside: _upsert_meta(conn, int(rfp_id), "set_aside", set_aside)
     return {"naics": naics, "set_aside": set_aside}
 
-def find_pop(conn: "sqlite3.Connection", rfp_id: int) -> dict:
+def find_pop(conn: sqlite3.Connection, rfp_id: int) -> dict:
     full = _collect_full_text(conn, int(rfp_id))
     pop = extract_pop_structure(full) or {}
     for k, v in pop.items():
         _upsert_meta(conn, int(rfp_id), k, str(v))
     return pop
 
-def find_section_M(conn: "sqlite3.Connection", rfp_id: int) -> int:
+def find_section_M(conn: sqlite3.Connection, rfp_id: int) -> int:
     full = _collect_full_text(conn, int(rfp_id))
     sec = extract_sections_L_M(full)
     cnt = 0
@@ -2007,7 +1999,7 @@ def find_section_M(conn: "sqlite3.Connection", rfp_id: int) -> int:
         conn.commit()
     return cnt
 
-def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
+def find_clins_all(conn: sqlite3.Connection, rfp_id: int) -> int:
     full = _collect_full_text(conn, int(rfp_id))
     rows = extract_clins(full)
     try:
@@ -2033,7 +2025,8 @@ def _parse_money(x):
         return float(s) if s else 0.0
     except Exception:
         return 0.0
-def clin_totals_df(conn: "sqlite3.Connection", rfp_id: int):
+
+def clin_totals_df(conn: sqlite3.Connection, rfp_id: int):
     try:
         df = pd.read_sql_query("SELECT clin, description, qty, unit_price, extended_price FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
@@ -2056,7 +2049,7 @@ def clin_totals_df(conn: "sqlite3.Connection", rfp_id: int):
     df["qty_num"] = qn; df["unit_price_num"] = up; df["extended_num"] = ext
     return df
 
-def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
+def render_status_and_gaps(conn: sqlite3.Connection) -> None:
     st.subheader("Status & Gaps")
     try:
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
@@ -2141,7 +2134,7 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
 
 
 
-def get_db() -> "sqlite3.Connection":
+def get_db() -> sqlite3.Connection:
     ensure_dirs()
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with closing(conn.cursor()) as cur:
@@ -2175,7 +2168,6 @@ def get_db() -> "sqlite3.Connection":
             _migrate_deals_columns(conn)
         except Exception:
             pass
-
         cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings(
                 key TEXT PRIMARY KEY,
@@ -2549,7 +2541,6 @@ def get_db() -> "sqlite3.Connection":
                     conn.commit()
             except Exception:
                 pass
-
             try:
                 cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_tenant ON {table}(tenant_id);")
             except Exception:
@@ -2575,7 +2566,6 @@ def get_db() -> "sqlite3.Connection":
                 """)
             except Exception:
                 pass
-
         for t in core_tables:
             _ensure_trigger(t)
 
@@ -2586,7 +2576,6 @@ def get_db() -> "sqlite3.Connection":
                 cur.execute(f"CREATE VIEW IF NOT EXISTS {v} AS SELECT * FROM {table} WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);")
             except Exception:
                 pass
-
         for t in core_tables:
             _create_view(t)
 
@@ -2598,6 +2587,7 @@ def get_db() -> "sqlite3.Connection":
             cur.execute("PRAGMA busy_timeout=5000;")
         except Exception:
             pass
+
 
         # RTM (Requirements Traceability Matrix)
         cur.execute("""
@@ -2660,12 +2650,10 @@ def get_db() -> "sqlite3.Connection":
         ensure_y5_tables(conn)
     except Exception:
         pass
-
     try:
         migrate(conn)
     except Exception:
         pass
-
     return conn
 
 
@@ -2685,6 +2673,8 @@ def _file_hash() -> str:
             return hashlib.sha256(f.read()).hexdigest()[:12]
     except Exception:
         return "unknown"
+
+
 def save_uploaded_file(uploaded_file, subdir: str = "") -> Optional[str]:
     if not uploaded_file:
         return None
@@ -2707,14 +2697,12 @@ def get_sam_api_key() -> Optional[str]:
             return key
     except Exception:
         pass
-
     try:
         key = st.secrets.get("SAM_API_KEY")
         if key:
             return key
     except Exception:
         pass
-
     return os.getenv("SAM_API_KEY")
 
 
@@ -2737,8 +2725,6 @@ def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
             resp = requests.get(SAM_ENDPOINT, params=q, headers={"X-Api-Key": api_key}, timeout=30)
         except Exception as ex:
             return {"totalRecords": 0, "records": [], "error": f"Request error: {ex}"}
-        except Exception:
-            pass
 
         if resp.status_code != 200:
             try:
@@ -2848,6 +2834,8 @@ def _tesseract_ok() -> bool:
         return True
     except Exception:
         return False
+
+
 def extract_text_pages(file_bytes: bytes, mime: str) -> list:
     """Return a list of page texts. Best-effort. Up to 100 pages to keep fast."""
     out = []
@@ -2866,7 +2854,6 @@ def extract_text_pages(file_bytes: bytes, mime: str) -> list:
                         out.append(txt)
             except Exception:
                 pass
-
         if not out and _pypdf is not None:
             try:
                 import io as _io
@@ -2876,9 +2863,9 @@ def extract_text_pages(file_bytes: bytes, mime: str) -> list:
                         out.append(p.extract_text() or "")
                     except Exception:
                         out.append("")
-        # As a very last resort, try a naive decode of bytes to avoid empty output.
             except Exception:
                 pass
+        # As a very last resort, try a naive decode of bytes to avoid empty output.
         if not out:
             try:
                 out = [file_bytes.decode("utf-8", errors="ignore")]
@@ -2940,12 +2927,11 @@ def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
                         ocr_count += 1
                 except Exception:
                     pass
-
         return new_pages, ocr_count
     except Exception:
         return pages_text, 0
 
-def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
+def save_rfp_file_db(conn: sqlite3.Connection, rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
     """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
     mime = _detect_mime_light(name)
     sha = compute_sha256(file_bytes)
@@ -2962,7 +2948,6 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                     conn.commit()
                 except Exception:
                     pass
-
             return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
         # New insert
         pages_text = extract_text_pages(file_bytes, mime)
@@ -3161,7 +3146,6 @@ def _y55_norm_date(s: str) -> str:
             return f"{dt.year:04d} {dt.month:02d} {dt.day:02d}"
         except Exception:
             pass
-
     # Fallback: grab mm/dd/yy or Month D, YYYY via regex
     m = re.search(r'([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})', t)
     if m:
@@ -3192,6 +3176,7 @@ def _y55_coerce_money(x):
         return float(s) if s else 0.0
     except Exception:
         return 0.0
+
 def _y55_validate(d: dict) -> dict:
     """
     Ensure structure matches _Y55_SCHEMA.
@@ -3303,8 +3288,6 @@ def y55_ai_parse(text: str) -> dict:
                 messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
                 temperature=0.0
             )
-        except Exception:
-            pass
         raw = ""
         try:
             raw = resp.choices[0].message.content or ""
@@ -3335,12 +3318,13 @@ def y55_ai_parse(text: str) -> dict:
         if not isinstance(out.get("meta"), dict): out["meta"] = {}
         out["title"] = (out.get("title") or "").strip()[:200]
         out["solnum"] = (out.get("solnum") or "").strip()[:80]
-    except Exception:
-        pass
 
         # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
+
+    except Exception:
+        pass
 
         # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
@@ -3352,6 +3336,7 @@ def _y55_norm_str(x):
         return re.sub(r'\s+',' ', str(x or '')).strip()
     except Exception:
         return str(x)
+
 def y55_merge_lm(base_list, ai_list):
     base = [_y55_norm_str(x) for x in (base_list or []) if _y55_norm_str(x)]
     ai = [_y55_norm_str(x) for x in (ai_list or []) if _y55_norm_str(x)]
@@ -3469,7 +3454,7 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
 
 
 # -------------------- Modules --------------------
-def run_contacts(conn: "sqlite3.Connection") -> None:
+def run_contacts(conn: sqlite3.Connection) -> None:
     st.header("Contacts")
     with st.form("add_contact", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 2, 2])
@@ -3491,8 +3476,6 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             st.success(f"Added contact {name}")
         except Exception as e:
             st.error(f"Error saving contact {e}")
-        except Exception:
-            pass
 
     try:
         df = pd.read_sql_query(
@@ -3505,11 +3488,9 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             st.dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
-    except Exception:
-        pass
 
 
-def run_deals(conn: "sqlite3.Connection") -> None:
+def run_deals(conn: sqlite3.Connection) -> None:
     st.header("Deals")
     with st.form("add_deal", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
@@ -3536,8 +3517,6 @@ def run_deals(conn: "sqlite3.Connection") -> None:
             st.success(f"Added deal {title}")
         except Exception as e:
             st.error(f"Error saving deal {e}")
-        except Exception:
-            pass
 
     try:
         df = pd.read_sql_query(
@@ -3551,13 +3530,11 @@ def run_deals(conn: "sqlite3.Connection") -> None:
             st.dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load deals {e}")
-    except Exception:
-        pass
 
 
 # ---------- SAM Watch (Phase A) ----------
 
-def run_sam_watch(conn: "sqlite3.Connection") -> None:
+def run_sam_watch(conn: sqlite3.Connection) -> None:
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -3677,152 +3654,152 @@ def run_sam_watch(conn: "sqlite3.Connection") -> None:
         st.session_state.pop("sam_selected_idx", None)
         st.success(f"Fetched {len(results_df)} notices")
 
-    # Normalize results_df from session_state if missing
+# -- normalize results for rendering --
 
-    if "results_df" not in locals():
-
-        try:
-
-            results_df = st.session_state.get("sam_results_df")
-
-        except Exception:
-
-            results_df = None
+if 'results_df' not in locals():
 
     try:
 
-        import pandas as pd  # ensure pd alias exists
+        results_df = st.session_state.get('sam_results_df')
 
     except Exception:
 
-        pass
+        results_df = None
 
-    if isinstance(results_df, pd.DataFrame) and not results_df.empty:
-            # --- List view with pagination (Phase Sam Watch: Part 1) ---
-            # Reset page if not set
-            if "sam_page" not in st.session_state:
-                st.session_state["sam_page"] = 1
-            # Compute pages based on current limit control
-            try:
-                page_size = int(limit)
-            except Exception:
-                page_size = 100
-            total = len(results_df)
-            total_pages = max(1, (total + page_size - 1) // page_size)
-            cur_page = int(st.session_state.get("sam_page", 1))
-            # Clamp page
-            if cur_page < 1:
-                cur_page = 1
-            if cur_page > total_pages:
-                cur_page = total_pages
-            st.session_state["sam_page"] = cur_page
+_has_rows = False
 
-            # Pager controls
-            p1, p2, p3 = st.columns([1, 3, 1])
-            with p1:
-                if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
-                    st.session_state["sam_page"] = cur_page - 1
-                    st.rerun()
-            with p2:
-                st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
-            with p3:
-                if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
-                    st.session_state["sam_page"] = cur_page + 1
-                    st.rerun()
+try:
 
-            start_i = (cur_page - 1) * page_size
-            end_i = min(start_i + page_size, total)
+    _has_rows = (results_df is not None) and hasattr(results_df, 'empty') and (not results_df.empty)
 
-            # Render list cards instead of table
-            for i in range(start_i, end_i):
-                row = results_df.iloc[i]
-                with st.container():
-                    st.markdown(f"**{row['Title']}**")
-                    meta_line = " | ".join([
-                        f"Solicitation: {row.get('Solicitation') or '—'}",
-                        f"Type: {row.get('Type') or '—'}",
-                        f"Set-Aside: {row.get('Set-Aside') or '—'}",
-                        f"NAICS: {row.get('NAICS') or '—'}",
-                        f"PSC: {row.get('PSC') or '—'}",
-                    ])
-                    st.caption(meta_line)
-                    st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
+except Exception:
+
+    _has_rows = False
+
+if _has_rows:
+
+        # --- List view with pagination (Phase Sam Watch: Part 1) ---
+        # Reset page if not set
+        if "sam_page" not in st.session_state:
+            st.session_state["sam_page"] = 1
+        # Compute pages based on current limit control
+        try:
+            page_size = int(limit)
+        except Exception:
+            page_size = 100
+        total = len(results_df)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        cur_page = int(st.session_state.get("sam_page", 1))
+        # Clamp page
+        if cur_page < 1:
+            cur_page = 1
+        if cur_page > total_pages:
+            cur_page = total_pages
+        st.session_state["sam_page"] = cur_page
+
+        # Pager controls
+        p1, p2, p3 = st.columns([1, 3, 1])
+        with p1:
+            if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
+                st.session_state["sam_page"] = cur_page - 1
+                st.rerun()
+        with p2:
+            st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
+        with p3:
+            if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
+                st.session_state["sam_page"] = cur_page + 1
+                st.rerun()
+
+        start_i = (cur_page - 1) * page_size
+        end_i = min(start_i + page_size, total)
+
+        # Render list cards instead of table
+        for i in range(start_i, end_i):
+            row = results_df.iloc[i]
+            with st.container():
+                st.markdown(f"**{row['Title']}**")
+                meta_line = " | ".join([
+                    f"Solicitation: {row.get('Solicitation') or '—'}",
+                    f"Type: {row.get('Type') or '—'}",
+                    f"Set-Aside: {row.get('Set-Aside') or '—'}",
+                    f"NAICS: {row.get('NAICS') or '—'}",
+                    f"PSC: {row.get('PSC') or '—'}",
+                ])
+                st.caption(meta_line)
+                st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
+                if row.get('SAM Link'):
+                    st.markdown(f"[Open in SAM]({row['SAM Link']})")
+
+                c3, c4, c5 = st.columns([2, 2, 2])
+                with c3:
+                    if st.button("View details", key=f"sam_view_{i}"):
+                        st.session_state["sam_selected_idx"] = i
+                        st.rerun()
+                with c4:
+                    if st.button("Add to Deals", key=f"add_to_deals_{i}"):
+                        try:
+                            from contextlib import closing as _closing
+                            with _closing(conn.cursor()) as cur:
+                                cur.execute(
+                                    """
+                                    INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                    """,
+                                    (
+                                        row.get("Title") or "",
+                                        row.get("Agency Path") or "",
+                                        "Bidding",
+                                        None,
+                                        row.get("Notice ID") or "",
+                                        row.get("Solicitation") or "",
+                                        row.get("Posted") or "",
+                                        row.get("Response Due") or "",
+                                        row.get("NAICS") or "",
+                                        row.get("PSC") or "",
+                                        row.get("SAM Link") or "",
+                                    ),
+                                )
+                                conn.commit()
+                            st.success("Saved to Deals")
+                        except Exception as e:
+                            st.error(f"Failed to save deal: {e}")
+                with c5:
+                    if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
+                        try:
+                            st.session_state["rfp_selected_notice"] = row.to_dict()
+                            st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                        except Exception as _e:
+                            st.error(f"Unable to push to RFP Analyzer: {_e}")
+
+                st.divider()
+
+        # Selected details section (sticky below list)
+        sel_idx = st.session_state.get("sam_selected_idx")
+        if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
+            row = results_df.iloc[sel_idx]
+            with st.expander("Opportunity Details", expanded=True):
+                c1, c2 = st.columns([3, 2])
+                with c1:
+                    st.write(f"**Title:** {row.get('Title') or ''}")
+                    st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
+                    st.write(f"**Type:** {row.get('Type') or '—'}")
+                    st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
+                    st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
+                    st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
+                with c2:
+                    st.write(f"**Posted:** {row.get('Posted') or '—'}")
+                    st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
+                    st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
+try:
+    _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
+    y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid,
+        key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
+except Exception:
+    pass
 
-                    c3, c4, c5 = st.columns([2, 2, 2])
-                    with c3:
-                        if st.button("View details", key=f"sam_view_{i}"):
-                            st.session_state["sam_selected_idx"] = i
-                            st.rerun()
-                    with c4:
-                        if st.button("Add to Deals", key=f"add_to_deals_{i}"):
-                            try:
-                                from contextlib import closing as _closing
-                                with _closing(conn.cursor()) as cur:
-                                    cur.execute(
-                                        """
-                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                        """,
-                                        (
-                                            row.get("Title") or "",
-                                            row.get("Agency Path") or "",
-                                            "Bidding",
-                                            None,
-                                            row.get("Notice ID") or "",
-                                            row.get("Solicitation") or "",
-                                            row.get("Posted") or "",
-                                            row.get("Response Due") or "",
-                                            row.get("NAICS") or "",
-                                            row.get("PSC") or "",
-                                            row.get("SAM Link") or "",
-                                        ),
-                                    )
-                                    conn.commit()
-                                st.success("Saved to Deals")
-                            except Exception as e:
-                                st.error(f"Failed to save deal: {e}")
-                            except Exception:
-                                pass
-                    with c5:
-                        if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
-                            try:
-                                st.session_state["rfp_selected_notice"] = row.to_dict()
-                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-                            except Exception as _e:
-                                st.error(f"Unable to push to RFP Analyzer: {_e}")
-                            except Exception:
-                                pass
-
-                    st.divider()
-
-            # Selected details section (sticky below list)
-            sel_idx = st.session_state.get("sam_selected_idx")
-            if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
-                row = results_df.iloc[sel_idx]
-                with st.expander("Opportunity Details", expanded=True):
-                    c1, c2 = st.columns([3, 2])
-                    with c1:
-                        st.write(f"**Title:** {row.get('Title') or ''}")
-                        st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
-                        st.write(f"**Type:** {row.get('Type') or '—'}")
-                        st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
-                        st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
-                        st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
-                    with c2:
-                        st.write(f"**Posted:** {row.get('Posted') or '—'}")
-                        st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
-                        st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
-                        if row.get('SAM Link'):
-                            st.markdown(f"[Open in SAM]({row['SAM Link']})")
-                try:
-                    _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-                    y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
-                except Exception:
-                    pass
-
-def run_research_tab(conn: "sqlite3.Connection") -> None:
+def run_research_tab(conn: sqlite3.Connection) -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/...")
     ttl = st.number_input("Cache TTL (hours)", min_value=1, max_value=168, value=24, step=1)
@@ -3841,7 +3818,7 @@ def run_research_tab(conn: "sqlite3.Connection") -> None:
                 st.markdown(f"[Open cached text]({rec['path']})")
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
-def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
+def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         # === One-Page Analyzer (integrated) ===
     try:
@@ -3898,6 +3875,7 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
             _rid = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn).iloc[0]["id"]
     except Exception:
         _rid = None
+
     _title0 = ""
     _solnum0 = ""
     _sam0 = ""
@@ -3908,12 +3886,12 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
             _solnum0 = str(_row.get("solnum") or "")
         except Exception:
             pass
-
         try:
             # sam_url may or may not exist yet
             _sam0 = pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(int(_rid),)).iloc[0].get("sam_url") or ""
         except Exception:
             _sam0 = ""
+
     with st.form("rfp_meta_edit", clear_on_submit=False):
         c1, c2 = st.columns(2)
         with c1:
@@ -3948,7 +3926,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
             sam_default = _ctx.loc[_ctx["id"]==rid_p3, "sam_url"].values[0]
         except Exception:
             pass
-
         cA, cB = st.columns([2,1])
         with cA:
             sam_url = st.text_input("SAM URL (for amendment tracking)", value=sam_default or "", key="p3_sam_url")
@@ -4020,10 +3997,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
     # ensure rfp_meta exists
     try:
         with closing(conn.cursor()) as _c:
-# SYNTAX AUTO-COMMENTED:     except Exception:
-# SYNTAX AUTO-COMMENTED:         pass
-# SYNTAX AUTO-COMMENTED:     except Exception:
-# SYNTAX AUTO-COMMENTED:         pass
 
             _c.execute("""
                 CREATE TABLE IF NOT EXISTS rfp_chat(
@@ -4043,9 +4016,9 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                 );
             """)
             conn.commit()
-
     except Exception:
         pass
+
         m = re.search(r'(?i)Solicitation\s*(Number|No\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\._/]{4,})', text)
         if m:
             return m.group(2)[:60]
@@ -4069,8 +4042,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                 except Exception:
                     df_rf_list = pd.DataFrame()
                     opt_rf = [None]
-                except Exception:
-                    pass
                 def _fmt_rfp(x):
                     try:
                         if x is None:
@@ -4152,8 +4123,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                 except Exception as e:
                     st.warning(f"PDF text extraction failed for {file.name}: {e}. Falling back to binary decode.")
                     return data.decode("latin-1", errors="ignore")
-                except Exception:
-                    pass
             if name.endswith(".docx"):
                 try:
                     f = io.BytesIO(data)
@@ -4162,8 +4131,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                 except Exception as e:
                     st.warning(f"DOCX parse failed for {file.name}: {e}.")
                     return ""
-                except Exception:
-                    pass
             if name.endswith(".xlsx"):
                 try:
                     pages = extract_text_pages(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -4173,8 +4140,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                 except Exception as e:
                     st.warning(f"XLSX parse failed for {file.name}: {e}.")
                     return ""
-                except Exception:
-                    pass
             st.error(f"Unsupported file type: {file.name}")
             return ""
 
@@ -4224,7 +4189,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                     cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(_k), str(_v)))
                         except Exception:
                             pass
-
                         with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
@@ -4267,7 +4231,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                                     (int(rfp_id), 'Ordering/POP', _pop['pop_structure'], ''))
                             except Exception:
                                 pass
-
                             conn.commit()
                             # X2: auto-link any pending ingested files to this new RFP
                             try:
@@ -4281,7 +4244,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                     st.session_state["x1_pending_link_after_create"] = False
                             except Exception:
                                 pass
-
                             st.success(f"Combined and saved RFP #{rfp_id} (items: {len(l_items)}, CLINs: {len(clins)}, dates: {len(dates)}, POCs: {len(pocs)}).")
                 else:
                     saved = 0
@@ -4314,7 +4276,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                     cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), str(_k), str(_v)))
                         except Exception:
                             pass
-
                         with closing(conn.cursor()) as cur:
                             cur.execute(
                                 "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
@@ -4348,7 +4309,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                             st.session_state["x1_pending_link_after_create"] = False
                     except Exception:
                         pass
-
                     st.success(f"Saved {saved} RFP record(s).")
     # ---------------- Y1: Ask with citations ----------------
     with tab_y1:
@@ -4458,8 +4418,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                     st.success("Stored Q&A.")
                 except Exception as e:
                     st.error(f"Q&A failed: {e}")
-                except Exception:
-                    pass
             try:
                 df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
                 if df_hist is not None and not df_hist.empty:
@@ -4479,14 +4437,10 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Clear failed: {e}")
-                            except Exception:
-                                pass
                 else:
                     st.caption("No Q&A yet for this RFP.")
             except Exception as e:
                 st.info(f"No history available: {e}")
-            except Exception:
-                pass
             # X7 guard: ensure checklist dataframe is defined and rid is available
             _rid = locals().get("rid", None)
             if _rid is None:
@@ -4497,8 +4451,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                         "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
                         conn, params=(int(_rid),)
                     )
-                except Exception:
-                    pass
 
                     with st.expander("Add to Proposal Drafts", expanded=False):
                         sec = st.text_input("Section label", value="Research Notes", key="y5_sec_y1")
@@ -4536,8 +4488,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                 df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
             except Exception as e:
                 df_files = pd.DataFrame()
-            except Exception:
-                pass
             st.caption("Linked files")
             if df_files is None or df_files.empty:
                 st.write("No files linked.")
@@ -4567,12 +4517,8 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                 st.text_area("Preview (first 20k chars)", value=preview, height=300)
                         except Exception as e:
                             st.info(f"Preview unavailable: {e}")
-                        except Exception:
-                            pass
                 except Exception as e:
                     st.info(f"No preview available: {e}")
-                except Exception:
-                    pass
 
                 # X6: bulk ZIP download, inventory CSV, and simple search across linked files
                 import io as _io, zipfile as _zipfile
@@ -4603,8 +4549,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                 )
                         except Exception as e:
                             st.error(f"ZIP build failed: {e}")
-                        except Exception:
-                            pass
                 with c_inv:
                     try:
                         inv = df_files.copy()
@@ -4613,8 +4557,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                         st.download_button("Export file inventory CSV", data=csvb, file_name=f"rfp_{int(rid)}_file_inventory.csv", mime="text/csv", key=f"inv_{rid}")
                     except Exception as e:
                         st.info(f"Inventory export unavailable: {e}")
-                    except Exception:
-                        pass
 
                 with st.expander("Find in linked files (simple)", expanded=False):
                     q = st.text_input("Search phrase", key=f"find_files_{rid}")
@@ -4638,8 +4580,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                                 st.write("No hits.")
                         except Exception as e:
                             st.info(f"No search results: {e}")
-                        except Exception:
-                            pass
 
                 to_unlink = st.multiselect("Unlink file IDs", options=df_files["id"].tolist(), key=f"unlink_{rid}")
                 if st.button("Unlink selected", key=f"unlink_btn_{rid}") and to_unlink:
@@ -4651,8 +4591,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                         st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Unlink failed: {e}")
-                    except Exception:
-                        pass
             st.caption("Attach from library")
             try:
                 df_pool = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
@@ -4672,8 +4610,6 @@ def run_rfp_analyzer(conn: "sqlite3.Connection") -> None:
                         st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Link failed: {e}")
-                    except Exception:
-                        pass
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
@@ -4849,7 +4785,7 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
 
 
 
-def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataFrame:
+def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFrame:
     """
     Robust loader:
       1) If tenancy views exist (lm_items_t/lm_meta_t), use them.
@@ -4875,6 +4811,7 @@ def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataF
             return pd.read_sql_query(q, conn, params=(name,)).shape[0] > 0
         except Exception:
             return False
+
     use_views = _has("lm_items_t")
     use_meta_view = _has("lm_meta_t")
 
@@ -4896,6 +4833,7 @@ def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataF
             return pd.read_sql_query(q, conn, params=(rfp_id,))
         except Exception:
             pass  # fall through
+
     # Base tables path (works even if lm_meta is empty)
     if _has("lm_items"):
         # Only join lm_meta if it truly exists (older DBs may lack it)
@@ -4965,7 +4903,7 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
+def _load_rfp_context(conn: sqlite3.Connection, rfp_id: int) -> dict:
     try:
         rf = pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
     except Exception:
@@ -4980,7 +4918,7 @@ def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     return {"rfp": meta, "sections": sections, "items": df_items}
 
 
-def run_lm_checklist(conn: "sqlite3.Connection") -> None:
+def run_lm_checklist(conn: sqlite3.Connection) -> None:
 
     st.header("L and M Checklist")
     rfp_id = st.session_state.get('current_rfp_id')
@@ -4990,8 +4928,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
             return
-        except Exception:
-            pass
         if df_rf.empty:
             st.info("No saved RFP extractions yet. Use RFP Analyzer to parse and save.")
             return
@@ -5006,8 +4942,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
     except Exception as e:
         st.error(f"Failed to load items: {e}")
         return
-    except Exception:
-        pass
     if df_items.empty:
         st.info("No L/M items found for this RFP.")
         return
@@ -5025,8 +4959,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 st.success("All items marked Complete")
             except Exception as e:
                 st.error(f"Update failed: {e}")
-            except Exception:
-                pass
     with c2:
         if st.button("Reset all to Open"):
             try:
@@ -5036,8 +4968,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 st.success("All items reset")
             except Exception as e:
                 st.error(f"Update failed: {e}")
-            except Exception:
-                pass
     with c3:
         if st.button("Mark all MUST to Open"):
             try:
@@ -5047,8 +4977,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 st.success("All MUST items set to Open")
             except Exception as e:
                 st.error(f"Update failed: {e}")
-            except Exception:
-                pass
 
     st.subheader("Checklist")
     for _, row in df_items.iterrows():
@@ -5063,8 +4991,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                     conn.commit()
             except Exception as e:
                 st.error(f"Failed to update item {row['id']}: {e}")
-            except Exception:
-                pass
 
     st.divider()
 
@@ -5116,8 +5042,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 st.success("Saved"); st.rerun()
             except Exception as e2:
                 st.error(f"Save failed: {e2}")
-            except Exception:
-                pass
     with cexp:
         if st.button("Export Matrix CSV", key="mx_export"):
             out = view.copy()
@@ -5172,8 +5096,6 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
-    except Exception:
-        pass
     spacing_map = {
         "single": WD_LINE_SPACING.SINGLE, "1": WD_LINE_SPACING.SINGLE, "1.0": WD_LINE_SPACING.SINGLE,
         "1.15": WD_LINE_SPACING.ONE_POINT_FIVE, "1,15": WD_LINE_SPACING.ONE_POINT_FIVE,
@@ -5206,8 +5128,6 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
                 for j, col in enumerate(clins.columns):
                     val = row.get(col); cells[j].text = "" if pd.isna(val) else str(val)
     except Exception: pass
-    except Exception:
-        pass
     try:
         if isinstance(checklist, pd.DataFrame) and not checklist.empty:
             doc.add_heading("Compliance Checklist", level=2)
@@ -5215,12 +5135,10 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
                 txt = str(r.get("item_text","")).strip()
                 if txt: doc.add_paragraph(txt, style="List Bullet")
     except Exception: pass
-    except Exception:
-        pass
     doc.save(path)
     return path
 
-def run_proposal_builder(conn: "sqlite3.Connection") -> None:
+def run_proposal_builder(conn: sqlite3.Connection) -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
@@ -5332,6 +5250,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     except Exception:
         pass
 
+
 def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     import math
     import streamlit as st
@@ -5346,7 +5265,7 @@ def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     view = df.iloc[start:end].copy() if df is not None else df
     st.session_state[page_key] = page
     return view, page, pages
-def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
+def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
@@ -5406,8 +5325,6 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                     st.success(f"Imported {n} vendors")
             except Exception as e:
                 st.error(f"Import failed: {e}")
-            except Exception:
-                pass
 
     with st.expander("Add Vendor", expanded=False):
         c1, c2, c3 = st.columns([2,2,2])
@@ -5442,8 +5359,6 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                     st.success("Vendor saved")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
-                except Exception:
-                    pass
 
     q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors_t WHERE 1=1"
     params: List[Any] = []
@@ -5465,8 +5380,6 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     except Exception as e:
         st.error(f"Query failed: {e}")
         df_v = pd.DataFrame()
-    except Exception:
-        pass
 
     st.subheader("Vendors")
     if df_v.empty:
@@ -5500,7 +5413,6 @@ def _smtp_settings() -> Dict[str, Any]:
         out.update({k: cfg.get(k, out[k]) for k in out})
     except Exception:
         pass
-
     for k in list(out.keys()):
         if not out[k]:
             try:
@@ -5509,7 +5421,6 @@ def _smtp_settings() -> Dict[str, Any]:
                     out[k] = v
             except Exception:
                 pass
-
     return out
 
 
@@ -5545,8 +5456,6 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
         return True, "sent"
     except Exception as e:
         return False, str(e)
-    except Exception:
-        pass
 
 
 def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
@@ -5576,7 +5485,9 @@ def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optiona
         return float(qty) * float(unit_price)
     except Exception:
         return None
-def run_quote_comparison(conn: "sqlite3.Connection") -> None:
+
+
+def run_quote_comparison(conn: sqlite3.Connection) -> None:
     st.header("Quote Comparison")
     df = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
@@ -5618,8 +5529,6 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                     st.success(f"Imported {len(by_vendor)} quotes / {total_rows} lines.")
             except Exception as e:
                 st.error(f"Import failed: {e}")
-            except Exception:
-                pass
 
     with st.expander("Add Quote (manual)", expanded=False):
         vendor = st.text_input("Vendor name")
@@ -5699,7 +5608,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
 
 
 # ---------- Pricing Calculator (Phase E) ----------
-def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str, float]:
+def _scenario_summary(conn: sqlite3.Connection, scenario_id: int) -> Dict[str, float]:
     dl = pd.read_sql_query("SELECT hours, rate, fringe_pct FROM pricing_labor WHERE scenario_id=?;", conn, params=(scenario_id,))
     other = pd.read_sql_query("SELECT cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
     base = pd.read_sql_query("SELECT overhead_pct, gna_pct, fee_pct, contingency_pct FROM pricing_scenarios WHERE id=?;", conn, params=(scenario_id,))
@@ -5727,7 +5636,7 @@ def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str,
     }
 
 
-def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
+def run_pricing_calculator(conn: sqlite3.Connection) -> None:
     st.header("Pricing Calculator")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
@@ -5824,7 +5733,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
 
 
 # ---------- Win Probability (Phase E) ----------
-def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
+def _price_competitiveness(conn: sqlite3.Connection, rfp_id: int, our_total: Optional[float]) -> Optional[float]:
     df = pd.read_sql_query("""
         SELECT q.vendor, SUM(l.extended_price) AS total
         FROM quotes q JOIN quote_lines l ON q.id = l.quote_id
@@ -5847,7 +5756,7 @@ def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: O
     return 0.0
 
 
-def run_win_probability(conn: "sqlite3.Connection") -> None:
+def run_win_probability(conn: sqlite3.Connection) -> None:
     st.header("Win Probability")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
@@ -5925,7 +5834,7 @@ def run_win_probability(conn: "sqlite3.Connection") -> None:
 
 
 # ---------- Phase F: Chat Assistant (rules-based over DB) ----------
-def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) -> Dict[str, Any]:
+def _kb_search(conn: sqlite3.Connection, rfp_id: Optional[int], query: str) -> Dict[str, Any]:
     q = query.lower()
     res: Dict[str, Any] = {}
     # RFP sections
@@ -5997,7 +5906,7 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     return res
 
 
-def run_chat_assistant(conn: "sqlite3.Connection") -> None:
+def run_chat_assistant(conn: sqlite3.Connection) -> None:
     st.header("Chat Assistant (DB-aware)")
     st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
@@ -6062,8 +5971,6 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
-    except Exception:
-        pass
 
     doc = docx.Document()
     for s in doc.sections:
@@ -6112,7 +6019,7 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
     return path
 
 
-def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
+def _orig_run_capability_statement(conn: sqlite3.Connection) -> None:
     st.header("Capability Statement")
     st.caption("Store your company profile and export a polished 1-page DOCX capability statement.")
 
@@ -6155,8 +6062,6 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
             st.success("Profile saved.")
         except Exception as e:
             st.error(f"Save failed: {e}")
-        except Exception:
-            pass
 
     # Export
     if st.button("Export Capability Statement DOCX"):
@@ -6197,7 +6102,6 @@ def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
             score += max(0, 20 - (age * 4))  # up to +20, decays 4/yr
     except Exception:
         pass
-
     # CPARS bonus
     if (rec.get("cpars_rating") or "").strip():
         score += 8
@@ -6208,7 +6112,6 @@ def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
         elif val >= 250000: score += 3
     except Exception:
         pass
-
     return min(score, 100)
 
 
@@ -6236,7 +6139,7 @@ def _pp_writeup_block(rec: dict) -> str:
 
 
 
-def run_past_performance(conn: "sqlite3.Connection") -> None:
+def run_past_performance(conn: sqlite3.Connection) -> None:
     st.header("Past Performance Library")
     st.caption("Store/import projects, score relevance vs an RFP, generate writeups, and push to Proposal Builder.")
 
@@ -6282,8 +6185,6 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                     st.success(f"Imported {n} projects.")
             except Exception as e:
                 st.error(f"Import failed: {e}")
-            except Exception:
-                pass
 
     # Add Project
     with st.expander("Add Project", expanded=False):
@@ -6322,8 +6223,6 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                 st.success("Saved project.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
-            except Exception:
-                pass
 
     # Filters
     with st.expander("Filter", expanded=True):
@@ -6413,7 +6312,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
         # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
         _export_past_perf_docx(out_path, past_perf)
-def _wp_load_paper(conn: "sqlite3.Connection", paper_id: int) -> pd.DataFrame:
+def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
     return pd.read_sql_query(
         "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
         conn, params=(paper_id,)
@@ -6435,7 +6334,6 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
         from docx.shared import Inches  # type: ignore
     except Exception:
         pass
-
     try:
         doc = docx.Document()
         doc.add_heading(title or "Win Plan", 0)
@@ -6453,13 +6351,11 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
         return path
     except Exception as e:
         pass
-    except Exception:
-        pass
 
         st.error(f"DOCX export failed: {e}")
         return None
 
-def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
+def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     st.header("White Paper Builder")
     st.caption("Templates → Drafts → DOCX export. Can include images per section.")
 
@@ -6637,8 +6533,6 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                     st.download_button("Download DOCX", data=_data, file_name=_fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
                 except Exception as _e:
                     st.error(f"Download failed: {_e}")
-                except Exception:
-                    pass
 
             with x2:
                 if st.button("Push narrative to Proposal Builder", key="wp_push"):
@@ -6660,7 +6554,7 @@ def _stage_probability(stage: str) -> int:
     }
     return mapping.get(stage or "", 10)
 
-def run_crm(conn: "sqlite3.Connection") -> None:
+def run_crm(conn: sqlite3.Connection) -> None:
     st.header("CRM")
     tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
 
@@ -6829,7 +6723,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
 
 
 
-def _ensure_files_table(conn: "sqlite3.Connection") -> None:
+def _ensure_files_table(conn: sqlite3.Connection) -> None:
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("""
@@ -6865,7 +6759,7 @@ def _detect_mime(name: str) -> str:
     return "application/octet-stream"
 
 
-def run_file_manager(conn: "sqlite3.Connection") -> None:
+def run_file_manager(conn: sqlite3.Connection) -> None:
     _ensure_files_table(conn)
     st.header("File Manager")
     st.caption("Attach files to RFPs / Deals / Vendors, tag them, and build a zipped submission kit.")
@@ -6922,8 +6816,6 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                             saved += 1
                     except Exception as e:
                         st.error(f"DB save failed: {e}")
-                    except Exception:
-                        pass
                 st.success(f"Uploaded {saved} file(s).")
 
     # --- Library & filters ---
@@ -6954,8 +6846,6 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
             except Exception as e2:
                 st.error(f"Failed to load files: {e2}")
                 df_files = pd.DataFrame()
-            except Exception:
-                pass
         if df_files.empty:
             st.write("No files yet.")
         else:
@@ -6987,7 +6877,6 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                                     os.remove(r["path"])
                             except Exception:
                                 pass
-
                             st.success("Deleted"); st.rerun()
 
     # --- Submission Kit (ZIP) ---
@@ -7007,8 +6896,6 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
     except Exception:
         _ensure_files_table(conn)
         df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
-    except Exception:
-        pass
     st.caption("Select attachments to include")
     selected = []
     if df_kit.empty:
@@ -7063,7 +6950,6 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                             z.write(p, arcname=fname)
                         except Exception:
                             pass
-
                     # Add a manifest
                     manifest = "Submission Kit Manifest\n"
                     manifest += f"RFP ID: {int(kit_rfp)}\n"
@@ -7077,14 +6963,14 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
 
 
 # ---------- Phase L: RFQ Pack ----------
-def _rfq_pack_by_id(conn: "sqlite3.Connection", pid: int) -> dict | None:
+def _rfq_pack_by_id(conn: sqlite3.Connection, pid: int) -> dict | None:
     df = pd.read_sql_query("SELECT * FROM rfq_packs_t WHERE id=?;", conn, params=(pid,))
     return None if df.empty else df.iloc[0].to_dict()
 
-def _rfq_lines(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
+def _rfq_lines(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
-def _rfq_vendors(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
+def _rfq_vendors(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     q = """
         SELECT rv.id, rv.vendor_id, v.name, v.email, v.phone
         FROM rfq_vendors_t rv
@@ -7096,10 +6982,11 @@ def _rfq_vendors(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
         return pd.read_sql_query(q, conn, params=(pid,))
     except Exception:
         return pd.DataFrame(columns=["id","vendor_id","name","email","phone"])
-def _rfq_attachments(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
+
+def _rfq_attachments(conn: sqlite3.Connection, pid: int) -> pd.DataFrame:
     return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
-def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
+def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
     pack = _rfq_pack_by_id(conn, pack_id)
     if not pack:
         st.error("Pack not found"); return None
@@ -7118,7 +7005,6 @@ def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
                     files.append((df.iloc[0]["filename"], df.iloc[0]["path"]))
             except Exception:
                 pass
-
     # CLINs CSV
     df_lines = _rfq_lines(conn, pack_id)
     clin_csv_path = str(Path(DATA_DIR) / f"rfq_{pack_id}_CLINs.csv")
@@ -7159,10 +7045,8 @@ def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
     except Exception as e:
         st.error(f"ZIP failed: {e}")
         return None
-    except Exception:
-        pass
 
-def run_rfq_pack(conn: "sqlite3.Connection") -> None:
+def run_rfq_pack(conn: sqlite3.Connection) -> None:
     st.header("RFQ Pack")
     st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
 
@@ -7299,8 +7183,6 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     except Exception as e:
         st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
-    except Exception:
-        pass
     df_rv = _rfq_vendors(conn, int(pk_sel))
     st.dataframe(df_rv[["name","email","phone"]] if not df_rv.empty else pd.DataFrame(), use_container_width=True, hide_index=True)
 
@@ -7314,7 +7196,6 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     cur.execute("INSERT OR IGNORE INTO rfq_vendors(pack_id, vendor_id) VALUES(?,?);", (int(pk_sel), int(vid)))
                 except Exception:
                     pass
-
             conn.commit()
         st.success("Vendors added"); st.rerun()
 
@@ -7365,14 +7246,15 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 st.success("Exported"); st.markdown(f"[Download CSV]({path})")
 
 
-def _db_path_from_conn(conn: "sqlite3.Connection") -> str:
+def _db_path_from_conn(conn: sqlite3.Connection) -> str:
     try:
         df = pd.read_sql_query("PRAGMA database_list;", conn, params=())
         p = df[df["name"]=="main"]["file"].values[0]
         return p or str(Path(DATA_DIR) / "app.db")
     except Exception:
         return str(Path(DATA_DIR) / "app.db")
-def migrate(conn: "sqlite3.Connection") -> None:
+
+def migrate(conn: sqlite3.Connection) -> None:
     """Lightweight idempotent migrations and indices."""
     with closing(conn.cursor()) as cur:
         # read current version
@@ -7380,6 +7262,7 @@ def migrate(conn: "sqlite3.Connection") -> None:
             ver = int(pd.read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn, params=()).iloc[0]["ver"])
         except Exception:
             ver = 0
+
         # v1: add common indexes
         if ver < 1:
             try:
@@ -7390,7 +7273,6 @@ def migrate(conn: "sqlite3.Connection") -> None:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);")
             except Exception:
                 pass
-
             cur.execute("UPDATE schema_version SET ver=1 WHERE id=1;")
             conn.commit()
 
@@ -7400,7 +7282,6 @@ def migrate(conn: "sqlite3.Connection") -> None:
                 cur.execute("PRAGMA foreign_keys=ON;")
             except Exception:
                 pass
-
             cur.execute("UPDATE schema_version SET ver=2 WHERE id=1;")
             conn.commit()
 
@@ -7410,22 +7291,22 @@ def migrate(conn: "sqlite3.Connection") -> None:
                 cur.execute("PRAGMA wal_checkpoint(FULL);")
             except Exception:
                 pass
-
             cur.execute("UPDATE schema_version SET ver=3 WHERE id=1;")
             conn.commit()
 
 
 
 # ---------- Phase N: Backup & Data ----------
-def _current_tenant(conn: "sqlite3.Connection") -> int:
+def _current_tenant(conn: sqlite3.Connection) -> int:
     try:
         return int(pd.read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn, params=()).iloc[0]["ctid"])
     except Exception:
         return 1
+
 def _safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s or "")
 
-def _backup_db(conn: "sqlite3.Connection") -> Optional[str]:
+def _backup_db(conn: sqlite3.Connection) -> Optional[str]:
     # Prefer VACUUM INTO; fallback to file copy using sqlite3 backup API
     db_path = _db_path_from_conn(conn)
     ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -7447,10 +7328,8 @@ def _backup_db(conn: "sqlite3.Connection") -> Optional[str]:
         except Exception as e:
             st.error(f"Backup failed: {e}")
             return None
-        except Exception:
-            pass
 
-def _restore_db_from_upload(conn: "sqlite3.Connection", upload) -> bool:
+def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
     # Use backup API to copy uploaded DB into main DB file
     db_path = _db_path_from_conn(conn)
     tmp = Path(DATA_DIR) / ("restore_" + _safe_name(upload.name))
@@ -7459,8 +7338,6 @@ def _restore_db_from_upload(conn: "sqlite3.Connection", upload) -> bool:
     except Exception as e:
         st.error(f"Could not write uploaded file: {e}")
         return False
-    except Exception:
-        pass
     try:
         src = _sq.connect(str(tmp))
         dst = _sq.connect(db_path)
@@ -7471,10 +7348,8 @@ def _restore_db_from_upload(conn: "sqlite3.Connection", upload) -> bool:
     except Exception as e:
         st.error(f"Restore failed: {e}")
         return False
-    except Exception:
-        pass
 
-def _export_table_csv(conn: "sqlite3.Connection", table_or_view: str, scoped: bool = True) -> Optional[str]:
+def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool = True) -> Optional[str]:
     name = table_or_view
     if scoped and not name.endswith("_t"):
         # if a view exists, prefer it
@@ -7484,7 +7359,6 @@ def _export_table_csv(conn: "sqlite3.Connection", table_or_view: str, scoped: bo
             name = name_t
         except Exception:
             pass
-
     try:
         df = pd.read_sql_query(f"SELECT * FROM {name};", conn)
         if df.empty:
@@ -7495,18 +7369,14 @@ def _export_table_csv(conn: "sqlite3.Connection", table_or_view: str, scoped: bo
     except Exception as e:
         st.error(f"Export failed: {e}")
         return None
-    except Exception:
-        pass
 
-def _import_csv_into_table(conn: "sqlite3.Connection", csv_file, table: str, scoped_to_current: bool=True) -> int:
+def _import_csv_into_table(conn: sqlite3.Connection, csv_file, table: str, scoped_to_current: bool=True) -> int:
     # Read CSV and insert rows. If tenant_id missing and scoped, stamp with current tenant.
     try:
         df = pd.read_csv(io.BytesIO(csv_file.getbuffer()))
     except Exception as e:
         st.error(f"CSV read failed: {e}")
         return 0
-    except Exception:
-        pass
     if scoped_to_current and "tenant_id" not in df.columns:
         df["tenant_id"] = _current_tenant(conn)
     # Align columns with destination
@@ -7515,8 +7385,6 @@ def _import_csv_into_table(conn: "sqlite3.Connection", csv_file, table: str, sco
     except Exception as e:
         st.error(f"Table info failed: {e}")
         return 0
-    except Exception:
-        pass
     present = [c for c in df.columns if c in cols]
     if not present:
         st.error("No matching columns in CSV.")
@@ -7537,10 +7405,8 @@ def _import_csv_into_table(conn: "sqlite3.Connection", csv_file, table: str, sco
     except Exception as e:
         st.error(f"Import failed: {e}")
         return 0
-    except Exception:
-        pass
 
-def run_backup_and_data(conn: "sqlite3.Connection") -> None:
+def run_backup_and_data(conn: sqlite3.Connection) -> None:
     st.header("Backup & Data")
     st.caption("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
 
@@ -7560,8 +7426,6 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
                 migrate(conn); st.success("Migrations done")
             except Exception as e:
                 st.error(f"Migrations failed: {e}")
-            except Exception:
-                pass
     with c2:
         if st.button("WAL Checkpoint (FULL)"):
             try:
@@ -7570,8 +7434,6 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
                 st.success("Checkpoint complete")
             except Exception as e:
                 st.error(f"Checkpoint failed: {e}")
-            except Exception:
-                pass
     with c3:
         if st.button("Analyze DB"):
             try:
@@ -7580,8 +7442,6 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
                 st.success("ANALYZE done")
             except Exception as e:
                 st.error(f"ANALYZE failed: {e}")
-            except Exception:
-                pass
 
     st.divider()
     st.subheader("Backup & Restore")
@@ -7692,7 +7552,7 @@ def nav() -> str:
 
 
 
-def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
+def render_workspace_switcher(conn: sqlite3.Connection) -> None:
     with st.sidebar.expander("Workspace", expanded=True):
         try:
             df_tenants = pd.read_sql_query("SELECT id, name FROM tenants ORDER BY id;", conn, params=())
@@ -7738,7 +7598,8 @@ def run_subcontractor_finder_s1_hook(conn):
     except Exception:
         pass
 
-def router(page: str, conn: "sqlite3.Connection") -> None:
+
+def router(page: str, conn: sqlite3.Connection) -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
     import re as _re
     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
@@ -7774,7 +7635,6 @@ def main() -> None:
         y0_ai_panel()
     except Exception:
         pass
-
     router(nav(), conn)
 
 
@@ -7794,6 +7654,7 @@ if "_o3_ensure_schema" not in globals():
             conn.commit()
         except Exception:
             pass
+
 
 # --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
 if "_o3_collect_recipients_ui" not in globals():
@@ -7842,7 +7703,6 @@ if "_o3_render_sender_picker" not in globals():
             ensure_outreach_o1_schema(conn)
         except Exception:
             pass
-
         _ensure_email_accounts_schema(conn)
         rows = _get_senders(conn)
         if not rows:
@@ -7868,7 +7728,6 @@ if "_o3_render_sender_picker" not in globals():
                             st.session_state["o4_sender_sel"] = email.strip()
                         except Exception:
                             pass
-
                         st.rerun()
                     except Exception as e:
                         st.error(f"Save failed: {e}")
@@ -7919,10 +7778,12 @@ def _y1_snapshot(conn, rfp_id: int) -> str:
         return f"{c}:{m}"
     except Exception:
         return "0:0"
+
 try:
     import streamlit as _st_phase8
 except Exception:
     _st_phase8 = None
+
 if _st_phase8 is not None:
     @_st_phase8.cache_data(show_spinner=False, ttl=600)
     def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
@@ -7939,7 +7800,6 @@ if _st_phase8 is not None:
                 conn2.close()
             except Exception:
                 pass
-
 else:
     # Fallback no-cache path when Streamlit not available
     def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
@@ -7961,8 +7821,6 @@ def y1_search(conn, rfp_id: int, query: str, k: int = 6):
     except Exception:
         # very conservative fallback
         db_path = "data/govcon.db"
-    except Exception:
-        pass
     return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
 
 
@@ -7978,7 +7836,6 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
             hits = y1_search(conn, int(rfp_id), user_q or "", k=int(k))
         except Exception:
             pass
-
         yield "[system] limited mode. rebuild index on Y1, then retry."
 
 # Re-define y4_stream_review to ensure true token streaming (shadow any earlier stub)
@@ -8004,8 +7861,6 @@ def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature
         else:
             yield f"AI unavailable: {type(_e).__name__}: {_e}"
             return
-    except Exception:
-        pass
     for ch in resp:
         try:
             delta = ch.choices[0].delta
@@ -8013,7 +7868,6 @@ def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature
                 yield delta.content
         except Exception:
             pass
-
 # === end PHASE 8 ===
 
 
@@ -8080,8 +7934,6 @@ def run_capability_statement(conn):
             st.info("Base UI not found in this build. Showing AI helper only.")
     except Exception as e:
         st.error(f"Capability Statement base UI error: {e}")
-    except Exception:
-        pass
     try:
         with st.expander("X16.1 — AI drafting helper (OpenAI)", expanded=False):
             st.caption("Draft tagline, core competencies, and differentiators using your org profile and recent RFP context.")
@@ -8119,8 +7971,6 @@ def run_capability_statement(conn):
             def _ask_x161(kind: str):
                 sys = "You are a senior federal capture writer. Use short, precise bullets. Avoid marketing fluff. No emojis."
                 req = f"""Company: {company}
-    except Exception:
-        pass
 Audience: {audience or '(general federal)'}
 Tone: {tone}
 Existing tagline: {tagline0[:200]}
@@ -8145,8 +7995,6 @@ RFP Context (optional, may be empty):
                     return (resp.choices[0].message.content or "").strip()
                 except Exception as e:
                     return f"AI error: {e}"
-                except Exception:
-                    pass
             c1, c2, c3 = st.columns([1,1,1])
             with c1:
                 if st.button("Draft Tagline", key="x161_tl"):
@@ -8172,8 +8020,6 @@ RFP Context (optional, may be empty):
                     st.success("Saved to org_profile")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
-                except Exception:
-                    pass
     except Exception as e:
         st.error(f"X16.1 panel error: {e}")
 # === end X16.1 ===
@@ -8204,13 +8050,13 @@ def s1_normalize_phone(s:str)->str:
 def s1_get_google_api_key()->str|None:
     import os
     try:
+
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
         if "google_api_key" in st.secrets:
             return st.secrets["google_api_key"]
     except Exception:
         pass
-
     return os.environ.get("GOOGLE_API_KEY")
 
 def s1_geocode_address(address:str):
@@ -8244,8 +8090,6 @@ def s1_places_text_search(query:str, lat:float, lon:float, radius_meters:int, pa
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         return {"error": str(e)}
-    except Exception:
-        pass
 
 def s1_vendor_exists(conn, place_id:str|None, email:str|None, phone:str|None)->bool:
     q = "SELECT 1 FROM vendors WHERE 1=0"
@@ -8498,7 +8342,6 @@ def o4_sender_accounts_ui(conn):
                     label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
         except Exception:
             pass
-
         with _st.form("o4_fallback_sender_mm", clear_on_submit=False):
             label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
             username = _st.text_input("Gmail address", value=username)
@@ -8518,8 +8361,6 @@ def o4_sender_accounts_ui(conn):
                     _st.success("Sender saved")
                 except Exception as e:
                     _st.error(f"Save failed: {e}")
-                except Exception:
-                    pass
         # Show current
         try:
             with closing(conn.cursor()) as cur:
@@ -8528,6 +8369,7 @@ def o4_sender_accounts_ui(conn):
                 _st.caption(f"Active: {row[0]} — {row[1]} via {row[2]}:{row[3]} TLS={'on' if row[4] else 'off'}")
         except Exception:
             pass
+
 
 def render_outreach_mailmerge(conn):
     globals()['_O4_CONN'] = conn
@@ -8568,8 +8410,6 @@ def render_outreach_mailmerge(conn):
                 st.warning("Send function not available in this build.")
         except Exception as e:
             st.error(f"Send failed: {e}")
-        except Exception:
-            pass
 
 
 def run_outreach(conn):
@@ -8596,8 +8436,6 @@ def run_outreach(conn):
             o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
-    except Exception:
-        pass
 
     # Templates (O2)
     try:
@@ -8613,8 +8451,6 @@ def run_outreach(conn):
             render_outreach_mailmerge(conn)
     except Exception as e:
         st.error(f"Mail merge panel error: {e}")
-    except Exception:
-        pass
 
 
 def _o3_ensure_schema(conn):
@@ -8734,8 +8570,6 @@ def _o3_collect_recipients_ui(conn):
                     all_rows = _pd.concat([all_rows, dfu], ignore_index=True)
             except Exception as e:
                 st.error(f"CSV read error: {e}")
-            except Exception:
-                pass
     with tabs[2]:
         st.caption("Paste one email per line or 'email, name, company'")
         txt = st.text_area("Lines", height=150, key="o3_paste")
@@ -8768,6 +8602,7 @@ def _o3_collect_recipients_ui(conn):
 
 def _o3_sender_accounts_from_secrets():
     try:
+
         accs = []
         try:
             for row in (st.secrets.get("gmail_accounts") or []):
@@ -8775,7 +8610,6 @@ def _o3_sender_accounts_from_secrets():
                     accs.append({"email":row["email"],"app_password":row["app_password"],"name":row.get("name","")})
         except Exception:
             pass
-
         if not accs:
             g = st.secrets.get("gmail") or {}
             if g.get("email") and g.get("app_password"):
@@ -8794,8 +8628,6 @@ except Exception:
         import smtplib as _smtplib
         SMTP_SSL = _smtplib.SMTP_SSL
         SMTP = _smtplib.SMTP
-except Exception:
-    pass
 
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
     # Ensure required email and SMTP aliases are available
@@ -8805,7 +8637,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         import smtplib as _o3smtp
     except Exception:
         pass
-
     import streamlit as st, datetime as _dt, pandas as _pd, socket as _socket
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
@@ -8839,7 +8670,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     smtp.starttls()
                 except Exception:
                     pass
-
                 smtp.login(sender["email"], sender["app_password"])
             else:
                 smtp = _o3smtp.SMTP_SSL(host, port, timeout=20)
@@ -8874,8 +8704,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     status = "Sent"; err = ""
                 except Exception as e:
                     status = "Error"; err = str(e)
-                except Exception:
-                    pass
         with _o3c(conn.cursor()) as cur:
             cur.execute("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES(?,?,?,?,?,?);",
                         (blast_id, to_email, str(r.get('name') or ""), subj, status, err))
@@ -8892,7 +8720,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                            file_name=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
     except Exception:
         pass
-
     st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
     return sent, logs
 
@@ -8925,8 +8752,6 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         doc.save(path)
         return path
     except Exception as e:
-        pass
-    except Exception:
         pass
 
         st.error(f"Past Performance export failed: {e}")
@@ -8973,7 +8798,6 @@ def _o4_accounts_ui(conn):
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-
     st.rerun()
     with c4:
         if st.button("Delete account", key="o4_ac_del"):
@@ -8998,7 +8822,6 @@ def _o3_render_sender_picker():
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
         pass
-
     choices = [r[0] for r in rows] + ["<add new>"]
     default = st.session_state.get("o4_sender_sel", choices[0] if choices else None)
     idx = choices.index(default) if default in choices else 0
@@ -9018,7 +8841,6 @@ def _o3_render_sender_picker():
                     chosen.update({"app_password": row2[0] or "", "smtp_host": row2[1] or "smtp.gmail.com", "smtp_port": int(row2[2] or 587), "use_ssl": int(row2[3] or 1)})
         except Exception:
             pass
-
     if sel == "<add new>":
         st.info("Add an account below in 'Sender accounts'. Then select it here.")
     else:
@@ -9051,8 +8873,6 @@ def _o4_optout_ui(conn):
             st.success(f"Imported {len(emails)} emails")
         except Exception as e:
             st.error(f"CSV error: {e}")
-        except Exception:
-            pass
     try:
         df2 = _pd.read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
         st.dataframe(df2, use_container_width=True, hide_index=True)
@@ -9073,6 +8893,8 @@ def _o4_audit_ui(conn):
         st.dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
+
+
 # === O5: Follow-ups & SLA ==================================================
 import sqlite3, pandas as _pd, smtplib, ssl, time
 from email.mime.text import MIMEText
@@ -9081,7 +8903,7 @@ from email.mime.multipart import MIMEMultipart
 def _o5_now_iso():
     return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-def ensure_o5_schema(conn: "sqlite3.Connection") -> None:
+def ensure_o5_schema(conn: sqlite3.Connection) -> None:
     with conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS outreach_sequences(
             id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL
@@ -9107,11 +8929,13 @@ def _o5_list_sequences(conn):
         return _pd.read_sql_query("SELECT id, name FROM outreach_sequences ORDER BY name;", conn)
     except Exception:
         return _pd.DataFrame(columns=["id","name"])
+
 def _o5_list_steps(conn, seq_id: int):
     try:
         return _pd.read_sql_query("SELECT id, step_no, delay_hours, subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
     except Exception:
         return _pd.DataFrame(columns=["id","step_no","delay_hours","subject"])
+
 def _o5_upsert_sequence(conn, name: str):
     with conn:
         conn.execute("INSERT INTO outreach_sequences(name) VALUES(?) ON CONFLICT(name) DO NOTHING;", (name.strip(),))
@@ -9170,8 +8994,6 @@ def _o5_send_due(conn, limit: int = 200):
             with conn: conn.execute("UPDATE outreach_schedules SET status='sent' WHERE id=?", (int(r["id"]),)); ok += 1
         except Exception as e:
             with conn: conn.execute("UPDATE outreach_schedules SET status='error', last_error=? WHERE id=?", (str(e)[:500], int(r["id"]))); fail += 1
-        except Exception:
-            pass
     return ok, fail
 
 def render_outreach_o5_followups(conn):
@@ -9239,12 +9061,12 @@ def o6_get_base_url(conn):
             return row[0]
     except Exception:
         pass
-
     try:
         import streamlit as _st
         return _st.secrets.get("app_base_url", "")
     except Exception:
         return ""
+
 def o6_is_suppressed(conn, email):
     try:
         em = (email or "").strip().lower()
@@ -9252,6 +9074,7 @@ def o6_is_suppressed(conn, email):
         return bool(row)
     except Exception:
         return False
+
 def o6_add_optout(conn, email, reason="user_unsubscribe"):
     try:
         with conn:
@@ -9300,7 +9123,6 @@ def o6_handle_query_unsubscribe(conn):
                 return True
     except Exception:
         pass
-
     return False
 
 def render_outreach_o6_compliance(conn):
@@ -9403,12 +9225,10 @@ def _s1d_get_api_key():
         return st.secrets["google"]["api_key"]
     except Exception:
         pass
-
     try:
         return st.secrets["GOOGLE_API_KEY"]
     except Exception:
         pass
-
     return ""
 
 def _s1d_norm_phone(p: str) -> str:
@@ -9454,6 +9274,7 @@ def _s1d_place_details(pid: str, key: str):
         return r.json().get("result", {}) or {}
     except Exception:
         return {}
+
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
 
     # Determine writable table and ensure schema
@@ -9671,8 +9492,6 @@ def render_subfinder_s1d(conn):
     except Exception as e:
         st.error(f"Search failed: {e}")
         return
-    except Exception:
-        pass
     if not js or not js.get("results"):
         st.info("No results yet. Enter a query and click Search.")
         return
@@ -9753,8 +9572,6 @@ def _wrap_run_subfinder():
             render_subfinder_s1d(conn)
         except Exception as e:
             st.error(f"S1D error: {e}")
-        except Exception:
-            pass
         base(conn)
     wrapped._s1d_wrapped = True
     g["run_subcontractor_finder"] = wrapped
@@ -9893,8 +9710,6 @@ def __p_o3_ui(conn):
             _st.success("Test sent")
         except Exception as e:
             _st.error(f"Send failed: {e}")
-        except Exception:
-            pass
     if go_bulk and rows and subj and body:
         sent=skip=fail=0
         for r in rows:
@@ -9904,8 +9719,6 @@ def __p_o3_ui(conn):
                 __p_smtp_send(sender, em, _render(subj,r), _with_unsub(_render(body,r), em))
                 sent+=1; _time2.sleep(0.25)
             except Exception: fail+=1
-            except Exception:
-                pass
         _st.success(f"Done. Sent {sent}. Skipped {skip}. Failed {fail}.")
 
 def __p_o5_ui(conn):
@@ -9976,8 +9789,7 @@ def __p_s1d_key():
     try: return _st.secrets["google"]["api_key"]
     except Exception:
         try: return _st.secrets["GOOGLE_API_KEY"]
-        except Exception:
-            return ''
+        except Exception: return ""
 
 def __p_s1d_norm_phone(p):
     digits="".join(_re2.findall(r"\d+", str(p or "")))
@@ -10046,8 +9858,6 @@ def __p_s1d_ui(conn):
             if len(digits)==11 and digits.startswith("1"): digits=digits[1:]
             phone=digits; website=det.get("website","") or ""; gurl=det.get("url","") or ""
         except Exception: pass
-        except Exception:
-            pass
         dup=((name.strip().lower(), phone) in by_np) or (pid in by_pid)
         rows.append(dict(name=name,address=addr,city=city,state=state,phone=phone,website=website,place_id=pid,google_url=gurl,_dup=dup))
         _time2.sleep(0.05)
@@ -10070,7 +9880,6 @@ def __p_run_outreach(conn):
         _st.sidebar.success("O4 Active" if n else "O4 Not Configured")
     except Exception:
         pass
-
     with _st.expander("O4 • Sender accounts", expanded=True):
         try: __p_o4_ui(conn)
         except Exception as e: _st.warning(f"O4 unavailable: {e}")
@@ -10095,8 +9904,6 @@ if __name__ == '__main__':
     except NameError:
         # fallback: run default entry if main() not defined in this build
         pass
-    except Exception:
-        pass
 
 def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
@@ -10105,7 +9912,8 @@ def run_subcontractor_finder_s1_hook(conn):
     except Exception:
         pass
 
-def router(page: str, conn: "sqlite3.Connection") -> None:
+
+def router(page: str, conn: sqlite3.Connection) -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
     import re as _re
     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
@@ -10145,8 +9953,7 @@ def __e1_google_api_key():
     try: return _st.secrets["google"]["api_key"]
     except Exception:
         try: return _st.secrets["GOOGLE_API_KEY"]
-        except Exception:
-            return ''
+        except Exception: return ""
 
 def __e1_norm_phone(p):
     digits = "".join(_re.findall(r"\d+", str(p or "")))
@@ -10184,7 +9991,6 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
             phone = digits; website = det.get("website","") or ""; gurl = det.get("url","") or ""
         except Exception:
             pass
-
         dup = ((name.strip().lower(), phone) in by_np) or (pid in by_pid)
         rows.append(dict(name=name, phone=phone, website=website, address=addr, place_id=pid, google_url=gurl, _dup=dup))
         _time.sleep(0.05)
@@ -10232,7 +10038,6 @@ if "_o3_render_sender_picker" not in globals():
                     use_tls = bool(row[4] or use_tls)
         except Exception:
             pass
-
         if not username or not password:
             st.error("Sender not configured. Go to Outreach → Sender and Save sender.")
             return {}
@@ -10293,7 +10098,6 @@ def o1_sender_accounts_ui(conn):
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-
     st.rerun()
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
