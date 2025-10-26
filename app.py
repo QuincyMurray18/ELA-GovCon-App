@@ -239,11 +239,11 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
     # 2) From SOW chunks, simple heuristic
     try:
         df_chunks = pd.read_sql_query("""
-            SELECT id, file_name, page, text FROM rfp_chunks
-            WHERE rfp_id=? ORDER BY file_name, page, id
+            SELECT id, filename, page, text FROM rfp_chunks
+            WHERE rfp_id=? ORDER BY filename, page, id
         """, conn, params=(int(rfp_id),))
     except Exception:
-        df_chunks = pd.DataFrame(columns=["file_name","page","text"])
+        df_chunks = pd.DataFrame(columns=["filename","page","text"])
     trig = re.compile(r"\\b(shall|must|will|provide|furnish)\\b", re.I)
     for _, row in df_chunks.iterrows():
         t = (row["text"] or "").strip()
@@ -263,7 +263,7 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
                     cur.execute("""
                         INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
                         VALUES(?,?,?,?,?,?,?, ?, ?);
-                    """, (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now))
+                    """, (int(rfp_id), key, "SOW", row.get("filename"), int(row.get("page") or 0), s.strip(), "Open", now, now))
                     inserted += 1
         if inserted >= max_rows:
             break
@@ -333,7 +333,7 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
                 from pathlib import Path as _Path
                 st.download_button("Export CSV",
                                    data=open(path, "rb").read(),
-                                   file_name=_Path(path).name,
+                                   filename=_Path(path).name,
                                    mime="text/csv",
                                    key=f"rtm_export_{_k}")
 
@@ -975,7 +975,7 @@ def _ensure_y1_schema(conn: sqlite3.Connection) -> None:
                     id INTEGER PRIMARY KEY,
                     rfp_id INTEGER,
                     rfp_file_id INTEGER,
-                    file_name TEXT,
+                    filename TEXT,
                     page INTEGER,
                     chunk_idx INTEGER,
                     text TEXT,
@@ -1153,7 +1153,7 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
                 emb = _embed_texts([ch])[0]
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
-                        INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb)
+                        INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, filename, page, chunk_idx, text, emb)
                         VALUES(?,?,?,?,?,?,?);
                     """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
                     conn.commit()
@@ -1164,7 +1164,7 @@ def _y1_search_uncached(conn: sqlite3.Connection, rfp_id: int, query: str, k: in
     if not (query or "").strip():
         return []
     try:
-        df = pd.read_sql_query("SELECT id, rfp_file_id, file_name, page, chunk_idx, text, emb FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        df = pd.read_sql_query("SELECT id, rfp_file_id, filename, page, chunk_idx, text, emb FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
     except Exception:
         return []
     if df is None or df.empty:
@@ -1187,7 +1187,7 @@ def _y1_search_uncached(conn: sqlite3.Connection, rfp_id: int, query: str, k: in
         rows.append({
             "id": int(r["id"]),
             "fid": int(r["rfp_file_id"]),
-            "file": r.get("file_name"),
+            "file": r.get("filename"),
             "page": int(r.get("page") or 0),
             "chunk": int(r.get("chunk_idx") or 0),
             "text": r.get("text") or "",
@@ -2129,7 +2129,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
         if not ok_gate:
             st.button("Export CLIN CSV", key=f"p2_clin_csv_blocked_{rid}", disabled=True, help="Blocked: " + ", ".join(missing_gate))
         else:
-            st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
+            st.download_button("Export CLIN CSV", data=csvb, filename=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
 
 
@@ -2931,7 +2931,38 @@ def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
     except Exception:
         return pages_text, 0
 
-def save_rfp_file_db(
+def save_rfp_file_db(conn, rfp_id, name: str, file_bytes: bytes) -> dict:
+    """Dedup by sha256 and store into rfp_files. Returns {'id', 'sha256', 'pages', 'mime'}"""
+    from contextlib import closing as _closing
+    import io
+    mime = _detect_mime_light(name)
+    sha = compute_sha256(file_bytes)
+    pages = None
+    try:
+        if 'pdf' in (mime or '').lower():
+            try:
+                import PyPDF2
+                pages = len(PyPDF2.PdfReader(io.BytesIO(file_bytes)).pages)
+            except Exception:
+                pages = None
+    except Exception:
+        pages = None
+    with _closing(conn.cursor()) as cur:
+        # Try insert; on conflict, attach to RFP if not already linked
+        cur.execute("""
+            INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at)
+            VALUES(?,?,?,?,?,?, datetime('now'))
+            ON CONFLICT(sha256) DO UPDATE SET
+                rfp_id = COALESCE(rfp_files.rfp_id, excluded.rfp_id)
+        """, (rfp_id, name, mime, sha, pages, file_bytes))
+        rid = cur.lastrowid or None
+        if not rid:
+            cur.execute("SELECT id FROM rfp_files WHERE sha256=?", (sha,))
+            row = cur.fetchone()
+            if row:
+                rid = int(row[0])
+        conn.commit()
+    return {'id': rid, 'sha256': sha, 'pages': pages, 'mime': mime}
 def _fetch_and_save_attachments(_db, notice_id: str, rfp_id: int) -> int:
     """Download attachments for a notice and save into rfp_files; returns count saved."""
     saved = 0
@@ -2941,7 +2972,7 @@ def _fetch_and_save_attachments(_db, notice_id: str, rfp_id: int) -> int:
                 # de-dupe by file name for this rfp_id
                 from contextlib import closing as _closing
                 with _closing(_db.cursor()) as cur:
-                    cur.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND file_name=? LIMIT 1", (rfp_id, fname))
+                    cur.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND filename=? LIMIT 1", (rfp_id, fname))
                     if cur.fetchone():
                         continue
                 save_rfp_file_db(_db, rfp_id, fname, fbytes)
@@ -2951,37 +2982,6 @@ def _fetch_and_save_attachments(_db, notice_id: str, rfp_id: int) -> int:
     except Exception:
         pass
     return saved
-conn: sqlite3.Connection, rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
-    """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
-    mime = _detect_mime_light(name)
-    sha = compute_sha256(file_bytes)
-    with closing(conn.cursor()) as cur:
-        # Dedup
-        cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
-        row = cur.fetchone()
-        if row:
-            rid = int(row[0]); pages = int(row[1]) if row[1] is not None else None
-            # if not linked to RFP yet, link now
-            if rfp_id is not None:
-                try:
-                    cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
-                    conn.commit()
-                except Exception:
-                    pass
-            return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
-        # New insert
-        pages_text = extract_text_pages(file_bytes, mime)
-        pages_before = len(pages_text)
-        pages_text, ocr_count = ocr_pages_if_empty(file_bytes, mime, pages_text)
-        pages = len(pages_text) if pages_text else None
-        cur.execute(
-            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
-            (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
-        )
-        rid = cur.lastrowid
-        conn.commit()
-        return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
-
 def extract_sections_L_M(text: str) -> dict:
     out = {}
     if not text:
@@ -3869,7 +3869,7 @@ if _has_rows:
                                 r = cur.fetchone()
                                 if r:
                                     _rfp_id = r[0]
-                                    cur.execute("SELECT file_name, length(file_bytes) FROM rfp_files WHERE rfp_id=?", (_rfp_id,))
+                                    cur.execute("SELECT filename, length(file_bytes) FROM rfp_files WHERE rfp_id=?", (_rfp_id,))
                                     _files = cur.fetchall()
                                     if _files:
                                         st.write("**Attachments on file:**")
@@ -4565,7 +4565,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     with c1:
                         if st.button("Export Q&A CSV", key="x7_export"):
                             csvb = df_hist.to_csv(index=False).encode("utf-8")
-                            st.download_button("Download Q&A CSV", data=csvb, file_name=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key="x7_dl")
+                            st.download_button("Download Q&A CSV", data=csvb, filename=f"rfp_{int(rid)}_qa.csv", mime="text/csv", key="x7_dl")
                     with c2:
                         if st.button("Clear history", key="x7_clear"):
                             try:
@@ -4617,7 +4617,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(rid))
                 csv_bytes = out.to_csv(index=False).encode("utf-8")
-                st.download_button("Download CSV", data=csv_bytes, file_name=f"rfp_{rid}_compliance.csv", mime="text/csv", key="lm_dl")
+                st.download_button("Download CSV", data=csv_bytes, filename=f"rfp_{rid}_compliance.csv", mime="text/csv", key="lm_dl")
 
     # ---------------- CLINs / Dates / POCs ----------------
     with tab_data:
@@ -4648,7 +4648,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         fname = row.get("filename") or f"rfp_file_{int(pick)}"
                         mime = row.get("mime") or "application/octet-stream"
                         b = row.get("bytes")
-                        st.download_button("Download original", data=b, file_name=fname, mime=mime, key=f"dl_{pick}")
+                        st.download_button("Download original", data=b, filename=fname, mime=mime, key=f"dl_{pick}")
                         try:
                             pages = extract_text_pages(b, mime)
                             preview = ("\n\n".join(pages) if pages else "").strip()[:20000]
@@ -4682,7 +4682,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 st.download_button(
                                     "Download ZIP",
                                     data=buf.getvalue(),
-                                    file_name=f"rfp_{int(rid)}_linked_files.zip",
+                                    filename=f"rfp_{int(rid)}_linked_files.zip",
                                     mime="application/zip",
                                     key=f"zip_dl_{rid}"
                                 )
@@ -4693,7 +4693,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         inv = df_files.copy()
                         inv["sha_short"] = inv["sha256"].str.slice(0,12)
                         csvb = inv[["id","filename","mime","pages","sha_short"]].to_csv(index=False).encode("utf-8")
-                        st.download_button("Export file inventory CSV", data=csvb, file_name=f"rfp_{int(rid)}_file_inventory.csv", mime="text/csv", key=f"inv_{rid}")
+                        st.download_button("Export file inventory CSV", data=csvb, filename=f"rfp_{int(rid)}_file_inventory.csv", mime="text/csv", key=f"inv_{rid}")
                     except Exception as e:
                         st.info(f"Inventory export unavailable: {e}")
 
@@ -6669,7 +6669,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                     with open(exp, "rb") as _f:
                         _data = _f.read()
                     _fname = _Path(exp).name or "export.docx"
-                    st.download_button("Download DOCX", data=_data, file_name=_fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                    st.download_button("Download DOCX", data=_data, filename=_fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
                 except Exception as _e:
                     st.error(f"Download failed: {_e}")
 
@@ -8030,7 +8030,7 @@ def test_seed_cases():
     from contextlib import closing as _closing
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
-        cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
+        cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, filename TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
         conn.commit()
     try:
         gen = ask_ai_with_citations(conn, 1, "What is the due date?", k=6, temperature=0.0)
@@ -8736,7 +8736,7 @@ def _o3_collect_recipients_ui(conn):
         st.write(f"Total recipients: {len(all_rows)}")
         st.dataframe(all_rows, use_container_width=True, hide_index=True)
         csv_bytes = all_rows.to_csv(index=False).encode("utf-8")
-        st.download_button("Download recipients CSV", data=csv_bytes, file_name="o3_recipients.csv", mime="text/csv", key="o3_dl_recip")
+        st.download_button("Download recipients CSV", data=csv_bytes, filename="o3_recipients.csv", mime="text/csv", key="o3_dl_recip")
     return all_rows
 
 def _o3_sender_accounts_from_secrets():
@@ -8856,7 +8856,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     try:
         df = _pd.DataFrame(logs)
         st.download_button("Download send log CSV", data=df.to_csv(index=False).encode("utf-8"),
-                           file_name=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
+                           filename=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
     except Exception:
         pass
     st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
@@ -10097,7 +10097,7 @@ def _fetch_and_save_attachments(_db, notice_id: str, rfp_id: int) -> int:
                 # de-dupe by file name for this rfp_id
                 from contextlib import closing as _closing
                 with _closing(_db.cursor()) as cur:
-                    cur.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND file_name=? LIMIT 1", (rfp_id, fname))
+                    cur.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND filename=? LIMIT 1", (rfp_id, fname))
                     if cur.fetchone():
                         continue
                 save_rfp_file_db(_db, rfp_id, fname, fbytes)
