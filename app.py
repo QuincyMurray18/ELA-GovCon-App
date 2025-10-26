@@ -3770,6 +3770,69 @@ if _has_rows:
                         except Exception as _e:
                             st.error(f"Unable to push to RFP Analyzer: {_e}")
 
+                # Inline details view for the selected card
+                try:
+                    _sel = st.session_state.get("sam_selected_idx")
+                except Exception:
+                    _sel = None
+                if _sel == i:
+                    with st.container(border=True):
+                        st.write("**Details**")
+                        _raw = None
+                        try:
+                            for _rec in st.session_state.get("sam_records_raw", []) or []:
+                                _nid = str(_rec.get("noticeId") or _rec.get("id") or "")
+                                if _nid == str(row.get("Notice ID") or ""):
+                                    _raw = _rec
+                                    break
+                        except Exception:
+                            _raw = None
+                
+                        def _gx(obj, *keys, default=""):
+                            try:
+                                for k in keys:
+                                    if obj is None:
+                                        return default
+                                    obj = obj.get(k)
+                                return obj if obj is not None else default
+                            except Exception:
+                                return default
+                
+                        desc = row.get("Description") or _gx(_raw, "description", default="")
+                        pop_city = _gx(_raw, "placeOfPerformance", "city", default="")
+                        pop_state = _gx(_raw, "placeOfPerformance", "state", default="")
+                        pop = ", ".join([p for p in [pop_city, pop_state] if p])
+                
+                        st.write(f"**Solicitation:** {row.get('Solicitation') or ''}")
+                        st.write(f"**Set-Aside:** {row.get('Set-Aside') or ''}")
+                        st.write(f"**PSC:** {row.get('PSC') or ''}     **NAICS:** {row.get('NAICS') or ''}")
+                        st.write(f"**Place of Performance:** {pop}")
+                        st.write(f"**Posted:** {row.get('Posted') or ''}     **Due:** {row.get('Response Due') or ''}")
+                        if desc:
+                            with st.expander("Description"):
+                                st.write(desc)
+                
+                        try:
+                            from contextlib import closing as _closing
+                            _db = globals().get("conn") or sqlite3.connect(DB_PATH, check_same_thread=False)
+                            with _closing(_db.cursor()) as cur:
+                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
+                                r = cur.fetchone()
+                                if r:
+                                    _rfp_id = r[0]
+                                    cur.execute("SELECT file_name, length(file_bytes) FROM rfp_files WHERE rfp_id=?", (_rfp_id,))
+                                    _files = cur.fetchall()
+                                    if _files:
+                                        st.write("**Attachments on file:**")
+                                        for fn, ln in _files:
+                                            st.write(f"- {fn} ({ln or 0} bytes)")
+                        except Exception:
+                            pass
+                
+                        link = row.get("SAM Link") or ""
+                        if link:
+                            st.markdown(f"[Open on SAM.gov]({link})")
+
                 st.divider()
 
         # Selected details section (sticky below list)
