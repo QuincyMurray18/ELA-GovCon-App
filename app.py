@@ -3841,15 +3841,13 @@ if _has_rows:
                                     cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
                                     rfp_id = cur.lastrowid
                                     _db.commit()
+                                att_saved = 0
                                 try:
-att_saved = 0
                                     for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
                                         try:
                                             save_rfp_file_db(_db, rfp_id, fname, fbytes)
                                             att_saved += 1
                                         except Exception:
-                                            pass
-except Exception:
                                             pass
                                 except Exception:
                                     pass
