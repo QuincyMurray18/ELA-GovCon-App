@@ -211,22 +211,11 @@ def _x3_render_modal(notice: dict):
             "6. Pricing (separate volume if required)",
             "7. Compliance Matrix",
         ]
-                outline = [
-                    '# Proposal Outline',
-                    '1. Cover Letter',
-                    '2. Executive Summary',
-                    '3. Technical Approach',
-                    '4. Management Approach',
-                    '5. Past Performance',
-                    '6. Pricing (separate volume if required)',
-                    '7. Compliance Matrix',
-                ]
-                st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
+        st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
+        st.success("Outline drafted and saved. Open Proposal Builder to continue.")
+
     with st.expander("Transcript Viewer", expanded=False):
         x5_render_transcript_viewer(conn, int(rfp_id))
-n".join(outline)
-        st.success("Outline drafted and saved. Open Proposal Builder to continue.")
-# ===== END X3 MODAL HELPERS =====
 def _uniq_key(base: str, rfp_id: int) -> str:
     """Return a unique (but stable per render) Streamlit key to avoid duplicates."""
     try:
@@ -4356,18 +4345,8 @@ if _has_rows:
                                         "6. Pricing (separate volume if required)",
                                         "7. Compliance Matrix",
                                     ]
-                outline = [
-                    '# Proposal Outline',
-                    '1. Cover Letter',
-                    '2. Executive Summary',
-                    '3. Technical Approach',
-                    '4. Management Approach',
-                    '5. Past Performance',
-                    '6. Pricing (separate volume if required)',
-                    '7. Compliance Matrix',
-                ]
-                st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
-                                    st.success("Outline drafted and saved to session. Open Proposal Builder to continue.")
+                                    st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
+                                    st.success("Outline drafted and saved. Open Proposal Builder to continue.")
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
                     # Push notice to Analyzer tab (optional)
@@ -4775,7 +4754,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         with colB:
             st.markdown("**Parse Controls**")
             run = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
-            st.caption("We’ll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
+            st.caption("We'll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
             name = file.name.lower()
@@ -8961,7 +8940,7 @@ def render_outreach_templates(conn):
     else:
         row = next(r for r in rows if r[1] == sel)
         tid = row[0]
-        name = st.text_input("Name", value=row[1], key="tpl_name")
+        name = st.text_input("Name", value=row[1], key="tpl_name__2")
         subject = st.text_input("Subject", value=row[2], key="tpl_subject")
         html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
     missing = template_missing_tags((subject or "") + " " + (html or ""))
@@ -10888,7 +10867,7 @@ def o1_sender_accounts_ui(conn):
     with c1: host = st.text_input("SMTP host", value="smtp.gmail.com")
     with c2: port = st.number_input("SMTP port", 1, 65535, value=465)
     with c3: ssl = st.checkbox("Use SSL", value=True)
-    if st.button("Save account", key="o4_ac_save"):
+    if st.button("Save account", key="o4_ac_save__2"):
         if not email:
             st.error("Email required")
         else:
