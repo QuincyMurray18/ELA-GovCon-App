@@ -61,6 +61,61 @@ def _x3_render_modal(notice: dict):
         return
     st.caption(f"RFP #{rfp_id} · {notice.get('Title','')}")
 
+    # Phase 4: side panel (SAM facts + AI summary + quick actions)
+    try:
+        _url = notice.get('SAM Link') or notice.get('sam_url') or ''
+    except Exception:
+        _url = ''
+    try:
+        render_amendment_sidebar(conn, int(rfp_id), _url, ttl_hours=72)
+    except Exception:
+        pass
+    try:
+        with st.sidebar.expander('RFP Summary', expanded=True):
+            st.markdown(_rfp_ai_summary(full_text or '', notice))
+    except Exception:
+        pass
+    try:
+        with st.sidebar.expander('Quick Actions', expanded=False):
+            if st.button('Fetch attachments now', key=_uniq_key('x3_fetch_sidebar', int(rfp_id))):
+                c = _fetch_and_save_now(conn, str(notice.get('Notice ID') or ''), int(rfp_id))
+                st.success(f'Fetched {c} attachment(s).')
+                try: st.rerun()
+                except Exception: pass
+            if st.button('Rebuild Search Index', key=_uniq_key('x3_reindex_sidebar', int(rfp_id))):
+                try:
+                    y1_index_rfp(conn, int(rfp_id), rebuild=True)
+                    st.success('Index rebuilt')
+                except Exception as _e:
+                    st.info(f'Index rebuild failed: {_e}')
+    except Exception:
+        pass
+    try:
+        outline_key = f'proposal_outline_{int(rfp_id)}'
+        with st.sidebar.expander('Proposal Outline', expanded=False):
+            if st.button('Generate Outline', key=_uniq_key('x3_outline_sidebar', int(rfp_id))):
+                outline = [
+                    '# Proposal Outline',
+                    '1. Cover Letter',
+                    '2. Executive Summary',
+                    '3. Technical Approach',
+                    '4. Management Approach',
+                    '5. Past Performance',
+                    '6. Pricing (separate volume if required)',
+                    '7. Compliance Matrix',
+                ]
+                st.session_state[outline_key] = '\n'.join(outline)
+                st.success('Outline drafted and saved to session')
+            _ol = st.session_state.get(outline_key, '')
+            if _ol:
+                st.text_area('Current outline', value=_ol, height=180, key=_uniq_key('x3_outline_preview', int(rfp_id)))
+                try:
+                    data = _ol.encode('utf-8')
+                    st.download_button('Download Outline (.md)', data=data, file_name=f'proposal_outline_{int(rfp_id)}.md', mime='text/markdown', key=_uniq_key('x3_outline_dl', int(rfp_id)))
+                except Exception:
+                    pass
+    except Exception:
+        pass
     # Attachments area
     try:
         from contextlib import closing as _closing
