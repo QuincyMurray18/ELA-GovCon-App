@@ -3624,6 +3624,121 @@ def run_deals(conn: sqlite3.Connection) -> None:
         st.error(f"Failed to load deals {e}")
 
 
+
+# ---- Phase 3 helpers: ensure RFP record, modal renderer ----
+def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
+    from contextlib import closing as _closing
+    nid = str(notice_row.get("Notice ID") or "")
+    if not nid:
+        raise ValueError("Missing Notice ID")
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
+        row = cur.fetchone()
+        if row:
+            return int(row[0])
+        cur.execute(
+            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+            (notice_row.get("Title") or "", notice_row.get("Solicitation") or "", nid, notice_row.get("SAM Link") or "", "")
+        )
+        rid = int(cur.lastrowid)
+        conn.commit()
+        return rid
+
+def _fetch_and_save_now(conn, notice_id: str, rfp_id: int) -> int:
+    saved = 0
+    try:
+        for fname, fbytes in (sam_try_fetch_attachments(str(notice_id)) or []):
+            try:
+                # de-dupe by sha256 via save_rfp_file_db
+                save_rfp_file_db(conn, int(rfp_id), fname, fbytes)
+                saved += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return saved
+
+def _rfp_build_fulltext_from_db(conn, rfp_id: int, max_files: int = 10, max_pages: int = 80) -> tuple[str, list]:
+    """Return (full_text, sources) reading rfp_files; sources is list of (filename, page, text_snippet)."""
+    try:
+        import io
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id;", (int(rfp_id),))
+            rows = cur.fetchall() or []
+    except Exception:
+        rows = []
+    sources = []
+    parts = []
+    count_files = 0
+    for rid, name, bts, mime in rows:
+        if count_files >= int(max_files):
+            break
+        try:
+            pages = extract_text_pages(bts, mime or "")
+            for pi, ptxt in enumerate(pages[:max_pages]):
+                sources.append((name, pi+1, (ptxt or "")[:400]))
+            parts.append("\n\n".join(pages[:max_pages]))
+            count_files += 1
+        except Exception:
+            continue
+    return ("\n\n".join([p for p in parts if p]).strip(), sources)
+
+def _rfp_ai_summary(text: str, meta: dict) -> str:
+    """Use y55_ai_parse to produce a structured summary in prose."""
+    try:
+        data = y55_ai_parse(text or "")
+    except Exception as e:
+        return f"AI parse failed: {e}"
+    # format a brief summary
+    lines = []
+    t = data.get("title") or meta.get("Title") or ""
+    s = data.get("solnum") or meta.get("Solicitation") or ""
+    lines.append(f"**{t or meta.get('Title','')}**  ")
+    if s: lines.append(f"Solicitation: {s}")
+    m = data.get("meta") or {}
+    if m:
+        for k in ("set_aside","naics","psc","pop","place_of_performance","contract_type","vehicle","agency","office"):
+            v = m.get(k) or meta.get(k.replace('_',' ').title(), "")
+            if v: lines.append(f"- {k.replace('_',' ').title()}: {v}")
+    dates = data.get("dates") or []
+    if dates:
+        lines.append("**Key Dates**")
+        for d in dates[:6]:
+            nm = (d.get("name") or "").title()
+            val = d.get("date") or d.get("iso") or ""
+            if nm or val: lines.append(f"- {nm}: {val}")
+    lms = data.get("l_items") or []
+    if lms:
+        lines.append("**L/M Highlights**")
+        for li in lms[:8]:
+            lines.append(f"- {li.get('text') or str(li)}")
+    return "\n".join(lines)
+
+def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
+    """Lightweight RAG: use y1_search() hits to ground the answer."""
+    try:
+        hits = y1_search(conn, int(rfp_id), question or "", k=int(k))
+    except Exception:
+        hits = []
+    context = []
+    for h in hits or []:
+        src = f"{h.get('file') or ''} p.{h.get('page') or ''}".strip()
+        snippet = (h.get('text') or '')[:800]
+        context.append(f"[{src}] {snippet}")
+    sys = "You are an acquisitions analyst. Answer concisely and cite sources in brackets like [filename p.X]."
+    prompt = "\n\n".join(context + [f"Question: {question}"])
+    try:
+        client = get_ai()
+        model = _resolve_model()
+        resp = client.chat.completions.create(model=model, messages=[
+            {"role":"system","content": sys},
+            {"role":"user","content": prompt}
+        ], temperature=0.2)
+        return (resp.choices[0].message.content or '').strip()
+    except Exception as e:
+        return f"AI error: {e}"
+
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
@@ -3886,7 +4001,120 @@ if _has_rows:
                             except Exception:
                                 pass
                 with c5:
-                    if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
+
+                    # Ask RFP Analyzer (Phase 3 modal)
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", int(row.get("Notice ID") or 0))):
+                        st.session_state["x3_modal_notice"] = row.to_dict()
+                        st.session_state["x3_show_modal"] = True
+
+                    # Render modal if requested
+                    if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
+                        try:
+                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", int(row.get("Notice ID") or 0)))
+                        except Exception:
+                            # Fallback if modal unavailable
+                            ctx = st.container()
+                        with ctx:
+                            try:
+                                _notice = st.session_state.get("x3_modal_notice") or {}
+                                rfp_id = _ensure_rfp_for_notice(conn, _notice)
+                                st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
+                                # Attachments area
+                                try:
+                                    from contextlib import closing as _closing
+                                    with _closing(conn.cursor()) as cur:
+                                        cur.execute("SELECT COUNT(*) FROM rfp_files WHERE rfp_id=?;", (int(rfp_id),))
+                                        n_files = int(cur.fetchone()[0])
+                                except Exception:
+                                    n_files = 0
+                                cA, cB = st.columns([2,1])
+                                with cA:
+                                    st.write(f"Attachments saved: **{n_files}**")
+                                with cB:
+                                    if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
+                                        c = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id))
+                                        st.success(f"Fetched {c} attachment(s).")
+                                        st.rerun()
+
+                                # Index (light) and summary
+                                try:
+                                    y1_index_rfp(conn, int(rfp_id), rebuild=False)
+                                except Exception:
+                                    pass
+                                full_text, sources = _rfp_build_fulltext_from_db(conn, int(rfp_id))
+                                if not full_text:
+                                    st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
+                                    # Try SAM description fallback
+                                    try:
+                                        descs = sam_try_fetch_attachments(str(row.get("Notice ID") or "")) or []
+                                        for name, b in descs:
+                                            if name.endswith("_description.html"):
+                                                import bs4
+                                                soup = bs4.BeautifulSoup(b.decode('utf-8', errors='ignore'), 'html.parser')
+                                                full_text = soup.get_text(" ", strip=True)
+                                                break
+                                    except Exception:
+                                        pass
+                                with st.expander("AI Summary", expanded=True):
+                                    st.markdown(_rfp_ai_summary(full_text or "", row.to_dict()))
+
+                                # Per-document summarize chips
+                                try:
+                                    from contextlib import closing as _closing
+                                    with _closing(conn.cursor()) as cur:
+                                        cur.execute("SELECT id, filename, mime FROM rfp_files WHERE rfp_id=? ORDER BY id;", (int(rfp_id),))
+                                        files = cur.fetchall() or []
+                                except Exception:
+                                    files = []
+                                if files:
+                                    st.write("Documents:")
+                                    for fid, fname, fmime in files[:12]:
+                                        if st.button(f"Summarize: {fname}", key=_uniq_key("sumdoc", int(fid))):
+                                            try:
+                                                blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(int(fid),)).iloc[0]
+                                                _text = "\n\n".join(extract_text_pages(blob['bytes'], blob.get('mime') or (fmime or '')) or [])
+                                            except Exception:
+                                                _text = ""
+                                            st.session_state["x3_docsum"] = _rfp_ai_summary(_text, row.to_dict())
+                                    if st.session_state.get("x3_docsum"):
+                                        with st.expander("Document Summary", expanded=True):
+                                            st.markdown(st.session_state.get("x3_docsum"))
+
+                                # Chat
+                                st.divider()
+                                st.subheader("Ask about this RFP")
+                                _chat_k = _uniq_key("x3_chat", int(rfp_id))
+                                hist_key = f"x3_chat_hist_{rfp_id}"
+                                st.session_state.setdefault(hist_key, [])
+                                for who, msg in st.session_state[hist_key]:
+                                    with st.chat_message(who):
+                                        st.markdown(msg)
+                                q = st.chat_input("Ask a question about the requirements, due dates, sections, etc.", key=_chat_k)
+                                if q:
+                                    st.session_state[hist_key].append(("user", q))
+                                    with st.chat_message("assistant"):
+                                        ans = _rfp_chat(conn, int(rfp_id), q)
+                                        st.session_state[hist_key].append(("assistant", ans))
+                                        st.markdown(ans)
+
+                                # Proposal hand-off
+                                st.divider()
+                                if st.button("Start Proposal Outline", key=_uniq_key("x3_outline", int(rfp_id))):
+                                    outline = [
+                                        "# Proposal Outline",
+                                        "1. Cover Letter",
+                                        "2. Executive Summary",
+                                        "3. Technical Approach",
+                                        "4. Management Approach",
+                                        "5. Past Performance",
+                                        "6. Pricing (separate volume if required)",
+                                        "7. Compliance Matrix",
+                                    ]
+                                    st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
+                                    st.success("Outline drafted and saved to session. Open Proposal Builder to continue.")
+                            except Exception as _e:
+                                st.error(f"Modal error: {_e}")
+                                    if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
