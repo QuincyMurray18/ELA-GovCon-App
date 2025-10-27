@@ -4114,7 +4114,8 @@ if _has_rows:
                                     st.success("Outline drafted and saved to session. Open Proposal Builder to continue.")
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
-                                    if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
+                    # Push notice to Analyzer tab (optional)
+                    if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
