@@ -8530,7 +8530,7 @@ if _st_phase8 is not None:
                 conn2.close()
             except Exception:
                 pass
-    elif page == "Proposal Builder":
+    if page == "Proposal Builder":
         run_proposal_builder(conn)
 
 else:
