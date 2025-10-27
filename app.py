@@ -3634,6 +3634,16 @@ def y55_merge_pocs(base_rows, ai_rows):
     return out[:300]
 
 def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum):
+
+    # ---- X3 MODAL RENDERER ----
+    if st.session_state.get("x3_show_modal"):
+        _notice = st.session_state.get("x3_modal_notice", {}) or {}
+        try:
+            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
+                _x3_render_modal(_notice)
+        except Exception:
+            with st.expander("RFP Analyzer", expanded=True):
+                _x3_render_modal(_notice)
     ai = y55_ai_parse(text or "")
     l_items2 = y55_merge_lm(l_items, ai.get("l_items", []))
     clins2 = y55_merge_clins(clins, ai.get("clins", []))
@@ -4162,6 +4172,7 @@ if _has_rows:
 
                     # Ask RFP Analyzer (Phase 3 modal)
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
+                        _x3_open_modal(row.to_dict())
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
 
