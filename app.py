@@ -8354,25 +8354,6 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-# ---- Unified Router ----
-ROUTES = {
-    "SAM Watch": "run_sam_watch",
-    "RFP Analyzer": "run_rfp_analyzer",
-    "Proposal Builder": "run_proposal_builder",           # X.7
-    "Review & Compliance": "run_review_compliance",       # X.6
-    "Outreach": "run_outreach",
-    "Subcontractor Finder": "run_subcontractor_finder",
-}
-
-def router(page: str, conn: sqlite3.Connection) -> None:
-    fname = ROUTES.get(page)
-    fn = globals().get(fname)
-    if callable(fn):
-        fn(conn)
-    else:
-        import streamlit as st
-        st.warning(f"Unknown page: {page}")
-
 def main() -> None:
     conn = get_db()
     global _O4_CONN
@@ -8549,22 +8530,6 @@ if _st_phase8 is not None:
                 conn2.close()
             except Exception:
                 pass
-    if page == "Proposal Builder":
-        run_proposal_builder(conn)
-
-else:
-    # Fallback no-cache path when Streamlit not available
-    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
-        import sqlite3 as _sql8
-        conn2 = _sql8.connect(db_path, check_same_thread=False)
-        try:
-            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
-        finally:
-            try:
-                conn2.close()
-            except Exception:
-                pass
-
 def y1_search(conn, rfp_id: int, query: str, k: int = 6):
     # Compute snapshot to invalidate cache if chunks changed
     snap = _y1_snapshot(conn, int(rfp_id))
