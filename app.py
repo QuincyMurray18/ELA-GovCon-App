@@ -4003,14 +4003,14 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", int(row.get("Notice ID") or 0))):
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe__safe_int(row.get("Notice ID")))):
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
 
                     # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
                         try:
-                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", int(row.get("Notice ID") or 0)))
+                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe__safe_int(row.get("Notice ID"))))
                         except Exception:
                             # Fallback if modal unavailable
                             ctx = st.container()
@@ -10382,6 +10382,20 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
+
+def _safe_int(v, default: int = 0) -> int:
+    try:
+        if v is None:
+            return default
+        if isinstance(v, int):
+            return v
+        s = str(v).strip()
+        import re as _re
+        m = _re.search(r"\d+", s)
+        return int(m.group()) if m else default
+    except Exception:
+        return default
+
 
 def __e1_google_api_key():
     try: return _st.secrets["google"]["api_key"]
