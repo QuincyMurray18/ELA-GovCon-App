@@ -211,8 +211,17 @@ def _x3_render_modal(notice: dict):
             "6. Pricing (separate volume if required)",
             "7. Compliance Matrix",
         ]
-        st.session_state[f"proposal_outline_{rfp_id}"] = "\
-    # X.5 Transcript Viewer (main area)
+                outline = [
+                    '# Proposal Outline',
+                    '1. Cover Letter',
+                    '2. Executive Summary',
+                    '3. Technical Approach',
+                    '4. Management Approach',
+                    '5. Past Performance',
+                    '6. Pricing (separate volume if required)',
+                    '7. Compliance Matrix',
+                ]
+                st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
     with st.expander("Transcript Viewer", expanded=False):
         x5_render_transcript_viewer(conn, int(rfp_id))
 n".join(outline)
@@ -4347,7 +4356,17 @@ if _has_rows:
                                         "6. Pricing (separate volume if required)",
                                         "7. Compliance Matrix",
                                     ]
-                                    st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
+                outline = [
+                    '# Proposal Outline',
+                    '1. Cover Letter',
+                    '2. Executive Summary',
+                    '3. Technical Approach',
+                    '4. Management Approach',
+                    '5. Past Performance',
+                    '6. Pricing (separate volume if required)',
+                    '7. Compliance Matrix',
+                ]
+                st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
                                     st.success("Outline drafted and saved to session. Open Proposal Builder to continue.")
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
