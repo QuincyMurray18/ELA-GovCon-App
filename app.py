@@ -4172,7 +4172,16 @@ if _has_rows:
 
                     # Ask RFP Analyzer (Phase 3 modal)
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
-                        _x3_open_modal(row.to_dict())
+                        notice = row.to_dict()
+                        st.session_state["x3_modal_notice"] = notice
+                        st.session_state["x3_show_modal"] = True
+                        try:
+                            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(notice.get("Notice ID")))):
+                                _x3_render_modal(notice)
+                        except Exception:
+                            with st.expander("RFP Analyzer", expanded=True):
+                                _x3_render_modal(notice)
+
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
 
