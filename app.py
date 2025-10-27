@@ -8530,6 +8530,9 @@ if _st_phase8 is not None:
                 conn2.close()
             except Exception:
                 pass
+    elif page == "Proposal Builder":
+        run_proposal_builder(conn)
+
 else:
     # Fallback no-cache path when Streamlit not available
     def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
@@ -10809,6 +10812,139 @@ def x6_save_links(conn: sqlite3.Connection, rfp_id: int, mapping: list[tuple[int
             saved += 1
     conn.commit()
     return int(saved)
+
+
+
+# ==== X.7 Proposal Builder v1 ====
+def _ensure_x7_schema(conn: sqlite3.Connection) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS proposals(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            title TEXT,
+            status TEXT DEFAULT 'draft',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS proposal_sections(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proposal_id INTEGER NOT NULL,
+            ord INTEGER NOT NULL,
+            title TEXT,
+            content TEXT,
+            settings_json TEXT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+    conn.commit()
+
+def x7_create_proposal_from_outline(conn: sqlite3.Connection, rfp_id: int, title: str | None = None) -> int:
+    from contextlib import closing as _closing
+    import json, datetime as _dt
+    outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "") or ""
+    if not outline.strip():
+        outline = "\n".join([
+            "# Proposal Outline",
+            "1. Cover Letter",
+            "2. Executive Summary",
+            "3. Technical Approach",
+            "4. Management Approach",
+            "5. Past Performance",
+            "6. Pricing",
+            "7. Compliance Matrix",
+        ])
+    lines = [ln.strip() for ln in outline.splitlines() if ln.strip() and not ln.startswith("#")]
+    if not title:
+        title = f"Proposal for RFP #{int(rfp_id)}"
+    with _closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO proposals(rfp_id, title) VALUES(?,?)", (int(rfp_id), title))
+        pid = cur.lastrowid
+        for i, ln in enumerate(lines, start=1):
+            cur.execute(
+                "INSERT INTO proposal_sections(proposal_id,ord,title,content,settings_json) VALUES(?,?,?,?,?)",
+                (int(pid), i, ln, "", json.dumps({"font":"Times New Roman","size":11}))
+            )
+    conn.commit()
+    return int(pid)
+
+def x7_list_proposals(conn: sqlite3.Connection, rfp_id: int):
+    import pandas as pd
+    try:
+        return pd.read_sql_query("SELECT id, title, status, created_at FROM proposals WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame(columns=["id","title","status","created_at"])
+
+def x7_get_sections(conn: sqlite3.Connection, proposal_id: int):
+    import pandas as pd
+    try:
+        return pd.read_sql_query("SELECT id, ord, title, content, settings_json FROM proposal_sections WHERE proposal_id=? ORDER BY ord ASC;", conn, params=(int(proposal_id),))
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame(columns=["id","ord","title","content","settings_json"])
+
+def x7_save_section(conn: sqlite3.Connection, section_id: int, content: str | None, settings_json: str | None = None) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("UPDATE proposal_sections SET content=?, settings_json=COALESCE(?, settings_json), updated_at=datetime('now') WHERE id=?", (content or "", settings_json, int(section_id)))
+    conn.commit()
+
+def x7_generate_section_ai(conn: sqlite3.Connection, rfp_id: int, title: str, guidance: str = "", temperature: float = 0.1, k: int = 8) -> str:
+    # Use Y1 index for grounding and GPT model for drafting
+    try:
+        hits = y1_search(conn, int(rfp_id), f"{title} {guidance}", k=int(k))
+    except Exception:
+        hits = []
+    ctx = []
+    for h in hits or []:
+        src = f"{h.get('file') or ''} p.{h.get('page') or ''}".strip()
+        snippet = (h.get('text') or '')[:900]
+        ctx.append(f"[{src}] {snippet}")
+    prompt = "\n\n".join(ctx + [f"Write the section: {title}", f"Guidance: {guidance}"])
+    client = get_ai()
+    model = _resolve_model()
+    sys = "You draft precise, proposal ready text. Use clear headings. Cite source brackets inline only where needed."
+    try:
+        resp = client.chat.completions.create(model=model, messages=[
+            {"role":"system","content": sys},
+            {"role":"user","content": prompt}
+        ], temperature=float(temperature))
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"AI error: {e}"
+
+def x7_export_docx(conn: sqlite3.Connection, proposal_id: int) -> bytes | None:
+    # Best effort DOCX export. If python-docx is missing, return None.
+    try:
+        import docx
+    except Exception:
+        return None
+    from contextlib import closing as _closing
+    doc = docx.Document()
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT p.title, p.rfp_id FROM proposals p WHERE p.id=?", (int(proposal_id),))
+        row = cur.fetchone()
+        title = row[0] if row else f"Proposal {int(proposal_id)}"
+        rfp_id = row[1] if row else 0
+    doc.add_heading(title, 0)
+    # sections
+    secs = x7_get_sections(conn, int(proposal_id))
+    for _, r in secs.iterrows():
+        doc.add_heading(str(r.get("title") or ""), level=1)
+        body = r.get("content") or ""
+        for para in body.split("\n\n"):
+            doc.add_paragraph(para)
+    import io
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+# ==== end X.7 helpers ====
+
+
 # ==== end X.6 helpers ====
 
 
