@@ -1,28 +1,3 @@
-# --- injected helpers (must be before any usage) ---
-def _safe_int(x, default=0):
-    try:
-        if x is None: return int(default)
-        if isinstance(x, int): return x
-        s = str(x).strip()
-        if s == "" or s.lower() in ("none", "nan"): return int(default)
-        if "." in s:
-            return int(float(s))
-        # fallback: strip non-digits
-        digits = "".join(ch for ch in s if ch.isdigit())
-        return int(digits) if digits else int(s)
-    except Exception:
-        return int(default)
-
-def _uniq_key(base: str, rfp_id: int) -> str:
-    try:
-        k = f"__uniq_counter_{base}_{rfp_id}"
-        n = int(st.session_state.get(k, 0))
-        st.session_state[k] = n + 1
-        return f"{base}_{rfp_id}_{n}"
-    except Exception:
-        import time
-        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
-
 
 def y3_get_rfp_files(_conn, rfp_id: int):
     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
@@ -36,6 +11,122 @@ def y3_get_rfp_files(_conn, rfp_id: int):
 
 import requests
 
+
+# ===== X3 MODAL HELPERS =====
+def _x3_open_modal(row_dict: dict):
+    st.session_state["x3_modal_notice"] = dict(row_dict or {})
+    st.session_state["x3_show_modal"] = True
+    try:
+        st.rerun()
+    except Exception:
+        pass
+
+def _x3_render_modal(notice: dict):
+    try:
+        rfp_id = _ensure_rfp_for_notice(conn, notice)
+    except Exception as e:
+        st.error(f"Could not open RFP Analyzer: {e}")
+        return
+    st.caption(f"RFP #{rfp_id} · {notice.get('Title','')}")
+
+    # Attachments area
+    try:
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT COUNT(*) FROM rfp_files WHERE rfp_id=?;", (int(rfp_id),))
+            n_files = int(cur.fetchone()[0])
+    except Exception:
+        n_files = 0
+    cA, cB = st.columns([2,1])
+    with cA:
+        st.write(f"Attachments saved: **{n_files}**")
+    with cB:
+        if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
+            c = _fetch_and_save_now(conn, str(notice.get("Notice ID") or ""), int(rfp_id))
+            st.success(f"Fetched {c} attachment(s).")
+            try: st.rerun()
+            except Exception: pass
+
+    # Index + summary
+    try:
+        y1_index_rfp(conn, int(rfp_id), rebuild=False)
+    except Exception:
+        pass
+    full_text, sources = _rfp_build_fulltext_from_db(conn, int(rfp_id))
+    if not full_text:
+        st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
+        try:
+            descs = sam_try_fetch_attachments(str(notice.get("Notice ID") or "")) or []
+            for name, b in descs:
+                if name.endswith("_description.html"):
+                    try:
+                        import bs4
+                        soup = bs4.BeautifulSoup(b.decode('utf-8', errors='ignore'), 'html.parser')
+                        full_text = soup.get_text(" ", strip=True)
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
+    with st.expander("AI Summary", expanded=True):
+        st.markdown(_rfp_ai_summary(full_text or "", notice))
+
+    # Per-document summarize chips
+    try:
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id, filename, mime FROM rfp_files WHERE rfp_id=? ORDER BY id;", (int(rfp_id),))
+            files = cur.fetchall() or []
+    except Exception:
+        files = []
+    if files:
+        st.write("Documents:")
+        for fid, fname, fmime in files[:12]:
+            if st.button(f"Summarize: {fname}", key=_uniq_key("sumdoc", int(fid))):
+                try:
+                    import pandas as pd
+                    blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(int(fid),)).iloc[0]
+                    _text = "\n\n".join(extract_text_pages(blob['bytes'], blob.get('mime') or (fmime or '')) or [])
+                except Exception:
+                    _text = ""
+                st.session_state["x3_docsum"] = _rfp_ai_summary(_text, notice)
+        if st.session_state.get("x3_docsum"):
+            with st.expander("Document Summary", expanded=True):
+                st.markdown(st.session_state.get("x3_docsum"))
+
+    # Chat
+    st.divider()
+    st.subheader("Ask about this RFP")
+    _chat_k = _uniq_key("x3_chat", int(rfp_id))
+    hist_key = f"x3_chat_hist_{rfp_id}"
+    st.session_state.setdefault(hist_key, [])
+    for who, msg in st.session_state[hist_key]:
+        with st.chat_message(who):
+            st.markdown(msg)
+    q = st.chat_input("Ask a question about the requirements, due dates, sections, etc.", key=_chat_k)
+    if q:
+        st.session_state[hist_key].append(("user", q))
+        with st.chat_message("assistant"):
+            ans = _rfp_chat(conn, int(rfp_id), q)
+            st.session_state[hist_key].append(("assistant", ans))
+            st.markdown(ans)
+
+    # Proposal hand-off
+    st.divider()
+    if st.button("Start Proposal Outline", key=_uniq_key("x3_outline", int(rfp_id))):
+        outline = [
+            "# Proposal Outline",
+            "1. Cover Letter",
+            "2. Executive Summary",
+            "3. Technical Approach",
+            "4. Management Approach",
+            "5. Past Performance",
+            "6. Pricing (separate volume if required)",
+            "7. Compliance Matrix",
+        ]
+        st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
+        st.success("Outline drafted and saved. Open Proposal Builder to continue.")
+# ===== END X3 MODAL HELPERS =====
 def _uniq_key(base: str, rfp_id: int) -> str:
     """Return a unique (but stable per render) Streamlit key to avoid duplicates."""
     try:
@@ -3767,6 +3858,16 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
+
+    # ---- X3 MODAL RENDERER ----
+    if st.session_state.get("x3_show_modal"):
+        _notice = st.session_state.get("x3_modal_notice", {}) or {}
+        try:
+            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
+                _x3_render_modal(_notice)
+        except Exception:
+            with st.expander("RFP Analyzer", expanded=True):
+                _x3_render_modal(_notice)
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -4028,14 +4129,14 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe__safe_int(row.get("Notice ID")))):
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
 
                     # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
                         try:
-                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID"))))
+                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe__safe_int(row.get("Notice ID"))))
                         except Exception:
                             # Fallback if modal unavailable
                             ctx = st.container()
