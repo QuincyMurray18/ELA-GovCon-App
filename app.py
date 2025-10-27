@@ -4226,19 +4226,17 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
+                    nid = _safe_int(row.get("Notice ID"), default=i)
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", nid)):
                         notice = row.to_dict()
-                        st.session_state["x3_modal_notice"] = notice
-                        st.session_state["x3_show_modal"] = True
                         try:
-                            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(notice.get("Notice ID")))):
-                                _x3_render_modal(notice)
+                            rid = _ensure_rfp_for_notice(conn, notice)
                         except Exception:
-                            with st.expander("RFP Analyzer", expanded=True):
-                                _x3_render_modal(notice)
-
-                        st.session_state["x3_modal_notice"] = row.to_dict()
+                            rid = int(st.session_state.get("x3_modal_rfp_id") or 0)
+                        st.session_state["x3_modal_notice"] = notice
+                        st.session_state["x3_modal_rfp_id"] = int(rid)
                         st.session_state["x3_show_modal"] = True
+                        st.rerun()
 
                     # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
