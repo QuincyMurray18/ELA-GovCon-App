@@ -54,6 +54,7 @@ def _x3_open_modal(row_dict: dict):
         pass
 
 def _x3_render_modal(notice: dict):
+    _ensure_x5_schema(conn)
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
     except Exception as e:
@@ -61,6 +62,21 @@ def _x3_render_modal(notice: dict):
         return
     st.caption(f"RFP #{rfp_id} · {notice.get('Title','')}")
 
+    # X.5: document panel renderer
+    _x5_scope = st.session_state.get('x5_scope', 'global')
+    _x5_doc = st.session_state.get('x5_doc')
+    if _x5_doc:
+        try:
+            with st.sidebar.expander(f"Document Summary — {_x5_doc.get('filename', '')}", expanded=True):
+                _summary = x5_summarize_document(conn, int(rfp_id), int(_x5_doc.get('id')))
+                st.markdown(_summary)
+                st.divider()
+                q = st.text_input('Ask a follow-up (doc-scoped)', key=_uniq_key('x5_doc_q', int(_x5_doc.get('id',0))))
+                if st.button('Ask', key=_uniq_key('x5_doc_ask', int(_x5_doc.get('id',0)))) and (q or '').strip():
+                    ans = x5_chat_answer(conn, int(rfp_id), q, scope=f"file:{int(_x5_doc.get('id'))}")
+                    st.markdown(ans)
+        except Exception:
+            pass
     # Phase 4: side panel (SAM facts + AI summary + quick actions)
     try:
         _url = notice.get('SAM Link') or notice.get('sam_url') or ''
@@ -168,20 +184,13 @@ def _x3_render_modal(notice: dict):
         files = []
     if files:
         st.write("Documents:")
-        for fid, fname, fmime in files[:12]:
-            if st.button(f"Summarize: {fname}", key=_uniq_key("sumdoc", int(fid))):
-                try:
-                    import pandas as pd
-                    blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(int(fid),)).iloc[0]
-                    _text = "\n\n".join(extract_text_pages(blob['bytes'], blob.get('mime') or (fmime or '')) or [])
-                except Exception:
-                    _text = ""
-                st.session_state["x3_docsum"] = _rfp_ai_summary(_text, notice)
-        if st.session_state.get("x3_docsum"):
-            with st.expander("Document Summary", expanded=True):
-                st.markdown(st.session_state.get("x3_docsum"))
-
-    # Chat
+        for fid, fname, fmime in files[:48]:
+            if st.button(f"Summarize: {fname}", key=_uniq_key("x5_sumdoc", int(fid))):
+                st.session_state["x5_doc"] = {"id": int(fid), "filename": fname}
+                st.session_state["x5_scope"] = f"file:{int(fid)}"
+                try: st.rerun()
+                except Exception: pass
+# Chat
     st.divider()
     st.subheader("Ask about this RFP")
     _chat_k = _uniq_key("x3_chat", int(rfp_id))
@@ -198,7 +207,17 @@ def _x3_render_modal(notice: dict):
             st.session_state[hist_key].append(("assistant", ans))
             st.markdown(ans)
 
-    # Proposal hand-off
+            # X.5: persist global chat turns
+            try:
+                from contextlib import closing as _closing
+                with _closing(conn.cursor()) as cur:
+                    cur.execute("INSERT INTO rfp_chat_turns(rfp_id,scope,role,content) VALUES(?,?,?,?)", (int(rfp_id), "global", "user", q))
+                    cur.execute("INSERT INTO rfp_chat_turns(rfp_id,scope,role,content) VALUES(?,?,?,?)", (int(rfp_id), "global", "assistant", ans))
+                conn.commit()
+            except Exception:
+                pass
+        
+        # Proposal hand-off
     st.divider()
     if st.button("Start Proposal Outline", key=_uniq_key("x3_outline", int(rfp_id))):
         outline = [
@@ -4226,17 +4245,19 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    nid = _safe_int(row.get("Notice ID"), default=i)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", nid)):
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
                         notice = row.to_dict()
-                        try:
-                            rid = _ensure_rfp_for_notice(conn, notice)
-                        except Exception:
-                            rid = int(st.session_state.get("x3_modal_rfp_id") or 0)
                         st.session_state["x3_modal_notice"] = notice
-                        st.session_state["x3_modal_rfp_id"] = int(rid)
                         st.session_state["x3_show_modal"] = True
-                        st.rerun()
+                        try:
+                            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(notice.get("Notice ID")))):
+                                _x3_render_modal(notice)
+                        except Exception:
+                            with st.expander("RFP Analyzer", expanded=True):
+                                _x3_render_modal(notice)
+
+                        st.session_state["x3_modal_notice"] = row.to_dict()
+                        st.session_state["x3_show_modal"] = True
 
                     # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
@@ -4328,7 +4349,6 @@ if _has_rows:
                                         st.session_state[hist_key].append(("assistant", ans))
                                         st.markdown(ans)
 
-                                # Proposal hand-off
                                 st.divider()
                                 if st.button("Start Proposal Outline", key=_uniq_key("x3_outline", int(rfp_id))):
                                     outline = [
@@ -10613,6 +10633,148 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
+# ==== X.5 schema & helpers ====
+def _ensure_x5_schema(conn: sqlite3.Connection) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS rfp_doc_summaries(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER,
+            file_id INTEGER,
+            sha256 TEXT,
+            filename TEXT,
+            summary TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS rfp_chat_turns(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER,
+            scope TEXT,     -- 'global' or 'file:<id>'
+            role TEXT,      -- 'user' or 'assistant'
+            content TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+    conn.commit()
+
+def x5_summarize_document(conn: sqlite3.Connection, rfp_id: int, file_id: int) -> str:
+    """Return cached summary if SHA matches, else extract+summarize and cache."""
+    from contextlib import closing as _closing
+    import pandas as pd
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT filename, bytes, mime, sha256 FROM rfp_files WHERE id=? AND rfp_id=?", (int(file_id), int(rfp_id)))
+        row = cur.fetchone()
+    if not row:
+        return "No file found."
+    fname, bts, mime, sha = row
+    # Cache check
+    try:
+        df = pd.read_sql_query(
+            "SELECT summary FROM rfp_doc_summaries WHERE rfp_id=? AND file_id=? AND sha256=? ORDER BY id DESC LIMIT 1;",
+            conn, params=(int(rfp_id), int(file_id), sha or "")
+        )
+        if not df.empty:
+            return df.iloc[0]["summary"] or ""
+    except Exception:
+        pass
+    # Extract
+    try:
+        pages = extract_text_pages(bts, mime or "")
+        text = "\n\n".join(pages or [])[:16000]
+    except Exception:
+        text = ""
+    # Summarize
+    client = get_ai()
+    model = _resolve_model()
+    sys = "You are a seasoned Contracting Officer. Summarize clearly and precisely."
+    user = f"""Summarize this RFP document for a capture team. Structure the answer:
+
+- Scope & Objectives
+- Key Dates (due, Q&A, site visits)
+- Must/Shall & Critical Requirements
+- Risk/Notes
+- References (quote short phrases with [filename p.X])
+
+Document: {fname}
+
+{text}"""
+    try:
+        resp = client.chat.completions.create(model=model, messages=[
+            {"role":"system","content": sys},
+            {"role":"user","content": user}
+        ], temperature=0.1)
+        out = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        out = f"AI error: {e}"
+    # Cache
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO rfp_doc_summaries(rfp_id,file_id,sha256,filename,summary) VALUES(?,?,?,?,?)",
+                (int(rfp_id), int(file_id), sha or "", fname or "", out)
+            )
+        conn.commit()
+    except Exception:
+        pass
+    return out
+
+def x5_chat_answer(conn: sqlite3.Connection, rfp_id: int, question: str, scope: str = "global", k: int = 6) -> str:
+    """RAG over Y1 index; scope can be 'global' or 'file:<id>' (soft filter by filename)."""
+    from contextlib import closing as _closing
+    target_filename = None
+    if scope.startswith("file:"):
+        try:
+            fid = int(scope.split(":",1)[1])
+            with _closing(conn.cursor()) as cur:
+                cur.execute("SELECT filename FROM rfp_files WHERE id=? AND rfp_id=?", (int(fid), int(rfp_id)))
+                r = cur.fetchone()
+            target_filename = r[0] if r else None
+        except Exception:
+            target_filename = None
+    # Retrieve
+    try:
+        hits = y1_search(conn, int(rfp_id), question or "", k=int(k))
+    except Exception:
+        hits = []
+    if target_filename:
+        hits = [h for h in (hits or []) if (h.get("file") or "") == target_filename]
+        if not hits:  # fallback if filter too strict
+            hits = y1_search(conn, int(rfp_id), f"{target_filename} {question}", k=int(k))
+    context = []
+    for h in hits or []:
+        src = f"{h.get('file') or ''} p.{h.get('page') or ''}".strip()
+        snippet = (h.get('text') or '')[:800]
+        context.append(f"[{src}] {snippet}")
+    sys = "You are an acquisitions analyst. Answer concisely and cite sources in brackets like [filename p.X]."
+    prompt = "\n\n".join(context + [f"Question: {question}"])
+    try:
+        client = get_ai()
+        model = _resolve_model()
+        resp = client.chat.completions.create(model=model, messages=[
+            {"role":"system","content": sys},
+            {"role":"user","content": prompt}
+        ], temperature=0.2)
+        ans = (resp.choices[0].message.content or '').strip()
+    except Exception as e:
+        ans = f"AI error: {e}"
+    # Persist turn
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO rfp_chat_turns(rfp_id,scope,role,content) VALUES(?,?,?,?)",
+                (int(rfp_id), scope, "user", question or ""))
+            cur.execute(
+                "INSERT INTO rfp_chat_turns(rfp_id,scope,role,content) VALUES(?,?,?,?)",
+                (int(rfp_id), scope, "assistant", ans or ""))
+        conn.commit()
+    except Exception:
+        pass
+    return ans
+# ==== end X.5 helpers ====
+
 
 def _safe_int(v, default: int = 0) -> int:
     try:
