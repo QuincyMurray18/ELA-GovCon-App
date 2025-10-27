@@ -8354,6 +8354,25 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+# ---- Unified Router ----
+ROUTES = {
+    "SAM Watch": "run_sam_watch",
+    "RFP Analyzer": "run_rfp_analyzer",
+    "Proposal Builder": "run_proposal_builder",           # X.7
+    "Review & Compliance": "run_review_compliance",       # X.6
+    "Outreach": "run_outreach",
+    "Subcontractor Finder": "run_subcontractor_finder",
+}
+
+def router(page: str, conn: sqlite3.Connection) -> None:
+    fname = ROUTES.get(page)
+    fn = globals().get(fname)
+    if callable(fn):
+        fn(conn)
+    else:
+        import streamlit as st
+        st.warning(f"Unknown page: {page}")
+
 def main() -> None:
     conn = get_db()
     global _O4_CONN
