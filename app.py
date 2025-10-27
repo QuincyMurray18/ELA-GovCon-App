@@ -61,6 +61,67 @@ def _x3_render_modal(notice: dict):
         return
     st.caption(f"RFP #{rfp_id} · {notice.get('Title','')}")
 
+
+    # X.6 Compliance Matrix v1
+    try:
+        _ensure_x6_schema(conn)
+        with st.expander("Compliance Matrix v1", expanded=False):
+            cA, cB, cC = st.columns([1,1,2])
+            with cA:
+                if st.button("Extract requirements", key=_uniq_key("x6_extract", int(rfp_id))):
+                    n = x6_extract_requirements(conn, int(rfp_id))
+                    st.success(f"Extracted {n} new requirement(s).")
+                    try: st.rerun()
+                    except Exception: pass
+            with cB:
+                cov, tot = x6_coverage(conn, int(rfp_id))
+                pct = 0 if tot == 0 else int(round(100 * cov / tot))
+                st.metric("Coverage", f"{cov}/{tot}", f"{pct}%")
+            with cC:
+                st.caption("Link requirements to outline sections to increase coverage.")
+
+            df = x6_requirements_df(conn, int(rfp_id))
+            if df is None or df.empty:
+                st.info("No requirements yet. Click Extract requirements.")
+            else:
+                # editable mapping column
+                suggestions = x6_sections_suggestions(int(rfp_id))
+                import pandas as pd
+                df_view = df.copy()
+                df_view["Map to section"] = ""
+                edited = st.data_editor(
+                    df_view,
+                    column_config={
+                        "must_flag": st.column_config.CheckboxColumn("Must", help="Detected must or shall"),
+                        "Map to section": st.column_config.SelectboxColumn(options=suggestions),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key=_uniq_key("x6_editor", int(rfp_id))
+                )
+                # Save mappings
+                to_save = []
+                for i, row in edited.iterrows():
+                    sec = str(row.get("Map to section") or "").strip()
+                    if sec:
+                        to_save.append((int(row["id"]), sec))
+                if st.button("Save mappings", key=_uniq_key("x6_save", int(rfp_id))) and to_save:
+                    saved = x6_save_links(conn, int(rfp_id), to_save)
+                    st.success(f"Saved {saved} link(s).")
+                    try: st.rerun()
+                    except Exception: pass
+
+                # Export CSV
+                import io
+                import csv
+                buf = io.StringIO()
+                writer = csv.writer(buf)
+                writer.writerow(["id","must","file","page","text","section"])
+                for _, r in edited.iterrows():
+                    writer.writerow([int(r["id"]), int(r["must_flag"]), r["file"], int(r["page"]) if r.get("page") else "", r["text"], r.get("Map to section") or ""])
+                st.download_button("Export Compliance CSV", buf.getvalue().encode("utf-8"), file_name=f"rfp_{int(rfp_id)}_compliance.csv", mime="text/csv", key=_uniq_key("x6_csv", int(rfp_id)))
+    except Exception as _x6e:
+        st.info(f"Compliance Matrix unavailable: {_x6e}")
     # Phase 4: side panel (SAM facts + AI summary + quick actions)
     try:
         _url = notice.get('SAM Link') or notice.get('sam_url') or ''
@@ -10617,6 +10678,141 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
+
+
+# ==== X.6 Compliance Matrix v1 ====
+def _ensure_x6_schema(conn: sqlite3.Connection) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_requirements(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            file TEXT,
+            page INTEGER,
+            text TEXT,
+            must_flag INTEGER DEFAULT 0,
+            hash TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_links(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            requirement_id INTEGER NOT NULL,
+            section TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """ )
+    conn.commit()
+
+def x6_sections_suggestions(rfp_id: int) -> list:
+    # prefer user outline from session, else defaults
+    outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "")
+    if outline:
+        # split numbered lines
+        items = [ln.strip() for ln in outline.splitlines() if ln.strip()]
+        # filter headers like '# Proposal Outline'
+        return [i for i in items if not i.startswith("#")]
+    return [
+        "Cover Letter",
+        "Executive Summary",
+        "Technical Approach",
+        "Management Approach",
+        "Past Performance",
+        "Pricing",
+        "Compliance Matrix",
+    ]
+
+def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_file: int = 400) -> int:
+    """Parse rfp_files for 'must' and 'shall' style requirements, upsert into compliance_requirements."""
+    import hashlib
+    from contextlib import closing as _closing
+    added = 0
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id ASC;", (int(rfp_id),))
+        files = cur.fetchall() or []
+    for fid, fname, bts, mime in files:
+        try:
+            pages = extract_text_pages(bts, mime or "")
+        except Exception:
+            pages = []
+        found = 0
+        for pi, page_txt in enumerate(pages or [], start=1):
+            if not page_txt:
+                continue
+            # Simple sentence split
+            parts = [s.strip() for s in page_txt.replace("\r", "\n").split("\n") if s.strip()]
+            for s in parts:
+                low = s.lower()
+                musty = any(k in low for k in [" shall ", " must ", " required ", " is required ", " will "])
+                if not musty and ("shall" not in low and "must" not in low):
+                    continue
+                h = hashlib.sha1(f"{rfp_id}|{fname}|{pi}|{s}".encode("utf-8")).hexdigest()
+                try:
+                    with _closing(conn.cursor()) as cur:
+                        # check dup by hash
+                        cur.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? AND hash=? LIMIT 1;", (int(rfp_id), h))
+                        if cur.fetchone():
+                            pass
+                        else:
+                            cur.execute(
+                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES(?,?,?,?,?,?)",
+                                (int(rfp_id), fname or "", int(pi), s[:2000], 1 if musty else 0, h)
+                            )
+                            added += 1
+                    conn.commit()
+                except Exception:
+                    pass
+                found += 1
+                if found >= limit_per_file:
+                    break
+            if found >= limit_per_file:
+                break
+    return int(added)
+
+def x6_requirements_df(conn: sqlite3.Connection, rfp_id: int):
+    import pandas as pd
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, must_flag, file, page, text FROM compliance_requirements WHERE rfp_id=? ORDER BY must_flag DESC, id ASC;",
+            conn, params=(int(rfp_id),)
+        )
+    except Exception:
+        import pandas as pd
+        df = pd.DataFrame(columns=["id","must_flag","file","page","text"])
+    return df
+
+def x6_coverage(conn: sqlite3.Connection, rfp_id: int) -> tuple[int, int]:
+    from contextlib import closing as _closing
+    total = 0
+    covered = 0
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT COUNT(*) FROM compliance_requirements WHERE rfp_id=?", (int(rfp_id),))
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute("SELECT COUNT(DISTINCT requirement_id) FROM compliance_links WHERE rfp_id=?", (int(rfp_id),))
+        covered = int(cur.fetchone()[0] or 0)
+    return covered, total
+
+def x6_save_links(conn: sqlite3.Connection, rfp_id: int, mapping: list[tuple[int, str]]) -> int:
+    from contextlib import closing as _closing
+    saved = 0
+    with _closing(conn.cursor()) as cur:
+        for rid, sec in mapping:
+            if not sec:
+                continue
+            cur.execute(
+                "INSERT INTO compliance_links(rfp_id, requirement_id, section) VALUES(?,?,?)",
+                (int(rfp_id), int(rid), str(sec)[:200])
+            )
+            saved += 1
+    conn.commit()
+    return int(saved)
+# ==== end X.6 helpers ====
+
+
+
 
 
 # ==== X.5 Transcript Viewer ====
