@@ -1,3 +1,28 @@
+# --- injected helpers (must be before any usage) ---
+def _safe_int(x, default=0):
+    try:
+        if x is None: return int(default)
+        if isinstance(x, int): return x
+        s = str(x).strip()
+        if s == "" or s.lower() in ("none", "nan"): return int(default)
+        if "." in s:
+            return int(float(s))
+        # fallback: strip non-digits
+        digits = "".join(ch for ch in s if ch.isdigit())
+        return int(digits) if digits else int(s)
+    except Exception:
+        return int(default)
+
+def _uniq_key(base: str, rfp_id: int) -> str:
+    try:
+        k = f"__uniq_counter_{base}_{rfp_id}"
+        n = int(st.session_state.get(k, 0))
+        st.session_state[k] = n + 1
+        return f"{base}_{rfp_id}_{n}"
+    except Exception:
+        import time
+        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
+
 
 def y3_get_rfp_files(_conn, rfp_id: int):
     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
