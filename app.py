@@ -1,4 +1,140 @@
 import streamlit as st
+## ELA Phase3 hybrid_api
+# Optional FastAPI backend (run separately) + client with graceful fallback.
+# Set GOVCON_API_BASE or st.secrets['api']['base_url'] to use the API.
+import os, threading, uuid, time
+try:
+    import requests
+except Exception:
+    requests = None
+
+# ---- job store for background tasks (in-memory) ----
+_jobs: dict[str, dict] = {}
+
+def _enqueue(fn, *args, **kwargs) -> str:
+    jid = str(uuid.uuid4())
+    _jobs[jid] = {"status":"queued"}
+    def _run():
+        _jobs[jid] = {"status":"running"}
+        try:
+            res = fn(*args, **kwargs)
+            _jobs[jid] = {"status":"done", "result": res}
+        except Exception as e:
+            _jobs[jid] = {"status":"error", "error": str(e)}
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jid
+
+def _job_status(jid: str) -> dict:
+    return _jobs.get(jid, {"status":"unknown"})
+
+# ---- API service functions (fallbacks) ----
+def _svc_analyze(question: str, context: dict | None = None):
+    # Use your in-process analyzer if available
+    try:
+        return _service_analyze_rfp_question(question, context or {})
+    except Exception:
+        # Minimal fallback
+        title = ""
+        if isinstance(context, dict):
+            title = context.get("title") or context.get("Title") or ""
+        return f"[demo] Analysis for {title or 'the selected notice'}: {question}"
+
+# ---- FastAPI app (optional) ----
+try:
+    from fastapi import FastAPI, BackgroundTasks
+    from pydantic import BaseModel
+    FASTAPI_OK = True
+except Exception:
+    FASTAPI_OK = False
+
+if FASTAPI_OK:
+    api = FastAPI(title="ELA GovCon API", version="0.1")
+
+    class AnalyzeReq(BaseModel):
+        question: str
+        context: dict | None = None
+
+    @api.post("/api/analyze")
+    def api_analyze(req: AnalyzeReq, background_tasks: BackgroundTasks):
+        jid = _enqueue(_svc_analyze, req.question, req.context or {})
+        return {"job_id": jid}
+
+    @api.get("/api/job/{job_id}")
+    def api_job(job_id: str):
+        return _job_status(job_id)
+
+# ---- Client helpers ----
+def _api_base_url():
+    try:
+        base = os.environ.get("GOVCON_API_BASE")
+        if not base and hasattr(st, "secrets"):
+            base = (getattr(st, "secrets", {}) or {}).get("api", {}).get("base_url")
+        return base
+    except Exception:
+        return None
+
+def _api_post(path: str, payload: dict):
+    base = _api_base_url()
+    if not base or requests is None:
+        return None
+    try:
+        url = base.rstrip("/") + path
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
+
+def _api_get(path: str):
+    base = _api_base_url()
+    if not base or requests is None:
+        return None
+    try:
+        url = base.rstrip("/") + path
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
+
+# ---- Wire into the RFP Analyze service used by the dialog ----
+def _phase3_analyze(question: str, opportunity: dict | None = None):
+    # Try API path first
+    resp = _api_post("/api/analyze", {"question": question, "context": opportunity or {}})
+    if isinstance(resp, dict) and resp.get("job_id"):
+        st.session_state["phase3_last_job"] = resp["job_id"]
+        return f"Queued analysis job: {resp['job_id']}"
+    # Fallback to in-process
+    try:
+        return _service_analyze_rfp_question(question, opportunity or {})
+    except Exception as e:
+        return f"Analyze error: {e}"
+
+def _phase3_poll_status():
+    jid = st.session_state.get("phase3_last_job")
+    if not jid:
+        return None
+    resp = _api_get(f"/api/job/{jid}")
+    if not resp:
+        return None
+    return resp
+
+# ---- Enhance Ask RFP Analyzer dialog to use Phase 3 when available ----
+def _phase3_enhance_rfp_dialog():
+    # integrate into existing dialog if present
+    if "show_rfp_analyzer" in st.session_state and st.session_state.get("show_rfp_analyzer"):
+        # add a status row
+        c1, c2 = st.columns([1,1])
+        with c1:
+            if st.button("Check job status", key=_unique_key("poll_job","o3")):
+                st.session_state["phase3_last_status"] = _phase3_poll_status()
+        with c2:
+            if st.session_state.get("phase3_last_status"):
+                st.caption(str(st.session_state["phase3_last_status"]))
+
 # ELA Phase2 performance
 import sqlite3, hashlib, time
 
@@ -651,10 +787,16 @@ def _ask_rfp_analyzer_modal(opportunity=None):
             st.session_state['show_rfp_analyzer'] = False
     _dlg()
 
-def _service_analyze_rfp_question(q, opp):
-    # TODO: wire to actual analyzer service; for now return a placeholder
+def _service_analyze_rfp_question(q, opportunity):
+    try:
+        base = _api_base_url()
+    except Exception:
+        base = None
+    if base:
+        return _phase3_analyze(q, opportunity)
+# TODO: wire to actual analyzer service; for now return a placeholder
     if not q:
-        return "Please enter a question."
+    return f"Please enter a question."
     title = (opp.get('title') if isinstance(opp, dict) else str(opp)) if opp else 'the selected notice'
     return f"[demo] Analysis for {title}: {q}"
 
