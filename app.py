@@ -34,7 +34,8 @@ def _ensure_indices(conn):
         pass
 
 def _db_connect(db_path: str, **kwargs):
-
+    import sqlite3
+    import streamlit as st
     # Build connect kwargs with safe defaults
     base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
     try:
@@ -51,15 +52,14 @@ def _db_connect(db_path: str, **kwargs):
         conn.execute("PRAGMA busy_timeout=5000;")
     except Exception:
         pass
-    # Create indices once per session to avoid long startup
+    # One-time per-session index creation
     try:
         if not st.session_state.get("_phase2_indices_done"):
             _ensure_indices(conn)
             st.session_state["_phase2_indices_done"] = True
     except Exception:
         pass
-
-
+    return conn
 # Cached SELECT helper (returns rows + cols); pass db_path explicitly
 @st.cache_data(ttl=600, show_spinner=False)
 def _cached_select(db_path: str, sql: str, params: tuple = ()):
