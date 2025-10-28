@@ -1205,6 +1205,7 @@ APP_TITLE = "ELA GovCon Suite"
 BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
+apply_theme()
 
 
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
@@ -11340,4 +11341,3 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
-
