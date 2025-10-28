@@ -1,3 +1,46 @@
+# Phase 1 bootstrap — keep this at the top
+import streamlit as st
+
+# Safe table wrapper so _styled_dataframe always exists
+if "_styled_dataframe" not in globals():
+    def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
+        try:
+            return st.dataframe(
+                df,
+                use_container_width=use_container_width,
+                height=height,
+                hide_index=hide_index,
+                column_config=column_config,
+            )
+        except TypeError:
+            return st.dataframe(df, use_container_width=use_container_width, height=height)
+
+# Theme function so apply_theme is always defined
+if "apply_theme" not in globals():
+    def apply_theme():
+        if st.session_state.get("_phase1_theme_applied"):
+            return
+        st.session_state["_phase1_theme_applied"] = True
+        st.markdown('''
+        <style>
+        .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+        h1, h2, h3 {margin-bottom: .4rem;}
+        /* Tables */
+        div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+        div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+        /* Expanders look like cards */
+        [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+        [data-testid="stExpander"] summary {font-weight: 600;}
+        /* Inputs and buttons */
+        .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+        button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+        /* Banner */
+        .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+        </style>
+        ''', unsafe_allow_html=True)
+        st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
+
+
 
 # ===== Phase 1 Theme (auto-injected) =====
 def apply_theme():
