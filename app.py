@@ -4,38 +4,61 @@ import sqlite3, hashlib, time
 
 # Cached DB connector with WAL + PRAGMAs
 def _ensure_indices(conn):
+
     try:
         cur = conn.cursor()
-        stmts = [
-            "CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)",
-            "CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)",
-            "CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)",
-            "CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)",
-            "CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)",
-        ]
+        def table_exists(name):
+            try:
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
+                return cur.fetchone() is not None
+            except Exception:
+                return False
+        stmts = []
+        if table_exists("notices"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)")
+        if table_exists("vendors"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
+        if table_exists("deals"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)")
+        if table_exists("files"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)")
+        if table_exists("messages"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)")
         for s in stmts:
-            try: cur.execute(s)
-            except Exception: pass
+            try:
+                cur.execute(s)
+            except Exception:
+                pass
         cur.close()
     except Exception:
         pass
 
-@st.cache_resource(show_spinner=False)
 def _db_connect(db_path: str, **kwargs):
-    conn = _db_connect(db_path, check_same_thread=False, detect_types=sqlite3.PARSE_DECLTYPES)
+
+    # Build connect kwargs with safe defaults
+    base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
+    try:
+        base_kwargs.update(kwargs or {})
+    except Exception:
+        pass
+    conn = sqlite3.connect(db_path, **base_kwargs)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA temp_store=MEMORY;")
         conn.execute("PRAGMA mmap_size=300000000;")
         conn.execute("PRAGMA cache_size=-200000;")
+        conn.execute("PRAGMA busy_timeout=5000;")
     except Exception:
         pass
+    # Create indices once per session to avoid long startup
     try:
-        _ensure_indices(conn)
+        if not st.session_state.get("_phase2_indices_done"):
+            _ensure_indices(conn)
+            st.session_state["_phase2_indices_done"] = True
     except Exception:
         pass
-    return conn
+
 
 # Cached SELECT helper (returns rows + cols); pass db_path explicitly
 @st.cache_data(ttl=600, show_spinner=False)
