@@ -1,4 +1,3 @@
-import streamlit as st
 # ELA Phase2 performance
 import sqlite3, hashlib, time
 
@@ -21,7 +20,7 @@ def _ensure_indices(conn):
         pass
 
 @st.cache_resource(show_spinner=False)
-def _db_connect(db_path: str):
+def _db_connect(db_path: str, **kwargs):
     conn = _db_connect(db_path, check_same_thread=False, detect_types=sqlite3.PARSE_DECLTYPES)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
