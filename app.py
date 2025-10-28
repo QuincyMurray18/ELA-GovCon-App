@@ -11293,6 +11293,7 @@ def _init_phase1_ui():
     if st.session_state.get('_phase1_ui_ready'):
         return
     st.session_state['_phase1_ui_ready'] = True
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
     st.markdown('''
     <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
@@ -11305,12 +11306,26 @@ def _init_phase1_ui():
     .ela-ok {background: rgba(0,200,83,.12);}
     .ela-warn {background: rgba(251,140,0,.12);}
     .ela-bad {background: rgba(229,57,53,.12);}
+    
+    /* Top ribbon banner */
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    /* Sidebar branding spacing */
+    section[data-testid="stSidebar"] .block-container {padding-top: 0.8rem;}
+    /* Expander cards */
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    /* Buttons subtle shadow */
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+    /* Text inputs rounding */
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    
     </style>
     ''', unsafe_allow_html=True)
 
 def _sidebar_brand():
     with st.sidebar:
         st.markdown("### 🧭 ELA GovCon Suite")
+        st.caption("Phase 1 UI loaded")
         st.caption("Faster sourcing, compliant bids, higher win rates.")
 
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
