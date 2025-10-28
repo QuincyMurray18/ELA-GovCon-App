@@ -1,3 +1,74 @@
+# ELA Phase2 performance
+import sqlite3, hashlib, time
+
+# Cached DB connector with WAL + PRAGMAs
+def _ensure_indices(conn):
+    try:
+        cur = conn.cursor()
+        stmts = [
+            "CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)",
+            "CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)",
+            "CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)",
+            "CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)",
+        ]
+        for s in stmts:
+            try: cur.execute(s)
+            except Exception: pass
+        cur.close()
+    except Exception:
+        pass
+
+@st.cache_resource(show_spinner=False)
+def _db_connect(db_path: str):
+    conn = _db_connect(db_path, check_same_thread=False, detect_types=sqlite3.PARSE_DECLTYPES)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA temp_store=MEMORY;")
+        conn.execute("PRAGMA mmap_size=300000000;")
+        conn.execute("PRAGMA cache_size=-200000;")
+    except Exception:
+        pass
+    try:
+        _ensure_indices(conn)
+    except Exception:
+        pass
+    return conn
+
+# Cached SELECT helper (returns rows + cols); pass db_path explicitly
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_select(db_path: str, sql: str, params: tuple = ()):
+    conn = _db_connect(db_path)
+    cur = conn.execute(sql, params)
+    rows = cur.fetchall()
+    cols = [d[0] for d in cur.description] if cur.description else []
+    return rows, cols
+
+# Cache AI answers by (question + context hash)
+def _ai_cache_key(question: str, context_hash: str = ""):
+    key = (question or "") + "|" + (context_hash or "")
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+def _cached_ai_answer(question: str, context_hash: str = ""):
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def _inner(k, q, ch):
+        try:
+            return _service_analyze_rfp_question(q, {"hash": ch})
+        except Exception as e:
+            return f"AI error: {e}"
+    return _inner(_ai_cache_key(question, context_hash), question, context_hash)
+
+# Expand Phase 0 write guard to clear caches after commits
+def _write_guard(conn, fn, *args, **kwargs):
+    with conn:
+        out = fn(*args, **kwargs)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return out
+
 # ELA Phase1 bootstrap
 import streamlit as st
 
@@ -383,7 +454,7 @@ def get_db():
     import sqlite3
     from contextlib import closing as _closing
     ensure_dirs()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = _db_connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
     return conn
@@ -2555,7 +2626,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
 
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = _db_connect(DB_PATH, check_same_thread=False)
     with closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
 
@@ -4366,7 +4437,7 @@ if _has_rows:
                             if _db is None:
                                 import sqlite3
                                 _owned = True
-                                _db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                                _db = _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
                                 cur.execute(
                                     """
@@ -4592,7 +4663,7 @@ if _has_rows:
                 
                         try:
                             from contextlib import closing as _closing
-                            _db = globals().get("conn") or sqlite3.connect(DB_PATH, check_same_thread=False)
+                            _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
                                 cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
                                 r = cur.fetchone()
@@ -8736,7 +8807,7 @@ def test_seed_cases():
 
     import sqlite3
     from contextlib import closing as _closing
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = _db_connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
         conn.commit()
