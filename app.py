@@ -312,6 +312,25 @@ def get_db():
 
 def get_o4_conn():
     import streamlit as st
+
+# ---- helper: generate unique widget keys (Phase 0) ----
+# ---- helper: render-once guard for O4 (Phase 0) ----
+def _render_once(name: str):
+    # returns True if allowed to render, False if already rendered
+    key = f"__rendered__{name}"
+    if st.session_state.get(key):
+        return False
+    st.session_state[key] = True
+    return True
+
+def _unique_key(base: str, namespace: str = "ui"):
+    # Uses a stable counter in session state to avoid duplicate form/widget keys
+    ss = st.session_state
+    counter_key = f"__{namespace}_key_counter__"
+    if counter_key not in ss:
+        ss[counter_key] = 0
+    ss[counter_key] += 1
+    return f"{base}-{namespace}-{ss[counter_key]}"
     global _O4_CONN
     if _O4_CONN:
         try:
@@ -440,6 +459,38 @@ def _o3c(cursor):
 def _migrate_deals_columns(conn):
     """
     Add columns used by Deals and SAM Watch if missing. Idempotent.
+
+# ---- Phase 0: Ask RFP Analyzer modal wiring ----
+def _ask_rfp_analyzer_modal(opportunity=None):
+    @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
+    def _dlg():
+        st.write("Use AI to analyze the selected opportunity and ask questions.")
+        q = st.text_area("Your question", key=_unique_key('rfp_q','o3'))
+        if st.button("Analyze", key=_unique_key('rfp_analyze','o3')):
+            # placeholder for analysis call; replace with your service function
+            try:
+                ans = _service_analyze_rfp_question(q, opportunity)
+            except Exception as e:
+                ans = f"Error: {e}"
+            st.markdown("**Answer**")
+            st.write(ans)
+        if st.button("Close", key=_unique_key('rfp_close','o3')):
+            st.session_state['show_rfp_analyzer'] = False
+    _dlg()
+
+def _service_analyze_rfp_question(q, opp):
+    # TODO: wire to actual analyzer service; for now return a placeholder
+    if not q:
+        return "Please enter a question."
+    title = (opp.get('title') if isinstance(opp, dict) else str(opp)) if opp else 'the selected notice'
+    return f"[demo] Analysis for {title}: {q}"
+
+def _render_ask_rfp_button(opportunity=None):
+    if st.button("Ask RFP Analyzer", key=_unique_key('ask_rfp','o3')):
+        st.session_state['show_rfp_analyzer'] = True
+    if st.session_state.get('show_rfp_analyzer'):
+        _ask_rfp_analyzer_modal(opportunity)
+
     """
     try:
         import pandas as _pd
@@ -9150,7 +9201,13 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
-            o4_sender_accounts_ui(conn)
+            # guarded render
+
+            __ok = _render_once('o4_sender')
+
+            if __ok:
+
+                o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
 
@@ -11210,3 +11267,22 @@ def o1_sender_accounts_ui(conn):
         st.dataframe(df, use_container_width=True)
     except Exception:
         pass
+
+# ---- helper: stable pagination (Phase 0) ----
+def _pager_init(key: str):
+    if key not in st.session_state:
+        st.session_state[key] = 0
+
+def _pager_update(key: str, delta: int, max_pages: int | None = None):
+    _pager_init(key)
+    st.session_state[key] = max(st.session_state[key] + delta, 0)
+    if max_pages is not None:
+        st.session_state[key] = min(st.session_state[key], max_pages - 1)
+    return st.session_state[key]
+
+
+# ---- helper: write guard (Phase 0) ----
+def _write_guard(conn, fn, *args, **kwargs):
+    # call DB write functions inside a transaction
+    with conn:
+        return fn(*args, **kwargs)
