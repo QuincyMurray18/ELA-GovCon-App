@@ -3910,7 +3910,6 @@ def run_contacts(conn: sqlite3.Connection) -> None:
 
 
 def run_deals(conn: sqlite3.Connection) -> None:
-    _page_header('Deals CRM', 'Pipeline, stages, quick actions')
     st.header("Deals")
     with st.form("add_deal", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
@@ -4070,8 +4069,6 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
-
-    _page_header('SAM Watch', 'Find and track notices')
 
     # ---- X3 MODAL RENDERER ----
     if st.session_state.get("x3_show_modal"):
@@ -4583,8 +4580,6 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
-
-        _page_header('RFP Analyzer', 'Parse, check compliance, ask questions')
 
         # === One-Page Analyzer (integrated) ===
     try:
@@ -5925,7 +5920,6 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     return path
 
 def run_proposal_builder(conn: sqlite3.Connection) -> None:
-    _page_header('Proposal Builder', 'Templates, merge, preview, export')
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
@@ -6053,7 +6047,6 @@ def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     st.session_state[page_key] = page
     return view, page, pages
 def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
-    _page_header('Subcontractor Finder', 'Search vendors, dedupe, save')
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
@@ -9188,7 +9181,6 @@ def render_outreach_mailmerge(conn):
 
 
 def run_outreach(conn):
-    _page_header('Outreach', 'RFQs, mail merge, SLA timers')
     import streamlit as st
 
     # O4 badge if present
@@ -11289,24 +11281,25 @@ def _pager_update(key: str, delta: int, max_pages: int | None = None):
     return st.session_state[key]
 
 
+# ---- helper: write guard (Phase 0) ----
+def _write_guard(conn, fn, *args, **kwargs):
+    # call DB write functions inside a transaction
+    with conn:
+        return fn(*args, **kwargs)
+
 
 # ---- Phase 1: Global UI setup (theme, CSS, helpers) ----
 def _init_phase1_ui():
     if st.session_state.get('_phase1_ui_ready'):
         return
     st.session_state['_phase1_ui_ready'] = True
-
-    # CSS for polished look: tighter headers, card feel, nicer tables
     st.markdown('''
     <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
     h1, h2, h3 {margin-bottom: .4rem;}
     .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
-    /* Dataframe polish */
-    div[data-testid="stDataFrame"] table {border-collapse: separate; border-spacing: 0;}
     div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
     div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64, 120, 242, 0.06);}
-    /* Cards via bordered containers */
     .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
     .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
     .ela-ok {background: rgba(0,200,83,.12);}
@@ -11320,21 +11313,10 @@ def _sidebar_brand():
         st.markdown("### 🧭 ELA GovCon Suite")
         st.caption("Faster sourcing, compliant bids, higher win rates.")
 
-def _page_header(title: str, subtitle: str | None = None, actions: list | None = None):
-    st.markdown(f"# {title}")
-    if subtitle:
-        st.markdown(f"<div class='ela-subtitle'>{subtitle}</div>", unsafe_allow_html=True)
-    if actions:
-        cols = st.columns(len(actions))
-        for i, (label, on_click) in enumerate(actions):
-            if cols[i].button(label, key=_unique_key(f'act-{label}','hdr')) and callable(on_click):
-                on_click()
-
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
     try:
         return _styled_dataframe(df, use_container_width=use_container_width, height=height, hide_index=hide_index, column_config=column_config)
     except TypeError:
-        # Backward compatibility if hide_index/column_config not available
         return _styled_dataframe(df, use_container_width=use_container_width, height=height)
 
 def _chip(text: str, kind: str = 'neutral'):
@@ -11343,13 +11325,4 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
-# ---- helper: write guard (Phase 0) ----
-def _write_guard(conn, fn, *args, **kwargs):
-    # call DB write functions inside a transaction
-    with conn:
-        return fn(*args, **kwargs)
-
-
-def begin_card(title: str, meta: str | None = None):
-    st.markdown(f"<div class='ela-card'><h4 style='margin-top:0'>{title}</h4>" + (f"<div class='ela-subtitle'>{meta}</div>" if meta else "") + "</div>", unsafe_allow_html=True)
 
