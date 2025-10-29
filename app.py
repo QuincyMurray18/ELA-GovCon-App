@@ -70,6 +70,151 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 import streamlit as st
 
+# === ELA GUARANTEED DEALS HANDLER (top-level) ==================================
+# These fallbacks ensure _handle_add_to_deals_row is always defined before UI code.
+
+# Light-weight connection getter
+try:
+    _ensure_conn
+except NameError:
+    def _ensure_conn():
+        try:
+            if "conn" in st.session_state and st.session_state.get("conn"):
+                return st.session_state["conn"]
+        except Exception:
+            pass
+        try:
+            return get_db()
+        except Exception:
+            return None
+
+# Safe Notice ID coercer
+try:
+    _coerce_notice_id
+except NameError:
+    import re as _re
+    def _coerce_notice_id(row) -> str:
+        try:
+            d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
+        except Exception:
+            d = row or {}
+        for k in ("Notice ID","notice_id","NoticeId","id","ID","Notice Id"):
+            v = d.get(k)
+            if v:
+                s = str(v).strip()
+                if s and s.lower() not in ("none","nan","null","0"):
+                    return s
+        link = d.get("SAM Link") or d.get("sam_url") or d.get("link") or ""
+        if isinstance(link, str) and link:
+            m = _re.search(r"[?&](?:id|opp_id|notice_id)=([A-Za-z0-9\-]+)", link)
+            if m:
+                return m.group(1)
+            m = _re.search(r"/opp/([A-Za-z0-9\-]+)/view", link)
+            if m:
+                return m.group(1)
+        return ""
+
+# No-op migrations if missing
+try:
+    _migrate_deals_columns
+except NameError:
+    def _migrate_deals_columns(conn): 
+        return
+
+# Minimal attachment saver fallbacks if missing
+try:
+    _detect_attachment_sources
+except NameError:
+    def _detect_attachment_sources(conn, notice_id: str):
+        return []
+try:
+    download_to_deal_storage
+except NameError:
+    def download_to_deal_storage(deal_id: int, url: str, preferred_name: str = ""):
+        return ""
+try:
+    _add_notice_attachments_to_deal
+except NameError:
+    def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
+        saved = []
+        try:
+            for s in _detect_attachment_sources(conn, notice_id) or []:
+                p = download_to_deal_storage(deal_id, s.get("url",""), s.get("filename",""))
+                if p:
+                    saved.append(p)
+        except Exception:
+            pass
+        return saved
+
+# Canonical handler (will be overwritten later if a more detailed version exists,
+# but we need a working baseline for all call sites).
+def _handle_add_to_deals_row(conn, row) -> int:
+    conn = conn or _ensure_conn()
+    if conn is None:
+        raise RuntimeError("No database connection available")
+    from contextlib import closing as _closing
+
+    nid = _coerce_notice_id(row)
+    d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
+    title = d.get("Title") or ""
+    agency = d.get("Agency Path") or ""
+    sam_link = d.get("SAM Link") or ""
+    solnum = d.get("Solicitation") or ""
+    posted = d.get("Posted") or ""
+    due = d.get("Response Due") or ""
+    naics = d.get("NAICS") or ""
+    psc = d.get("PSC") or ""
+
+    try:
+        _migrate_deals_columns(conn)
+    except Exception:
+        pass
+
+    # Insert deal row (even if nid is empty, to avoid blocking your workflow)
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            (title, agency, "Bidding", None, nid or "", solnum, posted, due, naics, psc, sam_link),
+        )
+        deal_id = int(cur.lastrowid)
+        conn.commit()
+
+    # Ensure/lookup rfps only if we have an id
+    rfp_id = None
+    if nid:
+        try:
+            with _closing(conn.cursor()) as cur:
+                cur.execute("SELECT id FROM rfps WHERE notice_id = ? ORDER BY id DESC LIMIT 1;", (nid,))
+                r = cur.fetchone()
+                if r:
+                    rfp_id = int(r[0])
+                else:
+                    cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?,?,?,?)", (nid, sam_link, title, solnum))
+                    rfp_id = int(cur.lastrowid)
+                conn.commit()
+        except Exception:
+            rfp_id = None
+
+    # Save attachments from cache/helpers
+    total = 0
+    try:
+        if nid:
+            extra = _add_notice_attachments_to_deal(conn, nid, deal_id) or []
+            total += len(extra or [])
+    except Exception:
+        pass
+
+    if not nid:
+        try:
+            st.info("Deal saved without a Notice ID. Add a SAM Link or open the notice to enable attachment pull.")
+        except Exception:
+            pass
+    return total
+# =============================================================================
+
+
+
 def _extract_notice_id_from_url(u: str) -> str:
     try:
         if not u:
@@ -5035,10 +5180,11 @@ if _has_rows:
 
                         
                         try:
-                            total = _handle_add_to_deals_row(_ensure_conn(), row)
+                            total = _handle_add_to_deals_row(_ensure_conn(), row if isinstance(row, dict) else (row.to_dict() if hasattr(row,'to_dict') else {}))
                             st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
                         except Exception as e:
                             st.error(f"Failed to save deal: {e}")
+                            
 
 
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
