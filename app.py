@@ -4587,7 +4587,12 @@ def run_deals(conn: sqlite3.Connection) -> None:
     from contextlib import closing as _closing
     nid = str(_get_notice_row(row if 'row' in locals() else None).get("Notice ID") or "")
     if not nid:
-        raise ValueError("Missing Notice ID")
+        
+        try:
+            st.warning("No Notice ID found for this row. Please select a notice or open details and try again.")
+        except Exception:
+            pass
+        return 0
     with _closing(conn.cursor()) as cur:
         cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
         row = cur.fetchone()
