@@ -293,6 +293,78 @@ except NameError:
 import os, threading, uuid, time
 try:
     import requests
+
+# === ELA patch: core imports for Deals/SAM/RFP Analyzer ===
+try:
+    from contextlib import closing
+
+# === ELA patch: safety helpers ===
+try:
+    _unique_key
+except NameError:
+    def _unique_key(base: str, namespace: str = "ns") -> str:
+        try:
+            import time as _t
+            k = f"__uniq_{base}_{namespace}"
+            n = int(st.session_state.get(k, 0))
+            st.session_state[k] = n + 1
+            return f"{base}_{namespace}_{int(_t.time()*1000)%100000}_{n}"
+        except Exception:
+            return f"{base}_{namespace}_{random.randint(0,99999)}"
+
+def _coerce_notice_id(row) -> str:
+    try:
+        d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
+    except Exception:
+        d = row or {}
+    for k in ("Notice ID", "NoticeId", "notice_id", "noticeId", "ID", "Id"):
+        v = d.get(k)
+        if v:
+            s = str(v).strip()
+            if s and s.lower() not in ("none", "nan", "null", "0"):
+                return s
+    link = d.get("SAM Link") or d.get("sam_url") or ""
+    if isinstance(link, str) and link:
+        m = re.search(r"/opp/([A-Za-z0-9\-\_]+)/view", link)
+        if m:
+            return m.group(1)
+        m = re.search(r"[?&](?:notice_id|opp_id|id)=([A-Za-z0-9\-\_]+)", link)
+        if m:
+            return m.group(1)
+        parts = [p for p in re.split(r"[/?#]", link) if p]
+        if parts:
+            parts_sorted = sorted(parts, key=len, reverse=True)
+            if parts_sorted:
+                cand = parts_sorted[0]
+                if len(cand) >= 8:
+                    return cand
+    return ""
+
+try:
+    _styled_dataframe
+except NameError:
+    def _styled_dataframe(df, use_container_width=True, hide_index=False, height=420):
+        try:
+            h = int(height) if isinstance(height, int) else 420
+        except Exception:
+            h = 420
+        return st.dataframe(df, use_container_width=use_container_width, hide_index=hide_index, height=h)
+
+except Exception:
+    pass
+try:
+    from pathlib import Path
+except Exception:
+    pass
+try:
+    import json
+except Exception:
+    pass
+try:
+    import requests
+except Exception:
+    pass
+
 except Exception:
     requests = None
 
@@ -5009,11 +5081,13 @@ if _has_rows:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
 
 
-                        try:
-                            total = _handle_add_to_deals_row(_ensure_conn(), row)
-                            st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
-                        except Exception as e:
-                            st.error(f"Failed to save deal: {e}")
+                        
+            try:
+                total = _handle_add_to_deals_row(_ensure_conn(), row)
+                st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
+            except Exception as e:
+                st.error(f"Failed to save deal: {e}")
+
 
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
                         notice = row.to_dict()
@@ -12391,3 +12465,241 @@ def _ask_rfp_analyzer_modal(opportunity=None):
             if st.button("Close", key=_unique_key("rfp_close_fb","o3")):
                 st.session_state["show_rfp_analyzer"] = False
 # ==== END ELA PATCH ====
+
+# === ELA patch: attachment helpers (SAM cache + direct download) ===
+def _detect_attachment_sources(conn, notice_id: str):
+    """Return a list of {'url':..., 'filename':...} from the best place we have."""
+    rows = []
+    try:
+        import pandas as _pd
+        q = _pd.read_sql_query(
+            "SELECT url, filename FROM rfp_docs WHERE notice_id = ?",
+            conn, params=[notice_id]
+        )
+        for _, r in (q or _pd.DataFrame()).iterrows():
+            rows.append({"url": str(r.get("url") or ""), "filename": str(r.get("filename") or "")})
+    except Exception:
+        pass
+    if not rows:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT docs_json FROM sam_cache WHERE notice_id = ?", [notice_id])
+            r = cur.fetchone()
+            if r and r[0]:
+                docs = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
+                for d in docs or []:
+                    if isinstance(d, dict):
+                        rows.append({"url": d.get("url",""), "filename": d.get("filename","")})
+        except Exception:
+            pass
+    return [r for r in rows if r.get("url")]
+
+def download_to_deal_storage(deal_id: int, url: str, preferred_name: str = ""):
+    base = Path("deals") / str(deal_id) / "attachments"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    name = preferred_name or url.split("?")[0].split("/")[-1] or "attachment"
+    out = base / name
+    i = 1
+    while True:
+        if not out.exists():
+            break
+        stem = out.stem
+        suf = out.suffix
+        out = base / f"{stem}{i}{suf}"
+        i += 1
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        out.write_bytes(r.content)
+        return str(out)
+    except Exception:
+        return ""
+
+def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
+    sources = _detect_attachment_sources(conn, notice_id)
+    saved = []
+    for s in sources:
+        p = download_to_deal_storage(deal_id, s.get("url",""), s.get("filename",""))
+        if p:
+            saved.append(p)
+    try:
+        with closing(conn.cursor()) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS deals_attachments (deal_id INTEGER, path TEXT)")
+            c.executemany("INSERT INTO deals_attachments (deal_id, path) VALUES (?,?)",
+                          [(deal_id, p) for p in saved])
+        conn.commit()
+    except Exception:
+        try:
+            with closing(conn.cursor()) as c:
+                c.execute("SELECT attachments FROM deals WHERE id = ?", [deal_id])
+                r = c.fetchone()
+                cur = json.loads(r[0]) if (r and r[0]) else []
+                cur.extend(saved)
+                c.execute("UPDATE deals SET attachments = ? WHERE id = ?", [json.dumps(cur), deal_id])
+            conn.commit()
+        except Exception:
+            pass
+    return saved
+
+
+
+# === ELA patch: unified Add-to-Deals handler ===
+def _handle_add_to_deals_row(conn, row) -> int:
+    conn = conn or _ensure_conn()
+    if conn is None:
+        raise RuntimeError('No database connection available')
+
+    from contextlib import closing as _closing
+    notice_id = _coerce_notice_id(row)
+    if not notice_id:
+        raise ValueError("No Notice ID found for this row. Please select a notice or open details and try again.")
+
+    d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
+    title = d.get("Title") or ""
+    agency = d.get("Agency Path") or ""
+    sam_link = d.get("SAM Link") or ""
+    solnum = d.get("Solicitation") or ""
+    posted = d.get("Posted") or ""
+    due = d.get("Response Due") or ""
+    naics = d.get("NAICS") or ""
+    psc = d.get("PSC") or ""
+
+    try:
+        _migrate_deals_columns(conn)
+    except Exception:
+        pass
+
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            (title, agency, "Bidding", None, notice_id, solnum, posted, due, naics, psc, sam_link),
+        )
+        deal_id = int(cur.lastrowid)
+        conn.commit()
+
+    rfp_id = None
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (notice_id,))
+            r = cur.fetchone()
+            if r:
+                rfp_id = int(r[0])
+            else:
+                cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?, ?, ?, ?)", (notice_id, sam_link, title, solnum))
+                rfp_id = int(cur.lastrowid)
+            conn.commit()
+    except Exception:
+        rfp_id = None
+
+    att_saved = 0
+    try:
+        if rfp_id and "_fetch_and_save_now" in globals():
+            att_saved = _fetch_and_save_now(conn, notice_id, int(rfp_id)) or 0
+    except Exception:
+        att_saved = 0
+
+    try:
+        extra = _add_notice_attachments_to_deal(conn, notice_id, int(deal_id)) or []
+    except Exception:
+        extra = []
+
+    return int(att_saved or 0) + len(extra or [])
+
+
+
+# === ELA patch: Ask RFP Analyzer wiring ===
+def _api_base_url():
+    try:
+        return os.environ.get("ANALYZER_BASE_URL") or st.session_state.get("ANALYZER_BASE_URL")
+    except Exception:
+        return None
+
+def _service_analyze_rfp_question(q, opportunity):
+    try:
+        base = _api_base_url()
+    except Exception:
+        base = None
+    if base:
+        try:
+            import requests as _rq
+            payload = {"q": q, "opportunity": opportunity}
+            resp = _rq.post(base.rstrip("/") + "/analyze", json=payload, timeout=20)
+            if resp.ok:
+                try:
+                    return resp.json().get("answer") or resp.text
+                except Exception:
+                    return resp.text
+        except Exception as e:
+            return f"Backend error: {e}"
+    if not q:
+        return "Please enter a question."
+    title = (opportunity.get('title') if isinstance(opportunity, dict) else str(opportunity)) if opportunity else 'the selected notice'
+    return f"[demo] Analysis for {title}: {q}"
+
+def _ask_rfp_analyzer_modal(opportunity=None):
+    try:
+        @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
+        def _dlg():
+            st.caption("Use AI to analyze the selected opportunity and ask questions.")
+            q = st.text_area("Your question", key=_unique_key("rfp_q", "o3"))
+            if st.button("Analyze", key=_unique_key("rfp_analyze", "o3")):
+                try:
+                    ans = _service_analyze_rfp_question(q, opportunity)
+                except Exception as e:
+                    ans = f"Error: {e}"
+                st.markdown("**Answer**")
+                st.write(ans)
+            if st.button("Close", key=_unique_key("rfp_close", "o3")):
+                st.session_state["show_rfp_analyzer"] = False
+        _dlg()
+    except Exception:
+        with st.expander("Ask RFP Analyzer", expanded=True):
+            st.caption("Use AI to analyze the selected opportunity and ask questions.")
+            q = st.text_area("Your question", key=_unique_key("rfp_q", "o3"))
+            if st.button("Analyze", key=_unique_key("rfp_analyze", "o3")):
+                try:
+                    ans = _service_analyze_rfp_question(q, opportunity)
+                except Exception as e:
+                    ans = f"Error: {e}"
+                st.markdown("**Answer**")
+                st.write(ans)
+            if st.button("Close", key=_unique_key("rfp_close", "o3")):
+                st.session_state["show_rfp_analyzer"] = False
+
+def _render_ask_rfp_button(opportunity=None):
+    if st.button("Ask RFP Analyzer", key=_unique_key("ask_rfp", "o3")):
+        st.session_state["show_rfp_analyzer"] = True
+    if st.session_state.get("show_rfp_analyzer"):
+        _ask_rfp_analyzer_modal(opportunity)
+
+
+
+# === ELA patch: vendors view compatibility ===
+try:
+    _compat_vendors_view
+except NameError:
+    def _compat_vendors_view(conn):
+        try:
+            with conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS vendors(
+                        id INTEGER PRIMARY KEY,
+                        name TEXT,
+                        email TEXT,
+                        phone TEXT,
+                        city TEXT,
+                        state TEXT,
+                        naics TEXT,
+                        cage TEXT,
+                        uei TEXT,
+                        website TEXT,
+                        notes TEXT
+                    );
+                """)
+        except Exception:
+            pass
+
