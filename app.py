@@ -301,7 +301,7 @@ if not hasattr(st, "_orig_dataframe"):
 
 # Ensure theme exists
 if "apply_theme" not in globals():
-    def apply_theme():
+    def _apply_theme_old():
         if st.session_state.get("_phase1_theme_applied"):
             return
         st.session_state["_phase1_theme_applied"] = True
@@ -323,7 +323,7 @@ if "apply_theme" not in globals():
 
 
 # ===== Phase 1 Theme (auto-injected) =====
-def apply_theme():
+def _apply_theme_old():
     import streamlit as st
     if st.session_state.get("_phase1_theme_applied"):
         return
@@ -8647,7 +8647,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase O: Global Theme & Layout ----------
-def apply_theme() -> None:
+def _apply_theme_old() -> None:
     css = """
     <style>
     /* Base font and spacing */
