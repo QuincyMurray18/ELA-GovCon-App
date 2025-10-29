@@ -70,6 +70,29 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 import streamlit as st
 
+# --- Notice row resolver to avoid NameError and type mismatches ---
+def _get_notice_row(row=None):
+    try:
+        if row is not None:
+            return row.to_dict() if hasattr(row, "to_dict") else row
+    except Exception:
+        pass
+    try:
+        nr = globals().get("_get_notice_row(row)", None)
+        if nr is not None:
+            return nr.to_dict() if hasattr(nr, "to_dict") else nr
+    except Exception:
+        pass
+    try:
+        ss = st.session_state.get("x3_modal_notice") or st.session_state.get("sam_selected_notice")
+        if ss:
+            return ss
+    except Exception:
+        pass
+    return {}
+# ------------------------------------------------------------------
+
+
 # --- Early stubs to avoid NameError during routing ---
 try:
     _compat_vendors_view
@@ -4560,9 +4583,9 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 
 
-# ---- Phase 3 helpers: ensure RFP record, modal renderer ----def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
+# ---- Phase 3 helpers: ensure RFP record, modal renderer ----def _ensure_rfp_for_notice(conn, _get_notice_row(row): dict) -> int:
     from contextlib import closing as _closing
-    nid = str(notice_row.get("Notice ID") or "")
+    nid = str(_get_notice_row(row).get("Notice ID") or "")
     if not nid:
         raise ValueError("Missing Notice ID")
     with _closing(conn.cursor()) as cur:
@@ -4572,7 +4595,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
             return int(row[0])
         cur.execute(
             "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-            (notice_row.get("Title") or "", notice_row.get("Solicitation") or "", nid, notice_row.get("SAM Link") or "", "")
+            (_get_notice_row(row).get("Title") or "", _get_notice_row(row).get("Solicitation") or "", nid, _get_notice_row(row).get("SAM Link") or "", "")
         )
         rid = int(cur.lastrowid)
         conn.commit()
