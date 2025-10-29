@@ -264,127 +264,127 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
     return _inner(_ai_cache_key(question, context_hash), question, context_hash)
 
 # Expand Phase 0 write guard to clear caches after commits
-def _write_guard(conn, fn, *args, **kwargs):
-    with conn:
-        out = fn(*args, **kwargs)
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    return out
-
-# ELA Phase1 bootstrap
-import streamlit as st
-
-# Safe dataframe wrapper and monkey patch to avoid height=None issues
-def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
-    kwargs = {"use_container_width": use_container_width}
-    if height is not None:
-        try:
-            kwargs["height"] = int(height) if height != "stretch" else "stretch"
-        except Exception:
-            if isinstance(height, str):
-                kwargs["height"] = height
-    try:
-        return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
-    except TypeError:
-        return st.dataframe(df, **kwargs)
-
-# Monkey patch st.dataframe to drop height=None safely
-if not hasattr(st, "_orig_dataframe"):
-    st._orig_dataframe = st.dataframe
-    def _safe_dataframe(df, **kwargs):
-        if "height" in kwargs and kwargs["height"] is None:
-            kwargs.pop("height", None)
-        return st._orig_dataframe(df, **kwargs)
-    st.dataframe = _safe_dataframe
-
-# Ensure theme exists
-if "apply_theme" not in globals():
-    def _apply_theme_old():
-        if st.session_state.get("_phase1_theme_applied"):
-            return
-        st.session_state["_phase1_theme_applied"] = True
-        st.markdown('''
-        <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
-        h1, h2, h3 {margin-bottom: .4rem;}
-        div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
-        div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
-        [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
-        [data-testid="stExpander"] summary {font-weight: 600;}
-        .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-        button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
-        .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
-        </style>
-        ''', unsafe_allow_html=True)
-        st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
-
-
-
-# ===== Phase 1 Theme (auto-injected) =====
-def _apply_theme_old():
-    import streamlit as st
-    if st.session_state.get("_phase1_theme_applied"):
-        return
-    st.session_state["_phase1_theme_applied"] = True
-    st.markdown('''
-    <style>
-    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
-    h1, h2, h3 {margin-bottom: .4rem;}
-    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
-    /* Dataframe polish */
-    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
-    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
-    /* Cards & expanders */
-    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
-    [data-testid="stExpander"] summary {font-weight: 600;}
-    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
-    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
-    .ela-ok {background: rgba(0,200,83,.12);} .ela-warn {background: rgba(251,140,0,.12);} .ela-bad {background: rgba(229,57,53,.12);}
-    /* Inputs & buttons */
-    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
-    /* Banner */
-    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
-    </style>
-    ''', unsafe_allow_html=True)
-    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
-
-# ===== injected early helpers (do not remove) =====
-def _safe_int(x, default=0):
-    try:
-        if x is None:
-            return int(default)
-        if isinstance(x, int):
-            return x
-        s = str(x).strip()
-        if s == "" or s.lower() in ("none", "nan"):
-            return int(default)
-        # try float first (handles "123.0")
-        try:
-            return int(float(s))
-        except Exception:
-            pass
-        # fallback: keep only digits
-        digits = "".join(ch for ch in s if ch.isdigit())
-        return int(digits) if digits else int(default)
-    except Exception:
-        return int(default)
-
-def _uniq_key(base: str, rfp_id: int) -> str:
-    try:
-        k = f"__uniq_counter_{base}_{rfp_id}"
-        n = int(st.session_state.get(k, 0))
-        st.session_state[k] = n + 1
-        return f"{base}_{rfp_id}_{n}"
-    except Exception:
-        import time
-        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
-# ===== end injected early helpers =====
-
-
-def y3_get_rfp_files(_conn, rfp_id: int):
+# [DEDUPED:_write_guard] def _write_guard(conn, fn, *args, **kwargs):
+# [DEDUPED:_write_guard]     with conn:
+# [DEDUPED:_write_guard]         out = fn(*args, **kwargs)
+# [DEDUPED:_write_guard]     try:
+# [DEDUPED:_write_guard]         st.cache_data.clear()
+# [DEDUPED:_write_guard]     except Exception:
+# [DEDUPED:_write_guard]         pass
+# [DEDUPED:_write_guard]     return out
+# [DEDUPED:_write_guard] 
+# [DEDUPED:_write_guard] # ELA Phase1 bootstrap
+# [DEDUPED:_write_guard] import streamlit as st
+# [DEDUPED:_write_guard] 
+# [DEDUPED:_write_guard] # Safe dataframe wrapper and monkey patch to avoid height=None issues
+# [DEDUPED:_write_guard] # [DEDUPED:_styled_dataframe] def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
+# [DEDUPED:_styled_dataframe]     kwargs = {"use_container_width": use_container_width}
+# [DEDUPED:_styled_dataframe]     if height is not None:
+# [DEDUPED:_styled_dataframe]         try:
+# [DEDUPED:_styled_dataframe]             kwargs["height"] = int(height) if height != "stretch" else "stretch"
+# [DEDUPED:_styled_dataframe]         except Exception:
+# [DEDUPED:_styled_dataframe]             if isinstance(height, str):
+# [DEDUPED:_styled_dataframe]                 kwargs["height"] = height
+# [DEDUPED:_styled_dataframe]     try:
+# [DEDUPED:_styled_dataframe]         return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
+# [DEDUPED:_styled_dataframe]     except TypeError:
+# [DEDUPED:_styled_dataframe]         return st.dataframe(df, **kwargs)
+# [DEDUPED:_styled_dataframe] 
+# [DEDUPED:_styled_dataframe] # Monkey patch st.dataframe to drop height=None safely
+# [DEDUPED:_styled_dataframe] if not hasattr(st, "_orig_dataframe"):
+# [DEDUPED:_styled_dataframe]     st._orig_dataframe = st.dataframe
+# [DEDUPED:_styled_dataframe]     def _safe_dataframe(df, **kwargs):
+# [DEDUPED:_styled_dataframe]         if "height" in kwargs and kwargs["height"] is None:
+# [DEDUPED:_styled_dataframe]             kwargs.pop("height", None)
+# [DEDUPED:_styled_dataframe]         return st._orig_dataframe(df, **kwargs)
+# [DEDUPED:_styled_dataframe]     st.dataframe = _safe_dataframe
+# [DEDUPED:_styled_dataframe] 
+# [DEDUPED:_styled_dataframe] # Ensure theme exists
+# [DEDUPED:_styled_dataframe] if "apply_theme" not in globals():
+# [DEDUPED:_styled_dataframe]     def _apply_theme_old():
+# [DEDUPED:_styled_dataframe]         if st.session_state.get("_phase1_theme_applied"):
+# [DEDUPED:_styled_dataframe]             return
+# [DEDUPED:_styled_dataframe]         st.session_state["_phase1_theme_applied"] = True
+# [DEDUPED:_styled_dataframe]         st.markdown('''
+# [DEDUPED:_styled_dataframe]         <style>
+# [DEDUPED:_styled_dataframe]         .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+# [DEDUPED:_styled_dataframe]         h1, h2, h3 {margin-bottom: .4rem;}
+# [DEDUPED:_styled_dataframe]         div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+# [DEDUPED:_styled_dataframe]         div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+# [DEDUPED:_styled_dataframe]         [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+# [DEDUPED:_styled_dataframe]         [data-testid="stExpander"] summary {font-weight: 600;}
+# [DEDUPED:_styled_dataframe]         .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+# [DEDUPED:_styled_dataframe]         button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+# [DEDUPED:_styled_dataframe]         .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+# [DEDUPED:_styled_dataframe]         </style>
+# [DEDUPED:_styled_dataframe]         ''', unsafe_allow_html=True)
+# [DEDUPED:_styled_dataframe]         st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
+# [DEDUPED:_styled_dataframe] 
+# [DEDUPED:_styled_dataframe] 
+# [DEDUPED:_styled_dataframe] 
+# [DEDUPED:_styled_dataframe] # ===== Phase 1 Theme (auto-injected) =====
+# [DEDUPED:_styled_dataframe] # [DEDUPED:_apply_theme_old] def _apply_theme_old():
+# [DEDUPED:_apply_theme_old]     import streamlit as st
+# [DEDUPED:_apply_theme_old]     if st.session_state.get("_phase1_theme_applied"):
+# [DEDUPED:_apply_theme_old]         return
+# [DEDUPED:_apply_theme_old]     st.session_state["_phase1_theme_applied"] = True
+# [DEDUPED:_apply_theme_old]     st.markdown('''
+# [DEDUPED:_apply_theme_old]     <style>
+# [DEDUPED:_apply_theme_old]     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+# [DEDUPED:_apply_theme_old]     h1, h2, h3 {margin-bottom: .4rem;}
+# [DEDUPED:_apply_theme_old]     .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+# [DEDUPED:_apply_theme_old]     /* Dataframe polish */
+# [DEDUPED:_apply_theme_old]     div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+# [DEDUPED:_apply_theme_old]     div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+# [DEDUPED:_apply_theme_old]     /* Cards & expanders */
+# [DEDUPED:_apply_theme_old]     [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+# [DEDUPED:_apply_theme_old]     [data-testid="stExpander"] summary {font-weight: 600;}
+# [DEDUPED:_apply_theme_old]     .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+# [DEDUPED:_apply_theme_old]     .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
+# [DEDUPED:_apply_theme_old]     .ela-ok {background: rgba(0,200,83,.12);} .ela-warn {background: rgba(251,140,0,.12);} .ela-bad {background: rgba(229,57,53,.12);}
+# [DEDUPED:_apply_theme_old]     /* Inputs & buttons */
+# [DEDUPED:_apply_theme_old]     .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+# [DEDUPED:_apply_theme_old]     button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+# [DEDUPED:_apply_theme_old]     /* Banner */
+# [DEDUPED:_apply_theme_old]     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+# [DEDUPED:_apply_theme_old]     </style>
+# [DEDUPED:_apply_theme_old]     ''', unsafe_allow_html=True)
+# [DEDUPED:_apply_theme_old]     st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+# [DEDUPED:_apply_theme_old] 
+# [DEDUPED:_apply_theme_old] # ===== injected early helpers (do not remove) =====
+# [DEDUPED:_apply_theme_old] # [DEDUPED:_safe_int] def _safe_int(x, default=0):
+# [DEDUPED:_safe_int]     try:
+# [DEDUPED:_safe_int]         if x is None:
+# [DEDUPED:_safe_int]             return int(default)
+# [DEDUPED:_safe_int]         if isinstance(x, int):
+# [DEDUPED:_safe_int]             return x
+# [DEDUPED:_safe_int]         s = str(x).strip()
+# [DEDUPED:_safe_int]         if s == "" or s.lower() in ("none", "nan"):
+# [DEDUPED:_safe_int]             return int(default)
+# [DEDUPED:_safe_int]         # try float first (handles "123.0")
+# [DEDUPED:_safe_int]         try:
+# [DEDUPED:_safe_int]             return int(float(s))
+# [DEDUPED:_safe_int]         except Exception:
+# [DEDUPED:_safe_int]             pass
+# [DEDUPED:_safe_int]         # fallback: keep only digits
+# [DEDUPED:_safe_int]         digits = "".join(ch for ch in s if ch.isdigit())
+# [DEDUPED:_safe_int]         return int(digits) if digits else int(default)
+# [DEDUPED:_safe_int]     except Exception:
+# [DEDUPED:_safe_int]         return int(default)
+# [DEDUPED:_safe_int] 
+# [DEDUPED:_safe_int] # [DEDUPED:_uniq_key] def _uniq_key(base: str, rfp_id: int) -> str:
+# [DEDUPED:_uniq_key]     try:
+# [DEDUPED:_uniq_key]         k = f"__uniq_counter_{base}_{rfp_id}"
+# [DEDUPED:_uniq_key]         n = int(st.session_state.get(k, 0))
+# [DEDUPED:_uniq_key]         st.session_state[k] = n + 1
+# [DEDUPED:_uniq_key]         return f"{base}_{rfp_id}_{n}"
+# [DEDUPED:_uniq_key]     except Exception:
+# [DEDUPED:_uniq_key]         import time
+# [DEDUPED:_uniq_key]         return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
+# [DEDUPED:_uniq_key] # ===== end injected early helpers =====
+# [DEDUPED:_uniq_key] 
+# [DEDUPED:_uniq_key] 
+# [DEDUPED:_uniq_key] def y3_get_rfp_files(_conn, rfp_id: int):
     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
     try:
         from contextlib import closing as _closing
@@ -650,20 +650,20 @@ except NameError:
 
 _O4_CONN = globals().get("_O4_CONN", None)
 
-def ensure_dirs():
-    from pathlib import Path as _Path
-    _Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-
-def get_db():
-    import sqlite3
-    from contextlib import closing as _closing
-    ensure_dirs()
-    conn = _db_connect(DB_PATH, check_same_thread=False)
-    with _closing(conn.cursor()) as cur:
-        cur.execute("PRAGMA foreign_keys = ON;")
-    return conn
-
-def get_o4_conn():
+# [DEDUPED:ensure_dirs] def ensure_dirs():
+# [DEDUPED:ensure_dirs]     from pathlib import Path as _Path
+# [DEDUPED:ensure_dirs]     _Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+# [DEDUPED:ensure_dirs] 
+# [DEDUPED:ensure_dirs] # [DEDUPED:get_db] def get_db():
+# [DEDUPED:get_db]     import sqlite3
+# [DEDUPED:get_db]     from contextlib import closing as _closing
+# [DEDUPED:get_db]     ensure_dirs()
+# [DEDUPED:get_db]     conn = _db_connect(DB_PATH, check_same_thread=False)
+# [DEDUPED:get_db]     with _closing(conn.cursor()) as cur:
+# [DEDUPED:get_db]         cur.execute("PRAGMA foreign_keys = ON;")
+# [DEDUPED:get_db]     return conn
+# [DEDUPED:get_db] 
+# [DEDUPED:get_db] def get_o4_conn():
     import streamlit as st
 
 # ---- helper: generate unique widget keys (Phase 0) ----
@@ -4846,7 +4846,7 @@ if _has_rows:
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
                     # Push notice to Analyzer tab (optional)
-                    if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
+                    if rfp_push_button())):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
@@ -4870,7 +4870,7 @@ if _has_rows:
                                     break
                         except Exception:
                             _raw = None
-                
+
                         def _gx(obj, *keys, default=""):
                             try:
                                 for k in keys:
@@ -4880,12 +4880,12 @@ if _has_rows:
                                 return obj if obj is not None else default
                             except Exception:
                                 return default
-                
+
                         desc = row.get("Description") or _gx(_raw, "description", default="")
                         pop_city = _gx(_raw, "placeOfPerformance", "city", default="")
                         pop_state = _gx(_raw, "placeOfPerformance", "state", default="")
                         pop = ", ".join([p for p in [pop_city, pop_state] if p])
-                
+
                         st.write(f"**Solicitation:** {row.get('Solicitation') or ''}")
                         st.write(f"**Set-Aside:** {row.get('Set-Aside') or ''}")
                         st.write(f"**PSC:** {row.get('PSC') or ''}     **NAICS:** {row.get('NAICS') or ''}")
@@ -4894,7 +4894,7 @@ if _has_rows:
                         if desc:
                             with st.expander("Description"):
                                 st.write(desc)
-                
+
                         try:
                             from contextlib import closing as _closing
                             _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
@@ -4911,7 +4911,7 @@ if _has_rows:
                                             st.write(f"- {fn} ({ln or 0} bytes)")
                         except Exception:
                             pass
-                
+
                         link = row.get("SAM Link") or ""
                         if link:
                             st.markdown(f"[Open on SAM.gov]({link})")
@@ -8756,40 +8756,40 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
-def run_subcontractor_finder_s1_hook(conn):
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        pass
-
-
-def router(page: str, conn: sqlite3.Connection) -> None:
-    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
-    import re as _re
-    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
-    fn = globals().get(name)
-    # explicit fallbacks for known variant names
-    if not callable(fn):
-        alt = {
-            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
-            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
-        }.get((page or "").strip(), [])
-        for a in alt:
-            fn = globals().get(a)
-            if callable(fn):
-                break
-    if not callable(fn):
-        import streamlit as _st
-        _st.warning(f"No handler for page '{page}' resolved as {name}.")
-        return
-    _safe_route_call(fn, conn)
-    # Hooks
-    if (page or "").strip() == "Subcontractor Finder":
-        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
-    if (page or "").strip() == "Proposal Builder":
-        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-def main() -> None:
+# [DEDUPED:run_subcontractor_finder_s1_hook] def run_subcontractor_finder_s1_hook(conn):
+# [DEDUPED:run_subcontractor_finder_s1_hook]     ensure_subfinder_s1_schema(conn)
+# [DEDUPED:run_subcontractor_finder_s1_hook]     try:
+# [DEDUPED:run_subcontractor_finder_s1_hook]         s1_render_places_panel(conn)
+# [DEDUPED:run_subcontractor_finder_s1_hook]     except Exception:
+# [DEDUPED:run_subcontractor_finder_s1_hook]         pass
+# [DEDUPED:run_subcontractor_finder_s1_hook] 
+# [DEDUPED:run_subcontractor_finder_s1_hook] 
+# [DEDUPED:run_subcontractor_finder_s1_hook] # [DEDUPED:router] def router(page: str, conn: sqlite3.Connection) -> None:
+# [DEDUPED:router]     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
+# [DEDUPED:router]     import re as _re
+# [DEDUPED:router]     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
+# [DEDUPED:router]     fn = globals().get(name)
+# [DEDUPED:router]     # explicit fallbacks for known variant names
+# [DEDUPED:router]     if not callable(fn):
+# [DEDUPED:router]         alt = {
+# [DEDUPED:router]             "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+# [DEDUPED:router]             "Backup & Data": ["run_backup_data", "run_backup_and_data"],
+# [DEDUPED:router]         }.get((page or "").strip(), [])
+# [DEDUPED:router]         for a in alt:
+# [DEDUPED:router]             fn = globals().get(a)
+# [DEDUPED:router]             if callable(fn):
+# [DEDUPED:router]                 break
+# [DEDUPED:router]     if not callable(fn):
+# [DEDUPED:router]         import streamlit as _st
+# [DEDUPED:router]         _st.warning(f"No handler for page '{page}' resolved as {name}.")
+# [DEDUPED:router]         return
+# [DEDUPED:router]     _safe_route_call(fn, conn)
+# [DEDUPED:router]     # Hooks
+# [DEDUPED:router]     if (page or "").strip() == "Subcontractor Finder":
+# [DEDUPED:router]         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
+# [DEDUPED:router]     if (page or "").strip() == "Proposal Builder":
+# [DEDUPED:router]         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+# [DEDUPED:router] def main() -> None:
     conn = get_db()
     global _O4_CONN
 
@@ -10148,7 +10148,7 @@ def _o5_send_due(conn, limit: int = 200):
     ok = 0; fail = 0; sender = _o5_pick_sender_from_session()
     for _, r in df.iterrows():
         try:
-            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]); 
+            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]);
             with conn: conn.execute("UPDATE outreach_schedules SET status='sent' WHERE id=?", (int(r["id"]),)); ok += 1
         except Exception as e:
             with conn: conn.execute("UPDATE outreach_schedules SET status='error', last_error=? WHERE id=?", (str(e)[:500], int(r["id"]))); fail += 1
@@ -10601,7 +10601,7 @@ def _s1d_select_existing_pairs(conn):
 
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
-    
+
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = _s1d_get_api_key()
     if not key:
@@ -11106,6 +11106,48 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
+
+
+# === RFP Analyzer Push Utilities (injected) ===
+try:
+    import streamlit as st  # ensure available
+except Exception:
+    pass
+
+def _safe_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()  # legacy fallback
+        except Exception:
+            pass
+
+if 'show_rfp_modal' not in st.session_state:
+    st.session_state['show_rfp_modal'] = False
+
+def rfp_push_button(label: str = "Push to RFP Analyzer", key: str = "push_to_rfp"):
+    if st.button(label, key=key):
+        st.session_state['show_rfp_modal'] = True
+
+def rfp_modal():
+    if st.session_state.get('show_rfp_modal'):
+        with st.modal("Push to RFP Analyzer", key="rfp_push_modal"):
+            st.markdown("Confirm push to **RFP Analyzer**.")
+            # Optional: Collect context here (e.g., notice_id, title, due date) if available in your app's session state.
+            cols = st.columns(2)
+            with cols[0]:
+                if st.button("Confirm push", key="rfp_confirm"):
+                    # TODO: implement actual push logic or callback here
+                    st.session_state['show_rfp_modal'] = False
+                    st.success("Pushed to RFP Analyzer.")
+                    _safe_rerun()
+            with cols[1]:
+                if st.button("Cancel", key="rfp_cancel"):
+                    st.session_state['show_rfp_modal'] = False
+                    _safe_rerun()
+# === End injected utilities ===
+
 
 
 # ==== X.6 Compliance Matrix v1 ====
@@ -11690,7 +11732,7 @@ def _init_phase1_ui():
     .ela-ok {background: rgba(0,200,83,.12);}
     .ela-warn {background: rgba(251,140,0,.12);}
     .ela-bad {background: rgba(229,57,53,.12);}
-    
+
     /* Top ribbon banner */
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     /* Sidebar branding spacing */
@@ -11702,7 +11744,7 @@ def _init_phase1_ui():
     button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
     /* Text inputs rounding */
     .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-    
+
     </style>
     ''', unsafe_allow_html=True)
 
