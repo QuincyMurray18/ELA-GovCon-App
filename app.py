@@ -1,3 +1,43 @@
+# === RFP Analyzer Push Utilities (injected) ===
+try:
+    import streamlit as st  # ensure available
+except Exception:
+    pass
+
+def _safe_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()  # legacy fallback
+        except Exception:
+            pass
+
+if 'show_rfp_modal' not in st.session_state:
+    st.session_state['show_rfp_modal'] = False
+
+def rfp_push_button(label: str = "Push to RFP Analyzer", key: str = "push_to_rfp"):
+    if st.button(label, key=key):
+        st.session_state['show_rfp_modal'] = True
+
+def rfp_modal():
+    if st.session_state.get('show_rfp_modal'):
+        with st.modal("Push to RFP Analyzer", key="rfp_push_modal"):
+            st.markdown("Confirm push to **RFP Analyzer**.")
+            # Optional: Collect context here (e.g., notice_id, title, due date) if available in your app's session state.
+            cols = st.columns(2)
+            with cols[0]:
+                if st.button("Confirm push", key="rfp_confirm"):
+                    # TODO: implement actual push logic or callback here
+                    st.session_state['show_rfp_modal'] = False
+                    st.success("Pushed to RFP Analyzer.")
+                    _safe_rerun()
+            with cols[1]:
+                if st.button("Cancel", key="rfp_cancel"):
+                    st.session_state['show_rfp_modal'] = False
+                    _safe_rerun()
+# === End injected utilities ===
+
 import streamlit as st
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
@@ -11108,45 +11148,6 @@ import re as _re
 import time as _time
 
 
-# === RFP Analyzer Push Utilities (injected) ===
-try:
-    import streamlit as st  # ensure available
-except Exception:
-    pass
-
-def _safe_rerun():
-    try:
-        st.rerun()
-    except Exception:
-        try:
-            st.experimental_rerun()  # legacy fallback
-        except Exception:
-            pass
-
-if 'show_rfp_modal' not in st.session_state:
-    st.session_state['show_rfp_modal'] = False
-
-def rfp_push_button(label: str = "Push to RFP Analyzer", key: str = "push_to_rfp"):
-    if st.button(label, key=key):
-        st.session_state['show_rfp_modal'] = True
-
-def rfp_modal():
-    if st.session_state.get('show_rfp_modal'):
-        with st.modal("Push to RFP Analyzer", key="rfp_push_modal"):
-            st.markdown("Confirm push to **RFP Analyzer**.")
-            # Optional: Collect context here (e.g., notice_id, title, due date) if available in your app's session state.
-            cols = st.columns(2)
-            with cols[0]:
-                if st.button("Confirm push", key="rfp_confirm"):
-                    # TODO: implement actual push logic or callback here
-                    st.session_state['show_rfp_modal'] = False
-                    st.success("Pushed to RFP Analyzer.")
-                    _safe_rerun()
-            with cols[1]:
-                if st.button("Cancel", key="rfp_cancel"):
-                    st.session_state['show_rfp_modal'] = False
-                    _safe_rerun()
-# === End injected utilities ===
 
 
 
