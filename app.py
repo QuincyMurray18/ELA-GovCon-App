@@ -69,6 +69,64 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 
 import streamlit as st
+
+
+# ---- Fallback Deals helper to avoid NameError before full defs are parsed ----
+try:
+    _handle_add_to_deals_row
+except NameError:
+    def _handle_add_to_deals_row(conn, row) -> int:
+        """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
+        from contextlib import closing as _closing
+        # Insert deal
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                (
+                    row.get("Title") or "",
+                    row.get("Agency Path") or "",
+                    "Bidding",
+                    None,
+                    row.get("Notice ID") or "",
+                    row.get("Solicitation") or "",
+                    row.get("Posted") or "",
+                    row.get("Response Due") or "",
+                    row.get("NAICS") or "",
+                    row.get("PSC") or "",
+                    row.get("SAM Link") or "",
+                ),
+            )
+            deal_id = cur.lastrowid
+            conn.commit()
+        # Ensure rfps entry
+        rfp_id = None
+        try:
+            with _closing(conn.cursor()) as cur:
+                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get("Notice ID") or ""),))
+                r = cur.fetchone()
+                if r:
+                    rfp_id = int(r[0])
+                else:
+                    cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (str(row.get("Notice ID") or ""), row.get("SAM Link") or ""))
+                    rfp_id = int(cur.lastrowid)
+                conn.commit()
+        except Exception:
+            rfp_id = None
+        # Attachments
+        att_saved = 0
+        try:
+            if rfp_id and "_fetch_and_save_now" in globals():
+                att_saved = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id)) or 0
+        except Exception:
+            att_saved = 0
+        try:
+            extra = _add_notice_attachments_to_deal(conn, str(row.get("Notice ID") or ""), int(deal_id)) or []
+        except Exception:
+            extra = []
+        return int(att_saved or 0) + len(extra or [])
+# -----------------------------------------------------------------------------
+
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
 # Set GOVCON_API_BASE or st.secrets['api']['base_url'] to use the API.
