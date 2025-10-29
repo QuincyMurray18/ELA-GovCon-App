@@ -4791,7 +4791,7 @@ if _has_rows:
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
                     # Push notice to Analyzer tab (optional)
-                    if st.button('Push to RFP Analyzer', key=_uniq_key("push_to_rfp", int(i, on_click=lambda: st.session_state.update({'rfp_modal_open': True})))):
+                    if st.button('Push to RFP Analyzer', key='rfp_push_btn', on_click=lambda: st.session_state.update({'rfp_modal_open': True})):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
