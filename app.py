@@ -459,7 +459,7 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 # [DEDUPED:_uniq_key]     try:
 # [DEDUPED:_uniq_key]         from contextlib import closing as _closing
 # [DEDUPED:_uniq_key]         with _closing(_conn.cursor()) as cur:
-# [DEDUPED:_uniq_key]             cur.execute("SELECT id, file_name, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
+# [DEDUPED:_uniq_key]             cur.execute("SELECT id, filename, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
 # [DEDUPED:_uniq_key]             return cur.fetchall() or []
 # [DEDUPED:_uniq_key]     except Exception:
 # [DEDUPED:_uniq_key]         return []
@@ -476,7 +476,7 @@ def _x3_open_modal(row_dict: dict):
     except Exception:
         pass
 
-def _x3_render_modal(notice: dict):
+def _x3_render_modal(conn, notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
     except Exception as e:
@@ -4263,10 +4263,10 @@ def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
             with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
-                _x3_render_modal(_notice)
+                _x3_render_modal(conn, _notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
-                _x3_render_modal(_notice)
+                _x3_render_modal(conn, _notice)
     ai = y55_ai_parse(text or "")
     l_items2 = y55_merge_lm(l_items, ai.get("l_items", []))
     clins2 = y55_merge_clins(clins, ai.get("clins", []))
@@ -4529,10 +4529,10 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
             with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
-                _x3_render_modal(_notice)
+                _x3_render_modal(conn, _notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
-                _x3_render_modal(_notice)
+                _x3_render_modal(conn, _notice)
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -4770,14 +4770,8 @@ if _has_rows:
                                     cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
                                     rfp_id = cur.lastrowid
                                     _db.commit()
-                                att_saved = 0
-                                try:
-                                    for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
-                                        try:
-                                            save_rfp_file_db(_db, rfp_id, fname, fbytes)
-                                            att_saved += 1
-                                        except Exception:
-                                            pass
+att_saved = _fetch_and_save_now(_db, str(row.get('Notice ID') or ''), int(rfp_id))
+
                                 except Exception:
                                     pass
                             except Exception:
@@ -4800,10 +4794,10 @@ if _has_rows:
                         st.session_state["x3_show_modal"] = True
                         try:
                             with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(notice.get("Notice ID")))):
-                                _x3_render_modal(notice)
+                                _x3_render_modal(conn, notice)
                         except Exception:
                             with st.expander("RFP Analyzer", expanded=True):
-                                _x3_render_modal(notice)
+                                _x3_render_modal(conn, notice)
 
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
