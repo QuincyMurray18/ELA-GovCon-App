@@ -70,6 +70,66 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 import streamlit as st
 
+def _coerce_notice_id(obj) -> str:
+    """Return a normalized Notice ID string from dict/Series or session, else ''."""
+    try:
+        if obj is not None and hasattr(obj, "to_dict"):
+            obj = obj.to_dict()
+    except Exception:
+        pass
+    cand = []
+    src = obj if isinstance(obj, dict) else {}
+    # Common keys
+    keys = [
+        "Notice ID","notice_id","NoticeID","noticeId","NOTICE_ID","id","Notice Id","sam_notice_id","SAM Notice ID"
+    ]
+    for k in keys:
+        v = src.get(k) if isinstance(src, dict) else None
+        if v is not None and str(v).strip():
+            cand.append(str(v).strip())
+    # Session fallbacks
+    try:
+        ss = st.session_state
+        for key in ["x3_modal_notice","sam_selected_notice","sam_selected_row"]:
+            d = ss.get(key)
+            if isinstance(d, dict):
+                for k in keys:
+                    v = d.get(k)
+                    if v is not None and str(v).strip():
+                        cand.append(str(v).strip())
+    except Exception:
+        pass
+    return cand[0] if cand else ""
+
+
+# --- Streamlit height sanitizers to avoid "Invalid height value: None" ---
+try:
+    _st_df_patched
+except NameError:
+    _st_df_patched = True
+    try:
+        _orig_dataframe = st.dataframe
+        def _df_sanitized(data, *args, **kwargs):
+            h = kwargs.get("height", None)
+            if not isinstance(h, int) or h <= 0:
+                kwargs["height"] = "stretch"
+            return _orig_dataframe(data, *args, **kwargs)
+        st.dataframe = _df_sanitized
+    except Exception:
+        pass
+    try:
+        _orig_data_editor = st.data_editor
+        def _de_sanitized(data, *args, **kwargs):
+            h = kwargs.get("height", None)
+            if not isinstance(h, int) or h <= 0:
+                kwargs["height"] = "stretch"
+            return _orig_data_editor(data, *args, **kwargs)
+        st.data_editor = _de_sanitized
+    except Exception:
+        pass
+# ------------------------------------------------------------------------
+
+
 # --- Notice row resolver to avoid NameError and type mismatches ---
 def _get_notice_row(row=None):
     try:
@@ -171,12 +231,12 @@ except NameError:
         rfp_id = None
         try:
             with _closing(conn.cursor()) as cur:
-                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get("Notice ID") or ""),))
+                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
                 r = cur.fetchone()
                 if r:
                     rfp_id = int(r[0])
                 else:
-                    cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (str(row.get("Notice ID") or ""), row.get("SAM Link") or ""))
+                    cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
                     rfp_id = int(cur.lastrowid)
                 conn.commit()
         except Exception:
@@ -185,11 +245,11 @@ except NameError:
         att_saved = 0
         try:
             if rfp_id and "_fetch_and_save_now" in globals():
-                att_saved = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id)) or 0
+                att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
         except Exception:
             att_saved = 0
         try:
-            extra = _add_notice_attachments_to_deal(conn, str(row.get("Notice ID") or ""), int(deal_id)) or []
+            extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
         except Exception:
             extra = []
         return int(att_saved or 0) + len(extra or [])
@@ -4958,7 +5018,7 @@ if _has_rows:
                                     st.write(f"Attachments saved: **{n_files}**")
                                 with cB:
                                     if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
-                                        c = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id))
+                                        c = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id))
                                         st.success(f"Fetched {c} attachment(s).")
                                         st.rerun()
 
@@ -4972,7 +5032,7 @@ if _has_rows:
                                     st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
                                     # Try SAM description fallback
                                     try:
-                                        descs = sam_try_fetch_attachments(str(row.get("Notice ID") or "")) or []
+                                        descs = sam_try_fetch_attachments(_coerce_notice_id(row)) or []
                                         for name, b in descs:
                                             if name.endswith("_description.html"):
                                                 import bs4
@@ -5058,7 +5118,7 @@ if _has_rows:
                         try:
                             for _rec in st.session_state.get("sam_records_raw", []) or []:
                                 _nid = str(_rec.get("noticeId") or _rec.get("id") or "")
-                                if _nid == str(row.get("Notice ID") or ""):
+                                if _nid == _coerce_notice_id(row):
                                     _raw = _rec
                                     break
                         except Exception:
@@ -5092,7 +5152,7 @@ if _has_rows:
                             from contextlib import closing as _closing
                             _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
-                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
+                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (_coerce_notice_id(row),))
                                 r = cur.fetchone()
                                 if r:
                                     _rfp_id = r[0]
@@ -12134,12 +12194,12 @@ def _handle_add_to_deals_row(conn, row) -> int:
     rfp_id = None
     try:
         with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get("Notice ID") or ""),))
+            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
             r = cur.fetchone()
             if r:
                 rfp_id = int(r[0])
             else:
-                cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (str(row.get("Notice ID") or ""), row.get("SAM Link") or ""))
+                cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
                 rfp_id = int(cur.lastrowid)
             conn.commit()
     except Exception:
@@ -12148,11 +12208,11 @@ def _handle_add_to_deals_row(conn, row) -> int:
     att_saved = 0
     try:
         if rfp_id and "_fetch_and_save_now" in globals():
-            att_saved = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id)) or 0
+            att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
     except Exception:
         att_saved = 0
     try:
-        extra = _add_notice_attachments_to_deal(conn, str(row.get("Notice ID") or ""), int(deal_id)) or []
+        extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
     except Exception:
         extra = []
     return int(att_saved or 0) + len(extra or [])
