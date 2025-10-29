@@ -78,7 +78,7 @@ def _get_notice_row(row=None):
     except Exception:
         pass
     try:
-        nr = globals().get("_get_notice_row(row)", None)
+        nr = globals().get("_get_notice_row(row if 'row' in locals() else None)", None)
         if nr is not None:
             return nr.to_dict() if hasattr(nr, "to_dict") else nr
     except Exception:
@@ -4583,9 +4583,9 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 
 
-# ---- Phase 3 helpers: ensure RFP record, modal renderer ----def _ensure_rfp_for_notice(conn, _get_notice_row(row): dict) -> int:
+# ---- Phase 3 helpers: ensure RFP record, modal renderer ----def _ensure_rfp_for_notice(conn, _get_notice_row(row if 'row' in locals() else None): dict) -> int:
     from contextlib import closing as _closing
-    nid = str(_get_notice_row(row).get("Notice ID") or "")
+    nid = str(_get_notice_row(row if 'row' in locals() else None).get("Notice ID") or "")
     if not nid:
         raise ValueError("Missing Notice ID")
     with _closing(conn.cursor()) as cur:
@@ -4595,7 +4595,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
             return int(row[0])
         cur.execute(
             "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-            (_get_notice_row(row).get("Title") or "", _get_notice_row(row).get("Solicitation") or "", nid, _get_notice_row(row).get("SAM Link") or "", "")
+            (_get_notice_row(row if 'row' in locals() else None).get("Title") or "", _get_notice_row(row if 'row' in locals() else None).get("Solicitation") or "", nid, _get_notice_row(row if 'row' in locals() else None).get("SAM Link") or "", "")
         )
         rid = int(cur.lastrowid)
         conn.commit()
