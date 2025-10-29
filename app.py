@@ -4764,16 +4764,30 @@ if _has_rows:
                                 )
                                 deal_id = cur.lastrowid
                                 _db.commit()
-                            # Optional: create an RFP shell and try to fetch attachments
+                            # Optional: ensure an RFP shell exists and try to fetch attachments
+                            att_saved = 0
                             try:
-                                with _closing(_db.cursor()) as cur:
-                                    cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
-                                    rfp_id = cur.lastrowid
-                                    _db.commit()
-att_saved = _fetch_and_save_now(_db, str(row.get('Notice ID') or ''), int(rfp_id))
-
+                                rfp_id = None
+                                try:
+                                    with _closing(_db.cursor()) as cur:
+                                        cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get('Notice ID') or ''),))
+                                        r = cur.fetchone()
+                                        if r:
+                                            rfp_id = int(r[0])
+                                        else:
+                                            cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)",
+                                                        (str(row.get('Notice ID') or ''), row.get('SAM Link') or ''))
+                                            rfp_id = int(cur.lastrowid)
+                                        _db.commit()
                                 except Exception:
                                     pass
+                                if rfp_id:
+                                    try:
+                                        att_saved = _fetch_and_save_now(_db, str(row.get('Notice ID') or ''), int(rfp_id))
+                                    except Exception:
+                                        att_saved = 0
+                            except Exception:
+                                att_saved = 0
                             except Exception:
                                 pass
                             st.success(f"Saved to Deals{' · ' + str(att_saved) + ' attachment(s) pulled' if att_saved else ''}")
