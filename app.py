@@ -880,10 +880,31 @@ def _o3c(cursor):
         except Exception:
             pass
 def _migrate_deals_columns(conn):
-    """
-    Add columns used by Deals and SAM Watch if missing. Idempotent.
+    """Add columns used by Deals and SAM Watch if missing. Idempotent."""
+    try:
+        import pandas as _pd
+        cur_cols = _pd.read_sql_query("PRAGMA table_info(deals);", conn)
+        have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
+    except Exception:
+        have = set()
+    def _add(col, ddl):
+        if col not in have:
+            try:
+                with closing(conn.cursor()) as _c:
+                    _c.execute(f"ALTER TABLE deals ADD COLUMN {ddl};")
+                conn.commit()
+            except Exception:
+                pass
+    _add("agency", "agency TEXT")
+    _add("value", "value REAL")
+    _add("sam_url", "sam_url TEXT")
+    _add("notice_id", "notice_id TEXT")
+    _add("solnum", "solnum TEXT")
+    _add("posted_date", "posted_date TEXT")
+    _add("rfp_deadline", "rfp_deadline TEXT")
+    _add("naics", "naics TEXT")
+    _add("psc", "psc TEXT")
 
-# ---- Phase 0: Ask RFP Analyzer modal wiring ----
 def _ask_rfp_analyzer_modal(opportunity=None):
     # Use st.dialog when available, otherwise fallback to expander
     try:
@@ -1025,17 +1046,18 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
             cur.execute("SELECT id FROM rtm_requirements WHERE rfp_id=? AND req_key=?;", (int(rfp_id), key))
             if cur.fetchone():
                 continue
-            cur.execute("""
-                INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                VALUES(?,?,?,?,?,?,?, ?, ?);
-            """, (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now))
+            cur.execute(
+                "INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?);",
+                (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now)
+            )
+
             inserted += 1
     # 2) From SOW chunks, simple heuristic
     try:
-        df_chunks = pd.read_sql_query("""
-            SELECT id, file_name, page, text FROM rfp_chunks
-            WHERE rfp_id=? ORDER BY file_name, page, id
-        """, conn, params=(int(rfp_id),))
+        df_chunks = pd.read_sql_query(
+            "SELECT id, file_name, page, text FROM rfp_chunks WHERE rfp_id=? ORDER BY file_name, page, id",
+            conn, params=(int(rfp_id),)
+        )
     except Exception:
         df_chunks = pd.DataFrame(columns=["file_name","page","text"])
     trig = re.compile(r"\\b(shall|must|will|provide|furnish)\\b", re.I)
@@ -1054,10 +1076,11 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
                     cur.execute("SELECT id FROM rtm_requirements WHERE rfp_id=? AND req_key=?;", (int(rfp_id), key))
                     if cur.fetchone():
                         continue
-                    cur.execute("""
-                        INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                        VALUES(?,?,?,?,?,?,?, ?, ?);
-                    """, (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now))
+                    cur.execute(
+                        "INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?);",
+                        (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now)
+                    )
+
                     inserted += 1
         if inserted >= max_rows:
             break
@@ -4355,7 +4378,7 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
 def run_contacts(conn: sqlite3.Connection) -> None:
     
     _compat_vendors_view(conn)
-st.header("Contacts")
+    st.header("Contacts")
     with st.form("add_contact", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
@@ -4392,7 +4415,7 @@ st.header("Contacts")
 def run_deals(conn: sqlite3.Connection) -> None:
     
     _migrate_deals_columns(conn)
-st.header("Deals")
+    st.header("Deals")
     with st.form("add_deal", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
         with c1:
@@ -4762,118 +4785,13 @@ if _has_rows:
                 with c4:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
 
+
                         try:
-                            from contextlib import closing as _closing
-                            _db = globals().get('conn')
-                            _owned = False
-                            if _db is None:
-                                _owned = True
-                                _db = _db_connect(DB_PATH, check_same_thread=False)
-                            with _closing(_db.cursor()) as cur:
-                                cur.execute(
-                                    """
-                                    INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                    """
-                                    ,
-                                    (
-                                        row.get("Title") or "",
-                                        row.get("Agency Path") or "",
-                                        "Bidding",
-                                        None,
-                                        row.get("Notice ID") or "",
-                                        row.get("Solicitation") or "",
-                                        row.get("Posted") or "",
-                                        row.get("Response Due") or "",
-                                        row.get("NAICS") or "",
-                                        row.get("PSC") or "",
-                                        row.get("SAM Link") or "",
-                                    ),
-                                )
-                                deal_id = cur.lastrowid
-                                _db.commit()
-                            rfp_id = None
-                            try:
-                                with _closing(_db.cursor()) as cur:
-                                    cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get('Notice ID') or ''),))
-                                    r = cur.fetchone()
-                                    if r:
-                                        rfp_id = int(r[0])
-                                    else:
-                                        cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (str(row.get('Notice ID') or ''), row.get('SAM Link') or ''))
-                                        rfp_id = int(cur.lastrowid)
-                                    _db.commit()
-                            except Exception:
-                                rfp_id = None
-                            att_saved = 0
-                            try:
-                                if rfp_id:
-                                    att_saved = _fetch_and_save_now(_db, str(row.get('Notice ID') or ''), int(rfp_id)) or 0
-                            except Exception:
-                                att_saved = 0
-                            try:
-                                extra = _add_notice_attachments_to_deal(_db, str(row.get('Notice ID') or ''), int(deal_id)) or []
-                            except Exception:
-                                extra = []
-                            total_saved = int(att_saved or 0) + len(extra or [])
-                            st.success(f"Saved to Deals{' · ' + str(total_saved) + ' attachment(s) pulled' if total_saved else ''}")
+                            total = _handle_add_to_deals_row(conn, row)
+                            st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
                         except Exception as e:
-                            st.error("Failed to save deal: %s" % (e,))
-                        finally:
-                            try:
-                                if _owned:
-                                    _db.close()
-                            except Exception:
-                                pass
+                            st.error(f"Failed to save deal: {e}")
 
-                            st.success(f"Saved to Deals{' · ' + str(total_saved) + ' attachment(s) pulled' if total_saved else ''}")
-                        except Exception as e:
-                            st.error("Failed to save deal: %s" % (e,))
-                        finally:
-                            try:
-                                if _owned:
-                                    _db.close()
-                            except Exception:
-                                pass
-
-                            # Optional: ensure an RFP shell exists and try to fetch attachments
-                            att_saved = 0
-                            try:
-                                rfp_id = None
-                                try:
-                                    with _closing(_db.cursor()) as cur:
-                                        cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get('Notice ID') or ''),))
-                                        r = cur.fetchone()
-                                        if r:
-                                            rfp_id = int(r[0])
-                                        else:
-                                            cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)",
-                                                        (str(row.get('Notice ID') or ''), row.get('SAM Link') or ''))
-                                            rfp_id = int(cur.lastrowid)
-                                        _db.commit()
-                                except Exception:
-                                    pass
-                                if rfp_id:
-                                    try:
-                                        att_saved = _fetch_and_save_now(_db, str(row.get('Notice ID') or ''), int(rfp_id))
-                                    except Exception:
-            att_saved = 0
-
-                                att_saved = 0
-                            except Exception:
-                                pass
-                            st.success(f"Saved to Deals{' · ' + str(att_saved) + ' attachment(s) pulled' if att_saved else ''}")
-                        except Exception as e:
-                            st.error("Failed to save deal: %s" % (e,))
-                        finally:
-                            try:
-                                if _owned:
-                                    _db.close()
-                            except Exception:
-                                pass
-                with c5:
-
-                    # Ask RFP Analyzer (Phase 3 modal)
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
                         notice = row.to_dict()
                         st.session_state["x3_modal_notice"] = notice
@@ -12051,3 +11969,55 @@ def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
         except Exception:
             pass
     return saved
+
+
+def _handle_add_to_deals_row(conn, row) -> int:
+    """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
+    from contextlib import closing as _closing
+    # Insert deal
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            (
+                row.get("Title") or "",
+                row.get("Agency Path") or "",
+                "Bidding",
+                None,
+                row.get("Notice ID") or "",
+                row.get("Solicitation") or "",
+                row.get("Posted") or "",
+                row.get("Response Due") or "",
+                row.get("NAICS") or "",
+                row.get("PSC") or "",
+                row.get("SAM Link") or "",
+            ),
+        )
+        deal_id = cur.lastrowid
+        conn.commit()
+    # Ensure rfps entry
+    rfp_id = None
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (str(row.get("Notice ID") or ""),))
+            r = cur.fetchone()
+            if r:
+                rfp_id = int(r[0])
+            else:
+                cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (str(row.get("Notice ID") or ""), row.get("SAM Link") or ""))
+                rfp_id = int(cur.lastrowid)
+            conn.commit()
+    except Exception:
+        rfp_id = None
+    # Attachments
+    att_saved = 0
+    try:
+        if rfp_id and "_fetch_and_save_now" in globals():
+            att_saved = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id)) or 0
+    except Exception:
+        att_saved = 0
+    try:
+        extra = _add_notice_attachments_to_deal(conn, str(row.get("Notice ID") or ""), int(deal_id)) or []
+    except Exception:
+        extra = []
+    return int(att_saved or 0) + len(extra or [])
