@@ -952,14 +952,14 @@ def _render_ask_rfp_button(opportunity=None):
 
 
 # Bridge names
-sqlite3 = _rtm_sqlite3
-pd = _rtm_pd
-st = _rtm_st
-re = _rtm_re
-json = _rtm_json
-hashlib = _rtm_hashlib
-closing = _rtm_closing
-
+# sqlite3 = _rtm_sqlite3
+# pd = _rtm_pd
+# st = _rtm_st
+# re = _rtm_re
+# json = _rtm_json
+# hashlib = _rtm_hashlib
+# closing = _rtm_closing
+# 
 # === RTM + Amendment helpers ===
 
 def _now_iso():
@@ -4815,20 +4815,16 @@ if _has_rows:
 
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
-
                     # Render modal if requested
-                    if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
+                    if st.session_state.get("x3_show_modal") and (st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID")):
                         try:
-                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID"))))
+                            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID")))):
+                                _x3_render_modal(conn, st.session_state.get("x3_modal_notice") or {})
                         except Exception:
-                            # Fallback if modal unavailable
-                            ctx = st.container()
-                        with ctx:
-                            try:
-                                _notice = st.session_state.get("x3_modal_notice") or {}
-                                rfp_id = _ensure_rfp_for_notice(conn, _notice)
-                                st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
-                                # Attachments area
+                            with st.expander("RFP Analyzer", expanded=True):
+                                _x3_render_modal(conn, st.session_state.get("x3_modal_notice") or {})
+
+                    # Attachments area
                                 try:
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
@@ -4921,9 +4917,7 @@ if _has_rows:
                                     ]
                                     st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
                                     st.success("Outline drafted and saved. Open Proposal Builder to continue.")
-                            except Exception as _e:
-                                st.error(f"Modal error: {_e}")
-                    # Push notice to Analyzer tab (optional)
+                                                # Push notice to Analyzer tab (optional)
                     if rfp_push_button():
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
@@ -11795,9 +11789,13 @@ def _sidebar_brand():
 
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
     try:
-        return _styled_dataframe(df, use_container_width=use_container_width, height=height, hide_index=hide_index, column_config=column_config)
+        return st.dataframe(df, use_container_width=use_container_width, height=height, hide_index=hide_index, column_config=column_config)
     except TypeError:
-        return _styled_dataframe(df, use_container_width=use_container_width, height=height)
+        try:
+            return st.dataframe(df, use_container_width=use_container_width, height=height)
+        except Exception:
+            return st.dataframe(df)
+
 
 def _chip(text: str, kind: str = 'neutral'):
     cls = 'ela-chip'
