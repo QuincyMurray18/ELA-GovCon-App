@@ -70,6 +70,21 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 import streamlit as st
 
+def _extract_notice_id_from_url(u: str) -> str:
+    try:
+        if not u:
+            return ""
+        # Common patterns: ...?id=XXXXXXXX, opp_id=XXXXXXXX
+        m = re.search(r"[?&](?:id|opp_id)=([A-Za-z0-9\-]+)", u)
+        if m:
+            return m.group(1)
+        # Fallback: last path segment if it looks like an id
+        m = re.search(r"/([A-Za-z0-9\-]{8,})/?(?:\?|$)", u)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
 def _coerce_notice_id(obj) -> str:
     """Return a normalized Notice ID string from dict/Series or session, else ''."""
     try:
@@ -79,6 +94,16 @@ def _coerce_notice_id(obj) -> str:
         pass
     cand = []
     src = obj if isinstance(obj, dict) else {}
+    # Try URL fields early
+    try:
+        for k in ['SAM Link','sam_url','url','link','samLink','sam_link']:
+            v = src.get(k) if isinstance(src, dict) else None
+            if isinstance(v, str):
+                nid = _extract_notice_id_from_url(v)
+                if nid:
+                    cand.append(nid)
+    except Exception:
+        pass
     # Common keys
     keys = [
         "Notice ID","notice_id","NoticeID","noticeId","NOTICE_ID","id","Notice Id","sam_notice_id","SAM Notice ID"
@@ -93,6 +118,13 @@ def _coerce_notice_id(obj) -> str:
         for key in ["x3_modal_notice","sam_selected_notice","sam_selected_row"]:
             d = ss.get(key)
             if isinstance(d, dict):
+                # URL fields in session
+                for kk in ['SAM Link','sam_url','url','link']:
+                    vv = d.get(kk)
+                    if isinstance(vv, str):
+                        nid = _extract_notice_id_from_url(vv)
+                        if nid:
+                            cand.append(nid)
                 for k in keys:
                     v = d.get(k)
                     if v is not None and str(v).strip():
@@ -4649,7 +4681,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
     if not nid:
         
         try:
-            st.warning("No Notice ID found for this row. Please select a notice or open details and try again.")
+            st.warning("No Notice ID found. Select a notice first. Hint: set SAM Link on the row or open details so we can parse the id.")
         except Exception:
             pass
         return 0
@@ -12216,3 +12248,64 @@ def _handle_add_to_deals_row(conn, row) -> int:
     except Exception:
         extra = []
     return int(att_saved or 0) + len(extra or [])
+
+
+def _sam_api_key():
+    try:
+        return st.secrets.get("sam", {}).get("api_key")  # st.secrets["sam"]["api_key"]
+    except Exception:
+        pass
+    try:
+        import os
+        return os.environ.get("SAM_API_KEY")
+    except Exception:
+        return None
+
+def _sam_fetch_docs(notice_id: str):
+    """Best-effort fetch of attachments list from SAM.gov API. Returns [{'url','filename'}, ...] or []"""
+    ak = _sam_api_key()
+    if not ak or not notice_id:
+        return []
+    urls = [
+        f"https://api.sam.gov/prod/opportunities/v3/opportunities/{notice_id}?api_key={ak}",
+        f"https://api.sam.gov/prod/opportunities/v2/opportunities/{notice_id}?api_key={ak}",
+    ]
+    out = []
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=20)
+            if r.status_code != 200:
+                continue
+            j = r.json()
+            # Try common shapes
+            paths = [
+                ["noticeData","attachments"],
+                ["data","noticeData","attachments"],
+                ["opportunity","attachments"],
+                ["attachments"],
+            ]
+            found = None
+            for p in paths:
+                cur = j
+                ok = True
+                for key in p:
+                    if isinstance(cur, dict) and key in cur:
+                        cur = cur[key]
+                    else:
+                        ok = False
+                        break
+                if ok and isinstance(cur, list):
+                    found = cur
+                    break
+            if isinstance(found, list):
+                for d in found:
+                    if isinstance(d, dict):
+                        url = d.get("url") or d.get("URI") or d.get("uri") or ""
+                        name = d.get("fileName") or d.get("filename") or url.split('/')[-1]
+                        if url:
+                            out.append({"url": url, "filename": name})
+                if out:
+                    break
+        except Exception:
+            continue
+    return out
