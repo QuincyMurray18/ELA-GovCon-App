@@ -264,65 +264,10 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
     return _inner(_ai_cache_key(question, context_hash), question, context_hash)
 
 # Expand Phase 0 write guard to clear caches after commits
-def _write_guard(conn, fn, *args, **kwargs):
-    with conn:
-        out = fn(*args, **kwargs)
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    return out
 
-# ELA Phase1 bootstrap
-import streamlit as st
+# Duplicate definition of _write_guard removed by cleaner
 
-# Safe dataframe wrapper and monkey patch to avoid height=None issues
-def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
-    kwargs = {"use_container_width": use_container_width}
-    if height is not None:
-        try:
-            kwargs["height"] = int(height) if height != "stretch" else "stretch"
-        except Exception:
-            if isinstance(height, str):
-                kwargs["height"] = height
-    try:
-        return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
-    except TypeError:
-        return st.dataframe(df, **kwargs)
-
-# Monkey patch st.dataframe to drop height=None safely
-if not hasattr(st, "_orig_dataframe"):
-    st._orig_dataframe = st.dataframe
-    def _safe_dataframe(df, **kwargs):
-        if "height" in kwargs and kwargs["height"] is None:
-            kwargs.pop("height", None)
-        return st._orig_dataframe(df, **kwargs)
-    st.dataframe = _safe_dataframe
-
-# Ensure theme exists
-if "apply_theme" not in globals():
-    def _apply_theme_old():
-        if st.session_state.get("_phase1_theme_applied"):
-            return
-        st.session_state["_phase1_theme_applied"] = True
-        st.markdown('''
-        <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
-        h1, h2, h3 {margin-bottom: .4rem;}
-        div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
-        div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
-        [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
-        [data-testid="stExpander"] summary {font-weight: 600;}
-        .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-        button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
-        .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
-        </style>
-        ''', unsafe_allow_html=True)
-        st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
-
-
-
-# ===== Phase 1 Theme (auto-injected) =====
+# Duplicate definition of _styled_dataframe removed by cleaner
 def _apply_theme_old():
     import streamlit as st
     if st.session_state.get("_phase1_theme_applied"):
@@ -4846,7 +4791,7 @@ if _has_rows:
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
                     # Push notice to Analyzer tab (optional)
-                    if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
+                    if st.button('Push to RFP Analyzer', key=_uniq_key("push_to_rfp", int(i, on_click=lambda: st.session_state.update({'rfp_modal_open': True})))):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
@@ -8756,215 +8701,8 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
-def run_subcontractor_finder_s1_hook(conn):
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        pass
 
-
-def router(page: str, conn: sqlite3.Connection) -> None:
-    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
-    import re as _re
-    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
-    fn = globals().get(name)
-    # explicit fallbacks for known variant names
-    if not callable(fn):
-        alt = {
-            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
-            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
-        }.get((page or "").strip(), [])
-        for a in alt:
-            fn = globals().get(a)
-            if callable(fn):
-                break
-    if not callable(fn):
-        import streamlit as _st
-        _st.warning(f"No handler for page '{page}' resolved as {name}.")
-        return
-    _safe_route_call(fn, conn)
-    # Hooks
-    if (page or "").strip() == "Subcontractor Finder":
-        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
-    if (page or "").strip() == "Proposal Builder":
-        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-def main() -> None:
-    conn = get_db()
-    global _O4_CONN
-
-    st.title(APP_TITLE)
-    st.caption(BUILD_LABEL)
-    # Y0 main panel (always on)
-    try:
-        y0_ai_panel()
-    except Exception:
-        pass
-    router(nav(), conn)
-
-
-
-# --- Outreach schema guard: fallback stub used if the full implementation is defined later ---
-if "_o3_ensure_schema" not in globals():
-    def _o3_ensure_schema(conn):
-        try:
-            from contextlib import closing
-            with closing(conn.cursor()) as cur:
-                # Minimal tables used by Outreach features
-                cur.execute("CREATE TABLE IF NOT EXISTS vendors_t (id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT, city TEXT, state TEXT, naics TEXT)")
-                cur.execute("CREATE TABLE IF NOT EXISTS current_tenant (id INTEGER PRIMARY KEY, ctid INTEGER)")
-                cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES (1, 1)")
-                cur.execute("CREATE TABLE IF NOT EXISTS outreach_templates (id INTEGER PRIMARY KEY, name TEXT, subject TEXT, body TEXT)")
-                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-            conn.commit()
-        except Exception:
-            pass
-
-
-# --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
-if "_o3_collect_recipients_ui" not in globals():
-    def _o3_collect_recipients_ui(conn):
-        import pandas as _pd
-        q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
-        params = []
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            f_naics = st.text_input("NAICS filter", key="o3_f_naics")
-        with c2:
-            f_state = st.text_input("State filter", key="o3_f_state")
-        with c3:
-            f_city = st.text_input("City filter", key="o3_f_city")
-        if f_naics:
-            q += " AND IFNULL(naics,'') LIKE ?"
-            params.append(f"%{f_naics}%")
-        if f_state:
-            q += " AND IFNULL(state,'') LIKE ?"
-            params.append(f"%{f_state}%")
-        if f_city:
-            q += " AND IFNULL(city,'') LIKE ?"
-            params.append(f"%{f_city}%")
-        try:
-            df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
-        except Exception:
-            df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
-        if df is None or df.empty:
-            # fallback to vendors table
-            q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
-            try:
-                df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
-            except Exception:
-                df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
-        st.caption(f"{len(df)} vendors match filters")
-        if not df.empty:
-            _styled_dataframe(df, use_container_width=True, hide_index=True)
-        return df
-
-# --- Outreach SMTP sender picker: working fallback ---
-if "_o3_render_sender_picker" not in globals():
-    def _o3_render_sender_picker_legacy():
-        import streamlit as st
-        conn = get_o4_conn()
-        try:
-            ensure_outreach_o1_schema(conn)
-        except Exception:
-            pass
-        _ensure_email_accounts_schema(conn)
-        rows = _get_senders(conn)
-        if not rows:
-            st.info("No sender accounts configured. Add one now:")
-            with st.form("o4_inline_add_sender", clear_on_submit=True):
-                email = st.text_input("Email address")
-                display = st.text_input("Display name")
-                pw = st.text_input("App password", type="password")
-                ok = st.form_submit_button("Save sender")
-                if ok and email:
-                    try:
-                        with conn:
-                            conn.execute("""
-                            INSERT INTO email_accounts(user_email, display_name, app_password)
-                            VALUES(?,?,?)
-                            ON CONFLICT(user_email) DO UPDATE SET
-                                display_name=excluded.display_name,
-                                app_password=excluded.app_password
-                            """, (email.strip(), display or "", pw or ""))
-                        st.success("Saved")
-                        try:
-                            import streamlit as st
-                            st.session_state["o4_sender_sel"] = email.strip()
-                        except Exception:
-                            pass
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Save failed: {e}")
-            if ok and email:
-                conn.execute("INSERT OR REPLACE INTO email_accounts(user_email, display_name, app_password) VALUES(?,?,?)",
-                             (email.strip().lower(), display.strip(), pw.strip()))
-                conn.commit()
-                rows = _get_senders(conn)
-        if not rows:
-            st.error("No sender accounts configured")
-            return {"email": "", "app_password": ""}
-        choices = [r[0] for r in rows] + ["<add new>"]
-        sel = st.selectbox("From account", choices, key="o4_from_addr")
-        if sel == "<add new>":
-            st.info("Add a sender in Outreach -> Sender accounts")
-            return {"email": "", "app_password": ""}
-        pw = st.text_input("App password", type="password", key="o4_from_pw")
-        return {"email": sel, "app_password": pw}
-
-def y_auto_k(text: str) -> int:
-    t = (text or "").lower()
-    n = len(t)
-    broad = any(k in t for k in [
-        "overview", "summary", "summarize", "list all", "requirements", "compliance",
-        "section l", "section m", "evaluation factors", "factors", "checklist",
-        "compare", "differences", "conflict", "conflicts", "crosswalk", "matrix"
-    ])
-    if not t.strip():
-        return 4
-    base = 7 if broad else 4
-    if n > 500:
-        base += 1
-    if n > 1200:
-        base += 1
-    return max(3, min(8, base))
-
-
-# === PHASE 8: Latency and UX ===
-# Memoize y1_search by (rfp_id, query) and a snapshot of the chunks table to keep cache fresh.
-def _y1_snapshot(conn, rfp_id: int) -> str:
-    try:
-        df = pd.read_sql_query(
-            "SELECT COUNT(1) AS c, COALESCE(MAX(id),0) AS m FROM rfp_chunks WHERE rfp_id=?;",
-            conn, params=(int(rfp_id),)
-        )
-        c = int(df.iloc[0]["c"]) if df is not None and not df.empty else 0
-        m = int(df.iloc[0]["m"]) if df is not None and not df.empty else 0
-        return f"{c}:{m}"
-    except Exception:
-        return "0:0"
-
-try:
-    import streamlit as _st_phase8
-except Exception:
-    _st_phase8 = None
-
-if _st_phase8 is not None:
-    @_st_phase8.cache_data(show_spinner=False, ttl=600)
-    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
-        import sqlite3 as _sql8
-        # Re-open a read-only connection to keep cache pure
-        try:
-            conn2 = _sql8.connect(db_path, check_same_thread=False)
-        except Exception:
-            conn2 = _sql8.connect(db_path)
-        try:
-            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
-        finally:
-            try:
-                conn2.close()
-            except Exception:
-                pass
+# Duplicate definition of run_subcontractor_finder_s1_hook removed by cleaner
 def y1_search(conn, rfp_id: int, query: str, k: int = 6):
     # Compute snapshot to invalidate cache if chunks changed
     snap = _y1_snapshot(conn, int(rfp_id))
@@ -11724,3 +11462,22 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
+
+
+# RFP Analyzer modal fallback injected by cleaner
+try:
+    import streamlit as st
+    if 'rfp_modal_open' not in st.session_state:
+        st.session_state['rfp_modal_open'] = False
+    def _rfp_analyzer_modal_fallback():
+        with st.modal("RFP Analyzer"):
+            st.markdown("**Upload an RFP or paste text**")
+            st.file_uploader("Upload", type=["pdf","docx","txt"], key="rfp_modal_file_fallback")
+            st.text_area("Notes or questions", key="rfp_modal_notes_fallback", height=120)
+            if st.button("Close", key="rfp_modal_close_fallback"):
+                st.session_state['rfp_modal_open'] = False
+                st.rerun()
+    if st.session_state.get('rfp_modal_open'):
+        _rfp_analyzer_modal_fallback()
+except Exception:
+    pass
