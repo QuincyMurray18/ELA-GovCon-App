@@ -232,59 +232,7 @@ except NameError:
 try:
     _handle_add_to_deals_row
 except NameError:
-    def _handle_add_to_deals_row(conn, row) -> int:
-        conn = conn or _ensure_conn()
-        if conn is None:
-            raise RuntimeError('No database connection available')
-        """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
-        from contextlib import closing as _closing
-        # Insert deal
-        with _closing(conn.cursor()) as cur:
-            cur.execute(
-                "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-                (
-                    row.get("Title") or "",
-                    row.get("Agency Path") or "",
-                    "Bidding",
-                    None,
-                    row.get("Notice ID") or "",
-                    row.get("Solicitation") or "",
-                    row.get("Posted") or "",
-                    row.get("Response Due") or "",
-                    row.get("NAICS") or "",
-                    row.get("PSC") or "",
-                    row.get("SAM Link") or "",
-                ),
-            )
-            deal_id = cur.lastrowid
-            conn.commit()
-        # Ensure rfps entry
-        rfp_id = None
-        try:
-            with _closing(conn.cursor()) as cur:
-                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
-                r = cur.fetchone()
-                if r:
-                    rfp_id = int(r[0])
-                else:
-                    cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
-                    rfp_id = int(cur.lastrowid)
-                conn.commit()
-        except Exception:
-            rfp_id = None
-        # Attachments
-        att_saved = 0
-        try:
-            if rfp_id and "_fetch_and_save_now" in globals():
-                att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
-        except Exception:
-            att_saved = 0
-        try:
-            extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
-        except Exception:
-            extra = []
-        return int(att_saved or 0) + len(extra or [])
+    pass
 # -----------------------------------------------------------------------------
 
 ## ELA Phase3 hybrid_api
@@ -293,10 +241,14 @@ except NameError:
 import os, threading, uuid, time
 try:
     import requests
+except Exception:
+    pass
 
 # === ELA patch: core imports for Deals/SAM/RFP Analyzer ===
 try:
     from contextlib import closing
+except Exception:
+    pass
 
 # === ELA patch: safety helpers ===
 try:
@@ -5082,11 +5034,11 @@ if _has_rows:
 
 
                         
-            try:
-                total = _handle_add_to_deals_row(_ensure_conn(), row)
-                st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
-            except Exception as e:
-                st.error(f"Failed to save deal: {e}")
+                        try:
+                            total = _handle_add_to_deals_row(_ensure_conn(), row)
+                            st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
+                        except Exception as e:
+                            st.error(f"Failed to save deal: {e}")
 
 
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
@@ -12273,57 +12225,68 @@ def _handle_add_to_deals_row(conn, row) -> int:
     if conn is None:
         raise RuntimeError('No database connection available')
 
-    """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
     from contextlib import closing as _closing
-    # Insert deal
+    notice_id = _coerce_notice_id(row)
+    missing_id = not bool(notice_id)
+
+    d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
+    title = d.get("Title") or ""
+    agency = d.get("Agency Path") or ""
+    sam_link = d.get("SAM Link") or ""
+    solnum = d.get("Solicitation") or ""
+    posted = d.get("Posted") or ""
+    due = d.get("Response Due") or ""
+    naics = d.get("NAICS") or ""
+    psc = d.get("PSC") or ""
+
+    try:
+        _migrate_deals_columns(conn)
+    except Exception:
+        pass
+
     with _closing(conn.cursor()) as cur:
         cur.execute(
             "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            (
-                row.get("Title") or "",
-                row.get("Agency Path") or "",
-                "Bidding",
-                None,
-                row.get("Notice ID") or "",
-                row.get("Solicitation") or "",
-                row.get("Posted") or "",
-                row.get("Response Due") or "",
-                row.get("NAICS") or "",
-                row.get("PSC") or "",
-                row.get("SAM Link") or "",
-            ),
+            (title, agency, "Bidding", None, notice_id or "", solnum, posted, due, naics, psc, sam_link),
         )
-        deal_id = cur.lastrowid
+        deal_id = int(cur.lastrowid)
         conn.commit()
-    # Ensure rfps entry
+
     rfp_id = None
     try:
         with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
-            r = cur.fetchone()
-            if r:
-                rfp_id = int(r[0])
-            else:
-                cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
-                rfp_id = int(cur.lastrowid)
+            if not missing_id:
+                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (notice_id,))
+                r = cur.fetchone()
+                if r:
+                    rfp_id = int(r[0])
+                else:
+                    cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?, ?, ?, ?)", (notice_id, sam_link, title, solnum))
+                    rfp_id = int(cur.lastrowid)
             conn.commit()
     except Exception:
         rfp_id = None
-    # Attachments
+
     att_saved = 0
     try:
-        if rfp_id and "_fetch_and_save_now" in globals():
-            att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
+        if not missing_id and rfp_id and "_fetch_and_save_now" in globals():
+            att_saved = _fetch_and_save_now(conn, notice_id, int(rfp_id)) or 0
     except Exception:
         att_saved = 0
+
     try:
-        extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
+        extra = _add_notice_attachments_to_deal(conn, notice_id, int(deal_id)) or [] if not missing_id else []
     except Exception:
         extra = []
-    return int(att_saved or 0) + len(extra or [])
 
-
+    total = int(att_saved or 0) + len(extra or [])
+    if missing_id:
+        try:
+            st.info("Deal saved without a Notice ID. Add a SAM Link or open the notice so attachments can be pulled.")
+        except Exception:
+            pass
+    return total
 def _sam_api_key():
     try:
         return st.secrets.get("sam", {}).get("api_key")  # st.secrets["sam"]["api_key"]
@@ -12554,8 +12517,7 @@ def _handle_add_to_deals_row(conn, row) -> int:
 
     from contextlib import closing as _closing
     notice_id = _coerce_notice_id(row)
-    if not notice_id:
-        raise ValueError("No Notice ID found for this row. Please select a notice or open details and try again.")
+    missing_id = not bool(notice_id)
 
     d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
     title = d.get("Title") or ""
@@ -12584,11 +12546,12 @@ def _handle_add_to_deals_row(conn, row) -> int:
     rfp_id = None
     try:
         with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (notice_id,))
+            if not missing_id:
+                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (notice_id,))
             r = cur.fetchone()
-            if r:
+            if not missing_id and r:
                 rfp_id = int(r[0])
-            else:
+            elif not missing_id:
                 cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?, ?, ?, ?)", (notice_id, sam_link, title, solnum))
                 rfp_id = int(cur.lastrowid)
             conn.commit()
@@ -12597,17 +12560,23 @@ def _handle_add_to_deals_row(conn, row) -> int:
 
     att_saved = 0
     try:
-        if rfp_id and "_fetch_and_save_now" in globals():
+        if not missing_id and rfp_id and "_fetch_and_save_now" in globals():
             att_saved = _fetch_and_save_now(conn, notice_id, int(rfp_id)) or 0
     except Exception:
         att_saved = 0
 
     try:
-        extra = _add_notice_attachments_to_deal(conn, notice_id, int(deal_id)) or []
+        extra = _add_notice_attachments_to_deal(conn, notice_id, int(deal_id)) or [] if not missing_id else []
     except Exception:
         extra = []
 
-    return int(att_saved or 0) + len(extra or [])
+    total = int(att_saved or 0) + len(extra or [])
+    if missing_id:
+        try:
+            st.info("Deal saved without a Notice ID. Add a SAM Link or open the notice so attachments can be pulled.")
+        except Exception:
+            pass
+    return total
 
 
 
@@ -12702,4 +12671,3 @@ except NameError:
                 """)
         except Exception:
             pass
-
