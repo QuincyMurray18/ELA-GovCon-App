@@ -16,31 +16,22 @@ def _safe_rerun():
 if 'show_rfp_modal' not in st.session_state:
     st.session_state['show_rfp_modal'] = False
 
-def rfp_push_button(label: str = "Push to RFP Analyzer", key: str = "push_to_rfp"):
-    clicked = st.button(label, key=key)
-    if clicked:
-        st.session_state['show_rfp_modal'] = True
-    return clicked
-
-def rfp_modal():
-    if st.session_state.get('show_rfp_modal'):
-        with st.modal("Push to RFP Analyzer", key="rfp_push_modal"):
-            st.markdown("Confirm push to **RFP Analyzer**.")
-            # Optional: Collect context here (e.g., notice_id, title, due date) if available in your app's session state.
-            cols = st.columns(2)
-            with cols[0]:
-                if st.button("Confirm push", key="rfp_confirm"):
-                    # TODO: implement actual push logic or callback here
-                    st.session_state['show_rfp_modal'] = False
-                    st.success("Pushed to RFP Analyzer.")
-                    _safe_rerun()
-            with cols[1]:
-                if st.button("Cancel", key="rfp_cancel"):
-                    st.session_state['show_rfp_modal'] = False
-                    _safe_rerun()
-# === End injected utilities ===
-
-# === Safety Helpers (injected) ===
+def rfp_push_button(label: str = "Push to RFP Analyzer", key: str | None = None, rfp_id: int | None = None):
+    """Button with unique key per render to avoid duplicate widget keys."""
+    try:
+        import streamlit as st
+        base = key or "push_to_rfp"
+        ckey = f"{base}__ctr"
+        idx = st.session_state.get(ckey, 0)
+        st.session_state[ckey] = idx + 1
+        suffix = f"{rfp_id}_" if rfp_id is not None else ""
+        ukey = f"{base}_{suffix}{idx}"
+        clicked = st.button(label, key=ukey)
+        if clicked:
+            st.session_state['show_rfp_modal'] = True
+        return clicked
+    except Exception:
+        return False
 def _safe_int(x, default=0):
     try:
         if x is None:
@@ -11879,4 +11870,3 @@ except Exception as _e:
     import traceback as _tb, sys as _sys
     st.error(f"App failed: {type(_e).__name__}: {_e}")
 # === End Minimal Router + Main ===
-
