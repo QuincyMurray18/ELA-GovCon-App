@@ -1563,8 +1563,32 @@ def flag(name: str, default: bool=False) -> bool:
 APP_TITLE = "ELA GovCon Suite"
 BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
 
+def apply_theme_phase1():
+    import streamlit as st
+    if st.session_state.get("_phase1_theme_applied"):
+        return
+    st.session_state["_phase1_theme_applied"] = True
+    st.markdown('''
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+    h1, h2, h3 {margin-bottom: .4rem;}
+    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,0.06);}
+    .ela-ok {background: rgba(0,200,83,0.12);} .ela-warn {background: rgba(251,140,0,0.12);} .ela-bad {background: rgba(229,57,53,0.12);}
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,0.08);}
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    </style>
+    ''', unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
-apply_theme()
+apply_theme_phase1()
 
 
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
