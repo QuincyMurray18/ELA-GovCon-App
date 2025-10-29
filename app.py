@@ -40,6 +40,43 @@ def rfp_modal():
                     _safe_rerun()
 # === End injected utilities ===
 
+# === Safety Helpers (injected) ===
+def _safe_int(x, default=0):
+    try:
+        if x is None:
+            return default
+        if isinstance(x, bool):
+            return int(x)
+        if isinstance(x, (int,)):
+            return x
+        s = str(x).strip().replace(",", "")
+        return int(float(s)) if "." in s else int(s)
+    except Exception:
+        return default
+
+def _safe_str(x, default=""):
+    try:
+        if x is None:
+            return default
+        return str(x)
+    except Exception:
+        return default
+
+def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
+    # Avoid duplicate widget keys when rendering in loops
+    try:
+        import streamlit as st
+        k = f"__uniq_counter_{base}_{rfp_id}"
+        n = st.session_state.get(k, 0)
+        st.session_state[k] = n + 1
+        return f"{base}_{rfp_id}_{n}"
+    except Exception:
+        import time
+        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
+# === End Safety Helpers ===
+
+
+
 import streamlit as st
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
