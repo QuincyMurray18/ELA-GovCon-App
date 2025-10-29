@@ -11,6 +11,8 @@ except Exception:
 # ---- job store for background tasks (in-memory) ----
 _jobs: dict[str, dict] = {}
 
+_O4_CONN = None
+
 def _enqueue(fn, *args, **kwargs) -> str:
     jid = str(uuid.uuid4())
     _jobs[jid] = {"status":"queued"}
@@ -664,32 +666,33 @@ def get_db():
     with _closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
     return conn
-def get_o4_conn(conn):
 
-        """Return a shared DB connection and store it in session_state if Streamlit is present."""
-        import sqlite3
-        try:
-            import streamlit as st
-        except Exception:
-            st = None  # type: ignore
+def get_o4_conn():
+    """Return a shared DB connection and store it in session_state if Streamlit is present."""
+    import sqlite3
+    try:
+        import streamlit as st
+    except Exception:
+        st = None  # type: ignore
 
-        global _O4_CONN
-        if _O4_CONN:
-            try:
-                if st is not None:
-                    st.session_state["conn"] = _O4_CONN
-            except Exception:
-                pass
-            return _O4_CONN
-
-        conn = get_db()
-        _O4_CONN = conn
+    global _O4_CONN
+    if _O4_CONN:
         try:
             if st is not None:
-                st.session_state["conn"] = conn
+                st.session_state["conn"] = _O4_CONN
         except Exception:
             pass
-        return conn
+        return _O4_CONN
+
+    conn = get_db()
+    _O4_CONN = conn
+    try:
+        if st is not None:
+            st.session_state["conn"] = conn
+    except Exception:
+        pass
+    return conn
+
 
 def _render_once(name: str):
     # returns True if allowed to render, False if already rendered
