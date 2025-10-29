@@ -12309,3 +12309,85 @@ def _sam_fetch_docs(notice_id: str):
         except Exception:
             continue
     return out
+
+
+# ==== ELA PATCH: Fixes 2025-10-29 ====
+from contextlib import closing
+
+def get_o4_conn():
+    """
+    Back-compat O4 connection accessor. No args.
+    Returns a cached sqlite3 connection using get_db().
+    """
+    global _O4_CONN
+    try:
+        if _O4_CONN:
+            try:
+                st.session_state["conn"] = _O4_CONN
+            except Exception:
+                pass
+            return _O4_CONN
+    except Exception:
+        pass
+    try:
+        if "conn" in st.session_state and st.session_state.get("conn"):
+            _O4_CONN = st.session_state["conn"]
+            return _O4_CONN
+    except Exception:
+        pass
+    conn = get_db()
+    _O4_CONN = conn
+    try:
+        st.session_state["conn"] = conn
+    except Exception:
+        pass
+    return conn
+
+def _unique_key(base: str, namespace: str = "ui"):
+    """
+    Generate a unique-but-stable key per render to avoid duplicate Streamlit widget keys.
+    """
+    try:
+        ss = st.session_state
+        counter_key = f"__{namespace}_key_counter__"
+        ss[counter_key] = int(ss.get(counter_key, 0)) + 1
+        return f"{base}-{namespace}-{ss[counter_key]}"
+    except Exception:
+        import time
+        return f"{base}-{namespace}-{int(time.time()*1000)%100000}"
+
+def _ask_rfp_analyzer_modal(opportunity=None):
+    """Modal (or fallback expander) to ask the RFP Analyzer questions."""
+    opened = False
+    try:
+        @st.dialog("Ask RFP Analyzer")
+        def _dlg():
+            st.caption("Use AI to analyze the selected opportunity and ask questions.")
+            q = st.text_area("Your question", key=_unique_key("rfp_q","o3"))
+            if st.button("Analyze", key=_unique_key("rfp_analyze","o3")):
+                try:
+                    ans = _service_analyze_rfp_question(q, opportunity)
+                except Exception as e:
+                    ans = f"Error: {e}"
+                st.markdown("**Answer**")
+                st.write(ans)
+            if st.button("Close", key=_unique_key("rfp_close","o3")):
+                st.session_state["show_rfp_analyzer"] = False
+        _dlg()
+        opened = True
+    except Exception:
+        pass
+    if not opened:
+        with st.expander("Ask RFP Analyzer", expanded=True):
+            st.caption("Use AI to analyze the selected opportunity and ask questions.")
+            q = st.text_area("Your question", key=_unique_key("rfp_q_fb","o3"))
+            if st.button("Analyze", key=_unique_key("rfp_analyze_fb","o3")):
+                try:
+                    ans = _service_analyze_rfp_question(q, opportunity)
+                except Exception as e:
+                    ans = f"Error: {e}"
+                st.markdown("**Answer**")
+                st.write(ans)
+            if st.button("Close", key=_unique_key("rfp_close_fb","o3")):
+                st.session_state["show_rfp_analyzer"] = False
+# ==== END ELA PATCH ====
