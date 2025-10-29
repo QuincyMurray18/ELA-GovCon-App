@@ -10794,12 +10794,85 @@ def __p_run_outreach(conn):
 # =========================
 
 
-if __name__ == '__main__':
+# ---------- app entry ----------
+def main():
+    import os, sqlite3
+    import streamlit as st
     try:
-        main()
-    except NameError:
-        # fallback: run default entry if main() not defined in this build
+        st.set_page_config(page_title="ELA GovCon", layout="wide")
+    except Exception:
         pass
+
+    try:
+        init_session()
+    except Exception:
+        pass
+
+    # Navigation
+    try:
+        page = nav()
+    except Exception as e:
+        st.error(f"Navigation failed: {e}")
+        return
+
+    # DB connection
+    try:
+        db_path = DB_PATH
+    except Exception:
+        db_path = "./data/app.db"
+    try:
+        conn = _db_connect(db_path)
+    except Exception as e:
+        st.error(f"Database open failed: {e}")
+        return
+
+    with conn:
+        try:
+            if page == "SAM Watch":
+                run_sam_watch(conn)
+            elif page == "RFP Analyzer":
+                run_rfp_analyzer(conn)
+            elif page == "L and M Checklist":
+                run_l_and_m_checklist(conn)
+            elif page == "Proposal Builder":
+                run_proposal_builder(conn)
+            elif page == "File Manager":
+                run_file_manager(conn)
+            elif page == "Subcontractor Finder":
+                run_subcontractor_finder(conn)
+            elif page == "Outreach":
+                run_outreach(conn)
+            elif page == "Mailbox":
+                run_mailbox(conn)
+            elif page == "RFQ Generator":
+                run_rfq_generator(conn)
+            elif page == "Quote Comparison":
+                run_quote_comparison(conn)
+            elif page == "Pricing Calculator":
+                run_pricing_calculator(conn)
+            elif page == "Win Probability":
+                run_win_probability(conn)
+            elif page == "Chat Assistant":
+                run_chat_assistant(conn)
+            elif page == "Capability Statement":
+                run_capability_statement(conn)
+            elif page == "CRM":
+                run_crm(conn)
+            elif page == "Contacts":
+                run_contacts(conn)
+            elif page == "Deals":
+                run_deals(conn)
+            else:
+                st.error(f"Unknown page: {page}")
+        except NameError as ne:
+            st.error(f"Missing module for '{page}': {ne}")
+        except Exception as e:
+            st.exception(e)
+
+# Ensure entry runs under Streamlit
+if __name__ == "__main__":
+    main()
+
 
 def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
