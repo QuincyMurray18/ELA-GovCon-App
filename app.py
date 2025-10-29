@@ -11769,3 +11769,77 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
+
+
+# === Minimal Router + Main (re-injected) ===
+import sqlite3 as _sqlite3
+import pandas as _pd
+
+def _router(page: str, conn):
+    mapping = {
+        "SAM Watch": "run_sam_watch",
+        "RFP Analyzer": "run_rfp_analyzer",
+        "L and M Checklist": "run_lm_checklist",
+        "Proposal Builder": "run_proposal_builder",
+        "File Manager": "run_file_manager",
+        "Past Performance": "run_past_performance",
+        "White Paper Builder": "run_white_paper_builder",
+        "Subcontractor Finder": "run_subcontractor_finder",
+        "Outreach": "run_outreach",
+        "RFQ Pack": "run_rfq_pack",
+        "Backup & Data": "run_backup_and_data",
+        "Quote Comparison": "run_quote_comparison",
+        "Pricing Calculator": "run_pricing_calculator",
+        "Win Probability": "run_win_probability",
+        "Chat Assistant": "run_chat_assistant",
+        "Capability Statement": "run_capability_statement",
+        "CRM": "run_crm",
+        "Contacts": "run_contacts",
+        "Deals": "run_deals",
+    }
+    fn_name = mapping.get((page or "").strip())
+    fn = globals().get(fn_name)
+    if not callable(fn):
+        st.warning(f"No handler for page '{page}'.")
+        return
+    _safe_route_call(fn, conn)
+
+def main():
+    # Ensure theme and phase 1 UI assets
+    try:
+        _init_phase1_ui()
+    except Exception:
+        pass
+    # DB
+    conn = get_db()
+    # Optional workspace switcher
+    try:
+        render_workspace_switcher(conn)
+    except Exception:
+        pass
+    # Y0 assistant panel
+    try:
+        y0_ai_panel()
+    except Exception:
+        pass
+    # Nav and route
+    try:
+        page = nav()
+    except Exception as _e:
+        st.error(f"Navigation failed: {_e}")
+        return
+    _router(page, conn)
+    # Ensure modal rendering
+    try:
+        rfp_modal()
+    except Exception:
+        pass
+
+# Call main directly so Streamlit renders UI
+try:
+    main()
+except Exception as _e:
+    import traceback as _tb, sys as _sys
+    st.error(f"App failed: {type(_e).__name__}: {_e}")
+# === End Minimal Router + Main ===
+
