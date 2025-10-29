@@ -17,8 +17,10 @@ if 'show_rfp_modal' not in st.session_state:
     st.session_state['show_rfp_modal'] = False
 
 def rfp_push_button(label: str = "Push to RFP Analyzer", key: str = "push_to_rfp"):
-    if st.button(label, key=key):
+    clicked = st.button(label, key=key)
+    if clicked:
         st.session_state['show_rfp_modal'] = True
+    return clicked
 
 def rfp_modal():
     if st.session_state.get('show_rfp_modal'):
@@ -425,14 +427,14 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 # [DEDUPED:_uniq_key] 
 # [DEDUPED:_uniq_key] 
 # [DEDUPED:_uniq_key] def y3_get_rfp_files(_conn, rfp_id: int):
-    """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
-    try:
-        from contextlib import closing as _closing
-        with _closing(_conn.cursor()) as cur:
-            cur.execute("SELECT id, file_name, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
-            return cur.fetchall() or []
-    except Exception:
-        return []
+# [DEDUPED:_uniq_key]     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
+# [DEDUPED:_uniq_key]     try:
+# [DEDUPED:_uniq_key]         from contextlib import closing as _closing
+# [DEDUPED:_uniq_key]         with _closing(_conn.cursor()) as cur:
+# [DEDUPED:_uniq_key]             cur.execute("SELECT id, file_name, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
+# [DEDUPED:_uniq_key]             return cur.fetchall() or []
+# [DEDUPED:_uniq_key]     except Exception:
+# [DEDUPED:_uniq_key]         return []
 
 import requests
 
@@ -704,7 +706,7 @@ _O4_CONN = globals().get("_O4_CONN", None)
 # [DEDUPED:get_db]     return conn
 # [DEDUPED:get_db] 
 # [DEDUPED:get_db] def get_o4_conn():
-    import streamlit as st
+# [DEDUPED:get_db]     import streamlit as st
 
 # ---- helper: generate unique widget keys (Phase 0) ----
 # ---- helper: render-once guard for O4 (Phase 0) ----
@@ -4886,7 +4888,7 @@ if _has_rows:
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
                     # Push notice to Analyzer tab (optional)
-                    if rfp_push_button())):
+                    if rfp_push_button():
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
@@ -8830,17 +8832,17 @@ def ns(scope: str, key: str) -> str:
 # [DEDUPED:router]     if (page or "").strip() == "Proposal Builder":
 # [DEDUPED:router]         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 # [DEDUPED:router] def main() -> None:
-    conn = get_db()
-    global _O4_CONN
+# [DEDUPED:router]     conn = get_db()
+# [DEDUPED:router]     global _O4_CONN
 
-    st.title(APP_TITLE)
-    st.caption(BUILD_LABEL)
-    # Y0 main panel (always on)
-    try:
-        y0_ai_panel()
-    except Exception:
-        pass
-    router(nav(), conn)
+# [DEDUPED:router]     st.title(APP_TITLE)
+# [DEDUPED:router]     st.caption(BUILD_LABEL)
+# [DEDUPED:router]     # Y0 main panel (always on)
+# [DEDUPED:router]     try:
+# [DEDUPED:router]         y0_ai_panel()
+# [DEDUPED:router]     except Exception:
+# [DEDUPED:router]         pass
+# [DEDUPED:router]     router(nav(), conn)
 
 
 
