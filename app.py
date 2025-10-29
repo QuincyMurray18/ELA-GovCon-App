@@ -70,12 +70,57 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 import streamlit as st
 
+# --- Early stubs to avoid NameError during routing ---
+try:
+    _compat_vendors_view
+except NameError:
+    def _compat_vendors_view(conn):
+        return None
+# -----------------------------------------------------
+
+
+
+# ---- Safety helpers injected ----
+def _ensure_conn():
+    """Return a usable sqlite3 connection for UI handlers."""
+    try:
+        if 'conn' in globals() and globals().get('conn') is not None:
+            return globals()['conn']
+    except Exception:
+        pass
+    try:
+        if 'get_db' in globals():
+            c = get_db()
+            if c:
+                globals()['conn'] = c
+                return c
+    except Exception:
+        pass
+    import sqlite3
+    try:
+        c = sqlite3.connect(DB_PATH, check_same_thread=False)
+        globals()['conn'] = c
+        return c
+    except Exception:
+        return None
+
+try:
+    _compat_vendors_view
+except NameError:
+    def _compat_vendors_view(conn):
+        return None
+# ---------------------------------
+
+
 
 # ---- Fallback Deals helper to avoid NameError before full defs are parsed ----
 try:
     _handle_add_to_deals_row
 except NameError:
     def _handle_add_to_deals_row(conn, row) -> int:
+        conn = conn or _ensure_conn()
+        if conn is None:
+            raise RuntimeError('No database connection available')
         """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
         from contextlib import closing as _closing
         # Insert deal
@@ -4845,7 +4890,7 @@ if _has_rows:
 
 
                         try:
-                            total = _handle_add_to_deals_row(conn, row)
+                            total = _handle_add_to_deals_row(_ensure_conn(), row)
                             st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
                         except Exception as e:
                             st.error(f"Failed to save deal: {e}")
@@ -12030,6 +12075,10 @@ def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
 
 
 def _handle_add_to_deals_row(conn, row) -> int:
+    conn = conn or _ensure_conn()
+    if conn is None:
+        raise RuntimeError('No database connection available')
+
     """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
     from contextlib import closing as _closing
     # Insert deal
