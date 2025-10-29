@@ -34,7 +34,8 @@ def _svc_analyze(question: str, context: dict | None = None):
     try:
         return _service_analyze_rfp_question(question, context or {})
     except Exception:
-        # Minimal fallback
+        pass
+    # Minimal fallback
         title = ""
         if isinstance(context, dict):
             title = context.get("title") or context.get("Title") or ""
@@ -170,7 +171,7 @@ def _phase3_poll_status():
 def _phase3_enhance_rfp_dialog():
     # integrate into existing dialog if present
     if "show_rfp_analyzer" in st.session_state and st.session_state.get("show_rfp_analyzer"):
-        # add a status row
+    # add a status row
         c1, c2 = st.columns([1,1])
         with c1:
             if st.button("Check job status", key=_unique_key("poll_job","o3")):
@@ -264,10 +265,65 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
     return _inner(_ai_cache_key(question, context_hash), question, context_hash)
 
 # Expand Phase 0 write guard to clear caches after commits
+def _write_guard(conn, fn, *args, **kwargs):
+    with conn:
+        out = fn(*args, **kwargs)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return out
 
-# Duplicate definition of _write_guard removed by cleaner
+# ELA Phase1 bootstrap
+import streamlit as st
 
-# Duplicate definition of _styled_dataframe removed by cleaner
+# Safe dataframe wrapper and monkey patch to avoid height=None issues
+def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
+    kwargs = {"use_container_width": use_container_width}
+    if height is not None:
+        try:
+            kwargs["height"] = int(height) if height != "stretch" else "stretch"
+        except Exception:
+            if isinstance(height, str):
+                kwargs["height"] = height
+    try:
+        return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
+    except TypeError:
+        return st.dataframe(df, **kwargs)
+
+# Monkey patch st.dataframe to drop height=None safely
+if not hasattr(st, "_orig_dataframe"):
+    st._orig_dataframe = st.dataframe
+    def _safe_dataframe(df, **kwargs):
+        if "height" in kwargs and kwargs["height"] is None:
+            kwargs.pop("height", None)
+        return st._orig_dataframe(df, **kwargs)
+    st.dataframe = _safe_dataframe
+
+# Ensure theme exists
+if "apply_theme" not in globals():
+    def _apply_theme_old():
+        if st.session_state.get("_phase1_theme_applied"):
+            return
+        st.session_state["_phase1_theme_applied"] = True
+        st.markdown('''
+        <style>
+        .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+        h1, h2, h3 {margin-bottom: .4rem;}
+        div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+        div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+        [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+        [data-testid="stExpander"] summary {font-weight: 600;}
+        .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+        button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+        .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+        </style>
+        ''', unsafe_allow_html=True)
+        st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
+
+
+
+# ===== Phase 1 Theme (auto-injected) =====
 def _apply_theme_old():
     import streamlit as st
     if st.session_state.get("_phase1_theme_applied"):
@@ -306,12 +362,12 @@ def _safe_int(x, default=0):
         s = str(x).strip()
         if s == "" or s.lower() in ("none", "nan"):
             return int(default)
-        # try float first (handles "123.0")
+    # try float first (handles "123.0")
         try:
             return int(float(s))
         except Exception:
             pass
-        # fallback: keep only digits
+    # fallback: keep only digits
         digits = "".join(ch for ch in s if ch.isdigit())
         return int(digits) if digits else int(default)
     except Exception:
@@ -382,7 +438,7 @@ def _x3_render_modal(notice: dict):
             if df is None or df.empty:
                 st.info("No requirements yet. Click Extract requirements.")
             else:
-                # editable mapping column
+    # editable mapping column
                 suggestions = x6_sections_suggestions(int(rfp_id))
                 import pandas as pd
                 df_view = df.copy()
@@ -397,7 +453,7 @@ def _x3_render_modal(notice: dict):
                     use_container_width=True,
                     key=_uniq_key("x6_editor", int(rfp_id))
                 )
-                # Save mappings
+    # Save mappings
                 to_save = []
                 for i, row in edited.iterrows():
                     sec = str(row.get("Map to section") or "").strip()
@@ -409,7 +465,7 @@ def _x3_render_modal(notice: dict):
                     try: st.rerun()
                     except Exception: pass
 
-                # Export CSV
+    # Export CSV
                 import io
                 import csv
                 buf = io.StringIO()
@@ -583,7 +639,8 @@ def _uniq_key(base: str, rfp_id: int) -> str:
         st.session_state[k] = n + 1
         return f"{base}_{rfp_id}_{n}"
     except Exception:
-        # Fallback if session_state isn't available
+        pass
+    # Fallback if session_state isn't available
         import time
         return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
 import time
@@ -607,12 +664,33 @@ def get_db():
     with _closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
     return conn
+def get_o4_conn(conn):
 
-def get_o4_conn():
-    import streamlit as st
+        """Return a shared DB connection and store it in session_state if Streamlit is present."""
+        import sqlite3
+        try:
+            import streamlit as st
+        except Exception:
+            st = None  # type: ignore
 
-# ---- helper: generate unique widget keys (Phase 0) ----
-# ---- helper: render-once guard for O4 (Phase 0) ----
+        global _O4_CONN
+        if _O4_CONN:
+            try:
+                if st is not None:
+                    st.session_state["conn"] = _O4_CONN
+            except Exception:
+                pass
+            return _O4_CONN
+
+        conn = get_db()
+        _O4_CONN = conn
+        try:
+            if st is not None:
+                st.session_state["conn"] = conn
+        except Exception:
+            pass
+        return conn
+
 def _render_once(name: str):
     # returns True if allowed to render, False if already rendered
     key = f"__rendered__{name}"
@@ -629,26 +707,6 @@ def _unique_key(base: str, namespace: str = "ui"):
         ss[counter_key] = 0
     ss[counter_key] += 1
     return f"{base}-{namespace}-{ss[counter_key]}"
-    global _O4_CONN
-    if _O4_CONN:
-        try:
-            st.session_state["conn"] = _O4_CONN
-        except Exception:
-            pass
-        return _O4_CONN
-    try:
-        if "conn" in st.session_state and st.session_state.get("conn"):
-            _O4_CONN = st.session_state["conn"]
-            return _O4_CONN
-    except Exception:
-        pass
-    conn = get_db()
-    _O4_CONN = conn
-    try:
-        st.session_state["conn"] = conn
-    except Exception:
-        pass
-    return conn
 
 def _ensure_email_accounts_schema(conn):
     # Unified to O1 schema
@@ -765,7 +823,7 @@ def _ask_rfp_analyzer_modal(opportunity=None):
         st.write("Use AI to analyze the selected opportunity and ask questions.")
         q = st.text_area("Your question", key=_unique_key('rfp_q','o3'))
         if st.button("Analyze", key=_unique_key('rfp_analyze','o3')):
-            # placeholder for analysis call; replace with your service function
+    # placeholder for analysis call; replace with your service function
             try:
                 ans = _service_analyze_rfp_question(q, opportunity)
             except Exception as e:
@@ -893,7 +951,7 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
         t = (row["text"] or "").strip()
         if not t:
             continue
-        # split into sentences with light heuristic
+    # split into sentences with light heuristic
         sentences = re.split(r"(?<=[\\.;:])\\s+", t)
         for s in sentences:
             if len(s) < 40:
@@ -1036,11 +1094,11 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
             rid = int(row["rtm_id"])
         except Exception:
             continue
-        # Status change
+    # Status change
         with closing(conn.cursor()) as cur:
             cur.execute("UPDATE rtm_requirements SET status=?, updated_at=? WHERE id=?;",
                         (row.get("status") or "Open", now, rid))
-        # New link
+    # New link
         lt = (row.get("add_link_type") or "").strip()
         tg = (row.get("add_link_target") or "").strip()
         if lt and tg:
@@ -1112,7 +1170,7 @@ def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, tt
         if st.button("Fetch SAM snapshot", key=_uniq_key("sam_fetch", int(rfp_id))):
             snap = sam_snapshot(conn, int(rfp_id), url, ttl_hours)
             st.success(f"Snapshot stored. Cached={snap.get('cached')}")
-        # Last two snapshots
+    # Last two snapshots
         try:
             dfv = pd.read_sql_query("SELECT id, created_at, sha256, extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 2;", conn, params=(int(rfp_id),))
         except Exception:
@@ -1127,7 +1185,7 @@ def render_amendment_sidebar(conn: sqlite3.Connection, rfp_id: int, url: str, tt
                 if diffs:
                     st.markdown("**Changes since previous:**")
                     st.json(diffs)
-                    # Impact to-dos
+    # Impact to-dos
                     todos = []
                     if "offers_due" in diffs:
                         todos.append("Update due date everywhere. Recalculate schedule and reminders.")
@@ -1734,10 +1792,11 @@ def _embed_texts(texts: list[str]) -> list[list[float]]:
                     new_vecs.append(list(d.embedding))
                 except Exception:
                     new_vecs.append([])
-            # write cache
+    # write cache
             _embed_cache_put(model, to_compute, new_vecs)
         except Exception:
-            # fallback: return empty vecs for missing
+            pass
+    # fallback: return empty vecs for missing
             new_vecs = [[] for _ in to_compute]
 
     # merge back preserving order
@@ -2169,7 +2228,7 @@ def research_fetch(url: str, ttl_hours: int = 24) -> dict:
         r = requests.get(url, timeout=20, headers={"User-Agent":"ELA-GovCon/1.0"})
         status = int(getattr(r, "status_code", 0) or 0)
         text = r.text if hasattr(r, "text") else ""
-        # persist
+    # persist
         try:
             with open(txt_path, "w", encoding="utf-8") as fh:
                 fh.write(text or "")
@@ -2344,7 +2403,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
     while i < len(lines):
         ln = lines[i]
         ln_stripped = ln.strip()
-        # detect headers
+    # detect headers
         if any(ln_stripped.lower().startswith(h.lower()) for h in sections):
             current = ln_stripped.split(":")[0].lower()
             bullet_count = 0
@@ -2356,13 +2415,13 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             out.append(ln)
             i += 1
             continue
-        # cap bullets in the four sections
+    # cap bullets in the four sections
         if current in {"strengths", "gaps", "risks", "required fixes"}:
             if re.match(r"^\s*[-*\u2022]\s+", ln):
                 if bullet_count < max_bullets:
                     out.append(ln)
                     bullet_count += 1
-                # else drop extra bullets
+    # else drop extra bullets
             else:
                 out.append(ln)
             i += 1
@@ -2449,7 +2508,7 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
         st.subheader("Combined result")
         st.markdown(final or "_no output_")
 
-        # Sources table
+    # Sources table
         hits = y1_search(conn, int(rfp_id), f"Section L Section M compliance {draft_text[:200]}", k=int(k))
         if hits:
             import pandas as _pd
@@ -2809,7 +2868,7 @@ def get_db() -> sqlite3.Connection:
     with closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
 
-        # Core
+    # Core
         cur.execute("""
             CREATE TABLE IF NOT EXISTS contacts(
                 id INTEGER PRIMARY KEY,
@@ -2832,7 +2891,7 @@ def get_db() -> sqlite3.Connection:
                 updated_at TEXT
             );
         """)
-        # Ensure new columns exist for Deals/SAM Watch
+    # Ensure new columns exist for Deals/SAM Watch
         try:
             _migrate_deals_columns(conn)
         except Exception:
@@ -2844,7 +2903,7 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        # Org profile (Phase F - Capability Statement)
+    # Org profile (Phase F - Capability Statement)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS org_profile(
                 id INTEGER PRIMARY KEY CHECK (id=1),
@@ -2865,7 +2924,7 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        # Phase B (RFP analyzer artifacts)
+    # Phase B (RFP analyzer artifacts)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfps(
                 id INTEGER PRIMARY KEY,
@@ -2941,7 +3000,7 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        # Phase D (vendors + outreach)
+    # Phase D (vendors + outreach)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS vendors(
                 id INTEGER PRIMARY KEY,
@@ -2970,7 +3029,7 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        # Phase E (quotes + pricing)
+    # Phase E (quotes + pricing)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS quotes(
                 id INTEGER PRIMARY KEY,
@@ -3046,7 +3105,7 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        # Phase H (White Paper Builder)
+    # Phase H (White Paper Builder)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS white_templates(
                 id INTEGER PRIMARY KEY,
@@ -3121,7 +3180,7 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 
-        # Phase J (File Manager)
+    # Phase J (File Manager)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS files(
                 id INTEGER PRIMARY KEY,
@@ -3139,7 +3198,7 @@ def get_db() -> sqlite3.Connection:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_type, owner_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_tags ON files(tags);")
 
-        # Phase L (RFQ Pack)
+    # Phase L (RFQ Pack)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfq_packs(
                 id INTEGER PRIMARY KEY,
@@ -3185,7 +3244,7 @@ def get_db() -> sqlite3.Connection:
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_attach_pack ON rfq_attach(pack_id);");
 
-        # Phase M (Tenancy 1)
+    # Phase M (Tenancy 1)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tenants(
                 id INTEGER PRIMARY KEY,
@@ -3220,7 +3279,7 @@ def get_db() -> sqlite3.Connection:
         for t in core_tables:
             _add_tenant_id(t)
 
-        # AFTER INSERT triggers: always stamp tenant_id to current_tenant
+    # AFTER INSERT triggers: always stamp tenant_id to current_tenant
         def _ensure_trigger(table: str):
             trg = f"{table}_ai_tenant"
             try:
@@ -3238,7 +3297,7 @@ def get_db() -> sqlite3.Connection:
         for t in core_tables:
             _ensure_trigger(t)
 
-        # Scoped views
+    # Scoped views
         def _create_view(table: str):
             v = f"{table}_t"
             try:
@@ -3248,7 +3307,7 @@ def get_db() -> sqlite3.Connection:
         for t in core_tables:
             _create_view(t)
 
-        # Phase N (Persist): Pragmas
+    # Phase N (Persist): Pragmas
         try:
             cur.execute("PRAGMA journal_mode=WAL;")
             cur.execute("PRAGMA synchronous=NORMAL;")
@@ -3258,7 +3317,7 @@ def get_db() -> sqlite3.Connection:
             pass
 
 
-        # RTM (Requirements Traceability Matrix)
+    # RTM (Requirements Traceability Matrix)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rtm_requirements(
                 id INTEGER PRIMARY KEY,
@@ -3287,7 +3346,7 @@ def get_db() -> sqlite3.Connection:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rtm_rfp ON rtm_requirements(rfp_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rtm_links ON rtm_links(rtm_id);")
 
-        # SAM Amendment snapshots
+    # SAM Amendment snapshots
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sam_versions(
                 id INTEGER PRIMARY KEY,
@@ -3480,13 +3539,14 @@ def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
                     or st.secrets.get("SAM_SYSTEM_AUTH")
                     or os.getenv("SAM_SYSTEM_AUTH"))
     except Exception:
-        # Fall back to env only
+        pass
+    # Fall back to env only
         sys_key = os.getenv("SAM_SYSTEM_API_KEY")
         sys_auth = os.getenv("SAM_SYSTEM_AUTH")
 
     try:
         if sys_key and sys_auth:
-            # Per docs: GET /{opportunityId}/resources/download/zip with Authorization header
+    # Per docs: GET /{opportunityId}/resources/download/zip with Authorization header
             url = f"https://api.sam.gov/prod/opportunity/v1/api/{notice_id}/resources/download/zip"
             params = {"api_key": sys_key}
             headers = {"Authorization": sys_auth}
@@ -3504,10 +3564,11 @@ def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
                 if files:
                     return files
             else:
-                # If unauthorized or not found, silently fall back
+    # If unauthorized or not found, silently fall back
                 pass
     except Exception:
-        # Swallow and fall back
+        pass
+    # Swallow and fall back
         pass
 
     # Attempt 2: Save description HTML as a helpful "attachment"
@@ -3579,7 +3640,7 @@ def extract_text_pages(file_bytes: bytes, mime: str) -> list:
     out = []
     m = (mime or "").lower()
     if "pdf" in m:
-        # Try vector: pdfplumber then pypdf. Never reference missing names.
+    # Try vector: pdfplumber then pypdf. Never reference missing names.
         if _pdfplumber is not None:
             try:
                 import io as _io
@@ -3603,7 +3664,7 @@ def extract_text_pages(file_bytes: bytes, mime: str) -> list:
                         out.append("")
             except Exception:
                 pass
-        # As a very last resort, try a naive decode of bytes to avoid empty output.
+    # As a very last resort, try a naive decode of bytes to avoid empty output.
         if not out:
             try:
                 out = [file_bytes.decode("utf-8", errors="ignore")]
@@ -3674,12 +3735,12 @@ def save_rfp_file_db(conn: sqlite3.Connection, rfp_id: int | None, name: str, fi
     mime = _detect_mime_light(name)
     sha = compute_sha256(file_bytes)
     with closing(conn.cursor()) as cur:
-        # Dedup
+    # Dedup
         cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
         row = cur.fetchone()
         if row:
             rid = int(row[0]); pages = int(row[1]) if row[1] is not None else None
-            # if not linked to RFP yet, link now
+    # if not linked to RFP yet, link now
             if rfp_id is not None:
                 try:
                     cur.execute("UPDATE rfp_files SET rfp_id=COALESCE(rfp_id, ?) WHERE id=?;", (int(rfp_id), rid))
@@ -3687,7 +3748,7 @@ def save_rfp_file_db(conn: sqlite3.Connection, rfp_id: int | None, name: str, fi
                 except Exception:
                     pass
             return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
-        # New insert
+    # New insert
         pages_text = extract_text_pages(file_bytes, mime)
         pages_before = len(pages_text)
         pages_text, ocr_count = ocr_pages_if_empty(file_bytes, mime, pages_text)
@@ -3996,7 +4057,7 @@ def y55_ai_parse(text: str) -> dict:
     t = (text or "").strip()
     if not t:
 
-        # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
+    # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
 
@@ -4057,14 +4118,14 @@ def y55_ai_parse(text: str) -> dict:
         out["title"] = (out.get("title") or "").strip()[:200]
         out["solnum"] = (out.get("solnum") or "").strip()[:80]
 
-        # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
+    # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
 
     except Exception:
         pass
 
-        # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
+    # Phase 3 post-process: validate schema, normalize dates/money, derive due_* fields
         out = _y55_validate(out)
         return out
 
@@ -4305,7 +4366,7 @@ def _fetch_and_save_now(conn, notice_id: str, rfp_id: int) -> int:
     try:
         for fname, fbytes in (sam_try_fetch_attachments(str(notice_id)) or []):
             try:
-                # de-dupe by sha256 via save_rfp_file_db
+    # de-dupe by sha256 via save_rfp_file_db
                 save_rfp_file_db(conn, int(rfp_id), fname, fbytes)
                 saved += 1
             except Exception:
@@ -4493,7 +4554,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             params["postedFrom"] = posted_from.strftime("%m/%d/%Y")
             params["postedTo"] = posted_to.strftime("%m/%d/%Y")
         else:
-            # SAM.gov API requires postedFrom/postedTo; use implicit last 30 days when filter is off
+    # SAM.gov API requires postedFrom/postedTo; use implicit last 30 days when filter is off
             _today = datetime.now().date()
             _from = _today - timedelta(days=30)
             params["postedFrom"] = _from.strftime("%m/%d/%Y")
@@ -4536,6 +4597,7 @@ if 'results_df' not in locals():
         results_df = st.session_state.get('sam_results_df')
 
     except Exception:
+        pass
 
         results_df = None
 
@@ -4546,15 +4608,16 @@ try:
     _has_rows = (results_df is not None) and hasattr(results_df, 'empty') and (not results_df.empty)
 
 except Exception:
+    pass
 
     _has_rows = False
 
 if _has_rows:
-        # --- List view with pagination (Phase Sam Watch: Part 1) ---
-        # Reset page if not set
+    # --- List view with pagination (Phase Sam Watch: Part 1) ---
+    # Reset page if not set
         if "sam_page" not in st.session_state:
             st.session_state["sam_page"] = 1
-        # Compute pages based on current limit control
+    # Compute pages based on current limit control
         try:
             page_size = int(limit)
         except Exception:
@@ -4562,14 +4625,14 @@ if _has_rows:
         total = len(results_df)
         total_pages = max(1, (total + page_size - 1) // page_size)
         cur_page = int(st.session_state.get("sam_page", 1))
-        # Clamp page
+    # Clamp page
         if cur_page < 1:
             cur_page = 1
         if cur_page > total_pages:
             cur_page = total_pages
         st.session_state["sam_page"] = cur_page
 
-        # Pager controls
+    # Pager controls
         p1, p2, p3 = st.columns([1, 3, 1])
         with p1:
             if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
@@ -4585,7 +4648,7 @@ if _has_rows:
         start_i = (cur_page - 1) * page_size
         end_i = min(start_i + page_size, total)
 
-        # Render list cards instead of table
+    # Render list cards instead of table
         for i in range(start_i, end_i):
             row = results_df.iloc[i]
             with st.container():
@@ -4639,7 +4702,7 @@ if _has_rows:
                                 )
                                 deal_id = cur.lastrowid
                                 _db.commit()
-                            # Optional: create an RFP shell and try to fetch attachments
+    # Optional: create an RFP shell and try to fetch attachments
                             try:
                                 with _closing(_db.cursor()) as cur:
                                     cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
@@ -4668,7 +4731,7 @@ if _has_rows:
                                 pass
                 with c5:
 
-                    # Ask RFP Analyzer (Phase 3 modal)
+    # Ask RFP Analyzer (Phase 3 modal)
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
                         notice = row.to_dict()
                         st.session_state["x3_modal_notice"] = notice
@@ -4683,19 +4746,20 @@ if _has_rows:
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
 
-                    # Render modal if requested
+    # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
                         try:
                             ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID"))))
                         except Exception:
-                            # Fallback if modal unavailable
+                            pass
+    # Fallback if modal unavailable
                             ctx = st.container()
                         with ctx:
                             try:
                                 _notice = st.session_state.get("x3_modal_notice") or {}
                                 rfp_id = _ensure_rfp_for_notice(conn, _notice)
                                 st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
-                                # Attachments area
+    # Attachments area
                                 try:
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
@@ -4712,7 +4776,7 @@ if _has_rows:
                                         st.success(f"Fetched {c} attachment(s).")
                                         st.rerun()
 
-                                # Index (light) and summary
+    # Index (light) and summary
                                 try:
                                     y1_index_rfp(conn, int(rfp_id), rebuild=False)
                                 except Exception:
@@ -4720,7 +4784,7 @@ if _has_rows:
                                 full_text, sources = _rfp_build_fulltext_from_db(conn, int(rfp_id))
                                 if not full_text:
                                     st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
-                                    # Try SAM description fallback
+    # Try SAM description fallback
                                     try:
                                         descs = sam_try_fetch_attachments(str(row.get("Notice ID") or "")) or []
                                         for name, b in descs:
@@ -4734,7 +4798,7 @@ if _has_rows:
                                 with st.expander("AI Summary", expanded=True):
                                     st.markdown(_rfp_ai_summary(full_text or "", row.to_dict()))
 
-                                # Per-document summarize chips
+    # Per-document summarize chips
                                 try:
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
@@ -4756,7 +4820,7 @@ if _has_rows:
                                         with st.expander("Document Summary", expanded=True):
                                             st.markdown(st.session_state.get("x3_docsum"))
 
-                                # Chat
+    # Chat
                                 st.divider()
                                 st.subheader("Ask about this RFP")
                                 _chat_k = _uniq_key("x3_chat", int(rfp_id))
@@ -4773,7 +4837,7 @@ if _has_rows:
                                         st.session_state[hist_key].append(("assistant", ans))
                                         st.markdown(ans)
 
-                                # Proposal hand-off
+    # Proposal hand-off
                                 st.divider()
                                 if st.button("Start Proposal Outline", key=_uniq_key("x3_outline", int(rfp_id))):
                                     outline = [
@@ -4790,15 +4854,15 @@ if _has_rows:
                                     st.success("Outline drafted and saved. Open Proposal Builder to continue.")
                             except Exception as _e:
                                 st.error(f"Modal error: {_e}")
-                    # Push notice to Analyzer tab (optional)
-                    if st.button('Push to RFP Analyzer', key='rfp_push_btn', on_click=lambda: st.session_state.update({'rfp_modal_open': True})):
+    # Push notice to Analyzer tab (optional)
+                    if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                         except Exception as _e:
                             st.error(f"Unable to push to RFP Analyzer: {_e}")
 
-                # Inline details view for the selected card
+    # Inline details view for the selected card
                 try:
                     _sel = st.session_state.get("sam_selected_idx")
                 except Exception:
@@ -4815,7 +4879,7 @@ if _has_rows:
                                     break
                         except Exception:
                             _raw = None
-                
+
                         def _gx(obj, *keys, default=""):
                             try:
                                 for k in keys:
@@ -4825,12 +4889,12 @@ if _has_rows:
                                 return obj if obj is not None else default
                             except Exception:
                                 return default
-                
+
                         desc = row.get("Description") or _gx(_raw, "description", default="")
                         pop_city = _gx(_raw, "placeOfPerformance", "city", default="")
                         pop_state = _gx(_raw, "placeOfPerformance", "state", default="")
                         pop = ", ".join([p for p in [pop_city, pop_state] if p])
-                
+
                         st.write(f"**Solicitation:** {row.get('Solicitation') or ''}")
                         st.write(f"**Set-Aside:** {row.get('Set-Aside') or ''}")
                         st.write(f"**PSC:** {row.get('PSC') or ''}     **NAICS:** {row.get('NAICS') or ''}")
@@ -4839,7 +4903,7 @@ if _has_rows:
                         if desc:
                             with st.expander("Description"):
                                 st.write(desc)
-                
+
                         try:
                             from contextlib import closing as _closing
                             _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
@@ -4856,14 +4920,14 @@ if _has_rows:
                                             st.write(f"- {fn} ({ln or 0} bytes)")
                         except Exception:
                             pass
-                
+
                         link = row.get("SAM Link") or ""
                         if link:
                             st.markdown(f"[Open on SAM.gov]({link})")
 
                 st.divider()
 
-        # Selected details section (sticky below list)
+    # Selected details section (sticky below list)
         sel_idx = st.session_state.get("sam_selected_idx")
         if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
             row = results_df.iloc[sel_idx]
@@ -4882,7 +4946,7 @@ if _has_rows:
                     st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                     if row.get('SAM Link'):
                         st.markdown(f"[Open in SAM]({row['SAM Link']})")
-                # CO Q&A helper
+    # CO Q&A helper
                 try:
                     _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
                     y6_render_co_box((conn if 'conn' in locals() else globals().get('conn')), _rid, key_prefix="run_sam_watch_y6", title="Ask the CO about this opportunity")
@@ -4910,7 +4974,7 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
-        # === One-Page Analyzer (integrated) ===
+    # === One-Page Analyzer (integrated) ===
     try:
         _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
@@ -4959,7 +5023,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
     # --- RFP Meta Editor (safe) ---
     try:
-        # Determine active RFP id
+    # Determine active RFP id
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
         if not _rid:
             _rid = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn).iloc[0]["id"]
@@ -4977,7 +5041,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         except Exception:
             pass
         try:
-            # sam_url may or may not exist yet
+    # sam_url may or may not exist yet
             _sam0 = pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(int(_rid),)).iloc[0].get("sam_url") or ""
         except Exception:
             _sam0 = ""
@@ -5021,9 +5085,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             sam_url = st.text_input("SAM URL (for amendment tracking)", value=sam_default or "", key="p3_sam_url")
         with cB:
             ttl_hours = st.number_input("Cache TTL (hours)", min_value=1, max_value=168, value=72, step=1, key="p3_ttl")
-        # Sidebar: amendment diff and impact to-dos
+    # Sidebar: amendment diff and impact to-dos
         render_amendment_sidebar(conn, int(rid_p3), sam_url, ttl_hours=int(ttl_hours))
-        # Main panel: full RTM coverage editor + metrics
+    # Main panel: full RTM coverage editor + metrics
         with st.expander("Requirements Traceability Matrix (RTM)", expanded=True):
             render_rtm_ui(conn, int(rid_p3))
 
@@ -5122,7 +5186,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 # ---------------- PARSE & SAVE ----------------
     with tab_parse:
 
-        # --- X1 Ingest: File Library + Health ---
+    # --- X1 Ingest: File Library + Health ---
         if True:
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
                 st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X7 applied")
@@ -5239,7 +5303,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             else:
                 if mode == "Combine all into one RFP":
                     text_parts = []
-                    # Include DB-saved attachments (rfp_files) as inputs too
+    # Include DB-saved attachments (rfp_files) as inputs too
                     try:
                         class _MemFile:
                             def __init__(self, name, data):
@@ -5264,7 +5328,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     if pasted:
                         text_parts.append(pasted)
                     full_text = "\\n\\n".join([t for t in text_parts if t]).strip()
-                    # X3: parse pricing matrices from any uploaded XLSX files
+    # X3: parse pricing matrices from any uploaded XLSX files
                     x3_clins = []
                     for _f in (ups or []):
                         try:
@@ -5318,7 +5382,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
 
-                            # X3: store POP / ordering period in meta and key_dates
+    # X3: store POP / ordering period in meta and key_dates
                             try:
                                 _pop = extract_pop_structure(full_text)
                                 if _pop:
@@ -5330,7 +5394,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             except Exception:
                                 pass
 
-                            # X3: POP / ordering period from this file's text
+    # X3: POP / ordering period from this file's text
                             try:
                                 _pop = extract_pop_structure(text)
                                 if _pop:
@@ -5342,7 +5406,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             except Exception:
                                 pass
                             conn.commit()
-                            # X2: auto-link any pending ingested files to this new RFP
+    # X2: auto-link any pending ingested files to this new RFP
                             try:
                                 if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids"):
                                     ids = tuple(int(i) for i in st.session_state.get("x1_last_ingested_ids") or [])
@@ -5407,7 +5471,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             conn.commit()
                         last_rfp_id = rfp_id
                         saved += 1
-                    # X2: if pending, link last created RFP to recently ingested files
+    # X2: if pending, link last created RFP to recently ingested files
                     try:
                         if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids") and "last_rfp_id" in locals():
                             ids = tuple(int(i) for i in st.session_state.get("x1_last_ingested_ids") or [])
@@ -5551,7 +5615,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     st.caption("No Q&A yet for this RFP.")
             except Exception as e:
                 st.info(f"No history available: {e}")
-            # X7 guard: ensure checklist dataframe is defined and rid is available
+    # X7 guard: ensure checklist dataframe is defined and rid is available
             _rid = locals().get("rid", None)
             if _rid is None:
                 st.caption("Checklist viewer: select an RFP above to load items.")
@@ -5583,7 +5647,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
-            # Export
+    # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(rid))
@@ -5592,7 +5656,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
     # ---------------- CLINs / Dates / POCs ----------------
     with tab_data:
-        # X2: Files for this RFP
+    # X2: Files for this RFP
         with st.expander("Files for this RFP (X2)", expanded=False):
             try:
                 df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
@@ -5603,7 +5667,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 st.write("No files linked.")
             else:
                 _styled_dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
-                # X5: preview and download selected linked file
+    # X5: preview and download selected linked file
                 try:
                     pick = st.selectbox(
                         "Open file",
@@ -5630,13 +5694,13 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 except Exception as e:
                     st.info(f"No preview available: {e}")
 
-                # X6: bulk ZIP download, inventory CSV, and simple search across linked files
+    # X6: bulk ZIP download, inventory CSV, and simple search across linked files
                 import io as _io, zipfile as _zipfile
                 c_zip, c_inv = st.columns([1,1])
                 with c_zip:
                     if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
                         try:
-                            # Fetch bytes for all linked files
+    # Fetch bytes for all linked files
                             df_bytes = pd.read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
                             if df_bytes is None or df_bytes.empty:
                                 st.warning("No files to package.")
@@ -5645,7 +5709,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 with _zipfile.ZipFile(buf, mode="w", compression=_zipfile.ZIP_DEFLATED) as zf:
                                     for _, r in df_bytes.iterrows():
                                         fname = (r.get("filename") or f"file_{_}.bin")
-                                        # Avoid directory traversal
+    # Avoid directory traversal
                                         fname = fname.replace("..","").replace("\\","/").split("/")[-1]
                                         b = r.get("bytes")
                                         if isinstance(b, (bytes, bytearray)):
@@ -5740,7 +5804,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             if df_meta_all is None or df_meta_all.empty:
                 st.write("No meta extracted yet.")
             else:
-                # Highlight common fields
+    # Highlight common fields
                 want = ['naics','set_aside','place_of_performance','pop_structure','ordering_period_years','base_months']
                 show = df_meta_all[df_meta_all["key"].isin(want)]
                 if show.empty:
@@ -5762,7 +5826,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 else:
                     _styled_dataframe(pop, use_container_width=True, hide_index=True)
 
-        # === Phase S: Manual Editors (LM / CLINs / Dates / POCs / Meta) ===
+    # === Phase S: Manual Editors (LM / CLINs / Dates / POCs / Meta) ===
 
         import pandas as _pd
         from contextlib import closing as _closing_ed
@@ -5848,7 +5912,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             cur.execute('INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);', (int(rid), k, v))
                         conn.commit()
                     st.success('Meta saved.')
-        # === End Phase S ===
+    # === End Phase S ===
         col1, col2, col3 = st.columns(3)
         with col1:
             df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
@@ -5862,7 +5926,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         st.subheader("Attributes")
         df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
         _styled_dataframe(df_meta, use_container_width=True, hide_index=True)
-        # --- RTM Coverage section ---
+    # --- RTM Coverage section ---
         try:
             rid_int = int(rid)
         except Exception:
@@ -5870,7 +5934,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         if rid_int:
             render_rtm_ui(conn, rid_int)
 
-        # --- Amendment awareness sidebar ---
+    # --- Amendment awareness sidebar ---
         try:
             sam_url = str(pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(rid_int,)).iloc[0]["sam_url"])
         except Exception:
@@ -5946,7 +6010,7 @@ def _load_compliance_matrix(conn: sqlite3.Connection, rfp_id: int) -> pd.DataFra
 
     # Base tables path (works even if lm_meta is empty)
     if _has("lm_items"):
-        # Only join lm_meta if it truly exists (older DBs may lack it)
+    # Only join lm_meta if it truly exists (older DBs may lack it)
         if _has("lm_meta"):
             q = """
                 SELECT i.id AS lm_id, i.item_text, i.is_must, i.status,
@@ -7260,7 +7324,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         if up and st.button("Import", key="pp_do_import"):
             try:
                 df = pd.read_csv(up)
-                # Normalize headers
+    # Normalize headers
                 df.columns = [c.strip().lower() for c in df.columns]
                 required = {"project_title"}
                 if not required.issubset(set(df.columns)):
@@ -7373,7 +7437,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         ctx = _load_rfp_context(conn, int(rfp_id))
         title = (ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "")
         secs = ctx.get("sections", pd.DataFrame())
-        # Compute scores
+    # Compute scores
         scores = []
         for _, r in df.iterrows():
             scores.append(_pp_score_one(r.to_dict(), title, secs))
@@ -7393,12 +7457,12 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         if not picked:
             st.error("Select at least one project.")
             return
-        # Build markdown text
+    # Build markdown text
         blocks = []
         for r in picked:
             blk = _pp_writeup_block(r)
             if tone == "Concise bullets":
-                # convert sentences to bullets
+    # convert sentences to bullets
                 bullets = []
                 for line in blk.split("\n"):
                     line = line.strip()
@@ -7415,11 +7479,11 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         st.markdown("**Preview**")
         st.write(final_md)
 
-        # Push to Proposal Builder section
+    # Push to Proposal Builder section
         st.session_state["pb_section_Past Performance Summary"] = final_md
         st.success("Pushed to Proposal Builder → Past Performance Summary")
 
-        # Export DOCX
+    # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
         _export_past_perf_docx(out_path, past_perf)
 def _wp_load_paper(conn: sqlite3.Connection, paper_id: int) -> pd.DataFrame:
@@ -7503,7 +7567,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                                     (int(t_sel), pos, ts_title.strip(), ts_body.strip()))
                         conn.commit()
                     st.success("Section added"); st.rerun()
-                # Reorder / delete (simple)
+    # Reorder / delete (simple)
                 if not df_ts.empty:
                     st.markdown("**Reorder / Delete**")
                     for _, r in df_ts.iterrows():
@@ -7567,7 +7631,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
     if 'p_sel' in locals() and p_sel:
         st.subheader(f"Editing draft #{int(p_sel)}")
         df_sec = _wp_load_paper(conn, int(p_sel))
-        # Add section
+    # Add section
         st.markdown("**Add section**")
         ns_title = st.text_input("Section title", key="wp_ns_title")
         ns_body = st.text_area("Body", key="wp_ns_body", height=140)
@@ -7584,7 +7648,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                 conn.commit()
             st.success("Section added"); st.rerun()
 
-        # Section list
+    # Section list
         if df_sec.empty:
             st.info("No sections yet.")
         else:
@@ -7624,7 +7688,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                         st.success("Deleted"); st.rerun()
                 st.divider()
 
-            # Export & Push
+    # Export & Push
             x1, x2 = st.columns([2,2])
             with x1:
                 if st.button("Export DOCX", key="wp_export"):
@@ -7646,7 +7710,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
 
             with x2:
                 if st.button("Push narrative to Proposal Builder", key="wp_push"):
-                    # Concatenate sections to markdown
+    # Concatenate sections to markdown
                     secs = _wp_load_paper(conn, int(p_sel))
                     lines = []
                     for _, rr in secs.sort_values("position").iterrows():
@@ -7805,7 +7869,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         else:
             df["prob_%"] = df["status"].apply(_stage_probability)
             df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
-            # Stage age: days since last stage change
+    # Stage age: days since last stage change
             df_log = pd.read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;", conn, params=())
             def stage_age(row):
                 try:
@@ -7898,7 +7962,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                     owner_id = st.selectbox("Vendor", options=df_v["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_v.loc[df_v['id']==i, 'name'].values[0]}",
                                             key="fm_owner_vendor")
-            # Owner_id can be None for "Other"
+    # Owner_id can be None for "Other"
         with c2:
             tags = st.text_input("Tags (comma-separated)", key="fm_tags")
             notes = st.text_area("Notes (optional)", height=70, key="fm_notes")
@@ -7960,7 +8024,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             st.write("No files yet.")
         else:
             _styled_dataframe(df_files.drop(columns=["path"]), use_container_width=True, hide_index=True)
-            # Per-row controls
+    # Per-row controls
             for _, r in df_files.iterrows():
                 c1, c2, c3, c4 = st.columns([3,2,2,2])
                 with c1:
@@ -8039,7 +8103,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         if not selected and not gen_paths:
             st.warning("Select at least one attachment or generated document.")
         else:
-            # Collect paths
+    # Collect paths
             rows = []
             if selected:
                 ph = ",".join(["?"]*len(selected))
@@ -8049,7 +8113,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
             for p in gen_paths:
                 rows.append((Path(p).name, p))
 
-            # Create ZIP
+    # Create ZIP
             from zipfile import ZipFile, ZIP_DEFLATED
             ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
             zip_path = str(Path(DATA_DIR) / f"submission_kit_RFP_{int(kit_rfp)}_{ts}.zip")
@@ -8060,7 +8124,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
                             z.write(p, arcname=fname)
                         except Exception:
                             pass
-                    # Add a manifest
+    # Add a manifest
                     manifest = "Submission Kit Manifest\n"
                     manifest += f"RFP ID: {int(kit_rfp)}\n"
                     manifest += "\nIncluded files:\n" + "\n".join(f"- {fname}" for fname, _ in rows)
@@ -8108,7 +8172,7 @@ def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
         if r.get("path"):
             files.append((r["name"] or Path(r["path"]).name, r["path"]))
         elif r.get("file_id"):
-            # fallback to files table
+    # fallback to files table
             try:
                 df = pd.read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(r["file_id"]),))
                 if not df.empty:
@@ -8144,7 +8208,7 @@ def _rfq_build_zip(conn: sqlite3.Connection, pack_id: int) -> Optional[str]:
             for fname, pth in files:
                 try: z.write(pth, arcname=fname)
                 except Exception: pass
-            # manifest
+    # manifest
             manifest = "RFQ Pack Manifest\n"
             manifest += f"Title: {title}\n"
             manifest += f"Due: {pack.get('due_date') or ''}\n"
@@ -8367,13 +8431,13 @@ def _db_path_from_conn(conn: sqlite3.Connection) -> str:
 def migrate(conn: sqlite3.Connection) -> None:
     """Lightweight idempotent migrations and indices."""
     with closing(conn.cursor()) as cur:
-        # read current version
+    # read current version
         try:
             ver = int(pd.read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn, params=()).iloc[0]["ver"])
         except Exception:
             ver = 0
 
-        # v1: add common indexes
+    # v1: add common indexes
         if ver < 1:
             try:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage);")
@@ -8386,7 +8450,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             cur.execute("UPDATE schema_version SET ver=1 WHERE id=1;")
             conn.commit()
 
-        # v2: ensure NOT NULL defaults where safe (no schema changes if exists)
+    # v2: ensure NOT NULL defaults where safe (no schema changes if exists)
         if ver < 2:
             try:
                 cur.execute("PRAGMA foreign_keys=ON;")
@@ -8395,7 +8459,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             cur.execute("UPDATE schema_version SET ver=2 WHERE id=1;")
             conn.commit()
 
-        # v3: WAL checkpoint to ensure clean state
+    # v3: WAL checkpoint to ensure clean state
         if ver < 3:
             try:
                 cur.execute("PRAGMA wal_checkpoint(FULL);")
@@ -8426,7 +8490,8 @@ def _backup_db(conn: sqlite3.Connection) -> Optional[str]:
             cur.execute(f"VACUUM INTO '{str(out)}';")
         return str(out)
     except Exception:
-        # fallback: use backup API
+        pass
+    # fallback: use backup API
         try:
             import sqlite3 as _sq
             src = _sq.connect(db_path)
@@ -8462,7 +8527,7 @@ def _restore_db_from_upload(conn: sqlite3.Connection, upload) -> bool:
 def _export_table_csv(conn: sqlite3.Connection, table_or_view: str, scoped: bool = True) -> Optional[str]:
     name = table_or_view
     if scoped and not name.endswith("_t"):
-        # if a view exists, prefer it
+    # if a view exists, prefer it
         name_t = name + "_t"
         try:
             pd.read_sql_query(f"SELECT 1 FROM {name_t} LIMIT 1;", conn)
@@ -8701,15 +8766,224 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
+def run_subcontractor_finder_s1_hook(conn):
+    ensure_subfinder_s1_schema(conn)
+    try:
+        s1_render_places_panel(conn)
+    except Exception:
+        pass
 
-# Duplicate definition of run_subcontractor_finder_s1_hook removed by cleaner
+
+def router(page: str, conn: sqlite3.Connection) -> None:
+    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
+    import re as _re
+    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
+    fn = globals().get(name)
+    # explicit fallbacks for known variant names
+    if not callable(fn):
+        alt = {
+            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
+        }.get((page or "").strip(), [])
+        for a in alt:
+            fn = globals().get(a)
+            if callable(fn):
+                break
+    if not callable(fn):
+        import streamlit as _st
+        _st.warning(f"No handler for page '{page}' resolved as {name}.")
+        return
+    _safe_route_call(fn, conn)
+    # Hooks
+    if (page or "").strip() == "Subcontractor Finder":
+        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
+    if (page or "").strip() == "Proposal Builder":
+        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+def main() -> None:
+    conn = get_db()
+    global _O4_CONN
+
+    st.title(APP_TITLE)
+    st.caption(BUILD_LABEL)
+    # Y0 main panel (always on)
+    try:
+        y0_ai_panel()
+    except Exception:
+        pass
+    router(nav(), conn)
+
+
+
+# --- Outreach schema guard: fallback stub used if the full implementation is defined later ---
+if "_o3_ensure_schema" not in globals():
+    def _o3_ensure_schema(conn):
+        try:
+            from contextlib import closing
+            with closing(conn.cursor()) as cur:
+    # Minimal tables used by Outreach features
+                cur.execute("CREATE TABLE IF NOT EXISTS vendors_t (id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT, city TEXT, state TEXT, naics TEXT)")
+                cur.execute("CREATE TABLE IF NOT EXISTS current_tenant (id INTEGER PRIMARY KEY, ctid INTEGER)")
+                cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES (1, 1)")
+                cur.execute("CREATE TABLE IF NOT EXISTS outreach_templates (id INTEGER PRIMARY KEY, name TEXT, subject TEXT, body TEXT)")
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+            conn.commit()
+        except Exception:
+            pass
+
+
+# --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
+if "_o3_collect_recipients_ui" not in globals():
+    def _o3_collect_recipients_ui(conn):
+        import pandas as _pd
+        q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
+        params = []
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            f_naics = st.text_input("NAICS filter", key="o3_f_naics")
+        with c2:
+            f_state = st.text_input("State filter", key="o3_f_state")
+        with c3:
+            f_city = st.text_input("City filter", key="o3_f_city")
+        if f_naics:
+            q += " AND IFNULL(naics,'') LIKE ?"
+            params.append(f"%{f_naics}%")
+        if f_state:
+            q += " AND IFNULL(state,'') LIKE ?"
+            params.append(f"%{f_state}%")
+        if f_city:
+            q += " AND IFNULL(city,'') LIKE ?"
+            params.append(f"%{f_city}%")
+        try:
+            df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+        except Exception:
+            df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
+        if df is None or df.empty:
+    # fallback to vendors table
+            q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
+            try:
+                df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+            except Exception:
+                df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
+        st.caption(f"{len(df)} vendors match filters")
+        if not df.empty:
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
+        return df
+
+# --- Outreach SMTP sender picker: working fallback ---
+if "_o3_render_sender_picker" not in globals():
+    def _o3_render_sender_picker_legacy():
+        import streamlit as st
+        conn = get_o4_conn()
+        try:
+            ensure_outreach_o1_schema(conn)
+        except Exception:
+            pass
+        _ensure_email_accounts_schema(conn)
+        rows = _get_senders(conn)
+        if not rows:
+            st.info("No sender accounts configured. Add one now:")
+            with st.form("o4_inline_add_sender", clear_on_submit=True):
+                email = st.text_input("Email address")
+                display = st.text_input("Display name")
+                pw = st.text_input("App password", type="password")
+                ok = st.form_submit_button("Save sender")
+                if ok and email:
+                    try:
+                        with conn:
+                            conn.execute("""
+                            INSERT INTO email_accounts(user_email, display_name, app_password)
+                            VALUES(?,?,?)
+                            ON CONFLICT(user_email) DO UPDATE SET
+                                display_name=excluded.display_name,
+                                app_password=excluded.app_password
+                            """, (email.strip(), display or "", pw or ""))
+                        st.success("Saved")
+                        try:
+                            import streamlit as st
+                            st.session_state["o4_sender_sel"] = email
+
+                        except Exception:
+                            pass
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+            if ok and email:
+                conn.execute("INSERT OR REPLACE INTO email_accounts(user_email, display_name, app_password) VALUES(?,?,?)",
+                             (email.strip().lower(), display.strip(), pw.strip()))
+                conn.commit()
+                rows = _get_senders(conn)
+        if not rows:
+            st.error("No sender accounts configured")
+            return {"email": "", "app_password": ""}
+        choices = [r[0] for r in rows] + ["<add new>"]
+        sel = st.selectbox("From account", choices, key="o4_from_addr")
+        if sel == "<add new>":
+            st.info("Add a sender in Outreach -> Sender accounts")
+            return {"email": "", "app_password": ""}
+        pw = st.text_input("App password", type="password", key="o4_from_pw")
+        return {"email": sel, "app_password": pw}
+
+def y_auto_k(text: str) -> int:
+    t = (text or "").lower()
+    n = len(t)
+    broad = any(k in t for k in [
+        "overview", "summary", "summarize", "list all", "requirements", "compliance",
+        "section l", "section m", "evaluation factors", "factors", "checklist",
+        "compare", "differences", "conflict", "conflicts", "crosswalk", "matrix"
+    ])
+    if not t.strip():
+        return 4
+    base = 7 if broad else 4
+    if n > 500:
+        base += 1
+    if n > 1200:
+        base += 1
+    return max(3, min(8, base))
+
+
+# === PHASE 8: Latency and UX ===
+# Memoize y1_search by (rfp_id, query) and a snapshot of the chunks table to keep cache fresh.
+def _y1_snapshot(conn, rfp_id: int) -> str:
+    try:
+        df = pd.read_sql_query(
+            "SELECT COUNT(1) AS c, COALESCE(MAX(id),0) AS m FROM rfp_chunks WHERE rfp_id=?;",
+            conn, params=(int(rfp_id),)
+        )
+        c = int(df.iloc[0]["c"]) if df is not None and not df.empty else 0
+        m = int(df.iloc[0]["m"]) if df is not None and not df.empty else 0
+        return f"{c}:{m}"
+    except Exception:
+        return "0:0"
+
+try:
+    import streamlit as _st_phase8
+except Exception:
+    _st_phase8 = None
+
+if _st_phase8 is not None:
+    @_st_phase8.cache_data(show_spinner=False, ttl=600)
+    def _y1_search_cached(db_path: str, rfp_id: int, query: str, k: int, snapshot: str):
+        import sqlite3 as _sql8
+    # Re-open a read-only connection to keep cache pure
+        try:
+            conn2 = _sql8.connect(db_path, check_same_thread=False)
+        except Exception:
+            conn2 = _sql8.connect(db_path)
+        try:
+            return _y1_search_uncached(conn2, int(rfp_id), query or "", int(k))
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
 def y1_search(conn, rfp_id: int, query: str, k: int = 6):
     # Compute snapshot to invalidate cache if chunks changed
     snap = _y1_snapshot(conn, int(rfp_id))
     try:
         db_path = DB_PATH  # provided in app
     except Exception:
-        # very conservative fallback
+        pass
+    # very conservative fallback
         db_path = "data/govcon.db"
     return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
 
@@ -8720,7 +8994,7 @@ def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6,
         for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature):
             yield tok
     except NameError:
-        # fallback if dependencies were not merged
+    # fallback if dependencies were not merged
         hits = []
         try:
             hits = y1_search(conn, int(rfp_id), user_q or "", k=int(k))
@@ -8827,7 +9101,7 @@ def run_capability_statement(conn):
     try:
         with st.expander("X16.1 — AI drafting helper (OpenAI)", expanded=False):
             st.caption("Draft tagline, core competencies, and differentiators using your org profile and recent RFP context.")
-            # Load org profile
+    # Load org profile
             try:
                 dfp = pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
             except Exception:
@@ -8841,7 +9115,7 @@ def run_capability_statement(conn):
             audience = st.text_input("Audience focus (e.g., BOP Facilities, USAF MXG, VA VISN)", key="x161_aud")
             tone = st.selectbox("Tone", ["Crisp federal", "Technical", "Plain language"], index=0, key="x161_tone")
             include_past_perf = st.checkbox("Incorporate past performance bullets if available", value=True, key="x161_pp")
-            # Optional RFP context
+    # Optional RFP context
             try:
                 dfr = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
                 rfp_sel = st.selectbox("Optional RFP context", options=[None] + dfr["id"].tolist(),
@@ -8852,12 +9126,12 @@ def run_capability_statement(conn):
             ctx = ""
             if rfp_sel:
                 try:
-                    # Pull a compact context from chunks
+    # Pull a compact context from chunks
                     hits = pd.read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=? LIMIT 40;", conn, params=(int(rfp_sel),))
                     ctx = "\n".join((hits["text"].fillna("").tolist() if hits is not None else []))[:12000]
                 except Exception:
                     ctx = ""
-            # Compose prompt
+    # Compose prompt
             def _ask_x161(kind: str):
                 sys = "You are a senior federal capture writer. Use short, precise bullets. Avoid marketing fluff. No emojis."
                 req = f"""Company: {company}
@@ -8902,7 +9176,7 @@ RFP Context (optional, may be empty):
             if save:
                 try:
                     with closing(conn.cursor()) as cur:
-                        # ensure profile row exists
+    # ensure profile row exists
                         cur.execute("INSERT OR IGNORE INTO org_profile(id, company_name) VALUES(1, ?);", (company,))
                         cur.execute("UPDATE org_profile SET tagline=?, core_competencies=?, differentiators=? WHERE id=1;",
                                     (st.session_state.get("x161_tagline",""), st.session_state.get("x161_core",""), st.session_state.get("x161_diff","")))
@@ -9216,49 +9490,58 @@ def seed_default_templates(conn):
 
 # --- O4 wrapper: delegates to __p_o4_ui if present, else shows fallback UI ---
 def o4_sender_accounts_ui(conn):
-    try:
-        return __p_o4_ui(conn)  # provided by O4 module when available
-    except Exception:
+
+        """Fallback UI if enhanced O4 module is unavailable."""
+        try:
+            return __p_o4_ui(conn)  # delegate if available
+        except Exception:
+            pass
+
         import streamlit as _st
-        from contextlib import closing
+        from contextlib import closing as _closing
         _st.info("O4 sender accounts fallback UI loaded.")
-        # Load existing if any
-        host, port, username, password, use_tls = "smtp.gmail.com", 587, "", "", True
+    # Load first account if exists
+        host, port, username, password, use_ssl = "smtp.gmail.com", 465, "", "", True
         try:
-            with closing(conn.cursor()) as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                row = cur.execute("SELECT label, host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+            with _closing(conn.cursor()) as cur:
+                cur.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email LIMIT 1;")
+                row = cur.fetchone()
                 if row:
-                    label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
+                    username = row[0] or ""
+                    host = row[2] or "smtp.gmail.com"
+                    try:
+                        port = int(row[3] or 465)
+                    except Exception:
+                        port = 465
+                    use_ssl = bool(row[4])
         except Exception:
             pass
-        with _st.form("o4_fallback_sender_mm", clear_on_submit=False):
-            label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
-            username = _st.text_input("Gmail address", value=username)
-            password = _st.text_input("App password", type="password", value=password)
-            c1,c2 = _st.columns(2)
-            with c1: host = _st.text_input("SMTP host", value=host)
-            with c2: port = _st.number_input("SMTP port", 1, 65535, value=int(port))
-            use_tls = _st.checkbox("Use STARTTLS", value=bool(use_tls))
-            saved = _st.form_submit_button("Save sender")
-            if saved:
-                try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                        cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
-                                    (label.strip() or "Default", host.strip(), int(port), username.strip(), password.strip(), 1 if use_tls else 0))
-                        conn.commit()
-                    _st.success("Sender saved")
-                except Exception as e:
-                    _st.error(f"Save failed: {e}")
-        # Show current
-        try:
-            with closing(conn.cursor()) as cur:
-                row = cur.execute("SELECT label, username, host, port, use_tls FROM smtp_settings WHERE id=1").fetchone()
-            if row:
-                _st.caption(f"Active: {row[0]} — {row[1]} via {row[2]}:{row[3]} TLS={'on' if row[4] else 'off'}")
-        except Exception:
-            pass
+
+        with _st.form(key="o4_fallback_sender_form"):
+            username = _st.text_input("Email", value=username or "", key="o4_fb_email")
+            host = _st.text_input("SMTP host", value=host or "smtp.gmail.com", key="o4_fb_host")
+            port = _st.number_input("Port", min_value=1, max_value=65535, value=int(port or 465), step=1, key="o4_fb_port")
+            use_ssl = _st.checkbox("Use SSL", value=bool(use_ssl), key="o4_fb_ssl")
+            password = _st.text_input("App password", type="password", value=password or "", key="o4_fb_pw")
+            submitted = _st.form_submit_button("Save")
+
+        if submitted:
+            try:
+                with _closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO email_accounts(user_email, display_name, app_password, smtp_host, smtp_port, use_ssl)
+                        VALUES(?,?,?,?,?,?)
+                        ON CONFLICT(user_email) DO UPDATE SET
+                            app_password=excluded.app_password,
+                            smtp_host=excluded.smtp_host,
+                            smtp_port=excluded.smtp_port,
+                            use_ssl=excluded.use_ssl
+                    """, (username.strip(), "", password or "", host or "smtp.gmail.com", int(port or 465), 1 if use_ssl else 0))
+                conn.commit()
+                _st.success("Saved sender account")
+            except Exception as e:
+                _st.error(f"Save failed: {e}")
+
 
 
 def render_outreach_mailmerge(conn):
@@ -9291,7 +9574,7 @@ def render_outreach_mailmerge(conn):
             if "_o3_send_batch" in globals():
                 if test:
                     st.info("Test run: rendering only, no SMTP.")
-                    # call with test_only=True
+    # call with test_only=True
                     out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn))
                 else:
                     out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn))
@@ -9323,7 +9606,7 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
-            # guarded render
+    # guarded render
 
             __ok = _render_once('o4_sender')
 
@@ -9554,7 +9837,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     logs = []
     smtp = None
     if not test_only:
-        # derive SMTP settings from sender
+    # derive SMTP settings from sender
         host = sender.get("host") or "smtp.gmail.com"
         port = int(sender.get("port") or 465)
         use_tls = bool(sender.get("use_tls") or (port == 587))
@@ -9691,7 +9974,8 @@ def _o4_accounts_ui(conn):
                 st.success("Saved")
     try:
         import streamlit as st
-        st.session_state["o4_sender_sel"] = email.strip()
+        st.session_state["o4_sender_sel"] = email
+
     except Exception:
         pass
     st.rerun()
@@ -9726,12 +10010,12 @@ def _o3_render_sender_picker():
     # Load password and SMTP details from the unifying table when present
     if sel != "<add new>":
         try:
-            # First try email_accounts
+    # First try email_accounts
             row = conn.execute("SELECT app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?", (sel,)).fetchone()
             if row:
                 chosen.update({"app_password": row[0] or "", "smtp_host": row[1] or "smtp.gmail.com", "smtp_port": int(row[2] or 465), "use_ssl": int(row[3] or 1)})
             else:
-                # Fallback to smtp_settings
+    # Fallback to smtp_settings
                 row2 = conn.execute("SELECT password, host, port, use_tls FROM smtp_settings WHERE username=?", (sel,)).fetchone()
                 if row2:
                     chosen.update({"app_password": row2[0] or "", "smtp_host": row2[1] or "smtp.gmail.com", "smtp_port": int(row2[2] or 587), "use_ssl": int(row2[3] or 1)})
@@ -9886,7 +10170,7 @@ def _o5_send_due(conn, limit: int = 200):
     ok = 0; fail = 0; sender = _o5_pick_sender_from_session()
     for _, r in df.iterrows():
         try:
-            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]); 
+            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]);
             with conn: conn.execute("UPDATE outreach_schedules SET status='sent' WHERE id=?", (int(r["id"]),)); ok += 1
         except Exception as e:
             with conn: conn.execute("UPDATE outreach_schedules SET status='error', last_error=? WHERE id=?", (str(e)[:500], int(r["id"]))); fail += 1
@@ -10010,7 +10294,7 @@ def o6_handle_query_unsubscribe(conn):
                 else:
                     _st.warning("Invalid or expired unsubscribe link.")
                     return True
-        # Also support direct email param
+    # Also support direct email param
         if "unsubscribe_email" in qp:
             email = (qp.get("unsubscribe_email",[None]) or [None])[0]
             if email:
@@ -10042,7 +10326,7 @@ def _o6_wrap_o3_send_batch():
         return
     def wrapped(*args, **kwargs):
         import pandas as _pd
-        # Normalize to new signature: (conn, sender, rows_df, subj, html, test_only=False, max_send=500)
+    # Normalize to new signature: (conn, sender, rows_df, subj, html, test_only=False, max_send=500)
         conn = kwargs.get("conn")
         sender = kwargs.get("sender")
         rows = kwargs.get("rows")
@@ -10051,37 +10335,37 @@ def _o6_wrap_o3_send_batch():
         test_only = kwargs.get("test_only", False)
         max_send = kwargs.get("max_send", 500)
 
-        # Positional fallbacks
+    # Positional fallbacks
         if conn is None or sender is None or rows is None or subj is None or html is None:
             if len(args) >= 5:
                 conn, sender, rows, subj, html = args[:5]
                 if len(args) >= 6: test_only = args[5]
                 if len(args) >= 7: max_send = args[6]
             elif len(args) == 2:
-                # Old call style: _o3_send_batch(sender, [{to, subject, html}, ])
+    # Old call style: _o3_send_batch(sender, [{to, subject, html}, ])
                 sender, rows_list = args
-                # Build conn via get_db if available
+    # Build conn via get_db if available
                 if conn is None and "get_db" in g:
                     try:
                         conn = g["get_db"]()
                     except Exception:
                         conn = kwargs.get("conn")
-                # Convert rows_list to DataFrame
+    # Convert rows_list to DataFrame
                 if isinstance(rows_list, list):
                     rows = _pd.DataFrame(rows_list)
                 elif hasattr(rows_list, "to_dict"):
                     rows = _pd.DataFrame(rows_list)
                 else:
                     rows = _pd.DataFrame([])
-                # Derive subj and html defaults per-row later
-                # If provided in kwargs, use them
+    # Derive subj and html defaults per-row later
+    # If provided in kwargs, use them
                 subj = subj or (rows.iloc[0]["subject"] if not rows.empty and "subject" in rows.columns else "")
                 html = html or (rows.iloc[0]["html"] if not rows.empty and "html" in rows.columns else "")
             else:
-                # Unsupported call pattern
+    # Unsupported call pattern
                 raise TypeError("Unsupported _o3_send_batch call signature")
 
-        # Ensure schema and suppression filter
+    # Ensure schema and suppression filter
         ensure_o6_schema(conn)
         if rows is not None and hasattr(rows, "copy"):
             _rows = rows.copy()
@@ -10090,15 +10374,15 @@ def _o6_wrap_o3_send_batch():
                 _rows = _rows[mask]
             rows = _rows
 
-        # If subj/html empty but rows contain per-recipient fields, send one by one
+    # If subj/html empty but rows contain per-recipient fields, send one by one
         if (not subj or not html) and rows is not None and not rows.empty and {"subject","html"}.issubset(set(map(str.lower, rows.columns))):
-            # Normalize column names case-insensitively
+    # Normalize column names case-insensitively
             columns = {c.lower(): c for c in rows.columns}
             total = 0
             for _, r in rows.iterrows():
                 subj_i = str(r.get(columns.get("subject"), subj) or "")
                 html_i = str(r.get(columns.get("html"), html) or "")
-                # Build single-row frame to keep orig API
+    # Build single-row frame to keep orig API
                 orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj_i, html=html_i, test_only=test_only, max_send=1)
                 total += 1
             return total
@@ -10254,7 +10538,7 @@ def _s1d_render_from_cache(conn, df):
                 return _h.sha1(s.encode()).hexdigest()[:12]
             keep["row_id"] = keep.apply(_mk_id, axis=1)
         keep_view = keep[["row_id","name","phone","website","address","city","state","place_id"]].copy()
-        # Restore selection
+    # Restore selection
         sel_ids = set(st.session_state.get("s1d_selected_ids", []))
         keep_view.insert(1, "Select", keep_view["row_id"].isin(sel_ids))
         edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor_cache")
@@ -10275,7 +10559,7 @@ def _s1d_render_from_cache(conn, df):
             if st.button("New search", key="s1d_new_search"):
                 st.session_state.pop("s1d_df", None)
                 st.session_state.pop("s1d_selected_ids", None)
-        # rerun suppressed to keep table visible
+    # rerun suppressed to keep table visible
 
 
 def _s1d_vendor_write_table(conn):
@@ -10339,7 +10623,7 @@ def _s1d_select_existing_pairs(conn):
 
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
-    
+
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = _s1d_get_api_key()
     if not key:
@@ -10413,7 +10697,7 @@ def render_subfinder_s1d(conn):
             "google_url": details.get("url") or "",
             "_dup": dup
         })
-        # be nice to Places
+    # be nice to Places
         _time.sleep(0.05)
     import pandas as _pd
     df = _pd.DataFrame(rows)
@@ -10794,85 +11078,12 @@ def __p_run_outreach(conn):
 # =========================
 
 
-# ---------- app entry ----------
-def main():
-    import os, sqlite3
-    import streamlit as st
+if __name__ == '__main__':
     try:
-        st.set_page_config(page_title="ELA GovCon", layout="wide")
-    except Exception:
+        main()
+    except NameError:
+    # fallback: run default entry if main() not defined in this build
         pass
-
-    try:
-        init_session()
-    except Exception:
-        pass
-
-    # Navigation
-    try:
-        page = nav()
-    except Exception as e:
-        st.error(f"Navigation failed: {e}")
-        return
-
-    # DB connection
-    try:
-        db_path = DB_PATH
-    except Exception:
-        db_path = "./data/app.db"
-    try:
-        conn = _db_connect(db_path)
-    except Exception as e:
-        st.error(f"Database open failed: {e}")
-        return
-
-    with conn:
-        try:
-            if page == "SAM Watch":
-                run_sam_watch(conn)
-            elif page == "RFP Analyzer":
-                run_rfp_analyzer(conn)
-            elif page == "L and M Checklist":
-                run_l_and_m_checklist(conn)
-            elif page == "Proposal Builder":
-                run_proposal_builder(conn)
-            elif page == "File Manager":
-                run_file_manager(conn)
-            elif page == "Subcontractor Finder":
-                run_subcontractor_finder(conn)
-            elif page == "Outreach":
-                run_outreach(conn)
-            elif page == "Mailbox":
-                run_mailbox(conn)
-            elif page == "RFQ Generator":
-                run_rfq_generator(conn)
-            elif page == "Quote Comparison":
-                run_quote_comparison(conn)
-            elif page == "Pricing Calculator":
-                run_pricing_calculator(conn)
-            elif page == "Win Probability":
-                run_win_probability(conn)
-            elif page == "Chat Assistant":
-                run_chat_assistant(conn)
-            elif page == "Capability Statement":
-                run_capability_statement(conn)
-            elif page == "CRM":
-                run_crm(conn)
-            elif page == "Contacts":
-                run_contacts(conn)
-            elif page == "Deals":
-                run_deals(conn)
-            else:
-                st.error(f"Unknown page: {page}")
-        except NameError as ne:
-            st.error(f"Missing module for '{page}': {ne}")
-        except Exception as e:
-            st.exception(e)
-
-# Ensure entry runs under Streamlit
-if __name__ == "__main__":
-    main()
-
 
 def run_subcontractor_finder_s1_hook(conn):
     ensure_subfinder_s1_schema(conn)
@@ -10950,9 +11161,9 @@ def x6_sections_suggestions(rfp_id: int) -> list:
     # prefer user outline from session, else defaults
     outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "")
     if outline:
-        # split numbered lines
+    # split numbered lines
         items = [ln.strip() for ln in outline.splitlines() if ln.strip()]
-        # filter headers like '# Proposal Outline'
+    # filter headers like '# Proposal Outline'
         return [i for i in items if not i.startswith("#")]
     return [
         "Cover Letter",
@@ -10981,7 +11192,7 @@ def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_fil
         for pi, page_txt in enumerate(pages or [], start=1):
             if not page_txt:
                 continue
-            # Simple sentence split
+    # Simple sentence split
             parts = [s.strip() for s in page_txt.replace("\r", "\n").split("\n") if s.strip()]
             for s in parts:
                 low = s.lower()
@@ -10991,7 +11202,7 @@ def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_fil
                 h = hashlib.sha1(f"{rfp_id}|{fname}|{pi}|{s}".encode("utf-8")).hexdigest()
                 try:
                     with _closing(conn.cursor()) as cur:
-                        # check dup by hash
+    # check dup by hash
                         cur.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? AND hash=? LIMIT 1;", (int(rfp_id), h))
                         if cur.fetchone():
                             pass
@@ -11453,7 +11664,8 @@ def o1_sender_accounts_ui(conn):
             st.success("Saved")
     try:
         import streamlit as st
-        st.session_state["o4_sender_sel"] = email.strip()
+        st.session_state["o4_sender_sel"] = email
+
     except Exception:
         pass
     st.rerun()
@@ -11501,7 +11713,7 @@ def _init_phase1_ui():
     .ela-ok {background: rgba(0,200,83,.12);}
     .ela-warn {background: rgba(251,140,0,.12);}
     .ela-bad {background: rgba(229,57,53,.12);}
-    
+
     /* Top ribbon banner */
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     /* Sidebar branding spacing */
@@ -11513,7 +11725,7 @@ def _init_phase1_ui():
     button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
     /* Text inputs rounding */
     .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-    
+
     </style>
     ''', unsafe_allow_html=True)
 
@@ -11535,22 +11747,3 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
-
-
-# RFP Analyzer modal fallback injected by cleaner
-try:
-    import streamlit as st
-    if 'rfp_modal_open' not in st.session_state:
-        st.session_state['rfp_modal_open'] = False
-    def _rfp_analyzer_modal_fallback():
-        with st.modal("RFP Analyzer"):
-            st.markdown("**Upload an RFP or paste text**")
-            st.file_uploader("Upload", type=["pdf","docx","txt"], key="rfp_modal_file_fallback")
-            st.text_area("Notes or questions", key="rfp_modal_notes_fallback", height=120)
-            if st.button("Close", key="rfp_modal_close_fallback"):
-                st.session_state['rfp_modal_open'] = False
-                st.rerun()
-    if st.session_state.get('rfp_modal_open'):
-        _rfp_analyzer_modal_fallback()
-except Exception:
-    pass
