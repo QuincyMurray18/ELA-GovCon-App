@@ -1,11 +1,3 @@
-
-# ---- Phase 0 compatibility shim ----
-try:
-    _apply_theme_old  # type: ignore
-except NameError:
-    def _apply_theme_old():
-        return None
-
 import streamlit as st
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
@@ -1595,25 +1587,7 @@ def apply_theme_phase1():
     ''', unsafe_allow_html=True)
     st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
 
-
-# ---- Phase 1: page config + theme (guarded) ----
-try:
-    _title_safe = globals().get("APP_TITLE", "ELA GovCon Suite")
-    st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
-except Exception:
-    pass
-try:
-    apply_theme_phase1()
-except Exception:
-    pass
-try:
-    _init_phase1_ui()
-except Exception:
-    pass
-try:
-    _sidebar_brand()
-except Exception:
-    pass
+st.set_page_config(page_title=APP_TITLE, layout="wide")
 apply_theme_phase1()
 
 
@@ -8815,13 +8789,13 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-\1
-# Ensure Phase 1 UI is initialized inside main as well
-try:
-    _init_phase1_ui()
-    _sidebar_brand()
-except Exception:
-    pass
+def main() -> None:
+    # Phase 1 re-init inside main
+    try:
+        _init_phase1_ui()
+        _sidebar_brand()
+    except Exception:
+        pass
 
     conn = get_db()
     global _O4_CONN
@@ -11139,6 +11113,34 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
+
+
+
+
+# ---- Phase 1 bootstrap (guarded) ----
+try:
+    _title_safe = globals().get("APP_TITLE", "ELA GovCon Suite")
+except Exception:
+    _title_safe = "ELA GovCon Suite"
+try:
+    import streamlit as st  # ensure st in scope if file order is unusual
+    st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
+except Exception:
+    pass
+for _fn in ("apply_theme_phase1", "_init_phase1_ui", "_sidebar_brand"):
+    try:
+        globals().get(_fn) and globals()[_fn]()
+    except Exception:
+        pass
+
+# ---- Phase 0 neutralizer ----
+# If any Phase 0 functions exist, convert to no-ops so they cannot override Phase 1.
+for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_apply_theme_old"):
+    try:
+        if _fn in globals() and callable(globals()[_fn]):
+            globals()[_fn] = (lambda *a, **k: None)
+    except Exception:
+        pass
 
 
 # ==== X.6 Compliance Matrix v1 ====
