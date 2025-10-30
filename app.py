@@ -265,7 +265,6 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 
 # Expand Phase 0 write guard to clear caches after commits
 def _write_guard(conn, fn, *args, **kwargs):
-    import streamlit as st
     with conn:
         out = fn(*args, **kwargs)
     try:
@@ -275,6 +274,7 @@ def _write_guard(conn, fn, *args, **kwargs):
     return out
 
 # ELA Phase1 bootstrap
+import streamlit as st
 
 # Safe dataframe wrapper and monkey patch to avoid height=None issues
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
@@ -8790,13 +8790,6 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 def main() -> None:
-    # Phase 1 re-init inside main
-    try:
-        _init_phase1_ui()
-        _sidebar_brand()
-    except Exception:
-        pass
-
     conn = get_db()
     global _O4_CONN
 
@@ -9592,6 +9585,12 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
+            # guarded render
+
+            __ok = _render_once('o4_sender')
+
+            if __ok:
+
                 o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
@@ -9919,7 +9918,6 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
 def _o4_accounts_ui(conn):
-    import streamlit as st
     import streamlit as st, pandas as _pd
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email").fetchall()
@@ -9954,7 +9952,7 @@ def _o4_accounts_ui(conn):
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
     try:
-
+        import streamlit as st
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
@@ -9969,7 +9967,6 @@ def _o4_accounts_ui(conn):
                 st.success("Deleted")
 
 def _o3_render_sender_picker():
-    import streamlit as st
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
     conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
@@ -9979,7 +9976,7 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = _get_senders(conn)
     try:
-
+        import streamlit as st
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
         pass
@@ -11111,51 +11108,6 @@ import re as _re
 import time as _time
 
 
-
-
-
-
-# ---- Streamlit write guard: suppress rendering of None ----
-try:
-    import streamlit as st  # ensure st is present
-    if not hasattr(st, "_write_wrapped"):
-        _orig_write = st.write
-        def _write_no_none(*args, **kwargs):
-            if len(args) == 1 and args[0] is None:
-                return
-            return _orig_write(*args, **kwargs)
-        st.write = _write_no_none
-        st._write_wrapped = True  # marker
-except Exception:
-    pass
-
-
-# ---- Phase 1 bootstrap (guarded) ----
-try:
-    _title_safe = globals().get("APP_TITLE", "ELA GovCon Suite")
-except Exception:
-    _title_safe = "ELA GovCon Suite"
-try:
-    import streamlit as st  # ensure st in scope if file order is unusual
-    st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
-except Exception:
-    pass
-for _fn in ("apply_theme_phase1", "_init_phase1_ui", "_sidebar_brand"):
-    try:
-        globals().get(_fn) and globals()[_fn]()
-    except Exception:
-        pass
-
-# ---- Phase 0 neutralizer ----
-# If any Phase 0 functions exist, convert to no-ops so they cannot override Phase 1.
-for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_apply_theme_old"):
-    try:
-        if _fn in globals() and callable(globals()[_fn]):
-            globals()[_fn] = (lambda *a, **k: "")
-    except Exception:
-        pass
-
-
 # ==== X.6 Compliance Matrix v1 ====
 def _ensure_x6_schema(conn: sqlite3.Connection) -> None:
     from contextlib import closing as _closing
@@ -11693,7 +11645,7 @@ def o1_sender_accounts_ui(conn):
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-
+    st.rerun()
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         _styled_dataframe(df, use_container_width=True)
