@@ -11117,6 +11117,23 @@ import time as _time
 
 
 
+
+
+# ---- Streamlit write guard: suppress rendering of None ----
+try:
+    import streamlit as st  # ensure st is present
+    if not hasattr(st, "_write_wrapped"):
+        _orig_write = st.write
+        def _write_no_none(*args, **kwargs):
+            if len(args) == 1 and args[0] is None:
+                return
+            return _orig_write(*args, **kwargs)
+        st.write = _write_no_none
+        st._write_wrapped = True  # marker
+except Exception:
+    pass
+
+
 # ---- Phase 1 bootstrap (guarded) ----
 try:
     _title_safe = globals().get("APP_TITLE", "ELA GovCon Suite")
@@ -11138,7 +11155,7 @@ for _fn in ("apply_theme_phase1", "_init_phase1_ui", "_sidebar_brand"):
 for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_apply_theme_old"):
     try:
         if _fn in globals() and callable(globals()[_fn]):
-            globals()[_fn] = (lambda *a, **k: None)
+            globals()[_fn] = (lambda *a, **k: "")
     except Exception:
         pass
 
