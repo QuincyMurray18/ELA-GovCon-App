@@ -214,8 +214,8 @@ def _ensure_indices(conn):
         pass
 
 def _db_connect(db_path: str, **kwargs):
-    import streamlit as st
     import sqlite3
+    import streamlit as st
     # Build connect kwargs with safe defaults
     base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
     try:
@@ -265,7 +265,6 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 
 # Expand Phase 0 write guard to clear caches after commits
 def _write_guard(conn, fn, *args, **kwargs):
-    import streamlit as st
     with conn:
         out = fn(*args, **kwargs)
     try:
@@ -275,6 +274,7 @@ def _write_guard(conn, fn, *args, **kwargs):
     return out
 
 # ELA Phase1 bootstrap
+import streamlit as st
 
 # Safe dataframe wrapper and monkey patch to avoid height=None issues
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
@@ -669,6 +669,8 @@ def get_o4_conn():
 # ---- helper: generate unique widget keys (Phase 0) ----
 # ---- helper: render-once guard for O4 (Phase 0) ----
 def _render_once(name: str):
+    if name == 'o4_sender':
+        return True
     # returns True if allowed to render, False if already rendered
     key = f"__rendered__{name}"
     if st.session_state.get(key):
@@ -1606,9 +1608,9 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
 import os
 
 def _resolve_model():
-    import streamlit as st
     # Priority: Streamlit secrets -> env var -> safe default
     try:
+        import streamlit as st  # noqa: F401
         for key in ("OPENAI_MODEL", "openai_model", "model"):
             try:
                 val = st.secrets.get(key)  # type: ignore[attr-defined]
@@ -6417,8 +6419,8 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
 
 
 def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
-    import streamlit as st
     import math
+    import streamlit as st
     n = 0 if df is None else len(df)
     page_size = max(5, int(page_size or 25))
     pages = max(1, math.ceil((n or 0) / page_size))
@@ -9531,8 +9533,8 @@ def o4_sender_accounts_ui(conn):
 
 
 def render_outreach_mailmerge(conn):
-    import streamlit as st
     globals()['_O4_CONN'] = conn
+    import streamlit as st
     import pandas as _pd
     # 1) Recipients
     rows = _o3_collect_recipients_ui(conn) if "_o3_collect_recipients_ui" in globals() else None
@@ -9592,12 +9594,6 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
-            # guarded render
-
-            __ok = _render_once('o4_sender')
-
-            if __ok:
-
                 o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
@@ -9795,7 +9791,6 @@ except Exception:
         SMTP = _smtplib.SMTP
 
 def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
-    import streamlit as st
     # Ensure required email and SMTP aliases are available
     try:
         from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
@@ -9803,6 +9798,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         import smtplib as _o3smtp
     except Exception:
         pass
+    import streamlit as st, datetime as _dt, pandas as _pd, socket as _socket
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
         st.error("No recipients"); return 0, []
@@ -9974,7 +9970,6 @@ def _o4_accounts_ui(conn):
                 st.success("Deleted")
 
 def _o3_render_sender_picker():
-    import streamlit as st
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
     conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
@@ -9984,6 +9979,7 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = _get_senders(conn)
     try:
+        import streamlit as st
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
         pass
@@ -10726,12 +10722,12 @@ def render_subfinder_s1d(conn):
 
 
 def _wrap_run_subfinder():
-    import streamlit as st
     g = globals()
     base = g.get("run_subcontractor_finder")
     if not callable(base) or getattr(base, "_s1d_wrapped", False):
         return
     def wrapped(conn):
+        import streamlit as st
         st.header("Subcontractor Finder")
         try:
             render_subfinder_s1d(conn)
@@ -11612,7 +11608,6 @@ def run_l_and_m_checklist(conn):
 
 # --- Tab name alias ---
 def run_backup_data(conn):
-    import streamlit as st
     return run_backup_and_data(conn)
 
 
@@ -11621,6 +11616,7 @@ def run_backup_data(conn):
 # Robust fallback picker that reads smtp_settings, only if not provided earlier.
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
+        import streamlit as st
         from contextlib import closing
         host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
         try:
@@ -11647,6 +11643,7 @@ if "_o3_render_sender_picker" not in globals():
 try:
     _orig__render_outreach_mailmerge = render_outreach_mailmerge
     def render_outreach_mailmerge(conn):
+        import streamlit as st
         sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
         if sender and "username" in sender and "email" not in sender:
             sender["email"] = sender.get("username","")
@@ -11663,8 +11660,8 @@ except Exception:
 
 
 def o1_sender_accounts_ui(conn):
-    import streamlit as st
     globals()['_O4_CONN'] = conn
+    import streamlit as st
     import pandas as _pd
     ensure_outreach_o1_schema(conn)
     st.subheader("Sender accounts")
@@ -11692,10 +11689,11 @@ def o1_sender_accounts_ui(conn):
                 """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
             st.success("Saved")
     try:
+        import streamlit as st
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-    st.rerun()
+
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         _styled_dataframe(df, use_container_width=True)
