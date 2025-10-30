@@ -1,3 +1,356 @@
+import streamlit as st
+## ELA Phase3 hybrid_api
+# Optional FastAPI backend (run separately) + client with graceful fallback.
+# Set GOVCON_API_BASE or st.secrets['api']['base_url'] to use the API.
+import os, threading, uuid, time
+try:
+    import requests
+except Exception:
+    requests = None
+
+# ---- job store for background tasks (in-memory) ----
+_jobs: dict[str, dict] = {}
+
+def _enqueue(fn, *args, **kwargs) -> str:
+    jid = str(uuid.uuid4())
+    _jobs[jid] = {"status":"queued"}
+    def _run():
+        _jobs[jid] = {"status":"running"}
+        try:
+            res = fn(*args, **kwargs)
+            _jobs[jid] = {"status":"done", "result": res}
+        except Exception as e:
+            _jobs[jid] = {"status":"error", "error": str(e)}
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jid
+
+def _job_status(jid: str) -> dict:
+    return _jobs.get(jid, {"status":"unknown"})
+
+# ---- API service functions (fallbacks) ----
+def _svc_analyze(question: str, context: dict | None = None):
+    # Use your in-process analyzer if available
+    try:
+        return _service_analyze_rfp_question(question, context or {})
+    except Exception:
+        # Minimal fallback
+        title = ""
+        if isinstance(context, dict):
+            title = context.get("title") or context.get("Title") or ""
+        return f"[demo] Analysis for {title or 'the selected notice'}: {question}"
+
+# ---- FastAPI app (optional) ----
+try:
+    from fastapi import FastAPI, BackgroundTasks
+    from pydantic import BaseModel
+    FASTAPI_OK = True
+except Exception:
+    FASTAPI_OK = False
+
+if FASTAPI_OK:
+    api = FastAPI(title="ELA GovCon API", version="0.1")
+
+    class AnalyzeReq(BaseModel):
+        question: str
+        context: dict | None = None
+
+    @api.post("/api/analyze")
+    def api_analyze(req: AnalyzeReq, background_tasks: BackgroundTasks):
+        jid = _enqueue(_svc_analyze, req.question, req.context or {})
+        return {"job_id": jid}
+
+    @api.get("/api/job/{job_id}")
+    def api_job(job_id: str):
+        return _job_status(job_id)
+
+# ---- Client helpers ----
+def _api_base_url():
+    try:
+        base = os.environ.get("GOVCON_API_BASE")
+        if not base and hasattr(st, "secrets"):
+            base = (getattr(st, "secrets", {}) or {}).get("api", {}).get("base_url")
+        return base
+    except Exception:
+        return None
+
+def _api_post_v2(path: str, payload: dict):
+    base = _api_base_url()
+    if not base or requests is None:
+        return None
+    try:
+        token = None
+        try:
+            token = (getattr(st, 'secrets', {}) or {}).get('api', {}).get('token')
+            if not token:
+                import os as _os
+                token = _os.getenv('GOVCON_API_TOKEN')
+        except Exception:
+            token = None
+        url = base.rstrip('/') + path
+        headers = {'X-API-Key': token} if token else None
+        r = requests.post(url, json=payload, headers=headers, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
+
+def _api_get_v2(path: str):
+    base = _api_base_url()
+    if not base or requests is None:
+        return None
+    try:
+        token = None
+        try:
+            token = (getattr(st, 'secrets', {}) or {}).get('api', {}).get('token')
+            if not token:
+                import os as _os
+                token = _os.getenv('GOVCON_API_TOKEN')
+        except Exception:
+            token = None
+        url = base.rstrip('/') + path
+        headers = {'X-API-Key': token} if token else None
+        r = requests.get(url, headers=headers, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
+
+def _api_post(path: str, payload: dict):
+    base = _api_base_url()
+    if not base or requests is None:
+        return None
+    try:
+        url = base.rstrip("/") + path
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
+
+def _api_get(path: str):
+    base = _api_base_url()
+    if not base or requests is None:
+        return None
+    try:
+        url = base.rstrip("/") + path
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
+
+# ---- Wire into the RFP Analyze service used by the dialog ----
+def _phase3_analyze(question: str, opportunity: dict | None = None):
+    # Try API path first
+    resp = _api_post_v2("/api/analyze", {"question": question, "context": opportunity or {}})
+    if isinstance(resp, dict) and resp.get("job_id"):
+        st.session_state["phase3_last_job"] = resp["job_id"]
+        return f"Queued analysis job: {resp['job_id']}"
+    # Fallback to in-process
+    try:
+        return _service_analyze_rfp_question(question, opportunity or {})
+    except Exception as e:
+        return f"Analyze error: {e}"
+
+def _phase3_poll_status():
+    jid = st.session_state.get("phase3_last_job")
+    if not jid:
+        return None
+    resp = _api_get_v2(f"/api/job/{jid}")
+    if not resp:
+        return None
+    return resp
+
+# ---- Enhance Ask RFP Analyzer dialog to use Phase 3 when available ----
+def _phase3_enhance_rfp_dialog():
+    # integrate into existing dialog if present
+    if "show_rfp_analyzer" in st.session_state and st.session_state.get("show_rfp_analyzer"):
+        # add a status row
+        c1, c2 = st.columns([1,1])
+        with c1:
+            if st.button("Check job status", key=_unique_key("poll_job","o3")):
+                st.session_state["phase3_last_status"] = _phase3_poll_status()
+        with c2:
+            if st.session_state.get("phase3_last_status"):
+                st.caption(str(st.session_state["phase3_last_status"]))
+
+# ELA Phase2 performance
+import sqlite3, hashlib, time
+
+# Cached DB connector with WAL + PRAGMAs
+def _ensure_indices(conn):
+
+    try:
+        cur = conn.cursor()
+        def table_exists(name):
+            try:
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
+                return cur.fetchone() is not None
+            except Exception:
+                return False
+        stmts = []
+        if table_exists("notices"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)")
+        if table_exists("vendors"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
+        if table_exists("deals"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)")
+        if table_exists("files"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)")
+        if table_exists("messages"):
+            stmts.append("CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)")
+        for s in stmts:
+            try:
+                cur.execute(s)
+            except Exception:
+                pass
+        cur.close()
+    except Exception:
+        pass
+
+def _db_connect(db_path: str, **kwargs):
+    import sqlite3
+    import streamlit as st
+    # Build connect kwargs with safe defaults
+    base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
+    try:
+        base_kwargs.update(kwargs or {})
+    except Exception:
+        pass
+    conn = sqlite3.connect(db_path, **base_kwargs)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA temp_store=MEMORY;")
+        conn.execute("PRAGMA mmap_size=300000000;")
+        conn.execute("PRAGMA cache_size=-200000;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
+    # One-time per-session index creation
+    try:
+        if not st.session_state.get("_phase2_indices_done"):
+            _ensure_indices(conn)
+            st.session_state["_phase2_indices_done"] = True
+    except Exception:
+        pass
+    return conn
+# Cached SELECT helper (returns rows + cols); pass db_path explicitly
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_select(db_path: str, sql: str, params: tuple = ()):
+    conn = _db_connect(db_path)
+    cur = conn.execute(sql, params)
+    rows = cur.fetchall()
+    cols = [d[0] for d in cur.description] if cur.description else []
+    return rows, cols
+
+# Cache AI answers by (question + context hash)
+def _ai_cache_key(question: str, context_hash: str = ""):
+    key = (question or "") + "|" + (context_hash or "")
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+def _cached_ai_answer(question: str, context_hash: str = ""):
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def _inner(k, q, ch):
+        try:
+            return _service_analyze_rfp_question(q, {"hash": ch})
+        except Exception as e:
+            return f"AI error: {e}"
+    return _inner(_ai_cache_key(question, context_hash), question, context_hash)
+
+# Expand Phase 0 write guard to clear caches after commits
+def _write_guard(conn, fn, *args, **kwargs):
+    import streamlit as st
+    with conn:
+        out = fn(*args, **kwargs)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return out
+
+# ELA Phase1 bootstrap
+
+# Safe dataframe wrapper and monkey patch to avoid height=None issues
+def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
+    kwargs = {"use_container_width": use_container_width}
+    if height is not None:
+        try:
+            kwargs["height"] = int(height) if height != "stretch" else "stretch"
+        except Exception:
+            if isinstance(height, str):
+                kwargs["height"] = height
+    try:
+        return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
+    except TypeError:
+        return st.dataframe(df, **kwargs)
+
+# Monkey patch st.dataframe to drop height=None safely
+if not hasattr(st, "_orig_dataframe"):
+    st._orig_dataframe = st.dataframe
+    def _safe_dataframe(df, **kwargs):
+        if "height" in kwargs and kwargs["height"] is None:
+            kwargs.pop("height", None)
+        return st._orig_dataframe(df, **kwargs)
+    st.dataframe = _safe_dataframe
+
+# Ensure theme exists
+if "apply_theme" not in globals():
+    def _apply_theme_old():
+        if st.session_state.get("_phase1_theme_applied"):
+            return
+        st.session_state["_phase1_theme_applied"] = True
+        st.markdown('''
+        <style>
+        .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+        h1, h2, h3 {margin-bottom: .4rem;}
+        div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+        div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+        [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+        [data-testid="stExpander"] summary {font-weight: 600;}
+        .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+        button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+        .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+        </style>
+        ''', unsafe_allow_html=True)
+        st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
+
+
+
+# ===== Phase 1 Theme (auto-injected) =====
+def _apply_theme_old():
+    import streamlit as st
+    if st.session_state.get("_phase1_theme_applied"):
+        return
+    st.session_state["_phase1_theme_applied"] = True
+    st.markdown('''
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+    h1, h2, h3 {margin-bottom: .4rem;}
+    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+    /* Dataframe polish */
+    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+    /* Cards & expanders */
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
+    .ela-ok {background: rgba(0,200,83,.12);} .ela-warn {background: rgba(251,140,0,.12);} .ela-bad {background: rgba(229,57,53,.12);}
+    /* Inputs & buttons */
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+    /* Banner */
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    </style>
+    ''', unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+
 # ===== injected early helpers (do not remove) =====
 def _safe_int(x, default=0):
     try:
@@ -305,16 +658,38 @@ def get_db():
     import sqlite3
     from contextlib import closing as _closing
     ensure_dirs()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = _db_connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 def get_o4_conn():
     import streamlit as st
+    global _O4_CONN
 
-# ---- helper: generate unique widget keys (Phase 0) ----
-# ---- helper: render-once guard for O4 (Phase 0) ----
+    # reuse cached connection if present
+    if globals().get("_O4_CONN"):
+        try:
+            st.session_state["conn"] = _O4_CONN
+        except Exception:
+            pass
+        return _O4_CONN
+
+    # otherwise use one from session or create a new one
+    try:
+        if "conn" in st.session_state and st.session_state.get("conn"):
+            _O4_CONN = st.session_state["conn"]
+            return _O4_CONN
+    except Exception:
+        pass
+
+    conn = get_db()
+    _O4_CONN = conn
+    try:
+        st.session_state["conn"] = conn
+    except Exception:
+        pass
+    return conn
 def _render_once(name: str):
     # returns True if allowed to render, False if already rendered
     key = f"__rendered__{name}"
@@ -478,10 +853,16 @@ def _ask_rfp_analyzer_modal(opportunity=None):
             st.session_state['show_rfp_analyzer'] = False
     _dlg()
 
-def _service_analyze_rfp_question(q, opp):
-    # TODO: wire to actual analyzer service; for now return a placeholder
+def _service_analyze_rfp_question(q, opportunity):
+    try:
+        base = _api_base_url()
+    except Exception:
+        base = None
+    if base:
+        return _phase3_analyze(q, opportunity)
+# TODO: wire to actual analyzer service; for now return a placeholder
     if not q:
-        return "Please enter a question."
+    return f"Please enter a question."
     title = (opp.get('title') if isinstance(opp, dict) else str(opp)) if opp else 'the selected notice'
     return f"[demo] Analysis for {title}: {q}"
 
@@ -1204,7 +1585,32 @@ def flag(name: str, default: bool=False) -> bool:
 APP_TITLE = "ELA GovCon Suite"
 BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
 
+def apply_theme_phase1():
+    import streamlit as st
+    if st.session_state.get("_phase1_theme_applied"):
+        return
+    st.session_state["_phase1_theme_applied"] = True
+    st.markdown('''
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+    h1, h2, h3 {margin-bottom: .4rem;}
+    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,0.06);}
+    .ela-ok {background: rgba(0,200,83,0.12);} .ela-warn {background: rgba(251,140,0,0.12);} .ela-bad {background: rgba(229,57,53,0.12);}
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,0.08);}
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    </style>
+    ''', unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
+apply_theme_phase1()
 
 
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
@@ -2126,7 +2532,7 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
             import pandas as _pd
             dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
             st.subheader("Sources used")
-            st.dataframe(dfh, use_container_width=True, hide_index=True)
+            _styled_dataframe(dfh, use_container_width=True, hide_index=True)
 
         with st.expander("Add to Proposal Drafts", expanded=True):
             section = st.text_input("Section label", value="CO Review Notes", key="y5_sec_rev")
@@ -2461,7 +2867,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
     else:
         total = float(dfc["extended_num"].sum())
         st.caption(f"Total Extended: ${total:,.2f}")
-        st.dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
+        _styled_dataframe(dfc[["clin","description","qty","unit_price","extended_price","extended_num"]], use_container_width=True, hide_index=True)
         csvb = dfc.to_csv(index=False).encode("utf-8")
         st.warning("Checking L/M gate before export")
         st.warning("Checking L/M gate before export")
@@ -2476,7 +2882,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
 
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = _db_connect(DB_PATH, check_same_thread=False)
     with closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
 
@@ -3904,7 +4310,7 @@ def run_contacts(conn: sqlite3.Connection) -> None:
         if df.empty:
             st.write("No contacts yet")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
 
@@ -3946,7 +4352,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
         if df.empty:
             st.write("No deals yet")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load deals {e}")
 
@@ -4287,7 +4693,7 @@ if _has_rows:
                             if _db is None:
                                 import sqlite3
                                 _owned = True
-                                _db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                                _db = _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
                                 cur.execute(
                                     """
@@ -4513,7 +4919,7 @@ if _has_rows:
                 
                         try:
                             from contextlib import closing as _closing
-                            _db = globals().get("conn") or sqlite3.connect(DB_PATH, check_same_thread=False)
+                            _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
                                 cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
                                 r = cur.fetchone()
@@ -4839,7 +5245,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             ids.append(int(rec["id"]))
                         import pandas as _pd
                         df_ing = _pd.DataFrame(rows)
-                        st.dataframe(df_ing, use_container_width=True, hide_index=True)
+                        _styled_dataframe(df_ing, use_container_width=True, hide_index=True)
                         st.session_state["x1_last_ingested_ids"] = ids
                         st.session_state["x1_pending_link_after_create"] = bool(link_to_rfp)
                         if link_now_rfp is not None:
@@ -5133,7 +5539,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                         import pandas as _pd
                         dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
                         st.subheader("Sources used")
-                        st.dataframe(dfh, use_container_width=True, hide_index=True)
+                        _styled_dataframe(dfh, use_container_width=True, hide_index=True)
 
 
 
@@ -5202,7 +5608,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             try:
                 df_hist = pd.read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
                 if df_hist is not None and not df_hist.empty:
-                    st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                    _styled_dataframe(df_hist, use_container_width=True, hide_index=True)
                     c1, c2 = st.columns([1,1])
                     with c1:
                         if st.button("Export Q&A CSV", key="x7_export"):
@@ -5243,7 +5649,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                     df_lm = pd.DataFrame(columns=['id','item_text','is_must','status'])
                 df_lm = df_lm.fillna("")
                 st.caption(f"{len(df_lm)} checklist items")
-                st.dataframe(df_lm, use_container_width=True, hide_index=True)
+                _styled_dataframe(df_lm, use_container_width=True, hide_index=True)
                 new_status = st.selectbox("Set status for selected IDs", ["Open","In Progress","Complete","N/A"], index=0, key="lm_set_status")
                 sel_ids = st.text_input("IDs to update (comma-separated)", key="lm_ids")
                 if st.button("Update Status", key="lm_status_btn"):
@@ -5273,7 +5679,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             if df_files is None or df_files.empty:
                 st.write("No files linked.")
             else:
-                st.dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
+                _styled_dataframe(df_files.assign(sha=df_files["sha256"].str.slice(0,12)).drop(columns=["sha256"]), use_container_width=True, hide_index=True)
                 # X5: preview and download selected linked file
                 try:
                     pick = st.selectbox(
@@ -5356,7 +5762,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                     hits.append({"file_id": int(r["id"]), "filename": r.get("filename"), "snippet": ctx})
                             if hits:
                                 dfh = pd.DataFrame(hits)
-                                st.dataframe(dfh, use_container_width=True, hide_index=True)
+                                _styled_dataframe(dfh, use_container_width=True, hide_index=True)
                             else:
                                 st.write("No hits.")
                         except Exception as e:
@@ -5380,7 +5786,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             if df_pool is None or df_pool.empty:
                 st.write("No unlinked files in library.")
             else:
-                st.dataframe(df_pool, use_container_width=True, hide_index=True)
+                _styled_dataframe(df_pool, use_container_width=True, hide_index=True)
                 to_link = st.multiselect("Attach file IDs", options=df_pool["id"].tolist(), key=f"link_{rid}")
                 if st.button("Attach selected to this RFP", key=f"link_btn_{rid}") and to_link:
                     try:
@@ -5415,9 +5821,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 want = ['naics','set_aside','place_of_performance','pop_structure','ordering_period_years','base_months']
                 show = df_meta_all[df_meta_all["key"].isin(want)]
                 if show.empty:
-                    st.dataframe(df_meta_all, use_container_width=True, hide_index=True)
+                    _styled_dataframe(df_meta_all, use_container_width=True, hide_index=True)
                 else:
-                    st.dataframe(show, use_container_width=True, hide_index=True)
+                    _styled_dataframe(show, use_container_width=True, hide_index=True)
 
         with st.expander("Ordering / POP (X3)", expanded=False):
             try:
@@ -5429,9 +5835,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             else:
                 pop = df_meta[df_meta["key"].isin(["pop_structure","ordering_period_years","base_months"])]
                 if pop.empty:
-                    st.dataframe(df_meta, use_container_width=True, hide_index=True)
+                    _styled_dataframe(df_meta, use_container_width=True, hide_index=True)
                 else:
-                    st.dataframe(pop, use_container_width=True, hide_index=True)
+                    _styled_dataframe(pop, use_container_width=True, hide_index=True)
 
         # === Phase S: Manual Editors (LM / CLINs / Dates / POCs / Meta) ===
 
@@ -5523,16 +5929,16 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         col1, col2, col3 = st.columns(3)
         with col1:
             df_c = pd.read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
-            st.subheader("CLINs"); st.dataframe(df_c, use_container_width=True, hide_index=True)
+            st.subheader("CLINs"); _styled_dataframe(df_c, use_container_width=True, hide_index=True)
         with col2:
             df_d = pd.read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(rid),))
-            st.subheader("Key Dates"); st.dataframe(df_d, use_container_width=True, hide_index=True)
+            st.subheader("Key Dates"); _styled_dataframe(df_d, use_container_width=True, hide_index=True)
         with col3:
             df_p = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),))
-            st.subheader("POCs"); st.dataframe(df_p, use_container_width=True, hide_index=True)
+            st.subheader("POCs"); _styled_dataframe(df_p, use_container_width=True, hide_index=True)
         st.subheader("Attributes")
         df_meta = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
-        st.dataframe(df_meta, use_container_width=True, hide_index=True)
+        _styled_dataframe(df_meta, use_container_width=True, hide_index=True)
         # --- RTM Coverage section ---
         try:
             rid_int = int(rid)
@@ -5786,7 +6192,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
         "owner":"Owner","ref_page":"Page","ref_para":"Para",
         "evidence":"Evidence/Link","risk":"Risk","notes":"Notes"
     })
-    st.dataframe(view[["Requirement","Must?","Status","Owner","Page","Para","Evidence/Link","Risk","Notes"]],
+    _styled_dataframe(view[["Requirement","Must?","Status","Owner","Page","Para","Evidence/Link","Risk","Notes"]],
                  use_container_width=True, hide_index=True)
 
     st.markdown("**Edit selected requirement**")
@@ -5836,7 +6242,7 @@ def run_lm_checklist(conn: sqlite3.Connection) -> None:
     if flags is None or flags.empty:
         st.write("No obvious flags detected.")
     else:
-        st.dataframe(flags, use_container_width=True, hide_index=True)
+        _styled_dataframe(flags, use_container_width=True, hide_index=True)
 
 
 
@@ -5972,7 +6378,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
         st.markdown("**Must address items from L and M**")
         items = _ctxd(ctx, "items") if isinstance(ctx.get("items"), pd.DataFrame) else pd.DataFrame()
         if not items.empty:
-            st.dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
+            _styled_dataframe(items.rename(columns={"item_text": "Item", "status": "Status"}), use_container_width=True, hide_index=True, height=240)
         else:
             st.caption("No checklist items found for this RFP")
 
@@ -6012,7 +6418,7 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             if df_snip is None or df_snip.empty:
                 st.caption("No snippets saved yet")
             else:
-                st.dataframe(df_snip[["id","section","source","created_at"]], use_container_width=True, hide_index=True, height=200)
+                _styled_dataframe(df_snip[["id","section","source","created_at"]], use_container_width=True, hide_index=True, height=200)
                 sid = st.selectbox("Pick snippet ID", options=df_snip["id"].tolist())
                 sec_choice = st.selectbox("Insert into section", options=selected, index=min(len(selected)-1, 0))
                 if st.button("Insert snippet"):
@@ -6328,7 +6734,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
     df_q = pd.read_sql_query("SELECT id, vendor, received_date, notes FROM quotes WHERE rfp_id=? ORDER BY vendor;", conn, params=(rfp_id,))
     if not df_q.empty:
         st.subheader("Quotes")
-        st.dataframe(df_q, use_container_width=True, hide_index=True)
+        _styled_dataframe(df_q, use_container_width=True, hide_index=True)
         qid = st.selectbox("Edit lines for quote", options=df_q["id"].tolist(), format_func=lambda qid: f"#{qid} — {df_q.loc[df_q['id']==qid,'vendor'].values[0]}")
         with st.form("add_quote_line", clear_on_submit=True):
             c1, c2, c3 = st.columns([2, 1, 1])
@@ -6364,11 +6770,11 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
 
     mat = df_lines.pivot_table(index="clin", columns="vendor", values="extended_price", aggfunc="sum").fillna(0.0)
     mat = mat.sort_index()
-    st.dataframe(mat.style.format("{:,.2f}"), use_container_width=True)
+    _styled_dataframe(mat.style.format("{:,.2f}"), use_container_width=True)
 
     best_vendor_by_clin = mat.replace(0, float("inf")).idxmin(axis=1).to_frame("Best Vendor")
     st.caption("Best vendor per CLIN")
-    st.dataframe(best_vendor_by_clin, use_container_width=True, hide_index=False)
+    _styled_dataframe(best_vendor_by_clin, use_container_width=True, hide_index=False)
 
     totals = df_lines.groupby("vendor")["extended_price"].sum().to_frame("Total").sort_values("Total")
     if not df_target.empty:
@@ -6377,7 +6783,7 @@ def run_quote_comparison(conn: sqlite3.Connection) -> None:
         coverage["Coverage %"] = (coverage["CLINs Quoted"] / coverage["Required CLINs"] * 100).round(1)
         totals = totals.join(coverage, how="left")
     st.subheader("Totals & Coverage")
-    st.dataframe(totals.style.format({"Total": "{:,.2f}", "Coverage %": "{:.1f}"}), use_container_width=True)
+    _styled_dataframe(totals.style.format({"Total": "{:,.2f}", "Coverage %": "{:.1f}"}), use_container_width=True)
 
     if st.button("Export comparison CSV"):
         path = os.path.join(DATA_DIR, "quote_comparison.csv")
@@ -6479,7 +6885,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
         SELECT id, labor_cat, hours, rate, fringe_pct, (hours*rate) AS direct, (hours*rate*fringe_pct/100.0) AS fringe
         FROM pricing_labor WHERE scenario_id=?;
     """, conn, params=(scenario_id,))
-    st.dataframe(df_lab, use_container_width=True, hide_index=True)
+    _styled_dataframe(df_lab, use_container_width=True, hide_index=True)
 
     st.subheader("Other Direct Costs")
     with st.form("add_odc", clear_on_submit=True):
@@ -6496,7 +6902,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
         st.success("Added ODC.")
 
     df_odc = pd.read_sql_query("SELECT id, label, cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
-    st.dataframe(df_odc, use_container_width=True, hide_index=True)
+    _styled_dataframe(df_odc, use_container_width=True, hide_index=True)
 
     st.subheader("Summary")
     s = _scenario_summary(conn, int(scenario_id))
@@ -6504,7 +6910,7 @@ def run_pricing_calculator(conn: sqlite3.Connection) -> None:
         st.info("Add labor/ODCs to see a summary.")
         return
     df_sum = pd.DataFrame(list(s.items()), columns=["Component", "Amount"])
-    st.dataframe(df_sum.style.format({"Amount": "{:,.2f}"}), use_container_width=True, hide_index=True)
+    _styled_dataframe(df_sum.style.format({"Amount": "{:,.2f}"}), use_container_width=True, hide_index=True)
 
     if st.button("Export pricing CSV"):
         path = os.path.join(DATA_DIR, f"pricing_scenario_{int(scenario_id)}.csv")
@@ -6597,7 +7003,7 @@ def run_win_probability(conn: sqlite3.Connection) -> None:
         "Small Business": smallbiz,
     }
     df_scores = pd.DataFrame(list(comp.items()), columns=["Factor", "Score (0-100)"])
-    st.dataframe(df_scores, use_container_width=True, hide_index=True)
+    _styled_dataframe(df_scores, use_container_width=True, hide_index=True)
 
     weighted = (
         compliance * w_comp + tech * w_tech + past_perf * w_past + team * w_team + int(round(price_score)) * w_price + smallbiz * w_small
@@ -6710,22 +7116,22 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
         st.subheader("Key Dates")
         df = res.get("dates", pd.DataFrame())
         if df is not None and not df.empty:
-            st.dataframe(df[["label","date_text"]], use_container_width=True, hide_index=True)
+            _styled_dataframe(df[["label","date_text"]], use_container_width=True, hide_index=True)
     if any(w in ql for w in ["poc", "contact", "officer", "specialist"]):
         st.subheader("Points of Contact")
         df = res.get("pocs", pd.DataFrame())
         if df is not None and not df.empty:
-            st.dataframe(df[["name","role","email","phone"]], use_container_width=True, hide_index=True)
+            _styled_dataframe(df[["name","role","email","phone"]], use_container_width=True, hide_index=True)
     if "clin" in ql:
         st.subheader("CLINs")
         df = res.get("clins", pd.DataFrame())
         if df is not None and not df.empty:
-            st.dataframe(df[["clin","description","qty","unit"]], use_container_width=True, hide_index=True)
+            _styled_dataframe(df[["clin","description","qty","unit"]], use_container_width=True, hide_index=True)
     if any(w in ql for w in ["checklist", "compliance"]):
         st.subheader("Checklist (top hits)")
         df = res.get("checklist", pd.DataFrame())
         if df is not None and not df.empty:
-            st.dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
+            _styled_dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
         meta = res.get("meta", {})
         if meta:
             st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
@@ -6733,7 +7139,7 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
         st.subheader("Quote Totals by Vendor")
         df = res.get("quotes", pd.DataFrame())
         if df is not None and not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
             st.caption("Lowest total appears at the top.")
 
     # Generic best-matches
@@ -6742,7 +7148,7 @@ def run_chat_assistant(conn: sqlite3.Connection) -> None:
         st.subheader("Relevant RFP Sections (snippets)")
         sh = sec.copy()
         sh["snippet"] = sh["content"].str.slice(0, 400)
-        st.dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
+        _styled_dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
 
 
 # ---------- Phase F: Capability Statement ----------
@@ -7031,7 +7437,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         return
 
     st.subheader("Projects")
-    st.dataframe(df[["id","project_title","customer","contract_no","naics","role","pop_start","pop_end","value","cpars_rating"]], use_container_width=True, hide_index=True)
+    _styled_dataframe(df[["id","project_title","customer","contract_no","naics","role","pop_start","pop_end","value","cpars_rating"]], use_container_width=True, hide_index=True)
     selected_ids = st.multiselect("Select projects for writeup", options=df["id"].tolist(), format_func=lambda i: f"#{i} — {df.loc[df['id']==i, 'project_title'].values[0]}")
 
     # Relevance scoring vs RFP
@@ -7051,7 +7457,7 @@ def run_past_performance(conn: sqlite3.Connection) -> None:
         df_sc = df.copy()
         df_sc["Relevance"] = scores
         st.subheader("Relevance vs selected RFP")
-        st.dataframe(df_sc[["project_title","naics","role","pop_end","value","Relevance"]].sort_values("Relevance", ascending=False),
+        _styled_dataframe(df_sc[["project_title","naics","role","pop_end","value","Relevance"]].sort_values("Relevance", ascending=False),
                      use_container_width=True, hide_index=True)
 
     # Generate writeups
@@ -7163,7 +7569,7 @@ def run_white_paper_builder(conn: sqlite3.Connection) -> None:
                 st.subheader("Edit Template Sections")
                 t_sel = st.selectbox("Choose template", options=df_t["id"].tolist(), format_func=lambda tid: df_t.loc[df_t["id"]==tid, "name"].values[0], key="wp_t_sel")
                 df_ts = _wp_load_template(conn, int(t_sel))
-                st.dataframe(df_ts, use_container_width=True, hide_index=True)
+                _styled_dataframe(df_ts, use_container_width=True, hide_index=True)
                 st.markdown("**Add section**")
                 ts_title = st.text_input("Section title", key="wp_ts_title")
                 ts_body = st.text_area("Default body", key="wp_ts_body", height=120)
@@ -7391,7 +7797,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
         if df_a.empty:
             st.write("No activities")
         else:
-            st.dataframe(df_a, use_container_width=True, hide_index=True)
+            _styled_dataframe(df_a, use_container_width=True, hide_index=True)
             if st.button("Export CSV", key="act_export"):
                 path = str(Path(DATA_DIR) / "activities.csv")
                 df_a.to_csv(path, index=False)
@@ -7487,7 +7893,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
                 except Exception:
                     return None
             df["stage_age_days"] = df.apply(stage_age, axis=1)
-            st.dataframe(df[["title","agency","status","value","prob_%","expected_value","stage_age_days"]], use_container_width=True, hide_index=True)
+            _styled_dataframe(df[["title","agency","status","value","prob_%","expected_value","stage_age_days"]], use_container_width=True, hide_index=True)
 
             st.subheader("Summary by Stage")
             summary = df.groupby("status").agg(
@@ -7495,7 +7901,7 @@ def run_crm(conn: sqlite3.Connection) -> None:
                 value=("value","sum"),
                 expected=("expected_value","sum")
             ).reset_index().sort_values("expected", ascending=False)
-            st.dataframe(summary, use_container_width=True, hide_index=True)
+            _styled_dataframe(summary, use_container_width=True, hide_index=True)
             if st.button("Export Pipeline CSV", key="pipe_export"):
                 path = str(Path(DATA_DIR) / "pipeline.csv")
                 df.to_csv(path, index=False)
@@ -7630,7 +8036,7 @@ def run_file_manager(conn: sqlite3.Connection) -> None:
         if df_files.empty:
             st.write("No files yet.")
         else:
-            st.dataframe(df_files.drop(columns=["path"]), use_container_width=True, hide_index=True)
+            _styled_dataframe(df_files.drop(columns=["path"]), use_container_width=True, hide_index=True)
             # Per-row controls
             for _, r in df_files.iterrows():
                 c1, c2, c3, c4 = st.columns([3,2,2,2])
@@ -7869,7 +8275,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     # ---- CLINs / Lines ----
     st.markdown("### CLINs / Lines")
     df_lines = _rfq_lines(conn, int(pk_sel))
-    st.dataframe(df_lines, use_container_width=True, hide_index=True)
+    _styled_dataframe(df_lines, use_container_width=True, hide_index=True)
     c1, c2, c3, c4, c5, c6 = st.columns([1.2,3,1,1,1,1])
     with c1:
         l_code = st.text_input("CLIN", key="rfq_line_code")
@@ -7921,7 +8327,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
     else:
         df_rfp_files = pd.DataFrame(columns=["id","filename","path","tags"])
     df_att = _rfq_attachments(conn, int(pk_sel))
-    st.dataframe(df_att.drop(columns=[]), use_container_width=True, hide_index=True)
+    _styled_dataframe(df_att.drop(columns=[]), use_container_width=True, hide_index=True)
 
     st.markdown("**Add from File Manager**")
     # allow selecting from all files
@@ -7965,7 +8371,7 @@ def run_rfq_pack(conn: sqlite3.Connection) -> None:
         st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
     df_rv = _rfq_vendors(conn, int(pk_sel))
-    st.dataframe(df_rv[["name","email","phone"]] if not df_rv.empty else pd.DataFrame(), use_container_width=True, hide_index=True)
+    _styled_dataframe(df_rv[["name","email","phone"]] if not df_rv.empty else pd.DataFrame(), use_container_width=True, hide_index=True)
 
     add_vs = st.multiselect("Add vendors", options=df_vendors["id"].astype(int).tolist(),
                             format_func=lambda vid: df_vendors.loc[df_vendors["id"]==vid, "name"].values[0],
@@ -8263,7 +8669,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase O: Global Theme & Layout ----------
-def apply_theme() -> None:
+def _apply_theme_old() -> None:
     css = """
     <style>
     /* Base font and spacing */
@@ -8406,6 +8812,13 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 def main() -> None:
+    # Phase 1 re-init inside main
+    try:
+        _init_phase1_ui()
+        _sidebar_brand()
+    except Exception:
+        pass
+
     conn = get_db()
     global _O4_CONN
 
@@ -8472,7 +8885,7 @@ if "_o3_collect_recipients_ui" not in globals():
                 df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
         st.caption(f"{len(df)} vendors match filters")
         if not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
         return df
 
 # --- Outreach SMTP sender picker: working fallback ---
@@ -8657,7 +9070,7 @@ def test_seed_cases():
 
     import sqlite3
     from contextlib import closing as _closing
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = _db_connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
         conn.commit()
@@ -8935,7 +9348,7 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
     if not rows:
         st.info("No new vendors in this page"); return
     df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    _styled_dataframe(df, use_container_width=True, hide_index=True)
     ids = [r["place_id"] for r in rows if r.get("place_id")]
     if not ids: return
     to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
@@ -9201,12 +9614,6 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
-            # guarded render
-
-            __ok = _render_once('o4_sender')
-
-            if __ok:
-
                 o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
@@ -9330,7 +9737,7 @@ def _o3_collect_recipients_ui(conn):
         if f_state:
             df = df[df["state"].fillna("").str.upper()==f_state.strip().upper()]
         st.caption(f"{len(df)} vendor rows")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        _styled_dataframe(df, use_container_width=True, hide_index=True)
         if st.button("Add all filtered vendors", key="o3_add_vendors"):
             all_rows = _pd.concat([all_rows, df], ignore_index=True)
     with tabs[1]:
@@ -9339,7 +9746,7 @@ def _o3_collect_recipients_ui(conn):
         if up:
             try:
                 dfu = _pd.read_csv(up)
-                st.dataframe(dfu.head(50), use_container_width=True, hide_index=True)
+                _styled_dataframe(dfu.head(50), use_container_width=True, hide_index=True)
                 if st.button("Add uploaded rows", key="o3_add_csv"):
                     all_rows = _pd.concat([all_rows, dfu], ignore_index=True)
             except Exception as e:
@@ -9369,7 +9776,7 @@ def _o3_collect_recipients_ui(conn):
     st.session_state["o3_rows"] = all_rows
     if not all_rows.empty:
         st.write(f"Total recipients: {len(all_rows)}")
-        st.dataframe(all_rows, use_container_width=True, hide_index=True)
+        _styled_dataframe(all_rows, use_container_width=True, hide_index=True)
         csv_bytes = all_rows.to_csv(index=False).encode("utf-8")
         st.download_button("Download recipients CSV", data=csv_bytes, file_name="o3_recipients.csv", mime="text/csv", key="o3_dl_recip")
     return all_rows
@@ -9534,11 +9941,12 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
 def _o4_accounts_ui(conn):
+    import streamlit as st
     import streamlit as st, pandas as _pd
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email").fetchall()
     if rows:
-        st.dataframe(_pd.DataFrame(rows, columns=["Email","Display name","SMTP host","SMTP port","SSL"]), use_container_width=True, hide_index=True)
+        _styled_dataframe(_pd.DataFrame(rows, columns=["Email","Display name","SMTP host","SMTP port","SSL"]), use_container_width=True, hide_index=True)
     st.markdown("**Add or update account**")
     c1,c2 = st.columns([3,2])
     with c1:
@@ -9568,7 +9976,7 @@ def _o4_accounts_ui(conn):
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
     try:
-        import streamlit as st
+
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
@@ -9583,6 +9991,7 @@ def _o4_accounts_ui(conn):
                 st.success("Deleted")
 
 def _o3_render_sender_picker():
+    import streamlit as st
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
     conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
@@ -9592,7 +10001,7 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = _get_senders(conn)
     try:
-        import streamlit as st
+
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
         pass
@@ -9649,7 +10058,7 @@ def _o4_optout_ui(conn):
             st.error(f"CSV error: {e}")
     try:
         df2 = _pd.read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
-        st.dataframe(df2, use_container_width=True, hide_index=True)
+        _styled_dataframe(df2, use_container_width=True, hide_index=True)
     except Exception:
         pass
 
@@ -9658,13 +10067,13 @@ def _o4_audit_ui(conn):
     try:
         blasts = _pd.read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
         st.markdown("**Recent blasts**")
-        st.dataframe(blasts, use_container_width=True, hide_index=True)
+        _styled_dataframe(blasts, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No blasts yet")
     try:
         logs = _pd.read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
         st.markdown("**Recent sends**")
-        st.dataframe(logs, use_container_width=True, hide_index=True)
+        _styled_dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
 
@@ -9784,7 +10193,7 @@ def render_outreach_o5_followups(conn):
         if sel != "— New —" and (seq_df is not None and not seq_df.empty):
             seq_id = int(seq_df.loc[seq_df["name"]==sel, "id"].iloc[0])
             st.markdown("**Steps**"); steps = _o5_list_steps(conn, seq_id)
-            if steps is not None and not steps.empty: st.dataframe(steps, use_container_width=True, hide_index=True)
+            if steps is not None and not steps.empty: _styled_dataframe(steps, use_container_width=True, hide_index=True)
             st.markdown("**Add step**"); s1,s2,s3 = st.columns(3)
             with s1: step_no = st.number_input("Step #", 1, 20, value=(int(steps["step_no"].max())+1 if steps is not None and not steps.empty else 1))
             with s2: delay = st.number_input("Delay hours", 1, 720, value=72)
@@ -9910,7 +10319,7 @@ def render_outreach_o6_compliance(conn):
     st.caption("Use {{UNSUB_LINK}} macro in templates. If absent, a default unsubscribe footer will be appended.")
     # Show list
     df = _pd.read_sql_query("SELECT email, reason, created_at FROM outreach_optouts ORDER BY created_at DESC LIMIT 500;", conn)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    _styled_dataframe(df, use_container_width=True, hide_index=True)
 
 # Wrap _o3_send_batch to enforce suppression and inject unsubscribe link
 def _o6_wrap_o3_send_batch():
@@ -10445,7 +10854,7 @@ def __p_o2_ui(conn):
             __p_db(conn, "INSERT OR REPLACE INTO outreach_templates(name,subject,body) VALUES(?,?,?)", (name,subject,body))
             _st.success(f"Saved template: {name}")
     df = _pandas.read_sql_query("SELECT name, subject, substr(body,1,200) AS preview FROM outreach_templates ORDER BY name", conn)
-    if not df.empty: _st.dataframe(df, use_container_width=True, hide_index=True)
+    if not df.empty: __styled_dataframe(df, use_container_width=True, hide_index=True)
 
 def __p_o3_ui(conn):
     sender = __p_active_sender(conn)
@@ -10510,7 +10919,7 @@ def __p_o5_ui(conn):
             seq_id = int(seq_df.loc[seq_df["name"]==sel,"id"].iloc[0])
             _st.markdown("**Steps**")
             steps = _pandas.read_sql_query("SELECT step_no,delay_hours,subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no", conn, params=(seq_id,))
-            if not steps.empty: _st.dataframe(steps, use_container_width=True, hide_index=True)
+            if not steps.empty: __styled_dataframe(steps, use_container_width=True, hide_index=True)
             s1,s2,s3 = _st.columns(3)
             with s1: step = _st.number_input("Step #", 1, 20, value=(int(steps["step_no"].max())+1 if not steps.empty else 1), key="__p_o5_step")
             with s2: delay = _st.number_input("Delay hours", 1, 720, value=72, key="__p_o5_delay")
@@ -10722,6 +11131,51 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
+
+
+
+
+
+
+# ---- Streamlit write guard: suppress rendering of None ----
+try:
+    import streamlit as st  # ensure st is present
+    if not hasattr(st, "_write_wrapped"):
+        _orig_write = st.write
+        def _write_no_none(*args, **kwargs):
+            if len(args) == 1 and args[0] is None:
+                return
+            return _orig_write(*args, **kwargs)
+        st.write = _write_no_none
+        st._write_wrapped = True  # marker
+except Exception:
+    pass
+
+
+# ---- Phase 1 bootstrap (guarded) ----
+try:
+    _title_safe = globals().get("APP_TITLE", "ELA GovCon Suite")
+except Exception:
+    _title_safe = "ELA GovCon Suite"
+try:
+    import streamlit as st  # ensure st in scope if file order is unusual
+    st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
+except Exception:
+    pass
+for _fn in ("apply_theme_phase1", "_init_phase1_ui", "_sidebar_brand"):
+    try:
+        globals().get(_fn) and globals()[_fn]()
+    except Exception:
+        pass
+
+# ---- Phase 0 neutralizer ----
+# If any Phase 0 functions exist, convert to no-ops so they cannot override Phase 1.
+for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_apply_theme_old"):
+    try:
+        if _fn in globals() and callable(globals()[_fn]):
+            globals()[_fn] = (lambda *a, **k: "")
+    except Exception:
+        pass
 
 
 # ==== X.6 Compliance Matrix v1 ====
@@ -11261,10 +11715,10 @@ def o1_sender_accounts_ui(conn):
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-    st.rerun()
+
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
-        st.dataframe(df, use_container_width=True)
+        _styled_dataframe(df, use_container_width=True)
     except Exception:
         pass
 
@@ -11286,3 +11740,57 @@ def _write_guard(conn, fn, *args, **kwargs):
     # call DB write functions inside a transaction
     with conn:
         return fn(*args, **kwargs)
+
+
+# ---- Phase 1: Global UI setup (theme, CSS, helpers) ----
+def _init_phase1_ui():
+    if st.session_state.get('_phase1_ui_ready'):
+        return
+    st.session_state['_phase1_ui_ready'] = True
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+    st.markdown('''
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+    h1, h2, h3 {margin-bottom: .4rem;}
+    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64, 120, 242, 0.06);}
+    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
+    .ela-ok {background: rgba(0,200,83,.12);}
+    .ela-warn {background: rgba(251,140,0,.12);}
+    .ela-bad {background: rgba(229,57,53,.12);}
+    
+    /* Top ribbon banner */
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    /* Sidebar branding spacing */
+    section[data-testid="stSidebar"] .block-container {padding-top: 0.8rem;}
+    /* Expander cards */
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    /* Buttons subtle shadow */
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+    /* Text inputs rounding */
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    
+    </style>
+    ''', unsafe_allow_html=True)
+
+def _sidebar_brand():
+    with st.sidebar:
+        st.markdown("### 🧭 ELA GovCon Suite")
+        st.caption("Phase 1 UI loaded")
+        st.caption("Faster sourcing, compliant bids, higher win rates.")
+
+def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
+    try:
+        return _styled_dataframe(df, use_container_width=use_container_width, height=height, hide_index=hide_index, column_config=column_config)
+    except TypeError:
+        return _styled_dataframe(df, use_container_width=use_container_width, height=height)
+
+def _chip(text: str, kind: str = 'neutral'):
+    cls = 'ela-chip'
+    if kind == 'ok': cls += ' ela-ok'
+    elif kind == 'warn': cls += ' ela-warn'
+    elif kind == 'bad': cls += ' ela-bad'
+    st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
