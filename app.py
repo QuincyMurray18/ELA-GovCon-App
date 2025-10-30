@@ -70,149 +70,16 @@ def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
 
 import streamlit as st
 
-# === ELA GUARANTEED DEALS HANDLER (top-level) ==================================
-# These fallbacks ensure _handle_add_to_deals_row is always defined before UI code.
 
-# Light-weight connection getter
-try:
-    _ensure_conn
-except NameError:
-    def _ensure_conn():
-        try:
-            if "conn" in st.session_state and st.session_state.get("conn"):
-                return st.session_state["conn"]
-        except Exception:
-            pass
-        try:
-            return get_db()
-        except Exception:
-            return None
-
-# Safe Notice ID coercer
-try:
-    _coerce_notice_id
-except NameError:
-    import re as _re
-    def _coerce_notice_id(row) -> str:
-        try:
-            d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
-        except Exception:
-            d = row or {}
-        for k in ("Notice ID","notice_id","NoticeId","id","ID","Notice Id"):
-            v = d.get(k)
-            if v:
-                s = str(v).strip()
-                if s and s.lower() not in ("none","nan","null","0"):
-                    return s
-        link = d.get("SAM Link") or d.get("sam_url") or d.get("link") or ""
-        if isinstance(link, str) and link:
-            m = _re.search(r"[?&](?:id|opp_id|notice_id)=([A-Za-z0-9\-]+)", link)
-            if m:
-                return m.group(1)
-            m = _re.search(r"/opp/([A-Za-z0-9\-]+)/view", link)
-            if m:
-                return m.group(1)
-        return ""
-
-# No-op migrations if missing
-try:
-    _migrate_deals_columns
-except NameError:
-    def _migrate_deals_columns(conn): 
-        return
-
-# Minimal attachment saver fallbacks if missing
-try:
-    _detect_attachment_sources
-except NameError:
-    def _detect_attachment_sources(conn, notice_id: str):
-        return []
-try:
-    download_to_deal_storage
-except NameError:
-    def download_to_deal_storage(deal_id: int, url: str, preferred_name: str = ""):
-        return ""
-try:
-    _add_notice_attachments_to_deal
-except NameError:
-    def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
-        saved = []
-        try:
-            for s in _detect_attachment_sources(conn, notice_id) or []:
-                p = download_to_deal_storage(deal_id, s.get("url",""), s.get("filename",""))
-                if p:
-                    saved.append(p)
-        except Exception:
-            pass
-        return saved
-
-# Canonical handler (will be overwritten later if a more detailed version exists,
-# but we need a working baseline for all call sites).
-def _handle_add_to_deals_row(conn, row) -> int:
-    conn = conn or _ensure_conn()
-    if conn is None:
-        raise RuntimeError("No database connection available")
-    from contextlib import closing as _closing
-
-    nid = _coerce_notice_id(row)
-    d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
-    title = d.get("Title") or ""
-    agency = d.get("Agency Path") or ""
-    sam_link = d.get("SAM Link") or ""
-    solnum = d.get("Solicitation") or ""
-    posted = d.get("Posted") or ""
-    due = d.get("Response Due") or ""
-    naics = d.get("NAICS") or ""
-    psc = d.get("PSC") or ""
-
+def _show_phase1_banner():
     try:
-        _migrate_deals_columns(conn)
+        import streamlit as st
+        if not st.session_state.get("_phase1_banner_shown"):
+            st.session_state["_phase1_banner_shown"] = True
+            _show_phase1_banner()
     except Exception:
+        # Never block app on banner issues
         pass
-
-    # Insert deal row (even if nid is empty, to avoid blocking your workflow)
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            (title, agency, "Bidding", None, nid or "", solnum, posted, due, naics, psc, sam_link),
-        )
-        deal_id = int(cur.lastrowid)
-        conn.commit()
-
-    # Ensure/lookup rfps only if we have an id
-    rfp_id = None
-    if nid:
-        try:
-            with _closing(conn.cursor()) as cur:
-                cur.execute("SELECT id FROM rfps WHERE notice_id = ? ORDER BY id DESC LIMIT 1;", (nid,))
-                r = cur.fetchone()
-                if r:
-                    rfp_id = int(r[0])
-                else:
-                    cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?,?,?,?)", (nid, sam_link, title, solnum))
-                    rfp_id = int(cur.lastrowid)
-                conn.commit()
-        except Exception:
-            rfp_id = None
-
-    # Save attachments from cache/helpers
-    total = 0
-    try:
-        if nid:
-            extra = _add_notice_attachments_to_deal(conn, nid, deal_id) or []
-            total += len(extra or [])
-    except Exception:
-        pass
-
-    if not nid:
-        try:
-            st.info("Deal saved without a Notice ID. Add a SAM Link or open the notice to enable attachment pull.")
-        except Exception:
-            pass
-    return total
-# =============================================================================
-
 
 
 def _extract_notice_id_from_url(u: str) -> str:
@@ -335,6 +202,7 @@ try:
     _compat_vendors_view
 except NameError:
     def _compat_vendors_view(conn):
+    """Create vendors table if missing for compatibility. No UI output."""
         return None
 # -----------------------------------------------------
 
@@ -364,11 +232,6 @@ def _ensure_conn():
     except Exception:
         return None
 
-try:
-    _compat_vendors_view
-except NameError:
-    def _compat_vendors_view(conn):
-        return None
 # ---------------------------------
 
 
@@ -377,7 +240,59 @@ except NameError:
 try:
     _handle_add_to_deals_row
 except NameError:
-    pass
+    def _handle_add_to_deals_row(conn, row) -> int:
+        conn = conn or _ensure_conn()
+        if conn is None:
+            raise RuntimeError('No database connection available')
+        """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
+        from contextlib import closing as _closing
+        # Insert deal
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                (
+                    row.get("Title") or "",
+                    row.get("Agency Path") or "",
+                    "Bidding",
+                    None,
+                    row.get("Notice ID") or "",
+                    row.get("Solicitation") or "",
+                    row.get("Posted") or "",
+                    row.get("Response Due") or "",
+                    row.get("NAICS") or "",
+                    row.get("PSC") or "",
+                    row.get("SAM Link") or "",
+                ),
+            )
+            deal_id = cur.lastrowid
+            conn.commit()
+        # Ensure rfps entry
+        rfp_id = None
+        try:
+            with _closing(conn.cursor()) as cur:
+                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
+                r = cur.fetchone()
+                if r:
+                    rfp_id = int(r[0])
+                else:
+                    cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
+                    rfp_id = int(cur.lastrowid)
+                conn.commit()
+        except Exception:
+            rfp_id = None
+        # Attachments
+        att_saved = 0
+        try:
+            if rfp_id and "_fetch_and_save_now" in globals():
+                att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
+        except Exception:
+            att_saved = 0
+        try:
+            extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
+        except Exception:
+            extra = []
+        return int(att_saved or 0) + len(extra or [])
 # -----------------------------------------------------------------------------
 
 ## ELA Phase3 hybrid_api
@@ -386,82 +301,6 @@ except NameError:
 import os, threading, uuid, time
 try:
     import requests
-except Exception:
-    pass
-
-# === ELA patch: core imports for Deals/SAM/RFP Analyzer ===
-try:
-    from contextlib import closing
-except Exception:
-    pass
-
-# === ELA patch: safety helpers ===
-try:
-    _unique_key
-except NameError:
-    def _unique_key(base: str, namespace: str = "ns") -> str:
-        try:
-            import time as _t
-            k = f"__uniq_{base}_{namespace}"
-            n = int(st.session_state.get(k, 0))
-            st.session_state[k] = n + 1
-            return f"{base}_{namespace}_{int(_t.time()*1000)%100000}_{n}"
-        except Exception:
-            return f"{base}_{namespace}_{random.randint(0,99999)}"
-
-def _coerce_notice_id(row) -> str:
-    try:
-        d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
-    except Exception:
-        d = row or {}
-    for k in ("Notice ID", "NoticeId", "notice_id", "noticeId", "ID", "Id"):
-        v = d.get(k)
-        if v:
-            s = str(v).strip()
-            if s and s.lower() not in ("none", "nan", "null", "0"):
-                return s
-    link = d.get("SAM Link") or d.get("sam_url") or ""
-    if isinstance(link, str) and link:
-        m = re.search(r"/opp/([A-Za-z0-9\-\_]+)/view", link)
-        if m:
-            return m.group(1)
-        m = re.search(r"[?&](?:notice_id|opp_id|id)=([A-Za-z0-9\-\_]+)", link)
-        if m:
-            return m.group(1)
-        parts = [p for p in re.split(r"[/?#]", link) if p]
-        if parts:
-            parts_sorted = sorted(parts, key=len, reverse=True)
-            if parts_sorted:
-                cand = parts_sorted[0]
-                if len(cand) >= 8:
-                    return cand
-    return ""
-
-try:
-    _styled_dataframe
-except NameError:
-    def _styled_dataframe(df, use_container_width=True, hide_index=False, height=420):
-        try:
-            h = int(height) if isinstance(height, int) else 420
-        except Exception:
-            h = 420
-        return st.dataframe(df, use_container_width=use_container_width, hide_index=hide_index, height=h)
-
-except Exception:
-    pass
-try:
-    from pathlib import Path
-except Exception:
-    pass
-try:
-    import json
-except Exception:
-    pass
-try:
-    import requests
-except Exception:
-    pass
-
 except Exception:
     requests = None
 
@@ -806,7 +645,7 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 # [DEDUPED:_apply_theme_old]     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
 # [DEDUPED:_apply_theme_old]     </style>
 # [DEDUPED:_apply_theme_old]     ''', unsafe_allow_html=True)
-# [DEDUPED:_apply_theme_old]     st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+# [DEDUPED:_apply_theme_old]     _show_phase1_banner()
 # [DEDUPED:_apply_theme_old] 
 # [DEDUPED:_apply_theme_old] # ===== injected early helpers (do not remove) =====
 # [DEDUPED:_apply_theme_old] # [DEDUPED:_safe_int] def _safe_int(x, default=0):
@@ -2090,7 +1929,7 @@ def apply_theme_phase1():
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     </style>
     ''', unsafe_allow_html=True)
-    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+    _show_phase1_banner()
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 apply_theme_phase1()
@@ -5178,14 +5017,11 @@ if _has_rows:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
 
 
-                        
                         try:
-                            total = _handle_add_to_deals_row(_ensure_conn(), row if isinstance(row, dict) else (row.to_dict() if hasattr(row,'to_dict') else {}))
+                            total = _handle_add_to_deals_row(_ensure_conn(), row)
                             st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
                         except Exception as e:
                             st.error(f"Failed to save deal: {e}")
-                            
-
 
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
                         notice = row.to_dict()
@@ -12137,7 +11973,7 @@ def _init_phase1_ui():
     if st.session_state.get('_phase1_ui_ready'):
         return
     st.session_state['_phase1_ui_ready'] = True
-    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+    _show_phase1_banner()
     st.markdown('''
     <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
@@ -12371,68 +12207,57 @@ def _handle_add_to_deals_row(conn, row) -> int:
     if conn is None:
         raise RuntimeError('No database connection available')
 
+    """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
     from contextlib import closing as _closing
-    notice_id = _coerce_notice_id(row)
-    missing_id = not bool(notice_id)
-
-    d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
-    title = d.get("Title") or ""
-    agency = d.get("Agency Path") or ""
-    sam_link = d.get("SAM Link") or ""
-    solnum = d.get("Solicitation") or ""
-    posted = d.get("Posted") or ""
-    due = d.get("Response Due") or ""
-    naics = d.get("NAICS") or ""
-    psc = d.get("PSC") or ""
-
-    try:
-        _migrate_deals_columns(conn)
-    except Exception:
-        pass
-
+    # Insert deal
     with _closing(conn.cursor()) as cur:
         cur.execute(
             "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            (title, agency, "Bidding", None, notice_id or "", solnum, posted, due, naics, psc, sam_link),
+            (
+                row.get("Title") or "",
+                row.get("Agency Path") or "",
+                "Bidding",
+                None,
+                row.get("Notice ID") or "",
+                row.get("Solicitation") or "",
+                row.get("Posted") or "",
+                row.get("Response Due") or "",
+                row.get("NAICS") or "",
+                row.get("PSC") or "",
+                row.get("SAM Link") or "",
+            ),
         )
-        deal_id = int(cur.lastrowid)
+        deal_id = cur.lastrowid
         conn.commit()
-
+    # Ensure rfps entry
     rfp_id = None
     try:
         with _closing(conn.cursor()) as cur:
-            if not missing_id:
-                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (notice_id,))
-                r = cur.fetchone()
-                if r:
-                    rfp_id = int(r[0])
-                else:
-                    cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?, ?, ?, ?)", (notice_id, sam_link, title, solnum))
-                    rfp_id = int(cur.lastrowid)
+            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
+            r = cur.fetchone()
+            if r:
+                rfp_id = int(r[0])
+            else:
+                cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
+                rfp_id = int(cur.lastrowid)
             conn.commit()
     except Exception:
         rfp_id = None
-
+    # Attachments
     att_saved = 0
     try:
-        if not missing_id and rfp_id and "_fetch_and_save_now" in globals():
-            att_saved = _fetch_and_save_now(conn, notice_id, int(rfp_id)) or 0
+        if rfp_id and "_fetch_and_save_now" in globals():
+            att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
     except Exception:
         att_saved = 0
-
     try:
-        extra = _add_notice_attachments_to_deal(conn, notice_id, int(deal_id)) or [] if not missing_id else []
+        extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
     except Exception:
         extra = []
+    return int(att_saved or 0) + len(extra or [])
 
-    total = int(att_saved or 0) + len(extra or [])
-    if missing_id:
-        try:
-            st.info("Deal saved without a Notice ID. Add a SAM Link or open the notice so attachments can be pulled.")
-        except Exception:
-            pass
-    return total
+
 def _sam_api_key():
     try:
         return st.secrets.get("sam", {}).get("api_key")  # st.secrets["sam"]["api_key"]
@@ -12574,246 +12399,3 @@ def _ask_rfp_analyzer_modal(opportunity=None):
             if st.button("Close", key=_unique_key("rfp_close_fb","o3")):
                 st.session_state["show_rfp_analyzer"] = False
 # ==== END ELA PATCH ====
-
-# === ELA patch: attachment helpers (SAM cache + direct download) ===
-def _detect_attachment_sources(conn, notice_id: str):
-    """Return a list of {'url':..., 'filename':...} from the best place we have."""
-    rows = []
-    try:
-        import pandas as _pd
-        q = _pd.read_sql_query(
-            "SELECT url, filename FROM rfp_docs WHERE notice_id = ?",
-            conn, params=[notice_id]
-        )
-        for _, r in (q or _pd.DataFrame()).iterrows():
-            rows.append({"url": str(r.get("url") or ""), "filename": str(r.get("filename") or "")})
-    except Exception:
-        pass
-    if not rows:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT docs_json FROM sam_cache WHERE notice_id = ?", [notice_id])
-            r = cur.fetchone()
-            if r and r[0]:
-                docs = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
-                for d in docs or []:
-                    if isinstance(d, dict):
-                        rows.append({"url": d.get("url",""), "filename": d.get("filename","")})
-        except Exception:
-            pass
-    return [r for r in rows if r.get("url")]
-
-def download_to_deal_storage(deal_id: int, url: str, preferred_name: str = ""):
-    base = Path("deals") / str(deal_id) / "attachments"
-    try:
-        base.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    name = preferred_name or url.split("?")[0].split("/")[-1] or "attachment"
-    out = base / name
-    i = 1
-    while True:
-        if not out.exists():
-            break
-        stem = out.stem
-        suf = out.suffix
-        out = base / f"{stem}{i}{suf}"
-        i += 1
-    try:
-        r = requests.get(url, timeout=30)
-        r.raise_for_status()
-        out.write_bytes(r.content)
-        return str(out)
-    except Exception:
-        return ""
-
-def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
-    sources = _detect_attachment_sources(conn, notice_id)
-    saved = []
-    for s in sources:
-        p = download_to_deal_storage(deal_id, s.get("url",""), s.get("filename",""))
-        if p:
-            saved.append(p)
-    try:
-        with closing(conn.cursor()) as c:
-            c.execute("CREATE TABLE IF NOT EXISTS deals_attachments (deal_id INTEGER, path TEXT)")
-            c.executemany("INSERT INTO deals_attachments (deal_id, path) VALUES (?,?)",
-                          [(deal_id, p) for p in saved])
-        conn.commit()
-    except Exception:
-        try:
-            with closing(conn.cursor()) as c:
-                c.execute("SELECT attachments FROM deals WHERE id = ?", [deal_id])
-                r = c.fetchone()
-                cur = json.loads(r[0]) if (r and r[0]) else []
-                cur.extend(saved)
-                c.execute("UPDATE deals SET attachments = ? WHERE id = ?", [json.dumps(cur), deal_id])
-            conn.commit()
-        except Exception:
-            pass
-    return saved
-
-
-
-# === ELA patch: unified Add-to-Deals handler ===
-def _handle_add_to_deals_row(conn, row) -> int:
-    conn = conn or _ensure_conn()
-    if conn is None:
-        raise RuntimeError('No database connection available')
-
-    from contextlib import closing as _closing
-    notice_id = _coerce_notice_id(row)
-    missing_id = not bool(notice_id)
-
-    d = row.to_dict() if hasattr(row, "to_dict") else (row or {})
-    title = d.get("Title") or ""
-    agency = d.get("Agency Path") or ""
-    sam_link = d.get("SAM Link") or ""
-    solnum = d.get("Solicitation") or ""
-    posted = d.get("Posted") or ""
-    due = d.get("Response Due") or ""
-    naics = d.get("NAICS") or ""
-    psc = d.get("PSC") or ""
-
-    try:
-        _migrate_deals_columns(conn)
-    except Exception:
-        pass
-
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            (title, agency, "Bidding", None, notice_id, solnum, posted, due, naics, psc, sam_link),
-        )
-        deal_id = int(cur.lastrowid)
-        conn.commit()
-
-    rfp_id = None
-    try:
-        with _closing(conn.cursor()) as cur:
-            if not missing_id:
-                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (notice_id,))
-            r = cur.fetchone()
-            if not missing_id and r:
-                rfp_id = int(r[0])
-            elif not missing_id:
-                cur.execute("INSERT INTO rfps(notice_id, sam_link, title, solnum) VALUES (?, ?, ?, ?)", (notice_id, sam_link, title, solnum))
-                rfp_id = int(cur.lastrowid)
-            conn.commit()
-    except Exception:
-        rfp_id = None
-
-    att_saved = 0
-    try:
-        if not missing_id and rfp_id and "_fetch_and_save_now" in globals():
-            att_saved = _fetch_and_save_now(conn, notice_id, int(rfp_id)) or 0
-    except Exception:
-        att_saved = 0
-
-    try:
-        extra = _add_notice_attachments_to_deal(conn, notice_id, int(deal_id)) or [] if not missing_id else []
-    except Exception:
-        extra = []
-
-    total = int(att_saved or 0) + len(extra or [])
-    if missing_id:
-        try:
-            st.info("Deal saved without a Notice ID. Add a SAM Link or open the notice so attachments can be pulled.")
-        except Exception:
-            pass
-    return total
-
-
-
-# === ELA patch: Ask RFP Analyzer wiring ===
-def _api_base_url():
-    try:
-        return os.environ.get("ANALYZER_BASE_URL") or st.session_state.get("ANALYZER_BASE_URL")
-    except Exception:
-        return None
-
-def _service_analyze_rfp_question(q, opportunity):
-    try:
-        base = _api_base_url()
-    except Exception:
-        base = None
-    if base:
-        try:
-            import requests as _rq
-            payload = {"q": q, "opportunity": opportunity}
-            resp = _rq.post(base.rstrip("/") + "/analyze", json=payload, timeout=20)
-            if resp.ok:
-                try:
-                    return resp.json().get("answer") or resp.text
-                except Exception:
-                    return resp.text
-        except Exception as e:
-            return f"Backend error: {e}"
-    if not q:
-        return "Please enter a question."
-    title = (opportunity.get('title') if isinstance(opportunity, dict) else str(opportunity)) if opportunity else 'the selected notice'
-    return f"[demo] Analysis for {title}: {q}"
-
-def _ask_rfp_analyzer_modal(opportunity=None):
-    try:
-        @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
-        def _dlg():
-            st.caption("Use AI to analyze the selected opportunity and ask questions.")
-            q = st.text_area("Your question", key=_unique_key("rfp_q", "o3"))
-            if st.button("Analyze", key=_unique_key("rfp_analyze", "o3")):
-                try:
-                    ans = _service_analyze_rfp_question(q, opportunity)
-                except Exception as e:
-                    ans = f"Error: {e}"
-                st.markdown("**Answer**")
-                st.write(ans)
-            if st.button("Close", key=_unique_key("rfp_close", "o3")):
-                st.session_state["show_rfp_analyzer"] = False
-        _dlg()
-    except Exception:
-        with st.expander("Ask RFP Analyzer", expanded=True):
-            st.caption("Use AI to analyze the selected opportunity and ask questions.")
-            q = st.text_area("Your question", key=_unique_key("rfp_q", "o3"))
-            if st.button("Analyze", key=_unique_key("rfp_analyze", "o3")):
-                try:
-                    ans = _service_analyze_rfp_question(q, opportunity)
-                except Exception as e:
-                    ans = f"Error: {e}"
-                st.markdown("**Answer**")
-                st.write(ans)
-            if st.button("Close", key=_unique_key("rfp_close", "o3")):
-                st.session_state["show_rfp_analyzer"] = False
-
-def _render_ask_rfp_button(opportunity=None):
-    if st.button("Ask RFP Analyzer", key=_unique_key("ask_rfp", "o3")):
-        st.session_state["show_rfp_analyzer"] = True
-    if st.session_state.get("show_rfp_analyzer"):
-        _ask_rfp_analyzer_modal(opportunity)
-
-
-
-# === ELA patch: vendors view compatibility ===
-try:
-    _compat_vendors_view
-except NameError:
-    def _compat_vendors_view(conn):
-        try:
-            with conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS vendors(
-                        id INTEGER PRIMARY KEY,
-                        name TEXT,
-                        email TEXT,
-                        phone TEXT,
-                        city TEXT,
-                        state TEXT,
-                        naics TEXT,
-                        cage TEXT,
-                        uei TEXT,
-                        website TEXT,
-                        notes TEXT
-                    );
-                """)
-        except Exception:
-            pass
