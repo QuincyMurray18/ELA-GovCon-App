@@ -9592,12 +9592,6 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
-            # guarded render
-
-            __ok = _render_once('o4_sender')
-
-            if __ok:
-
                 o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
@@ -11699,7 +11693,7 @@ def o1_sender_accounts_ui(conn):
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-    st.rerun()
+
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         _styled_dataframe(df, use_container_width=True)
