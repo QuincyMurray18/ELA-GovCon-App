@@ -1,3 +1,11 @@
+
+# ---- Phase 0 compatibility shim ----
+try:
+    _apply_theme_old  # type: ignore
+except NameError:
+    def _apply_theme_old():
+        return None
+
 import streamlit as st
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
@@ -301,7 +309,7 @@ if not hasattr(st, "_orig_dataframe"):
 
 # Ensure theme exists
 if "apply_theme" not in globals():
-    def pass  # _apply_theme_old() disabled:
+    def _apply_theme_old():
         if st.session_state.get("_phase1_theme_applied"):
             return
         st.session_state["_phase1_theme_applied"] = True
@@ -323,7 +331,7 @@ if "apply_theme" not in globals():
 
 
 # ===== Phase 1 Theme (auto-injected) =====
-def pass  # _apply_theme_old() disabled:
+def _apply_theme_old():
     import streamlit as st
     if st.session_state.get("_phase1_theme_applied"):
         return
@@ -1605,7 +1613,11 @@ except Exception:
 try:
     _sidebar_brand()
 except Exception:
-    pass# === Y0: GPT-5 Thinking CO assistant (streaming) ===
+    pass
+apply_theme_phase1()
+
+
+# === Y0: GPT-5 Thinking CO assistant (streaming) ===
 try:
     from openai import OpenAI as _Y0OpenAI
 except Exception:
@@ -8661,7 +8673,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase O: Global Theme & Layout ----------
-def pass  # _apply_theme_old() disabled-> None:
+def _apply_theme_old() -> None:
     css = """
     <style>
     /* Base font and spacing */
@@ -8803,19 +8815,19 @@ def router(page: str, conn: sqlite3.Connection) -> None:
         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-def main() -> None:
-    conn = get_db()
-    global _O4_CONN
-
-    st.title(APP_TITLE)
-    st.caption(BUILD_LABEL)
-
+\1
 # Ensure Phase 1 UI is initialized inside main as well
 try:
     _init_phase1_ui()
     _sidebar_brand()
 except Exception:
     pass
+
+    conn = get_db()
+    global _O4_CONN
+
+    st.title(APP_TITLE)
+    st.caption(BUILD_LABEL)
     # Y0 main panel (always on)
     try:
         y0_ai_panel()
