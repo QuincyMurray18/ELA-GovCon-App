@@ -265,6 +265,7 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 
 # Expand Phase 0 write guard to clear caches after commits
 def _write_guard(conn, fn, *args, **kwargs):
+    import streamlit as st
     with conn:
         out = fn(*args, **kwargs)
     try:
@@ -274,7 +275,6 @@ def _write_guard(conn, fn, *args, **kwargs):
     return out
 
 # ELA Phase1 bootstrap
-import streamlit as st
 
 # Safe dataframe wrapper and monkey patch to avoid height=None issues
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
@@ -669,8 +669,6 @@ def get_o4_conn():
 # ---- helper: generate unique widget keys (Phase 0) ----
 # ---- helper: render-once guard for O4 (Phase 0) ----
 def _render_once(name: str):
-    if name == 'o4_sender':
-        return True
     # returns True if allowed to render, False if already rendered
     key = f"__rendered__{name}"
     if st.session_state.get(key):
@@ -9594,6 +9592,12 @@ def run_outreach(conn):
     # Sender accounts (O4)
     try:
         with st.expander("Sender accounts", expanded=True):
+            # guarded render
+
+            __ok = _render_once('o4_sender')
+
+            if __ok:
+
                 o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
@@ -9921,6 +9925,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
 def _o4_accounts_ui(conn):
+    import streamlit as st
     import streamlit as st, pandas as _pd
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email").fetchall()
@@ -9955,7 +9960,7 @@ def _o4_accounts_ui(conn):
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
     try:
-        import streamlit as st
+
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
@@ -9970,6 +9975,7 @@ def _o4_accounts_ui(conn):
                 st.success("Deleted")
 
 def _o3_render_sender_picker():
+    import streamlit as st
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
     conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
@@ -9979,7 +9985,7 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = _get_senders(conn)
     try:
-        import streamlit as st
+
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
         pass
@@ -11693,7 +11699,7 @@ def o1_sender_accounts_ui(conn):
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-
+    st.rerun()
     try:
         df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         _styled_dataframe(df, use_container_width=True)
