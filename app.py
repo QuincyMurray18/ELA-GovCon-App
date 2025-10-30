@@ -8798,11 +8798,6 @@ def main() -> None:
         pass
 
     conn = get_db()
-    try:
-        render_workspace_switcher(conn)
-    except Exception:
-        pass
-
     global _O4_CONN
 
     st.title(APP_TITLE)
@@ -8836,6 +8831,7 @@ if "_o3_ensure_schema" not in globals():
 # --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
 if "_o3_collect_recipients_ui" not in globals():
     def _o3_collect_recipients_ui(conn):
+        import streamlit as st
         import pandas as _pd
         q = "SELECT id, name, email, phone, city, state, naics FROM vendors_t WHERE 1=1"
         params = []
@@ -8874,7 +8870,6 @@ if "_o3_collect_recipients_ui" not in globals():
 # --- Outreach SMTP sender picker: working fallback ---
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker_legacy():
-        import streamlit as st
         conn = get_o4_conn()
         try:
             ensure_outreach_o1_schema(conn)
@@ -8901,7 +8896,6 @@ if "_o3_render_sender_picker" not in globals():
                             """, (email.strip(), display or "", pw or ""))
                         st.success("Saved")
                         try:
-                            import streamlit as st
                             st.session_state["o4_sender_sel"] = email.strip()
                         except Exception:
                             pass
