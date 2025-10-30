@@ -78,7 +78,6 @@ def _show_phase1_banner():
             st.session_state["_phase1_banner_shown"] = True
             _show_phase1_banner()
     except Exception:
-        # Never block app on banner issues
         pass
 
 
@@ -202,7 +201,6 @@ try:
     _compat_vendors_view
 except NameError:
     def _compat_vendors_view(conn):
-    """Create vendors table if missing for compatibility. No UI output."""
         return None
 # -----------------------------------------------------
 
