@@ -74,50 +74,6 @@ def _api_base_url():
     except Exception:
         return None
 
-def _api_post_v2(path: str, payload: dict):
-    base = _api_base_url()
-    if not base or requests is None:
-        return None
-    try:
-        token = None
-        try:
-            token = (getattr(st, 'secrets', {}) or {}).get('api', {}).get('token')
-            if not token:
-                import os as _os
-                token = _os.getenv('GOVCON_API_TOKEN')
-        except Exception:
-            token = None
-        url = base.rstrip('/') + path
-        headers = {'X-API-Key': token} if token else None
-        r = requests.post(url, json=payload, headers=headers, timeout=20)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        return None
-    return None
-
-def _api_get_v2(path: str):
-    base = _api_base_url()
-    if not base or requests is None:
-        return None
-    try:
-        token = None
-        try:
-            token = (getattr(st, 'secrets', {}) or {}).get('api', {}).get('token')
-            if not token:
-                import os as _os
-                token = _os.getenv('GOVCON_API_TOKEN')
-        except Exception:
-            token = None
-        url = base.rstrip('/') + path
-        headers = {'X-API-Key': token} if token else None
-        r = requests.get(url, headers=headers, timeout=20)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        return None
-    return None
-
 def _api_post(path: str, payload: dict):
     base = _api_base_url()
     if not base or requests is None:
@@ -147,7 +103,7 @@ def _api_get(path: str):
 # ---- Wire into the RFP Analyze service used by the dialog ----
 def _phase3_analyze(question: str, opportunity: dict | None = None):
     # Try API path first
-    resp = _api_post_v2("/api/analyze", {"question": question, "context": opportunity or {}})
+    resp = _api_post("/api/analyze", {"question": question, "context": opportunity or {}})
     if isinstance(resp, dict) and resp.get("job_id"):
         st.session_state["phase3_last_job"] = resp["job_id"]
         return f"Queued analysis job: {resp['job_id']}"
@@ -161,7 +117,7 @@ def _phase3_poll_status():
     jid = st.session_state.get("phase3_last_job")
     if not jid:
         return None
-    resp = _api_get_v2(f"/api/job/{jid}")
+    resp = _api_get(f"/api/job/{jid}")
     if not resp:
         return None
     return resp
