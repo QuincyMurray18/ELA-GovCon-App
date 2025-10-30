@@ -1,298 +1,4 @@
-# === RFP Analyzer Push Utilities (injected) ===
-try:
-    import streamlit as st  # ensure available
-except Exception:
-    pass
-
-def _safe_rerun():
-    try:
-        st.rerun()
-    except Exception:
-        try:
-            st.experimental_rerun()  # legacy fallback
-        except Exception:
-            pass
-
-if 'show_rfp_modal' not in st.session_state:
-    st.session_state['show_rfp_modal'] = False
-
-def rfp_push_button(label: str = "Push to RFP Analyzer", key: str | None = None, rfp_id: int | None = None):
-    """Button with unique key per render to avoid duplicate widget keys."""
-    try:
-        import streamlit as st
-        base = key or "push_to_rfp"
-        ckey = f"{base}__ctr"
-        idx = st.session_state.get(ckey, 0)
-        st.session_state[ckey] = idx + 1
-        suffix = f"{rfp_id}_" if rfp_id is not None else ""
-        ukey = f"{base}_{suffix}{idx}"
-        clicked = st.button(label, key=ukey)
-        if clicked:
-            st.session_state['show_rfp_modal'] = True
-        return clicked
-    except Exception:
-        return False
-def _safe_int(x, default=0):
-    try:
-        if x is None:
-            return default
-        if isinstance(x, bool):
-            return int(x)
-        if isinstance(x, (int,)):
-            return x
-        s = str(x).strip().replace(",", "")
-        return int(float(s)) if "." in s else int(s)
-    except Exception:
-        return default
-
-def _safe_str(x, default=""):
-    try:
-        if x is None:
-            return default
-        return str(x)
-    except Exception:
-        return default
-
-def _uniq_key(base: str = "k", rfp_id: int = 0) -> str:
-    # Avoid duplicate widget keys when rendering in loops
-    try:
-        import streamlit as st
-        k = f"__uniq_counter_{base}_{rfp_id}"
-        n = st.session_state.get(k, 0)
-        st.session_state[k] = n + 1
-        return f"{base}_{rfp_id}_{n}"
-    except Exception:
-        import time
-        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
-# === End Safety Helpers ===
-
-
-
 import streamlit as st
-
-
-def _show_phase1_banner():
-    try:
-        import streamlit as st
-        if not st.session_state.get("_phase1_banner_shown"):
-            st.session_state["_phase1_banner_shown"] = True
-            _show_phase1_banner()
-    except Exception:
-        pass
-
-
-def _extract_notice_id_from_url(u: str) -> str:
-    try:
-        if not u:
-            return ""
-        # Common patterns: ...?id=XXXXXXXX, opp_id=XXXXXXXX
-        m = re.search(r"[?&](?:id|opp_id)=([A-Za-z0-9\-]+)", u)
-        if m:
-            return m.group(1)
-        # Fallback: last path segment if it looks like an id
-        m = re.search(r"/([A-Za-z0-9\-]{8,})/?(?:\?|$)", u)
-        return m.group(1) if m else ""
-    except Exception:
-        return ""
-
-
-def _coerce_notice_id(obj) -> str:
-    """Return a normalized Notice ID string from dict/Series or session, else ''."""
-    try:
-        if obj is not None and hasattr(obj, "to_dict"):
-            obj = obj.to_dict()
-    except Exception:
-        pass
-    cand = []
-    src = obj if isinstance(obj, dict) else {}
-    # Try URL fields early
-    try:
-        for k in ['SAM Link','sam_url','url','link','samLink','sam_link']:
-            v = src.get(k) if isinstance(src, dict) else None
-            if isinstance(v, str):
-                nid = _extract_notice_id_from_url(v)
-                if nid:
-                    cand.append(nid)
-    except Exception:
-        pass
-    # Common keys
-    keys = [
-        "Notice ID","notice_id","NoticeID","noticeId","NOTICE_ID","id","Notice Id","sam_notice_id","SAM Notice ID"
-    ]
-    for k in keys:
-        v = src.get(k) if isinstance(src, dict) else None
-        if v is not None and str(v).strip():
-            cand.append(str(v).strip())
-    # Session fallbacks
-    try:
-        ss = st.session_state
-        for key in ["x3_modal_notice","sam_selected_notice","sam_selected_row"]:
-            d = ss.get(key)
-            if isinstance(d, dict):
-                # URL fields in session
-                for kk in ['SAM Link','sam_url','url','link']:
-                    vv = d.get(kk)
-                    if isinstance(vv, str):
-                        nid = _extract_notice_id_from_url(vv)
-                        if nid:
-                            cand.append(nid)
-                for k in keys:
-                    v = d.get(k)
-                    if v is not None and str(v).strip():
-                        cand.append(str(v).strip())
-    except Exception:
-        pass
-    return cand[0] if cand else ""
-
-
-# --- Streamlit height sanitizers to avoid "Invalid height value: None" ---
-try:
-    _st_df_patched
-except NameError:
-    _st_df_patched = True
-    try:
-        _orig_dataframe = st.dataframe
-        def _df_sanitized(data, *args, **kwargs):
-            h = kwargs.get("height", None)
-            if not isinstance(h, int) or h <= 0:
-                kwargs["height"] = "stretch"
-            return _orig_dataframe(data, *args, **kwargs)
-        st.dataframe = _df_sanitized
-    except Exception:
-        pass
-    try:
-        _orig_data_editor = st.data_editor
-        def _de_sanitized(data, *args, **kwargs):
-            h = kwargs.get("height", None)
-            if not isinstance(h, int) or h <= 0:
-                kwargs["height"] = "stretch"
-            return _orig_data_editor(data, *args, **kwargs)
-        st.data_editor = _de_sanitized
-    except Exception:
-        pass
-# ------------------------------------------------------------------------
-
-
-# --- Notice row resolver to avoid NameError and type mismatches ---
-def _get_notice_row(row=None):
-    try:
-        if row is not None:
-            return row.to_dict() if hasattr(row, "to_dict") else row
-    except Exception:
-        pass
-    try:
-        nr = globals().get("_get_notice_row(row if 'row' in locals() else None)", None)
-        if nr is not None:
-            return nr.to_dict() if hasattr(nr, "to_dict") else nr
-    except Exception:
-        pass
-    try:
-        ss = st.session_state.get("x3_modal_notice") or st.session_state.get("sam_selected_notice")
-        if ss:
-            return ss
-    except Exception:
-        pass
-    return {}
-# ------------------------------------------------------------------
-
-
-# --- Early stubs to avoid NameError during routing ---
-try:
-    _compat_vendors_view
-except NameError:
-    def _compat_vendors_view(conn):
-        return None
-# -----------------------------------------------------
-
-
-
-# ---- Safety helpers injected ----
-def _ensure_conn():
-    """Return a usable sqlite3 connection for UI handlers."""
-    try:
-        if 'conn' in globals() and globals().get('conn') is not None:
-            return globals()['conn']
-    except Exception:
-        pass
-    try:
-        if 'get_db' in globals():
-            c = get_db()
-            if c:
-                globals()['conn'] = c
-                return c
-    except Exception:
-        pass
-    import sqlite3
-    try:
-        c = sqlite3.connect(DB_PATH, check_same_thread=False)
-        globals()['conn'] = c
-        return c
-    except Exception:
-        return None
-
-# ---------------------------------
-
-
-
-# ---- Fallback Deals helper to avoid NameError before full defs are parsed ----
-try:
-    _handle_add_to_deals_row
-except NameError:
-    def _handle_add_to_deals_row(conn, row) -> int:
-        conn = conn or _ensure_conn()
-        if conn is None:
-            raise RuntimeError('No database connection available')
-        """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
-        from contextlib import closing as _closing
-        # Insert deal
-        with _closing(conn.cursor()) as cur:
-            cur.execute(
-                "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-                (
-                    row.get("Title") or "",
-                    row.get("Agency Path") or "",
-                    "Bidding",
-                    None,
-                    row.get("Notice ID") or "",
-                    row.get("Solicitation") or "",
-                    row.get("Posted") or "",
-                    row.get("Response Due") or "",
-                    row.get("NAICS") or "",
-                    row.get("PSC") or "",
-                    row.get("SAM Link") or "",
-                ),
-            )
-            deal_id = cur.lastrowid
-            conn.commit()
-        # Ensure rfps entry
-        rfp_id = None
-        try:
-            with _closing(conn.cursor()) as cur:
-                cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
-                r = cur.fetchone()
-                if r:
-                    rfp_id = int(r[0])
-                else:
-                    cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
-                    rfp_id = int(cur.lastrowid)
-                conn.commit()
-        except Exception:
-            rfp_id = None
-        # Attachments
-        att_saved = 0
-        try:
-            if rfp_id and "_fetch_and_save_now" in globals():
-                att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
-        except Exception:
-            att_saved = 0
-        try:
-            extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
-        except Exception:
-            extra = []
-        return int(att_saved or 0) + len(extra or [])
-# -----------------------------------------------------------------------------
-
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
 # Set GOVCON_API_BASE or st.secrets['api']['base_url'] to use the API.
@@ -558,135 +264,135 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
     return _inner(_ai_cache_key(question, context_hash), question, context_hash)
 
 # Expand Phase 0 write guard to clear caches after commits
-# [DEDUPED:_write_guard] def _write_guard(conn, fn, *args, **kwargs):
-# [DEDUPED:_write_guard]     with conn:
-# [DEDUPED:_write_guard]         out = fn(*args, **kwargs)
-# [DEDUPED:_write_guard]     try:
-# [DEDUPED:_write_guard]         st.cache_data.clear()
-# [DEDUPED:_write_guard]     except Exception:
-# [DEDUPED:_write_guard]         pass
-# [DEDUPED:_write_guard]     return out
-# [DEDUPED:_write_guard] 
-# [DEDUPED:_write_guard] # ELA Phase1 bootstrap
-# [DEDUPED:_write_guard] import streamlit as st
-# [DEDUPED:_write_guard] 
-# [DEDUPED:_write_guard] # Safe dataframe wrapper and monkey patch to avoid height=None issues
-# [DEDUPED:_write_guard] # [DEDUPED:_styled_dataframe] def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
-# [DEDUPED:_styled_dataframe]     kwargs = {"use_container_width": use_container_width}
-# [DEDUPED:_styled_dataframe]     if height is not None:
-# [DEDUPED:_styled_dataframe]         try:
-# [DEDUPED:_styled_dataframe]             kwargs["height"] = int(height) if height != "stretch" else "stretch"
-# [DEDUPED:_styled_dataframe]         except Exception:
-# [DEDUPED:_styled_dataframe]             if isinstance(height, str):
-# [DEDUPED:_styled_dataframe]                 kwargs["height"] = height
-# [DEDUPED:_styled_dataframe]     try:
-# [DEDUPED:_styled_dataframe]         return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
-# [DEDUPED:_styled_dataframe]     except TypeError:
-# [DEDUPED:_styled_dataframe]         return st.dataframe(df, **kwargs)
-# [DEDUPED:_styled_dataframe] 
-# [DEDUPED:_styled_dataframe] # Monkey patch st.dataframe to drop height=None safely
-# [DEDUPED:_styled_dataframe] if not hasattr(st, "_orig_dataframe"):
-# [DEDUPED:_styled_dataframe]     st._orig_dataframe = st.dataframe
-# [DEDUPED:_styled_dataframe]     def _safe_dataframe(df, **kwargs):
-# [DEDUPED:_styled_dataframe]         if "height" in kwargs and kwargs["height"] is None:
-# [DEDUPED:_styled_dataframe]             kwargs.pop("height", None)
-# [DEDUPED:_styled_dataframe]         return st._orig_dataframe(df, **kwargs)
-# [DEDUPED:_styled_dataframe]     st.dataframe = _safe_dataframe
-# [DEDUPED:_styled_dataframe] 
-# [DEDUPED:_styled_dataframe] # Ensure theme exists
-# [DEDUPED:_styled_dataframe] if "apply_theme" not in globals():
-# [DEDUPED:_styled_dataframe]     def _apply_theme_old():
-# [DEDUPED:_styled_dataframe]         if st.session_state.get("_phase1_theme_applied"):
-# [DEDUPED:_styled_dataframe]             return
-# [DEDUPED:_styled_dataframe]         st.session_state["_phase1_theme_applied"] = True
-# [DEDUPED:_styled_dataframe]         st.markdown('''
-# [DEDUPED:_styled_dataframe]         <style>
-# [DEDUPED:_styled_dataframe]         .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
-# [DEDUPED:_styled_dataframe]         h1, h2, h3 {margin-bottom: .4rem;}
-# [DEDUPED:_styled_dataframe]         div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
-# [DEDUPED:_styled_dataframe]         div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
-# [DEDUPED:_styled_dataframe]         [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
-# [DEDUPED:_styled_dataframe]         [data-testid="stExpander"] summary {font-weight: 600;}
-# [DEDUPED:_styled_dataframe]         .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-# [DEDUPED:_styled_dataframe]         button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
-# [DEDUPED:_styled_dataframe]         .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
-# [DEDUPED:_styled_dataframe]         </style>
-# [DEDUPED:_styled_dataframe]         ''', unsafe_allow_html=True)
-# [DEDUPED:_styled_dataframe]         st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
-# [DEDUPED:_styled_dataframe] 
-# [DEDUPED:_styled_dataframe] 
-# [DEDUPED:_styled_dataframe] 
-# [DEDUPED:_styled_dataframe] # ===== Phase 1 Theme (auto-injected) =====
-# [DEDUPED:_styled_dataframe] # [DEDUPED:_apply_theme_old] def _apply_theme_old():
-# [DEDUPED:_apply_theme_old]     import streamlit as st
-# [DEDUPED:_apply_theme_old]     if st.session_state.get("_phase1_theme_applied"):
-# [DEDUPED:_apply_theme_old]         return
-# [DEDUPED:_apply_theme_old]     st.session_state["_phase1_theme_applied"] = True
-# [DEDUPED:_apply_theme_old]     st.markdown('''
-# [DEDUPED:_apply_theme_old]     <style>
-# [DEDUPED:_apply_theme_old]     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
-# [DEDUPED:_apply_theme_old]     h1, h2, h3 {margin-bottom: .4rem;}
-# [DEDUPED:_apply_theme_old]     .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
-# [DEDUPED:_apply_theme_old]     /* Dataframe polish */
-# [DEDUPED:_apply_theme_old]     div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
-# [DEDUPED:_apply_theme_old]     div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
-# [DEDUPED:_apply_theme_old]     /* Cards & expanders */
-# [DEDUPED:_apply_theme_old]     [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
-# [DEDUPED:_apply_theme_old]     [data-testid="stExpander"] summary {font-weight: 600;}
-# [DEDUPED:_apply_theme_old]     .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
-# [DEDUPED:_apply_theme_old]     .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
-# [DEDUPED:_apply_theme_old]     .ela-ok {background: rgba(0,200,83,.12);} .ela-warn {background: rgba(251,140,0,.12);} .ela-bad {background: rgba(229,57,53,.12);}
-# [DEDUPED:_apply_theme_old]     /* Inputs & buttons */
-# [DEDUPED:_apply_theme_old]     .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-# [DEDUPED:_apply_theme_old]     button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
-# [DEDUPED:_apply_theme_old]     /* Banner */
-# [DEDUPED:_apply_theme_old]     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
-# [DEDUPED:_apply_theme_old]     </style>
-# [DEDUPED:_apply_theme_old]     ''', unsafe_allow_html=True)
-# [DEDUPED:_apply_theme_old]     _show_phase1_banner()
-# [DEDUPED:_apply_theme_old] 
-# [DEDUPED:_apply_theme_old] # ===== injected early helpers (do not remove) =====
-# [DEDUPED:_apply_theme_old] # [DEDUPED:_safe_int] def _safe_int(x, default=0):
-# [DEDUPED:_safe_int]     try:
-# [DEDUPED:_safe_int]         if x is None:
-# [DEDUPED:_safe_int]             return int(default)
-# [DEDUPED:_safe_int]         if isinstance(x, int):
-# [DEDUPED:_safe_int]             return x
-# [DEDUPED:_safe_int]         s = str(x).strip()
-# [DEDUPED:_safe_int]         if s == "" or s.lower() in ("none", "nan"):
-# [DEDUPED:_safe_int]             return int(default)
-# [DEDUPED:_safe_int]         # try float first (handles "123.0")
-# [DEDUPED:_safe_int]         try:
-# [DEDUPED:_safe_int]             return int(float(s))
-# [DEDUPED:_safe_int]         except Exception:
-# [DEDUPED:_safe_int]             pass
-# [DEDUPED:_safe_int]         # fallback: keep only digits
-# [DEDUPED:_safe_int]         digits = "".join(ch for ch in s if ch.isdigit())
-# [DEDUPED:_safe_int]         return int(digits) if digits else int(default)
-# [DEDUPED:_safe_int]     except Exception:
-# [DEDUPED:_safe_int]         return int(default)
-# [DEDUPED:_safe_int] 
-# [DEDUPED:_safe_int] # [DEDUPED:_uniq_key] def _uniq_key(base: str, rfp_id: int) -> str:
-# [DEDUPED:_uniq_key]     try:
-# [DEDUPED:_uniq_key]         k = f"__uniq_counter_{base}_{rfp_id}"
-# [DEDUPED:_uniq_key]         n = int(st.session_state.get(k, 0))
-# [DEDUPED:_uniq_key]         st.session_state[k] = n + 1
-# [DEDUPED:_uniq_key]         return f"{base}_{rfp_id}_{n}"
-# [DEDUPED:_uniq_key]     except Exception:
-# [DEDUPED:_uniq_key]         import time
-# [DEDUPED:_uniq_key]         return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
-# [DEDUPED:_uniq_key] # ===== end injected early helpers =====
-# [DEDUPED:_uniq_key] 
-# [DEDUPED:_uniq_key] 
-# [DEDUPED:_uniq_key] def y3_get_rfp_files(_conn, rfp_id: int):
-# [DEDUPED:_uniq_key]     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
-# [DEDUPED:_uniq_key]     try:
-# [DEDUPED:_uniq_key]         from contextlib import closing as _closing
-# [DEDUPED:_uniq_key]         with _closing(_conn.cursor()) as cur:
-# [DEDUPED:_uniq_key]             cur.execute("SELECT id, filename, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
-# [DEDUPED:_uniq_key]             return cur.fetchall() or []
-# [DEDUPED:_uniq_key]     except Exception:
-# [DEDUPED:_uniq_key]         return []
+def _write_guard(conn, fn, *args, **kwargs):
+    with conn:
+        out = fn(*args, **kwargs)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return out
+
+# ELA Phase1 bootstrap
+import streamlit as st
+
+# Safe dataframe wrapper and monkey patch to avoid height=None issues
+def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
+    kwargs = {"use_container_width": use_container_width}
+    if height is not None:
+        try:
+            kwargs["height"] = int(height) if height != "stretch" else "stretch"
+        except Exception:
+            if isinstance(height, str):
+                kwargs["height"] = height
+    try:
+        return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
+    except TypeError:
+        return st.dataframe(df, **kwargs)
+
+# Monkey patch st.dataframe to drop height=None safely
+if not hasattr(st, "_orig_dataframe"):
+    st._orig_dataframe = st.dataframe
+    def _safe_dataframe(df, **kwargs):
+        if "height" in kwargs and kwargs["height"] is None:
+            kwargs.pop("height", None)
+        return st._orig_dataframe(df, **kwargs)
+    st.dataframe = _safe_dataframe
+
+# Ensure theme exists
+if "apply_theme" not in globals():
+    def pass  # _apply_theme_old() disabled:
+        if st.session_state.get("_phase1_theme_applied"):
+            return
+        st.session_state["_phase1_theme_applied"] = True
+        st.markdown('''
+        <style>
+        .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+        h1, h2, h3 {margin-bottom: .4rem;}
+        div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+        div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+        [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+        [data-testid="stExpander"] summary {font-weight: 600;}
+        .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+        button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+        .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+        </style>
+        ''', unsafe_allow_html=True)
+        st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
+
+
+
+# ===== Phase 1 Theme (auto-injected) =====
+def pass  # _apply_theme_old() disabled:
+    import streamlit as st
+    if st.session_state.get("_phase1_theme_applied"):
+        return
+    st.session_state["_phase1_theme_applied"] = True
+    st.markdown('''
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+    h1, h2, h3 {margin-bottom: .4rem;}
+    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+    /* Dataframe polish */
+    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+    /* Cards & expanders */
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
+    .ela-ok {background: rgba(0,200,83,.12);} .ela-warn {background: rgba(251,140,0,.12);} .ela-bad {background: rgba(229,57,53,.12);}
+    /* Inputs & buttons */
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
+    /* Banner */
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    </style>
+    ''', unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+
+# ===== injected early helpers (do not remove) =====
+def _safe_int(x, default=0):
+    try:
+        if x is None:
+            return int(default)
+        if isinstance(x, int):
+            return x
+        s = str(x).strip()
+        if s == "" or s.lower() in ("none", "nan"):
+            return int(default)
+        # try float first (handles "123.0")
+        try:
+            return int(float(s))
+        except Exception:
+            pass
+        # fallback: keep only digits
+        digits = "".join(ch for ch in s if ch.isdigit())
+        return int(digits) if digits else int(default)
+    except Exception:
+        return int(default)
+
+def _uniq_key(base: str, rfp_id: int) -> str:
+    try:
+        k = f"__uniq_counter_{base}_{rfp_id}"
+        n = int(st.session_state.get(k, 0))
+        st.session_state[k] = n + 1
+        return f"{base}_{rfp_id}_{n}"
+    except Exception:
+        import time
+        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
+# ===== end injected early helpers =====
+
+
+def y3_get_rfp_files(_conn, rfp_id: int):
+    """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
+    try:
+        from contextlib import closing as _closing
+        with _closing(_conn.cursor()) as cur:
+            cur.execute("SELECT id, file_name, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id", (rfp_id,))
+            return cur.fetchall() or []
+    except Exception:
+        return []
 
 import requests
 
@@ -700,7 +406,7 @@ def _x3_open_modal(row_dict: dict):
     except Exception:
         pass
 
-def _x3_render_modal(conn, notice: dict):
+def _x3_render_modal(notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
     except Exception as e:
@@ -944,21 +650,21 @@ except NameError:
 
 _O4_CONN = globals().get("_O4_CONN", None)
 
-# [DEDUPED:ensure_dirs] def ensure_dirs():
-# [DEDUPED:ensure_dirs]     from pathlib import Path as _Path
-# [DEDUPED:ensure_dirs]     _Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-# [DEDUPED:ensure_dirs] 
-# [DEDUPED:ensure_dirs] # [DEDUPED:get_db] def get_db():
-# [DEDUPED:get_db]     import sqlite3
-# [DEDUPED:get_db]     from contextlib import closing as _closing
-# [DEDUPED:get_db]     ensure_dirs()
-# [DEDUPED:get_db]     conn = _db_connect(DB_PATH, check_same_thread=False)
-# [DEDUPED:get_db]     with _closing(conn.cursor()) as cur:
-# [DEDUPED:get_db]         cur.execute("PRAGMA foreign_keys = ON;")
-# [DEDUPED:get_db]     return conn
-# [DEDUPED:get_db] 
-# [DEDUPED:get_db] def get_o4_conn():
-# [DEDUPED:get_db]     import streamlit as st
+def ensure_dirs():
+    from pathlib import Path as _Path
+    _Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+def get_db():
+    import sqlite3
+    from contextlib import closing as _closing
+    ensure_dirs()
+    conn = _db_connect(DB_PATH, check_same_thread=False)
+    with _closing(conn.cursor()) as cur:
+        cur.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+def get_o4_conn():
+    import streamlit as st
 
 # ---- helper: generate unique widget keys (Phase 0) ----
 # ---- helper: render-once guard for O4 (Phase 0) ----
@@ -1104,62 +810,12 @@ def _o3c(cursor):
         except Exception:
             pass
 def _migrate_deals_columns(conn):
-    """Add columns used by Deals and SAM Watch if missing. Idempotent."""
-    try:
-        import pandas as _pd
-        cur_cols = _pd.read_sql_query("PRAGMA table_info(deals);", conn)
-        have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
-    except Exception:
-        have = set()
-    def _add(col, ddl):
-        if col not in have:
-            try:
-                with closing(conn.cursor()) as _c:
-                    _c.execute(f"ALTER TABLE deals ADD COLUMN {ddl};")
-                conn.commit()
-            except Exception:
-                pass
-    _add("agency", "agency TEXT")
-    _add("value", "value REAL")
-    _add("sam_url", "sam_url TEXT")
-    _add("notice_id", "notice_id TEXT")
-    _add("solnum", "solnum TEXT")
-    _add("posted_date", "posted_date TEXT")
-    _add("rfp_deadline", "rfp_deadline TEXT")
-    _add("naics", "naics TEXT")
-    _add("psc", "psc TEXT")
+    """
+    Add columns used by Deals and SAM Watch if missing. Idempotent.
 
+# ---- Phase 0: Ask RFP Analyzer modal wiring ----
 def _ask_rfp_analyzer_modal(opportunity=None):
-    # Use st.dialog when available, otherwise fallback to expander
-    try:
-        @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
-        def _dlg():
-            st.caption("Use AI to analyze the selected opportunity and ask questions.")
-            q = st.text_area("Your question", key=_unique_key("rfp_q", "o3"))
-            if st.button("Analyze", key=_unique_key("rfp_analyze", "o3")):
-                try:
-                    ans = _service_analyze_rfp_question(q, opportunity)
-                except Exception as e:
-                    ans = f"Error: {e}"
-                st.markdown("Answer")
-                st.write(ans)
-            if st.button("Close", key=_unique_key("rfp_close", "o3")):
-                st.session_state["show_rfp_analyzer"] = False
-        _dlg()
-    except Exception:
-        with st.expander("Ask RFP Analyzer", expanded=True):
-            st.caption("Use AI to analyze the selected opportunity and ask questions.")
-            q = st.text_area("Your question", key=_unique_key("rfp_q_fallback", "o3"))
-            if st.button("Analyze", key=_unique_key("rfp_analyze_fallback", "o3")):
-                try:
-                    ans = _service_analyze_rfp_question(q, opportunity)
-                except Exception as e:
-                    ans = f"Error: {e}"
-                st.markdown("Answer")
-                st.write(ans)
-            if st.button("Close", key=_unique_key("rfp_close_fallback", "o3")):
-                st.session_state["show_rfp_analyzer"] = False
-
+    @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
     def _dlg():
         st.write("Use AI to analyze the selected opportunity and ask questions.")
         q = st.text_area("Your question", key=_unique_key('rfp_q','o3'))
@@ -1180,24 +836,28 @@ def _service_analyze_rfp_question(q, opportunity):
         base = _api_base_url()
     except Exception:
         base = None
-
-    # If a backend analyzer endpoint is configured, use it
     if base:
         return _phase3_analyze(q, opportunity)
-
-    # Graceful fallback
+# TODO: wire to actual analyzer service; for now return a placeholder
     if not q:
-        return "Please enter a question."
-    title = (opportunity.get('title') if isinstance(opportunity, dict) else str(opportunity)) if opportunity else 'the selected notice'
+    return f"Please enter a question."
+    title = (opp.get('title') if isinstance(opp, dict) else str(opp)) if opp else 'the selected notice'
     return f"[demo] Analysis for {title}: {q}"
 
-
 def _render_ask_rfp_button(opportunity=None):
-    if st.button("Ask RFP Analyzer", key=_unique_key("ask_rfp", "o3")):
-        st.session_state["show_rfp_analyzer"] = True
-    if st.session_state.get("show_rfp_analyzer"):
+    if st.button("Ask RFP Analyzer", key=_unique_key('ask_rfp','o3')):
+        st.session_state['show_rfp_analyzer'] = True
+    if st.session_state.get('show_rfp_analyzer'):
         _ask_rfp_analyzer_modal(opportunity)
 
+    """
+    try:
+        import pandas as _pd
+        from contextlib import closing
+        cur_cols = _pd.read_sql_query("PRAGMA table_info(deals);", conn)
+        have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
+    except Exception:
+        have = set()
 
     def _add(col, ddl):
         if col not in have:
@@ -1222,14 +882,14 @@ def _render_ask_rfp_button(opportunity=None):
 
 
 # Bridge names
-# sqlite3 = _rtm_sqlite3
-# pd = _rtm_pd
-# st = _rtm_st
-# re = _rtm_re
-# json = _rtm_json
-# hashlib = _rtm_hashlib
-# closing = _rtm_closing
-# 
+sqlite3 = _rtm_sqlite3
+pd = _rtm_pd
+st = _rtm_st
+re = _rtm_re
+json = _rtm_json
+hashlib = _rtm_hashlib
+closing = _rtm_closing
+
 # === RTM + Amendment helpers ===
 
 def _now_iso():
@@ -1270,18 +930,17 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
             cur.execute("SELECT id FROM rtm_requirements WHERE rfp_id=? AND req_key=?;", (int(rfp_id), key))
             if cur.fetchone():
                 continue
-            cur.execute(
-                "INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?);",
-                (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now)
-            )
-
+            cur.execute("""
+                INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
+                VALUES(?,?,?,?,?,?,?, ?, ?);
+            """, (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now))
             inserted += 1
     # 2) From SOW chunks, simple heuristic
     try:
-        df_chunks = pd.read_sql_query(
-            "SELECT id, file_name, page, text FROM rfp_chunks WHERE rfp_id=? ORDER BY file_name, page, id",
-            conn, params=(int(rfp_id),)
-        )
+        df_chunks = pd.read_sql_query("""
+            SELECT id, file_name, page, text FROM rfp_chunks
+            WHERE rfp_id=? ORDER BY file_name, page, id
+        """, conn, params=(int(rfp_id),))
     except Exception:
         df_chunks = pd.DataFrame(columns=["file_name","page","text"])
     trig = re.compile(r"\\b(shall|must|will|provide|furnish)\\b", re.I)
@@ -1300,11 +959,10 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
                     cur.execute("SELECT id FROM rtm_requirements WHERE rfp_id=? AND req_key=?;", (int(rfp_id), key))
                     if cur.fetchone():
                         continue
-                    cur.execute(
-                        "INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?);",
-                        (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now)
-                    )
-
+                    cur.execute("""
+                        INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
+                        VALUES(?,?,?,?,?,?,?, ?, ?);
+                    """, (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now))
                     inserted += 1
         if inserted >= max_rows:
             break
@@ -1927,13 +1585,27 @@ def apply_theme_phase1():
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     </style>
     ''', unsafe_allow_html=True)
-    _show_phase1_banner()
-
-st.set_page_config(page_title=APP_TITLE, layout="wide")
-apply_theme_phase1()
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
 
 
-# === Y0: GPT-5 Thinking CO assistant (streaming) ===
+# ---- Phase 1: page config + theme (guarded) ----
+try:
+    _title_safe = globals().get("APP_TITLE", "ELA GovCon Suite")
+    st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
+except Exception:
+    pass
+try:
+    apply_theme_phase1()
+except Exception:
+    pass
+try:
+    _init_phase1_ui()
+except Exception:
+    pass
+try:
+    _sidebar_brand()
+except Exception:
+    pass# === Y0: GPT-5 Thinking CO assistant (streaming) ===
 try:
     from openai import OpenAI as _Y0OpenAI
 except Exception:
@@ -4535,10 +4207,10 @@ def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
             with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
-                _x3_render_modal(conn, _notice)
+                _x3_render_modal(_notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
-                _x3_render_modal(conn, _notice)
+                _x3_render_modal(_notice)
     ai = y55_ai_parse(text or "")
     l_items2 = y55_merge_lm(l_items, ai.get("l_items", []))
     clins2 = y55_merge_clins(clins, ai.get("clins", []))
@@ -4600,8 +4272,6 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
 
 # -------------------- Modules --------------------
 def run_contacts(conn: sqlite3.Connection) -> None:
-    
-    _compat_vendors_view(conn)
     st.header("Contacts")
     with st.form("add_contact", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 2, 2])
@@ -4636,9 +4306,8 @@ def run_contacts(conn: sqlite3.Connection) -> None:
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
 
+
 def run_deals(conn: sqlite3.Connection) -> None:
-    
-    _migrate_deals_columns(conn)
     st.header("Deals")
     with st.form("add_deal", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
@@ -4681,16 +4350,12 @@ def run_deals(conn: sqlite3.Connection) -> None:
 
 
 
-# ---- Phase 3 helpers: ensure RFP record, modal renderer ----def _ensure_rfp_for_notice(conn, _get_notice_row(row if 'row' in locals() else None): dict) -> int:
+# ---- Phase 3 helpers: ensure RFP record, modal renderer ----
+def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
     from contextlib import closing as _closing
-    nid = str(_get_notice_row(row if 'row' in locals() else None).get("Notice ID") or "")
+    nid = str(notice_row.get("Notice ID") or "")
     if not nid:
-        
-        try:
-            st.warning("No Notice ID found. Select a notice first. Hint: set SAM Link on the row or open details so we can parse the id.")
-        except Exception:
-            pass
-        return 0
+        raise ValueError("Missing Notice ID")
     with _closing(conn.cursor()) as cur:
         cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
         row = cur.fetchone()
@@ -4698,7 +4363,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
             return int(row[0])
         cur.execute(
             "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-            (_get_notice_row(row if 'row' in locals() else None).get("Title") or "", _get_notice_row(row if 'row' in locals() else None).get("Solicitation") or "", nid, _get_notice_row(row if 'row' in locals() else None).get("SAM Link") or "", "")
+            (notice_row.get("Title") or "", notice_row.get("Solicitation") or "", nid, notice_row.get("SAM Link") or "", "")
         )
         rid = int(cur.lastrowid)
         conn.commit()
@@ -4808,10 +4473,10 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
             with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
-                _x3_render_modal(conn, _notice)
+                _x3_render_modal(_notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
-                _x3_render_modal(conn, _notice)
+                _x3_render_modal(_notice)
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -5013,37 +4678,93 @@ if _has_rows:
                         st.rerun()
                 with c4:
                     if st.button("Add to Deals", key=f"add_to_deals_{i}"):
-
-
                         try:
-                            total = _handle_add_to_deals_row(_ensure_conn(), row)
-                            st.success(f"Saved to Deals{' · ' + str(total) + ' attachment(s) pulled' if total else ''}")
+                            from contextlib import closing as _closing
+                            _db = globals().get('conn')
+                            _owned = False
+                            if _db is None:
+                                import sqlite3
+                                _owned = True
+                                _db = _db_connect(DB_PATH, check_same_thread=False)
+                            with _closing(_db.cursor()) as cur:
+                                cur.execute(
+                                    """
+                                    INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                    """,
+                                    (
+                                        row.get("Title") or "",
+                                        row.get("Agency Path") or "",
+                                        "Bidding",
+                                        None,
+                                        row.get("Notice ID") or "",
+                                        row.get("Solicitation") or "",
+                                        row.get("Posted") or "",
+                                        row.get("Response Due") or "",
+                                        row.get("NAICS") or "",
+                                        row.get("PSC") or "",
+                                        row.get("SAM Link") or "",
+                                    ),
+                                )
+                                deal_id = cur.lastrowid
+                                _db.commit()
+                            # Optional: create an RFP shell and try to fetch attachments
+                            try:
+                                with _closing(_db.cursor()) as cur:
+                                    cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
+                                    rfp_id = cur.lastrowid
+                                    _db.commit()
+                                att_saved = 0
+                                try:
+                                    for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
+                                        try:
+                                            save_rfp_file_db(_db, rfp_id, fname, fbytes)
+                                            att_saved += 1
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                            st.success(f"Saved to Deals{' · ' + str(att_saved) + ' attachment(s) pulled' if att_saved else ''}")
                         except Exception as e:
-                            st.error(f"Failed to save deal: {e}")
+                            st.error("Failed to save deal: %s" % (e,))
+                        finally:
+                            try:
+                                if _owned:
+                                    _db.close()
+                            except Exception:
+                                pass
+                with c5:
 
+                    # Ask RFP Analyzer (Phase 3 modal)
                     if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
                         notice = row.to_dict()
                         st.session_state["x3_modal_notice"] = notice
                         st.session_state["x3_show_modal"] = True
                         try:
                             with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(notice.get("Notice ID")))):
-                                _x3_render_modal(conn, notice)
+                                _x3_render_modal(notice)
                         except Exception:
                             with st.expander("RFP Analyzer", expanded=True):
-                                _x3_render_modal(conn, notice)
+                                _x3_render_modal(notice)
 
                         st.session_state["x3_modal_notice"] = row.to_dict()
                         st.session_state["x3_show_modal"] = True
-                    # Render modal if requested
-                    if st.session_state.get("x3_show_modal") and (st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID")):
-                        try:
-                            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID")))):
-                                _x3_render_modal(conn, st.session_state.get("x3_modal_notice") or {})
-                        except Exception:
-                            with st.expander("RFP Analyzer", expanded=True):
-                                _x3_render_modal(conn, st.session_state.get("x3_modal_notice") or {})
 
-                    # Attachments area
+                    # Render modal if requested
+                    if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
+                        try:
+                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID"))))
+                        except Exception:
+                            # Fallback if modal unavailable
+                            ctx = st.container()
+                        with ctx:
+                            try:
+                                _notice = st.session_state.get("x3_modal_notice") or {}
+                                rfp_id = _ensure_rfp_for_notice(conn, _notice)
+                                st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
+                                # Attachments area
                                 try:
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
@@ -5056,7 +4777,7 @@ if _has_rows:
                                     st.write(f"Attachments saved: **{n_files}**")
                                 with cB:
                                     if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
-                                        c = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id))
+                                        c = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id))
                                         st.success(f"Fetched {c} attachment(s).")
                                         st.rerun()
 
@@ -5070,7 +4791,7 @@ if _has_rows:
                                     st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
                                     # Try SAM description fallback
                                     try:
-                                        descs = sam_try_fetch_attachments(_coerce_notice_id(row)) or []
+                                        descs = sam_try_fetch_attachments(str(row.get("Notice ID") or "")) or []
                                         for name, b in descs:
                                             if name.endswith("_description.html"):
                                                 import bs4
@@ -5136,8 +4857,10 @@ if _has_rows:
                                     ]
                                     st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
                                     st.success("Outline drafted and saved. Open Proposal Builder to continue.")
-                                                # Push notice to Analyzer tab (optional)
-                    if rfp_push_button():
+                            except Exception as _e:
+                                st.error(f"Modal error: {_e}")
+                    # Push notice to Analyzer tab (optional)
+                    if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
                         try:
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
@@ -5156,12 +4879,12 @@ if _has_rows:
                         try:
                             for _rec in st.session_state.get("sam_records_raw", []) or []:
                                 _nid = str(_rec.get("noticeId") or _rec.get("id") or "")
-                                if _nid == _coerce_notice_id(row):
+                                if _nid == str(row.get("Notice ID") or ""):
                                     _raw = _rec
                                     break
                         except Exception:
                             _raw = None
-
+                
                         def _gx(obj, *keys, default=""):
                             try:
                                 for k in keys:
@@ -5171,12 +4894,12 @@ if _has_rows:
                                 return obj if obj is not None else default
                             except Exception:
                                 return default
-
+                
                         desc = row.get("Description") or _gx(_raw, "description", default="")
                         pop_city = _gx(_raw, "placeOfPerformance", "city", default="")
                         pop_state = _gx(_raw, "placeOfPerformance", "state", default="")
                         pop = ", ".join([p for p in [pop_city, pop_state] if p])
-
+                
                         st.write(f"**Solicitation:** {row.get('Solicitation') or ''}")
                         st.write(f"**Set-Aside:** {row.get('Set-Aside') or ''}")
                         st.write(f"**PSC:** {row.get('PSC') or ''}     **NAICS:** {row.get('NAICS') or ''}")
@@ -5185,12 +4908,12 @@ if _has_rows:
                         if desc:
                             with st.expander("Description"):
                                 st.write(desc)
-
+                
                         try:
                             from contextlib import closing as _closing
                             _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
-                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (_coerce_notice_id(row),))
+                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
                                 r = cur.fetchone()
                                 if r:
                                     _rfp_id = r[0]
@@ -5202,7 +4925,7 @@ if _has_rows:
                                             st.write(f"- {fn} ({ln or 0} bytes)")
                         except Exception:
                             pass
-
+                
                         link = row.get("SAM Link") or ""
                         if link:
                             st.markdown(f"[Open on SAM.gov]({link})")
@@ -8938,7 +8661,7 @@ def run_backup_and_data(conn: sqlite3.Connection) -> None:
 
 
 # ---------- Phase O: Global Theme & Layout ----------
-def _apply_theme_old() -> None:
+def pass  # _apply_theme_old() disabled-> None:
     css = """
     <style>
     /* Base font and spacing */
@@ -9047,51 +8770,58 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
-# [DEDUPED:run_subcontractor_finder_s1_hook] def run_subcontractor_finder_s1_hook(conn):
-# [DEDUPED:run_subcontractor_finder_s1_hook]     ensure_subfinder_s1_schema(conn)
-# [DEDUPED:run_subcontractor_finder_s1_hook]     try:
-# [DEDUPED:run_subcontractor_finder_s1_hook]         s1_render_places_panel(conn)
-# [DEDUPED:run_subcontractor_finder_s1_hook]     except Exception:
-# [DEDUPED:run_subcontractor_finder_s1_hook]         pass
-# [DEDUPED:run_subcontractor_finder_s1_hook] 
-# [DEDUPED:run_subcontractor_finder_s1_hook] 
-# [DEDUPED:run_subcontractor_finder_s1_hook] # [DEDUPED:router] def router(page: str, conn: sqlite3.Connection) -> None:
-# [DEDUPED:router]     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
-# [DEDUPED:router]     import re as _re
-# [DEDUPED:router]     name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
-# [DEDUPED:router]     fn = globals().get(name)
-# [DEDUPED:router]     # explicit fallbacks for known variant names
-# [DEDUPED:router]     if not callable(fn):
-# [DEDUPED:router]         alt = {
-# [DEDUPED:router]             "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
-# [DEDUPED:router]             "Backup & Data": ["run_backup_data", "run_backup_and_data"],
-# [DEDUPED:router]         }.get((page or "").strip(), [])
-# [DEDUPED:router]         for a in alt:
-# [DEDUPED:router]             fn = globals().get(a)
-# [DEDUPED:router]             if callable(fn):
-# [DEDUPED:router]                 break
-# [DEDUPED:router]     if not callable(fn):
-# [DEDUPED:router]         import streamlit as _st
-# [DEDUPED:router]         _st.warning(f"No handler for page '{page}' resolved as {name}.")
-# [DEDUPED:router]         return
-# [DEDUPED:router]     _safe_route_call(fn, conn)
-# [DEDUPED:router]     # Hooks
-# [DEDUPED:router]     if (page or "").strip() == "Subcontractor Finder":
-# [DEDUPED:router]         _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
-# [DEDUPED:router]     if (page or "").strip() == "Proposal Builder":
-# [DEDUPED:router]         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-# [DEDUPED:router] def main() -> None:
-# [DEDUPED:router]     conn = get_db()
-# [DEDUPED:router]     global _O4_CONN
+def run_subcontractor_finder_s1_hook(conn):
+    ensure_subfinder_s1_schema(conn)
+    try:
+        s1_render_places_panel(conn)
+    except Exception:
+        pass
 
-# [DEDUPED:router]     st.title(APP_TITLE)
-# [DEDUPED:router]     st.caption(BUILD_LABEL)
-# [DEDUPED:router]     # Y0 main panel (always on)
-# [DEDUPED:router]     try:
-# [DEDUPED:router]         y0_ai_panel()
-# [DEDUPED:router]     except Exception:
-# [DEDUPED:router]         pass
-# [DEDUPED:router]     router(nav(), conn)
+
+def router(page: str, conn: sqlite3.Connection) -> None:
+    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
+    import re as _re
+    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
+    fn = globals().get(name)
+    # explicit fallbacks for known variant names
+    if not callable(fn):
+        alt = {
+            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
+        }.get((page or "").strip(), [])
+        for a in alt:
+            fn = globals().get(a)
+            if callable(fn):
+                break
+    if not callable(fn):
+        import streamlit as _st
+        _st.warning(f"No handler for page '{page}' resolved as {name}.")
+        return
+    _safe_route_call(fn, conn)
+    # Hooks
+    if (page or "").strip() == "Subcontractor Finder":
+        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
+    if (page or "").strip() == "Proposal Builder":
+        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+def main() -> None:
+    conn = get_db()
+    global _O4_CONN
+
+    st.title(APP_TITLE)
+    st.caption(BUILD_LABEL)
+
+# Ensure Phase 1 UI is initialized inside main as well
+try:
+    _init_phase1_ui()
+    _sidebar_brand()
+except Exception:
+    pass
+    # Y0 main panel (always on)
+    try:
+        y0_ai_panel()
+    except Exception:
+        pass
+    router(nav(), conn)
 
 
 
@@ -10439,7 +10169,7 @@ def _o5_send_due(conn, limit: int = 200):
     ok = 0; fail = 0; sender = _o5_pick_sender_from_session()
     for _, r in df.iterrows():
         try:
-            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]);
+            _o5_smtp_send(sender, r["to_email"], r["subject"], r["body_html"]); 
             with conn: conn.execute("UPDATE outreach_schedules SET status='sent' WHERE id=?", (int(r["id"]),)); ok += 1
         except Exception as e:
             with conn: conn.execute("UPDATE outreach_schedules SET status='error', last_error=? WHERE id=?", (str(e)[:500], int(r["id"]))); fail += 1
@@ -10892,7 +10622,7 @@ def _s1d_select_existing_pairs(conn):
 
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
-
+    
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = _s1d_get_api_key()
     if not key:
@@ -11397,9 +11127,6 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
-
-
-
 
 
 # ==== X.6 Compliance Matrix v1 ====
@@ -11971,7 +11698,7 @@ def _init_phase1_ui():
     if st.session_state.get('_phase1_ui_ready'):
         return
     st.session_state['_phase1_ui_ready'] = True
-    _show_phase1_banner()
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
     st.markdown('''
     <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
@@ -11984,7 +11711,7 @@ def _init_phase1_ui():
     .ela-ok {background: rgba(0,200,83,.12);}
     .ela-warn {background: rgba(251,140,0,.12);}
     .ela-bad {background: rgba(229,57,53,.12);}
-
+    
     /* Top ribbon banner */
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     /* Sidebar branding spacing */
@@ -11996,7 +11723,7 @@ def _init_phase1_ui():
     button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
     /* Text inputs rounding */
     .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-
+    
     </style>
     ''', unsafe_allow_html=True)
 
@@ -12008,13 +11735,9 @@ def _sidebar_brand():
 
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
     try:
-        return st.dataframe(df, use_container_width=use_container_width, height=height, hide_index=hide_index, column_config=column_config)
+        return _styled_dataframe(df, use_container_width=use_container_width, height=height, hide_index=hide_index, column_config=column_config)
     except TypeError:
-        try:
-            return st.dataframe(df, use_container_width=use_container_width, height=height)
-        except Exception:
-            return st.dataframe(df)
-
+        return _styled_dataframe(df, use_container_width=use_container_width, height=height)
 
 def _chip(text: str, kind: str = 'neutral'):
     cls = 'ela-chip'
@@ -12022,536 +11745,3 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
-
-
-# === Minimal Router + Main (re-injected) ===
-import sqlite3 as _sqlite3
-import pandas as _pd
-
-def _router(page: str, conn):
-    mapping = {
-        "SAM Watch": "run_sam_watch",
-        "RFP Analyzer": "run_rfp_analyzer",
-        "L and M Checklist": "run_lm_checklist",
-        "Proposal Builder": "run_proposal_builder",
-        "File Manager": "run_file_manager",
-        "Past Performance": "run_past_performance",
-        "White Paper Builder": "run_white_paper_builder",
-        "Subcontractor Finder": "run_subcontractor_finder",
-        "Outreach": "run_outreach",
-        "RFQ Pack": "run_rfq_pack",
-        "Backup & Data": "run_backup_and_data",
-        "Quote Comparison": "run_quote_comparison",
-        "Pricing Calculator": "run_pricing_calculator",
-        "Win Probability": "run_win_probability",
-        "Chat Assistant": "run_chat_assistant",
-        "Capability Statement": "run_capability_statement",
-        "CRM": "run_crm",
-        "Contacts": "run_contacts",
-        "Deals": "run_deals",
-    }
-    fn_name = mapping.get((page or "").strip())
-    fn = globals().get(fn_name)
-    if not callable(fn):
-        st.warning(f"No handler for page '{page}'.")
-        return
-    _safe_route_call(fn, conn)
-
-def main():
-    # Ensure theme and phase 1 UI assets
-    try:
-        _init_phase1_ui()
-    except Exception:
-        pass
-    # DB
-    conn = get_db()
-    # Optional workspace switcher
-    try:
-        render_workspace_switcher(conn)
-    except Exception:
-        pass
-    # Y0 assistant panel
-    try:
-        y0_ai_panel()
-    except Exception:
-        pass
-    # Nav and route
-    try:
-        page = nav()
-    except Exception as _e:
-        st.error(f"Navigation failed: {_e}")
-        return
-    _router(page, conn)
-    # Ensure modal rendering
-    try:
-        rfp_modal()
-    except Exception:
-        pass
-
-# Call main directly so Streamlit renders UI
-try:
-    main()
-except Exception as _e:
-    import traceback as _tb, sys as _sys
-    st.error(f"App failed: {type(_e).__name__}: {_e}")
-# === End Minimal Router + Main ===
-
-
-def _rfp_push_button_widget(label="Push to RFP Analyzer", notice_id=None, namespace="o3"):
-    safe = str(notice_id) if notice_id is not None else "global"
-    key = _unique_key(f"push_rfp_{safe}", namespace)
-    return st.button(label, key=key)
-
-
-
-def _compat_vendors_view(conn):
-    try:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS vendors(
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    email TEXT,
-                    phone TEXT,
-                    city TEXT,
-                    state TEXT,
-                    naics TEXT,
-                    cage TEXT,
-                    uei TEXT,
-                    website TEXT,
-                    notes TEXT
-                );
-            """)
-    except Exception:
-        pass
-
-
-
-def _detect_attachment_sources(conn, notice_id: str):
-    """Return a list of {'url':..., 'filename':...} from the best place we have."""
-    rows = []
-    try:
-        import pandas as _pd
-        q = _pd.read_sql_query(
-            "SELECT url, filename FROM rfp_docs WHERE notice_id = ?",
-            conn, params=[notice_id]
-        )
-        for _, r in q.iterrows():
-            rows.append({"url": str(r.get("url") or ""), "filename": str(r.get("filename") or "")})
-    except Exception:
-        pass
-    if not rows:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT docs_json FROM sam_cache WHERE notice_id = ?", [notice_id])
-            r = cur.fetchone()
-            if r and r[0]:
-                docs = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
-                for d in docs or []:
-                    if isinstance(d, dict):
-                        rows.append({"url": d.get("url",""), "filename": d.get("filename","")})
-        except Exception:
-            pass
-    return [r for r in rows if r.get("url")]
-
-def download_to_deal_storage(deal_id: int, url: str, preferred_name: str = ""):
-    base = Path("deals") / str(deal_id) / "attachments"
-    base.mkdir(parents=True, exist_ok=True)
-    name = preferred_name or url.split("?")[0].split("/")[-1] or "attachment"
-    out = base / name
-    i = 1
-    while out.exists():
-        stem = out.stem
-        suf = out.suffix
-        out = base / f"{stem}{i}{suf}"
-        i += 1
-    try:
-        r = requests.get(url, timeout=30)
-        r.raise_for_status()
-        out.write_bytes(r.content)
-        return str(out)
-    except Exception:
-        return ""
-
-def _add_notice_attachments_to_deal(conn, notice_id: str, deal_id: int):
-    sources = _detect_attachment_sources(conn, notice_id)
-    saved = []
-    for s in sources:
-        p = download_to_deal_storage(deal_id, s.get("url",""), s.get("filename",""))
-        if p:
-            saved.append(p)
-    try:
-        with closing(conn.cursor()) as c:
-            c.execute("CREATE TABLE IF NOT EXISTS deals_attachments (deal_id INTEGER, path TEXT)")
-            c.executemany("INSERT INTO deals_attachments (deal_id, path) VALUES (?,?)",
-                          [(deal_id, p) for p in saved])
-        conn.commit()
-    except Exception:
-        try:
-            with closing(conn.cursor()) as c:
-                c.execute("SELECT attachments FROM deals WHERE id = ?", [deal_id])
-                r = c.fetchone()
-                cur = json.loads(r[0]) if (r and r[0]) else []
-                cur.extend(saved)
-                c.execute("UPDATE deals SET attachments = ? WHERE id = ?", [json.dumps(cur), deal_id])
-            conn.commit()
-        except Exception:
-            pass
-    return saved
-
-
-def _handle_add_to_deals_row(conn, row) -> int:
-    conn = conn or _ensure_conn()
-    if conn is None:
-        raise RuntimeError('No database connection available')
-
-    """Create a deal from a SAM row and pull attachments. Returns count of attachments saved."""
-    from contextlib import closing as _closing
-    # Insert deal
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            (
-                row.get("Title") or "",
-                row.get("Agency Path") or "",
-                "Bidding",
-                None,
-                row.get("Notice ID") or "",
-                row.get("Solicitation") or "",
-                row.get("Posted") or "",
-                row.get("Response Due") or "",
-                row.get("NAICS") or "",
-                row.get("PSC") or "",
-                row.get("SAM Link") or "",
-            ),
-        )
-        deal_id = cur.lastrowid
-        conn.commit()
-    # Ensure rfps entry
-    rfp_id = None
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id FROM rfps WHERE notice_id = ?", (_coerce_notice_id(row),))
-            r = cur.fetchone()
-            if r:
-                rfp_id = int(r[0])
-            else:
-                cur.execute("INSERT INTO rfps(notice_id, sam_link) VALUES (?, ?)", (_coerce_notice_id(row), row.get("SAM Link") or ""))
-                rfp_id = int(cur.lastrowid)
-            conn.commit()
-    except Exception:
-        rfp_id = None
-    # Attachments
-    att_saved = 0
-    try:
-        if rfp_id and "_fetch_and_save_now" in globals():
-            att_saved = _fetch_and_save_now(conn, _coerce_notice_id(row), int(rfp_id)) or 0
-    except Exception:
-        att_saved = 0
-    try:
-        extra = _add_notice_attachments_to_deal(conn, _coerce_notice_id(row), int(deal_id)) or []
-    except Exception:
-        extra = []
-    return int(att_saved or 0) + len(extra or [])
-
-
-def _sam_api_key():
-    try:
-        return st.secrets.get("sam", {}).get("api_key")  # st.secrets["sam"]["api_key"]
-    except Exception:
-        pass
-    try:
-        import os
-        return os.environ.get("SAM_API_KEY")
-    except Exception:
-        return None
-
-def _sam_fetch_docs(notice_id: str):
-    """Best-effort fetch of attachments list from SAM.gov API. Returns [{'url','filename'}, ...] or []"""
-    ak = _sam_api_key()
-    if not ak or not notice_id:
-        return []
-    urls = [
-        f"https://api.sam.gov/prod/opportunities/v3/opportunities/{notice_id}?api_key={ak}",
-        f"https://api.sam.gov/prod/opportunities/v2/opportunities/{notice_id}?api_key={ak}",
-    ]
-    out = []
-    for u in urls:
-        try:
-            r = requests.get(u, timeout=20)
-            if r.status_code != 200:
-                continue
-            j = r.json()
-            # Try common shapes
-            paths = [
-                ["noticeData","attachments"],
-                ["data","noticeData","attachments"],
-                ["opportunity","attachments"],
-                ["attachments"],
-            ]
-            found = None
-            for p in paths:
-                cur = j
-                ok = True
-                for key in p:
-                    if isinstance(cur, dict) and key in cur:
-                        cur = cur[key]
-                    else:
-                        ok = False
-                        break
-                if ok and isinstance(cur, list):
-                    found = cur
-                    break
-            if isinstance(found, list):
-                for d in found:
-                    if isinstance(d, dict):
-                        url = d.get("url") or d.get("URI") or d.get("uri") or ""
-                        name = d.get("fileName") or d.get("filename") or url.split('/')[-1]
-                        if url:
-                            out.append({"url": url, "filename": name})
-                if out:
-                    break
-        except Exception:
-            continue
-    return out
-
-
-# ==== ELA PATCH: Fixes 2025-10-29 ====
-from contextlib import closing
-
-def get_o4_conn():
-    """
-    Back-compat O4 connection accessor. No args.
-    Returns a cached sqlite3 connection using get_db().
-    """
-    global _O4_CONN
-    try:
-        if _O4_CONN:
-            try:
-                st.session_state["conn"] = _O4_CONN
-            except Exception:
-                pass
-            return _O4_CONN
-    except Exception:
-        pass
-    try:
-        if "conn" in st.session_state and st.session_state.get("conn"):
-            _O4_CONN = st.session_state["conn"]
-            return _O4_CONN
-    except Exception:
-        pass
-    conn = get_db()
-    _O4_CONN = conn
-    try:
-        st.session_state["conn"] = conn
-    except Exception:
-        pass
-    return conn
-
-def _unique_key(base: str, namespace: str = "ui"):
-    """
-    Generate a unique-but-stable key per render to avoid duplicate Streamlit widget keys.
-    """
-    try:
-        ss = st.session_state
-        counter_key = f"__{namespace}_key_counter__"
-        ss[counter_key] = int(ss.get(counter_key, 0)) + 1
-        return f"{base}-{namespace}-{ss[counter_key]}"
-    except Exception:
-        import time
-        return f"{base}-{namespace}-{int(time.time()*1000)%100000}"
-
-def _ask_rfp_analyzer_modal(opportunity=None):
-    """Modal (or fallback expander) to ask the RFP Analyzer questions."""
-    opened = False
-    try:
-        @st.dialog("Ask RFP Analyzer")
-        def _dlg():
-            st.caption("Use AI to analyze the selected opportunity and ask questions.")
-            q = st.text_area("Your question", key=_unique_key("rfp_q","o3"))
-            if st.button("Analyze", key=_unique_key("rfp_analyze","o3")):
-                try:
-                    ans = _service_analyze_rfp_question(q, opportunity)
-                except Exception as e:
-                    ans = f"Error: {e}"
-                st.markdown("**Answer**")
-                st.write(ans)
-            if st.button("Close", key=_unique_key("rfp_close","o3")):
-                st.session_state["show_rfp_analyzer"] = False
-        _dlg()
-        opened = True
-    except Exception:
-        pass
-    if not opened:
-        with st.expander("Ask RFP Analyzer", expanded=True):
-            st.caption("Use AI to analyze the selected opportunity and ask questions.")
-            q = st.text_area("Your question", key=_unique_key("rfp_q_fb","o3"))
-            if st.button("Analyze", key=_unique_key("rfp_analyze_fb","o3")):
-                try:
-                    ans = _service_analyze_rfp_question(q, opportunity)
-                except Exception as e:
-                    ans = f"Error: {e}"
-                st.markdown("**Answer**")
-                st.write(ans)
-            if st.button("Close", key=_unique_key("rfp_close_fb","o3")):
-                st.session_state["show_rfp_analyzer"] = False
-# ==== END ELA PATCH ====
-
-
-
-
-# ---- ID resolver wrapper (non-destructive) ----
-import re as _re_ens
-import typing as _t_ens
-
-def _resolve_notice_id(notice: _t_ens.Optional[dict]) -> str:
-    """Try to extract Notice ID from keys or SAM.gov link."""
-    if not isinstance(notice, dict):
-        return ""
-    # Direct keys
-    for k in [
-        "Notice ID","NoticeId","notice_id","noticeId","id","opp_id","Opp ID",
-        "NoticeID","noticeID","Opportunity ID","OpportunityID"
-    ]:
-        v = str(notice.get(k) or "").strip()
-        if _re_ens.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v, _re_ens.I):
-            return v
-    # Parse from link-like fields
-    for k in ["SAM Link","SAM.gov Link","Link","URL","Sam Link","sam_url","sam","Opportunity URL","Opportunity Link","Solicitation Link"]:
-        v = str(notice.get(k) or "").strip()
-        if not v:
-            continue
-        m = _re_ens.search(r"/opp/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", v, _re_ens.I)
-        if m:
-            return m.group(1)
-        m = _re_ens.search(r"[?&](?:noticeId|notice_id)=([0-9a-f-]{36})", v, _re_ens.I)
-        if m:
-            return m.group(1)
-    return ""
-
-def _paste_notice_ui() -> str:
-    """Render a small UI to paste a SAM.gov link or UUID. Returns parsed UUID or ''."""
-    try:
-        import streamlit as st
-        with st.expander("Paste SAM.gov link or Notice ID", expanded=False):
-            user_in = st.text_input("SAM.gov link or Notice ID", key="deal_notice_input")
-            if user_in:
-                m = _re_ens.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", user_in, _re_ens.I)
-                if m:
-                    return m.group(1)
-    except Exception:
-        pass
-    return ""
-
-try:
-    _orig__ensure_rfp_for_notice
-except NameError:
-    _orig__ensure_rfp_for_notice = None
-
-def _ensure_rfp_for_notice(conn, notice: dict) -> int:
-    """Wrapper: resolve Notice ID before delegating to original implementation if present."""
-    import streamlit as st
-    nid = _resolve_notice_id(notice or {})
-    # Fallback to an app-level helper if available
-    if not nid:
-        try:
-            # Many versions expose _get_notice_row(None) to pull current selection
-            _candidate = _get_notice_row(None)  # type: ignore[name-defined]
-            nid = _resolve_notice_id(_candidate)
-            if nid and not notice:
-                notice = dict(_candidate or {})
-        except Exception:
-            pass
-    # As a last resort, offer a paste UI
-    if not nid:
-        st.warning("No Notice ID found. Select a notice first. Hint: set SAM Link on the row or open details so we can parse the id.")
-        pasted = _paste_notice_ui()
-        if pasted:
-            notice = dict(notice or {})
-            notice["Notice ID"] = pasted
-            nid = pasted
-    if not nid:
-        return 0
-    # Ensure the notice dict carries the resolved id for downstream code
-    if str((notice or {}).get("Notice ID") or "") != nid:
-        notice = dict(notice or {})
-        notice["Notice ID"] = nid
-
-    # Delegate
-    if _orig__ensure_rfp_for_notice:
-        return _orig__ensure_rfp_for_notice(conn, notice)
-    # Minimal fallback if original wasn't defined
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
-        row = cur.fetchone()
-        if row:
-            return int(row[0])
-        title = str((notice or {}).get("Title") or "")
-        solnum = str((notice or {}).get("Solicitation") or (notice or {}).get("Solicitation Number") or "")
-        sam_url = str((notice or {}).get("SAM Link") or (notice or {}).get("Link") or "")
-        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                    (title, solnum, nid, sam_url, ""))
-        conn.commit()
-        cur.execute("SELECT last_insert_rowid();")
-        return int(cur.fetchone()[0])
-
-
-def _resolve_notice_id(notice: dict) -> str:
-    """Try to extract Notice ID from keys or SAM.gov link."""
-    if not isinstance(notice, dict):
-        return ""
-    # Direct keys
-    for k in ["Notice ID","NoticeId","notice_id","noticeId","id","opp_id","Opp ID"]:
-        v = str(notice.get(k) or "").strip()
-        if len(v) >= 32 and "-" in v:
-            return v
-    # Parse from link-like fields
-    for k in ["SAM Link","SAM.gov Link","Link","URL","Sam Link","sam_url","sam"]:
-        v = str(notice.get(k) or "").strip()
-        if not v:
-            continue
-        m = _re_ens.search(r"/opp/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", v, _re_ens.I)
-        if m:
-            return m.group(1)
-        m = _re_ens.search(r"[?&](?:noticeId|notice_id)=([0-9a-f-]{36})", v, _re_ens.I)
-        if m:
-            return m.group(1)
-    return ""
-
-try:
-    _orig__ensure_rfp_for_notice = _ensure_rfp_for_notice
-    def _ensure_rfp_for_notice(conn, notice: dict):
-        nid = _resolve_notice_id(notice or {})
-        if nid and str((notice or {}).get("Notice ID") or "") != nid:
-            notice = dict(notice or {})
-            notice["Notice ID"] = nid
-        return _orig__ensure_rfp_for_notice(conn, notice)
-except NameError:
-    # Provide a minimal fallback if original does not exist
-    from contextlib import closing as _closing
-    def _ensure_rfp_for_notice(conn, notice: dict) -> int:
-        nid = _resolve_notice_id(notice or {})
-        if not nid:
-            try:
-                import streamlit as st
-                st.warning("No Notice ID found. Add a SAM Link or paste a Notice ID.")
-            except Exception:
-                pass
-            return 0
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
-            row = cur.fetchone()
-            if row:
-                return int(row[0])
-            title = str((notice or {}).get("Title") or "")
-            solnum = str((notice or {}).get("Solicitation") or (notice or {}).get("Solicitation Number") or "")
-            sam_url = str((notice or {}).get("SAM Link") or (notice or {}).get("Link") or "")
-            cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                        (title, solnum, nid, sam_url, ""))
-            conn.commit()
-            cur.execute("SELECT last_insert_rowid();")
-            return int(cur.fetchone()[0])
-
-
