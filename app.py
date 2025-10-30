@@ -8798,6 +8798,11 @@ def main() -> None:
         pass
 
     conn = get_db()
+    try:
+        render_workspace_switcher(conn)
+    except Exception:
+        pass
+
     global _O4_CONN
 
     st.title(APP_TITLE)
