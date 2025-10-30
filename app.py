@@ -12400,8 +12400,103 @@ def _ask_rfp_analyzer_modal(opportunity=None):
 
 
 
+
 # ---- ID resolver wrapper (non-destructive) ----
 import re as _re_ens
+import typing as _t_ens
+
+def _resolve_notice_id(notice: _t_ens.Optional[dict]) -> str:
+    """Try to extract Notice ID from keys or SAM.gov link."""
+    if not isinstance(notice, dict):
+        return ""
+    # Direct keys
+    for k in [
+        "Notice ID","NoticeId","notice_id","noticeId","id","opp_id","Opp ID",
+        "NoticeID","noticeID","Opportunity ID","OpportunityID"
+    ]:
+        v = str(notice.get(k) or "").strip()
+        if _re_ens.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v, _re_ens.I):
+            return v
+    # Parse from link-like fields
+    for k in ["SAM Link","SAM.gov Link","Link","URL","Sam Link","sam_url","sam","Opportunity URL","Opportunity Link","Solicitation Link"]:
+        v = str(notice.get(k) or "").strip()
+        if not v:
+            continue
+        m = _re_ens.search(r"/opp/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", v, _re_ens.I)
+        if m:
+            return m.group(1)
+        m = _re_ens.search(r"[?&](?:noticeId|notice_id)=([0-9a-f-]{36})", v, _re_ens.I)
+        if m:
+            return m.group(1)
+    return ""
+
+def _paste_notice_ui() -> str:
+    """Render a small UI to paste a SAM.gov link or UUID. Returns parsed UUID or ''."""
+    try:
+        import streamlit as st
+        with st.expander("Paste SAM.gov link or Notice ID", expanded=False):
+            user_in = st.text_input("SAM.gov link or Notice ID", key="deal_notice_input")
+            if user_in:
+                m = _re_ens.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", user_in, _re_ens.I)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+try:
+    _orig__ensure_rfp_for_notice
+except NameError:
+    _orig__ensure_rfp_for_notice = None
+
+def _ensure_rfp_for_notice(conn, notice: dict) -> int:
+    """Wrapper: resolve Notice ID before delegating to original implementation if present."""
+    import streamlit as st
+    nid = _resolve_notice_id(notice or {})
+    # Fallback to an app-level helper if available
+    if not nid:
+        try:
+            # Many versions expose _get_notice_row(None) to pull current selection
+            _candidate = _get_notice_row(None)  # type: ignore[name-defined]
+            nid = _resolve_notice_id(_candidate)
+            if nid and not notice:
+                notice = dict(_candidate or {})
+        except Exception:
+            pass
+    # As a last resort, offer a paste UI
+    if not nid:
+        st.warning("No Notice ID found. Select a notice first. Hint: set SAM Link on the row or open details so we can parse the id.")
+        pasted = _paste_notice_ui()
+        if pasted:
+            notice = dict(notice or {})
+            notice["Notice ID"] = pasted
+            nid = pasted
+    if not nid:
+        return 0
+    # Ensure the notice dict carries the resolved id for downstream code
+    if str((notice or {}).get("Notice ID") or "") != nid:
+        notice = dict(notice or {})
+        notice["Notice ID"] = nid
+
+    # Delegate
+    if _orig__ensure_rfp_for_notice:
+        return _orig__ensure_rfp_for_notice(conn, notice)
+    # Minimal fallback if original wasn't defined
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
+        row = cur.fetchone()
+        if row:
+            return int(row[0])
+        title = str((notice or {}).get("Title") or "")
+        solnum = str((notice or {}).get("Solicitation") or (notice or {}).get("Solicitation Number") or "")
+        sam_url = str((notice or {}).get("SAM Link") or (notice or {}).get("Link") or "")
+        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                    (title, solnum, nid, sam_url, ""))
+        conn.commit()
+        cur.execute("SELECT last_insert_rowid();")
+        return int(cur.fetchone()[0])
+
 
 def _resolve_notice_id(notice: dict) -> str:
     """Try to extract Notice ID from keys or SAM.gov link."""
