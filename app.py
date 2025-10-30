@@ -1,234 +1,3 @@
-import streamlit as st
-## ELA Phase3 hybrid_api
-# Optional FastAPI backend (run separately) + client with graceful fallback.
-# Set GOVCON_API_BASE or st.secrets['api']['base_url'] to use the API.
-import os, threading, uuid, time
-try:
-    import requests
-except Exception:
-    requests = None
-
-# ---- job store for background tasks (in-memory) ----
-_jobs: dict[str, dict] = {}
-
-def _enqueue(fn, *args, **kwargs) -> str:
-    jid = str(uuid.uuid4())
-    _jobs[jid] = {"status":"queued"}
-    def _run():
-        _jobs[jid] = {"status":"running"}
-        try:
-            res = fn(*args, **kwargs)
-            _jobs[jid] = {"status":"done", "result": res}
-        except Exception as e:
-            _jobs[jid] = {"status":"error", "error": str(e)}
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return jid
-
-def _job_status(jid: str) -> dict:
-    return _jobs.get(jid, {"status":"unknown"})
-
-# ---- API service functions (fallbacks) ----
-def _svc_analyze(question: str, context: dict | None = None):
-    # Use your in-process analyzer if available
-    try:
-        return _service_analyze_rfp_question(question, context or {})
-    except Exception:
-        # Minimal fallback
-        title = ""
-        if isinstance(context, dict):
-            title = context.get("title") or context.get("Title") or ""
-        return f"[demo] Analysis for {title or 'the selected notice'}: {question}"
-
-# ---- FastAPI app (optional) ----
-try:
-    from fastapi import FastAPI, BackgroundTasks
-    from pydantic import BaseModel
-    FASTAPI_OK = True
-except Exception:
-    FASTAPI_OK = False
-
-if FASTAPI_OK:
-    api = FastAPI(title="ELA GovCon API", version="0.1")
-
-    class AnalyzeReq(BaseModel):
-        question: str
-        context: dict | None = None
-
-    @api.post("/api/analyze")
-    def api_analyze(req: AnalyzeReq, background_tasks: BackgroundTasks):
-        jid = _enqueue(_svc_analyze, req.question, req.context or {})
-        return {"job_id": jid}
-
-    @api.get("/api/job/{job_id}")
-    def api_job(job_id: str):
-        return _job_status(job_id)
-
-# ---- Client helpers ----
-def _api_base_url():
-    try:
-        base = os.environ.get("GOVCON_API_BASE")
-        if not base and hasattr(st, "secrets"):
-            base = (getattr(st, "secrets", {}) or {}).get("api", {}).get("base_url")
-        return base
-    except Exception:
-        return None
-
-def _api_post(path: str, payload: dict):
-    base = _api_base_url()
-    if not base or requests is None:
-        return None
-    try:
-        url = base.rstrip("/") + path
-        r = requests.post(url, json=payload, timeout=20)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        return None
-    return None
-
-def _api_get(path: str):
-    base = _api_base_url()
-    if not base or requests is None:
-        return None
-    try:
-        url = base.rstrip("/") + path
-        r = requests.get(url, timeout=20)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        return None
-    return None
-
-# ---- Wire into the RFP Analyze service used by the dialog ----
-def _phase3_analyze(question: str, opportunity: dict | None = None):
-    # Try API path first
-    resp = _api_post("/api/analyze", {"question": question, "context": opportunity or {}})
-    if isinstance(resp, dict) and resp.get("job_id"):
-        st.session_state["phase3_last_job"] = resp["job_id"]
-        return f"Queued analysis job: {resp['job_id']}"
-    # Fallback to in-process
-    try:
-        return _service_analyze_rfp_question(question, opportunity or {})
-    except Exception as e:
-        return f"Analyze error: {e}"
-
-def _phase3_poll_status():
-    jid = st.session_state.get("phase3_last_job")
-    if not jid:
-        return None
-    resp = _api_get(f"/api/job/{jid}")
-    if not resp:
-        return None
-    return resp
-
-# ---- Enhance Ask RFP Analyzer dialog to use Phase 3 when available ----
-def _phase3_enhance_rfp_dialog():
-    # integrate into existing dialog if present
-    if "show_rfp_analyzer" in st.session_state and st.session_state.get("show_rfp_analyzer"):
-        # add a status row
-        c1, c2 = st.columns([1,1])
-        with c1:
-            if st.button("Check job status", key=_unique_key("poll_job","o3")):
-                st.session_state["phase3_last_status"] = _phase3_poll_status()
-        with c2:
-            if st.session_state.get("phase3_last_status"):
-                st.caption(str(st.session_state["phase3_last_status"]))
-
-# ELA Phase2 performance
-import sqlite3, hashlib, time
-
-# Cached DB connector with WAL + PRAGMAs
-def _ensure_indices(conn):
-
-    try:
-        cur = conn.cursor()
-        def table_exists(name):
-            try:
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
-                return cur.fetchone() is not None
-            except Exception:
-                return False
-        stmts = []
-        if table_exists("notices"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)")
-        if table_exists("vendors"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
-        if table_exists("deals"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)")
-        if table_exists("files"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)")
-        if table_exists("messages"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)")
-        for s in stmts:
-            try:
-                cur.execute(s)
-            except Exception:
-                pass
-        cur.close()
-    except Exception:
-        pass
-
-def _db_connect(db_path: str, **kwargs):
-    import sqlite3
-    import streamlit as st
-    # Build connect kwargs with safe defaults
-    base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
-    try:
-        base_kwargs.update(kwargs or {})
-    except Exception:
-        pass
-    conn = sqlite3.connect(db_path, **base_kwargs)
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA temp_store=MEMORY;")
-        conn.execute("PRAGMA mmap_size=300000000;")
-        conn.execute("PRAGMA cache_size=-200000;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-    except Exception:
-        pass
-    # One-time per-session index creation
-    try:
-        if not st.session_state.get("_phase2_indices_done"):
-            _ensure_indices(conn)
-            st.session_state["_phase2_indices_done"] = True
-    except Exception:
-        pass
-    return conn
-# Cached SELECT helper (returns rows + cols); pass db_path explicitly
-@st.cache_data(ttl=600, show_spinner=False)
-def _cached_select(db_path: str, sql: str, params: tuple = ()):
-    conn = _db_connect(db_path)
-    cur = conn.execute(sql, params)
-    rows = cur.fetchall()
-    cols = [d[0] for d in cur.description] if cur.description else []
-    return rows, cols
-
-# Cache AI answers by (question + context hash)
-def _ai_cache_key(question: str, context_hash: str = ""):
-    key = (question or "") + "|" + (context_hash or "")
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
-def _cached_ai_answer(question: str, context_hash: str = ""):
-    @st.cache_data(ttl=86400, show_spinner=False)
-    def _inner(k, q, ch):
-        try:
-            return _service_analyze_rfp_question(q, {"hash": ch})
-        except Exception as e:
-            return f"AI error: {e}"
-    return _inner(_ai_cache_key(question, context_hash), question, context_hash)
-
-# Expand Phase 0 write guard to clear caches after commits
-def _write_guard(conn, fn, *args, **kwargs):
-    with conn:
-        out = fn(*args, **kwargs)
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    return out
-
 # ELA Phase1 bootstrap
 import streamlit as st
 
@@ -614,7 +383,7 @@ def get_db():
     import sqlite3
     from contextlib import closing as _closing
     ensure_dirs()
-    conn = _db_connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
     return conn
@@ -787,16 +556,10 @@ def _ask_rfp_analyzer_modal(opportunity=None):
             st.session_state['show_rfp_analyzer'] = False
     _dlg()
 
-def _service_analyze_rfp_question(q, opportunity):
-    try:
-        base = _api_base_url()
-    except Exception:
-        base = None
-    if base:
-        return _phase3_analyze(q, opportunity)
-# TODO: wire to actual analyzer service; for now return a placeholder
+def _service_analyze_rfp_question(q, opp):
+    # TODO: wire to actual analyzer service; for now return a placeholder
     if not q:
-    return f"Please enter a question."
+        return "Please enter a question."
     title = (opp.get('title') if isinstance(opp, dict) else str(opp)) if opp else 'the selected notice'
     return f"[demo] Analysis for {title}: {q}"
 
@@ -2792,7 +2555,7 @@ def render_status_and_gaps(conn: sqlite3.Connection) -> None:
 
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
-    conn = _db_connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with closing(conn.cursor()) as cur:
         cur.execute("PRAGMA foreign_keys = ON;")
 
@@ -4603,7 +4366,7 @@ if _has_rows:
                             if _db is None:
                                 import sqlite3
                                 _owned = True
-                                _db = _db_connect(DB_PATH, check_same_thread=False)
+                                _db = sqlite3.connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
                                 cur.execute(
                                     """
@@ -4829,7 +4592,7 @@ if _has_rows:
                 
                         try:
                             from contextlib import closing as _closing
-                            _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
+                            _db = globals().get("conn") or sqlite3.connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
                                 cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
                                 r = cur.fetchone()
@@ -8973,7 +8736,7 @@ def test_seed_cases():
 
     import sqlite3
     from contextlib import closing as _closing
-    conn = _db_connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     with _closing(conn.cursor()) as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
         conn.commit()
