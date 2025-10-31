@@ -399,8 +399,8 @@ import requests
 
 # ===== X3 MODAL HELPERS =====
 def _x3_open_modal(row_dict: dict):
-    st.session_state['x3_modal_notice'] = dict(row_dict or {})
-    st.session_state['x3_show_modal'] = True
+    st.session_state["x3_modal_notice"] = dict(row_dict or {})
+    st.session_state["x3_show_modal"] = True
     try:
         st.rerun()
     except Exception:
@@ -437,6 +437,13 @@ def _x3_modal_gate():
 
 
 def _x3_render_modal(notice: dict):
+    # Resolve DB connection for modal
+    conn = (globals().get('_O4_CONN')
+            or st.session_state.get('conn')
+            or (get_o4_conn() if 'get_o4_conn' in globals() else None))
+    if conn is None:
+        st.error('Database connection unavailable.')
+        return
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
     except Exception as e:
@@ -4240,6 +4247,275 @@ def y55_merge_pocs(base_rows, ai_rows):
 
 def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum):
 
+    # ---- X3 MODAL RENDERER ----
+    if st.session_state.get("x3_show_modal"):
+        _notice = st.session_state.get("x3_modal_notice", {}) or {}
+        try:
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get('Notice ID'))}"):
+                _x3_render_modal(_notice)
+        except Exception:
+            with st.expander("RFP Analyzer", expanded=True):
+                _x3_render_modal(_notice)
+    ai = y55_ai_parse(text or "")
+    l_items2 = y55_merge_lm(l_items, ai.get("l_items", []))
+    clins2 = y55_merge_clins(clins, ai.get("clins", []))
+    dates2 = y55_merge_dates(dates, ai.get("dates", []))
+    pocs2 = y55_merge_pocs(pocs, ai.get("pocs", []))
+    meta2 = dict(meta or {})
+    for k in ("naics","set_aside","place_of_performance"):
+        v = (ai.get("meta", {}) or {}).get(k)
+        if v:
+            meta2[k] = _y55_norm_str(v)
+    title2 = (ai.get("title") or "").strip() or (title or "")
+    solnum2 = (ai.get("solnum") or "").strip() or (solnum or "")
+    return (l_items2, clins2, dates2, pocs2, meta2, title2, solnum2)
+# === end Y5.5 ===
+
+def extract_clins_xlsx(file_bytes: bytes) -> list:
+    try:
+        import io, pandas as _pd
+        wb = _pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, dtype=str)
+    except Exception:
+        return []
+    rows = []
+    for sname, df in wb.items():
+        if df is None or df.empty:
+            continue
+        df2 = df.copy()
+        df2.columns = [str(c).strip() for c in df2.columns]
+        low = [c.lower() for c in df2.columns]
+        def _pick(fn):
+            for i,c in enumerate(low):
+                try:
+                    if fn(c):
+                        return df2.columns[i]
+                except Exception:
+                    continue
+            return None
+        col_clin = _pick(lambda c: 'clin' in c or 'line item' in c or c.startswith('clin') or c.startswith('line'))
+        col_desc = _pick(lambda c: 'desc' in c or c=='item' or 'description' in c)
+        col_qty  = _pick(lambda c: 'qty' in c or 'quantity' in c)
+        col_unit = _pick(lambda c: c in ('unit','u/i','uom') or 'unit ' in c or 'uom' in c)
+        col_upr  = _pick(lambda c: 'unit price' in c or (('unit' in c or 'price' in c) and 'total' not in c and 'ext' not in c and 'extended' not in c))
+        col_ext  = _pick(lambda c: 'extended' in c or 'amount' in c or c=='total' or 'total price' in c or 'ext price' in c)
+        if (col_clin or col_desc) and (col_qty or col_upr or col_ext):
+            for _, r in df2.iterrows():
+                def gv(col):
+                    return "" if col is None else str(r.get(col, "")).strip()
+                clin = gv(col_clin); desc = gv(col_desc); qty  = gv(col_qty)
+                unit = gv(col_unit); upr  = gv(col_upr);  ext  = gv(col_ext)
+                if any([clin, desc, qty, upr, ext]):
+                    rows.append({'clin': clin, 'description': desc[:300] if desc else "", 'qty': qty, 'unit': unit, 'unit_price': upr, 'extended_price': ext})
+    seen = set(); uniq = []
+    for r in rows:
+        key = (r['clin'], r['description'], r['qty'], r['unit_price'], r['extended_price'])
+        if key in seen: continue
+        seen.add(key); uniq.append(r)
+    return uniq[:2000]
+
+
+
+# -------------------- Modules --------------------
+def run_contacts(conn: sqlite3.Connection) -> None:
+    st.header("Contacts")
+    with st.form("add_contact", clear_on_submit=True):
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            name = st.text_input("Name")
+        with c2:
+            email = st.text_input("Email")
+        with c3:
+            org = st.text_input("Organization")
+        submitted = st.form_submit_button("Add Contact")
+    if submitted:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO contacts(name, email, org) VALUES (?, ?, ?);",
+                    (name.strip(), email.strip(), org.strip()),
+                )
+                conn.commit()
+            st.success(f"Added contact {name}")
+        except Exception as e:
+            st.error(f"Error saving contact {e}")
+
+    try:
+        df = pd.read_sql_query(
+            "SELECT name, email, org FROM contacts_t ORDER BY name;", conn
+        )
+        st.subheader("Contact List")
+        if df.empty:
+            st.write("No contacts yet")
+        else:
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Failed to load contacts {e}")
+
+
+def run_deals(conn: sqlite3.Connection) -> None:
+    st.header("Deals")
+    with st.form("add_deal", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+        with c1:
+            title = st.text_input("Title")
+        with c2:
+            agency = st.text_input("Agency")
+        with c3:
+            status = st.selectbox(
+                "Status",
+                ["New", "Qualifying", "Bidding", "Submitted", "Awarded", "Lost"],
+            )
+        with c4:
+            value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
+        submitted = st.form_submit_button("Add Deal")
+    if submitted:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO deals(title, agency, status, value) VALUES (?, ?, ?, ?);",
+                    (title.strip(), agency.strip(), status, float(value)),
+                )
+                conn.commit()
+            st.success(f"Added deal {title}")
+        except Exception as e:
+            st.error(f"Error saving deal {e}")
+
+    try:
+        df = pd.read_sql_query(
+            "SELECT title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+            conn,
+        )
+        st.subheader("Pipeline")
+        if df.empty:
+            st.write("No deals yet")
+        else:
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Failed to load deals {e}")
+
+
+
+# ---- Phase 3 helpers: ensure RFP record, modal renderer ----
+def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
+    from contextlib import closing as _closing
+    nid = str(notice_row.get("Notice ID") or "")
+    if not nid:
+        raise ValueError("Missing Notice ID")
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1;", (nid,))
+        row = cur.fetchone()
+        if row:
+            return int(row[0])
+        cur.execute(
+            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+            (notice_row.get("Title") or "", notice_row.get("Solicitation") or "", nid, notice_row.get("SAM Link") or "", "")
+        )
+        rid = int(cur.lastrowid)
+        conn.commit()
+        return rid
+
+def _fetch_and_save_now(conn, notice_id: str, rfp_id: int) -> int:
+    saved = 0
+    try:
+        for fname, fbytes in (sam_try_fetch_attachments(str(notice_id)) or []):
+            try:
+                # de-dupe by sha256 via save_rfp_file_db
+                save_rfp_file_db(conn, int(rfp_id), fname, fbytes)
+                saved += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return saved
+
+def _rfp_build_fulltext_from_db(conn, rfp_id: int, max_files: int = 10, max_pages: int = 80) -> tuple[str, list]:
+    """Return (full_text, sources) reading rfp_files; sources is list of (filename, page, text_snippet)."""
+    try:
+        import io
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id;", (int(rfp_id),))
+            rows = cur.fetchall() or []
+    except Exception:
+        rows = []
+    sources = []
+    parts = []
+    count_files = 0
+    for rid, name, bts, mime in rows:
+        if count_files >= int(max_files):
+            break
+        try:
+            pages = extract_text_pages(bts, mime or "")
+            for pi, ptxt in enumerate(pages[:max_pages]):
+                sources.append((name, pi+1, (ptxt or "")[:400]))
+            parts.append("\n\n".join(pages[:max_pages]))
+            count_files += 1
+        except Exception:
+            continue
+    return ("\n\n".join([p for p in parts if p]).strip(), sources)
+
+def _rfp_ai_summary(text: str, meta: dict) -> str:
+    """Use y55_ai_parse to produce a structured summary in prose."""
+    try:
+        data = y55_ai_parse(text or "")
+    except Exception as e:
+        return f"AI parse failed: {e}"
+    # format a brief summary
+    lines = []
+    t = data.get("title") or meta.get("Title") or ""
+    s = data.get("solnum") or meta.get("Solicitation") or ""
+    lines.append(f"**{t or meta.get('Title','')}**  ")
+    if s: lines.append(f"Solicitation: {s}")
+    m = data.get("meta") or {}
+    if m:
+        for k in ("set_aside","naics","psc","pop","place_of_performance","contract_type","vehicle","agency","office"):
+            v = m.get(k) or meta.get(k.replace('_',' ').title(), "")
+            if v: lines.append(f"- {k.replace('_',' ').title()}: {v}")
+    dates = data.get("dates") or []
+    if dates:
+        lines.append("**Key Dates**")
+        for d in dates[:6]:
+            nm = (d.get("name") or "").title()
+            val = d.get("date") or d.get("iso") or ""
+            if nm or val: lines.append(f"- {nm}: {val}")
+    lms = data.get("l_items") or []
+    if lms:
+        lines.append("**L/M Highlights**")
+        for li in lms[:8]:
+            lines.append(f"- {li.get('text') or str(li)}")
+    return "\n".join(lines)
+
+def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
+    """Lightweight RAG: use y1_search() hits to ground the answer."""
+    try:
+        hits = y1_search(conn, int(rfp_id), question or "", k=int(k))
+    except Exception:
+        hits = []
+    context = []
+    for h in hits or []:
+        src = f"{h.get('file') or ''} p.{h.get('page') or ''}".strip()
+        snippet = (h.get('text') or '')[:800]
+        context.append(f"[{src}] {snippet}")
+    sys = "You are an acquisitions analyst. Answer concisely and cite sources in brackets like [filename p.X]."
+    prompt = "\n\n".join(context + [f"Question: {question}"])
+    try:
+        client = get_ai()
+        model = _resolve_model()
+        resp = client.chat.completions.create(model=model, messages=[
+            {"role":"system","content": sys},
+            {"role":"user","content": prompt}
+        ], temperature=0.2)
+        return (resp.choices[0].message.content or '').strip()
+    except Exception as e:
+        return f"AI error: {e}"
+
+# ---------- SAM Watch (Phase A) ----------
+
+def run_sam_watch(conn: sqlite3.Connection) -> None:
+    try:
+        _x3_modal_gate()
+    except Exception:
+        pass
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -4500,37 +4776,10 @@ if _has_rows:
                                 pass
                 with c5:
 
-                    # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get('Notice ID'))}"):
-                        _x3_open_modal(row.to_dict())
-                    # Render modal if requested
-                    if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
-                        try:
-                            ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get('Notice ID'))}")
-                        except Exception:
-                            # Fallback if modal unavailable
-                            ctx = st.container()
-                        with ctx:
-                            try:
-                                _notice = st.session_state.get("x3_modal_notice") or {}
-                                rfp_id = _ensure_rfp_for_notice(conn, _notice)
-                                st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
-                                # Attachments area
-                                try:
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("SELECT COUNT(*) FROM rfp_files WHERE rfp_id=?;", (int(rfp_id),))
-                                        n_files = int(cur.fetchone()[0])
-                                except Exception:
-                                    n_files = 0
-                                cA, cB = st.columns([2,1])
-                                with cA:
-                                    st.write(f"Attachments saved: **{n_files}**")
-                                with cB:
-                                    if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
-                                        c = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id))
-                                        st.success(f"Fetched {c} attachment(s).")
-                                        st.rerun()
+                                # Ask RFP Analyzer (Phase 3 modal)
+                                if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get('Notice ID'))}"):
+                                    _x3_open_modal(row.to_dict())
+                                    # rerun handled inside _x3_open_modal
 
                                 # Index (light) and summary
                                 try:
@@ -11537,3 +11786,11 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as _e:
+        import streamlit as _st
+        _st.error(f"App crashed: {_e}")
