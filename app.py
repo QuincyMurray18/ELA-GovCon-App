@@ -1,4 +1,3 @@
-PHASE3_ACTIVE = True
 import re
 import streamlit as st
 import pandas as pd
@@ -511,7 +510,7 @@ def _apply_theme_old():
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     </style>
     ''', unsafe_allow_html=True)
-    st.markdown("<div class='ela-banner'>Phase 3 active · Ask RFP & API queue enabled</div>", unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
 
 # ===== injected early helpers (do not remove) =====
 def _safe_int(x, default=0):
@@ -2179,7 +2178,7 @@ def apply_theme_phase1():
     .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
     </style>
     ''', unsafe_allow_html=True)
-    st.markdown("<div class='ela-banner'>Phase 3 active · Ask RFP & API queue enabled</div>", unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 apply_theme_phase1()
@@ -5439,6 +5438,259 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
             if rec.get("path"):
                 st.markdown(f"[Open cached text]({rec['path']})")
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
+
+
+# === Phase 3 helpers: SAM updates, CRM wiring, Due-date iCal ===
+import datetime as _dt
+
+def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
+    import hashlib
+    sha = hashlib.sha256(blob or b"").hexdigest()
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+            INSERT OR IGNORE INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at)
+            VALUES(?,?,?,?,NULL,?, datetime('now'))
+        """, (int(rfp_id), filename, mime or "application/octet-stream", sha, blob))
+        conn.commit()
+
+def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))
+        if not df.empty:
+            return str(df.iloc[0]["value"] or "")
+    except Exception:
+        pass
+    return default
+
+def _p3_rfp_meta_set(conn, rfp_id: int, key: str, value: str):
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        try:
+            cur.execute("DELETE FROM rfp_meta WHERE rfp_id=? AND key=?", (int(rfp_id), str(key)))
+        except Exception:
+            pass
+        try:
+            cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?)", (int(rfp_id), str(key), str(value)))
+        except Exception:
+            pass
+        conn.commit()
+
+def _p3_parse_notice_id(s: str) -> str:
+    if not s: return ""
+    m = re.search(r"NoticeId=([A-Za-z0-9\-]+)", s)
+    if m: return m.group(1)
+    if re.fullmatch(r"[A-Za-z0-9\-]{8,}", s):
+        return s
+    return ""
+
+def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
+    results = {"new_files": 0, "attempted": 0, "errors": []}
+    try:
+        import pandas as _pd
+        nid = _p3_rfp_meta_get(conn, rfp_id, "notice_id", "")
+        if not nid:
+            df = _pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
+            if not df.empty:
+                nid = _p3_parse_notice_id(str(df.iloc[0]["sam_url"] or ""))
+    except Exception as e:
+        results["errors"].append(f"lookup error: {e}")
+        nid = ""
+    if not nid:
+        results["errors"].append("No SAM Notice ID/URL found.")
+        return results
+    fetcher = globals().get("sam_try_fetch_attachments") or globals().get("sam_fetch_attachments") or None
+    if not fetcher:
+        results["errors"].append("SAM fetcher not available in this build.")
+        return results
+    try:
+        for (fname, data) in fetcher(nid) or []:
+            results["attempted"] += 1
+            try:
+                _p3_insert_or_skip_file(conn, rfp_id, fname, data, None)
+                results["new_files"] += 1
+            except Exception as e:
+                results["errors"].append(f"{fname}: {e}")
+    except Exception as e:
+        results["errors"].append(f"fetch error: {e}")
+    try:
+        if "y1_index_rfp" in globals():
+            globals()["y1_index_rfp"](conn, int(rfp_id), rebuild=False)
+    except Exception:
+        pass
+    try:
+        if "find_section_M" in globals():
+            globals()["find_section_M"](conn, int(rfp_id))
+    except Exception:
+        pass
+    _p3_rfp_meta_set(conn, rfp_id, "last_sam_check", _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z")
+    return results
+
+def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
+    from contextlib import closing as _closing
+    import pandas as _pd
+    try:
+        df = _pd.read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
+        title = (df.iloc[0]["title"] if not df.empty else f"RFP #{rfp_id}")
+    except Exception:
+        title = f"RFP #{rfp_id}"
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""
+                INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at)
+                VALUES(?, ?, COALESCE((SELECT stage FROM deals WHERE rfp_id=?), 'Intake'), datetime('now'))
+            """, (int(rfp_id), str(title), int(rfp_id)))
+            conn.commit()
+    except Exception:
+        pass
+    try:
+        dfp = _pd.read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
+    except Exception:
+        dfp = None
+    if dfp is not None and not dfp.empty:
+        for _, row in dfp.iterrows():
+            name = row.get("name") or ""
+            email = row.get("email") or ""
+            phone = row.get("phone") or ""
+            job = row.get("job_title") or ""
+            agency = row.get("agency") or ""
+            try:
+                with _closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at)
+                        VALUES(?,?,?,?,?, datetime('now'))
+                    """, (str(name), str(email), str(phone), str(job), str(agency)))
+                    conn.commit()
+            except Exception:
+                pass
+
+def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query(
+            "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR label LIKE '%Close%') ORDER BY id DESC LIMIT 1;",
+            conn, params=(int(rfp_id),)
+        )
+        if not df.empty:
+            return str(df.iloc[0]["value"] or "")
+    except Exception:
+        pass
+    return _p3_rfp_meta_get(conn, rfp_id, "proposal_due", "")
+
+def _p3_make_ics(summary: str, when_str: str) -> bytes:
+    from datetime import datetime
+    dt = None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%m/%d/%Y %H:%M", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            dt = datetime.strptime(when_str.strip(), fmt)
+            break
+        except Exception:
+            continue
+    if not dt:
+        dt = datetime.utcnow().replace(hour=12, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+    dt_utc = dt.strftime("%Y%m%dT%H%M%SZ")
+    uid = f"ela-{int(_dt.datetime.utcnow().timestamp())}@local"
+    ics = f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ELA//RFP Due Date//EN
+BEGIN:VEVENT
+UID:{uid}
+DTSTAMP:{dt_utc}
+DTSTART:{dt_utc}
+SUMMARY:{summary}
+END:VEVENT
+END:VCALENDAR
+"""
+    return ics.encode("utf-8")
+
+
+def _run_rfp_analyzer_phase3(conn):
+    import pandas as pd, streamlit as st
+    st.header("RFP Analyzer")
+    try:
+        df_rfps = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        df_rfps = None
+    if df_rfps is None or df_rfps.empty:
+        st.info("No RFPs found. Use Parse & Save to add one.")
+        return
+    # Prefer current_rfp_id if set
+    try:
+        current_id = st.session_state.get("current_rfp_id")
+        if current_id not in df_rfps["id"].tolist():
+            current_id = None
+    except Exception:
+        current_id = None
+    default_idx = 0
+    if current_id:
+        try:
+            default_idx = df_rfps["id"].tolist().index(int(current_id))
+        except Exception:
+            default_idx = 0
+    rid = st.selectbox(
+        "RFP (One‑Page Analyzer)",
+        options=df_rfps["id"].tolist(),
+        index=default_idx,
+        format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0],
+        key="onepage_rfp_default"
+    )
+    use_legacy = st.toggle("Open legacy Analyzer instead", value=False, key="use_legacy_analyzer")
+    if use_legacy:
+        return  # fall through to legacy below
+
+    # Phase 3 — Monitoring & CRM
+    with st.container(border=True):
+        st.caption("Phase 3 — Monitoring & CRM")
+        cA, cB, cC = st.columns([1,1,2])
+        with cA:
+            if st.button("Check for SAM updates ▶", key="p3_check_sam"):
+                with st.spinner("Checking SAM.gov for amendments and new attachments…"):
+                    res = _p3_check_sam_updates(conn, int(rid))
+                    st.success(f"Attempted: {res.get('attempted',0)} — New/updated files (best-effort): {res.get('new_files',0)}")
+                    errs = res.get("errors") or []
+                    if errs:
+                        st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
+        with cB:
+            if st.button("Ensure Deal & Contacts", key="p3_crm_wire"):
+                with st.spinner("Creating deal record and mirroring POCs into contacts…"):
+                    _p3_ensure_deal_and_contacts(conn, int(rid))
+                    st.success("CRM wiring complete (best-effort).")
+        with cC:
+            due = _p3_due_date_for_rfp(conn, int(rid))
+            if due:
+                st.info(f"📅 Proposal Due: **{due}**")
+                ics_bytes = _p3_make_ics("Proposal Due", due)
+                st.download_button("Download Due Date (.ics)", data=ics_bytes, file_name="proposal_due.ics", mime="text/calendar")
+            else:
+                st.caption("No due date found in key_dates/meta.")
+
+    # Build pages for One-Page Analyzer and run it
+    try:
+        df_files = pd.read_sql_query(
+            "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            conn, params=(int(rid),)
+        )
+    except Exception:
+        df_files = None
+    pages = []
+    if df_files is not None and not df_files.empty:
+        for _, r in df_files.iterrows():
+            b = r.get("bytes"); mime = r.get("mime") or ""
+            try:
+                texts = extract_text_pages(b, mime) or []
+            except Exception:
+                texts = []
+            for i, t in enumerate(texts[:100], start=1):
+                pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+    if not pages:
+        st.warning("No readable pages found in linked files for this RFP.")
+    else:
+        try:
+            run_rfp_analyzer_onepage(pages)
+            st.stop()
+        except Exception as e:
+            st.error(f"One-Page Analyzer error: {e}")
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === One-Page Analyzer (default view in Phase 2) ===
@@ -12044,7 +12296,7 @@ def _init_phase1_ui():
     if st.session_state.get('_phase1_ui_ready'):
         return
     st.session_state['_phase1_ui_ready'] = True
-    st.markdown("<div class='ela-banner'>Phase 3 active · Ask RFP & API queue enabled</div>", unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
     st.markdown('''
     <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
