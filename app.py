@@ -406,18 +406,211 @@ def _x3_open_modal(row_dict: dict):
     except Exception:
         pass
 
-def x6_requirements_df(conn: sqlite3.Connection, rfp_id: int):
-    import pandas as pd
-    try:
-        df = pd.read_sql_query(
-            "SELECT id, must_flag, file, page, text FROM compliance_requirements WHERE rfp_id=? ORDER BY must_flag DESC, id ASC;",
-            conn, params=(int(rfp_id),)
-        )
-    except Exception:
-        import pandas as pd
-        df = pd.DataFrame(columns=["id","must_flag","file","page","text"])
-    return df
+def _ensure_x6_schema(conn: sqlite3.Connection) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_requirements(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            file TEXT,
+            page INTEGER,
+            text TEXT,
+            must_flag INTEGER DEFAULT 0,
+            hash TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_links(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            requirement_id INTEGER NOT NULL,
+            section TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """ )
+    conn.commit()
 
+def x6_sections_suggestions(rfp_id: int) -> list:
+    # prefer user outline from session, else defaults
+    outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "")
+    if outline:
+        # split numbered lines
+        items = [ln.strip() for ln in outline.splitlines() if ln.strip()]
+        # filter headers like '# Proposal Outline'
+        return [i for i in items if not i.startswith("#")]
+    return [
+        "Cover Letter",
+        "Executive Summary",
+        "Technical Approach",
+        "Management Approach",
+        "Past Performance",
+        "Pricing",
+        "Compliance Matrix",
+    ]
+
+def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_file: int = 400) -> int:
+    """Parse rfp_files for 'must' and 'shall' style requirements, upsert into compliance_requirements."""
+    import hashlib
+    from contextlib import closing as _closing
+    added = 0
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id ASC;", (int(rfp_id),))
+        files = cur.fetchall() or []
+    for fid, fname, bts, mime in files:
+        try:
+            pages = extract_text_pages(bts, mime or "")
+        except Exception:
+            pages = []
+        found = 0
+        for pi, page_txt in enumerate(pages or [], start=1):
+            if not page_txt:
+                continue
+            # Simple sentence split
+            parts = [s.strip() for s in page_txt.replace("\r", "\n").split("\n") if s.strip()]
+            for s in parts:
+                low = s.lower()
+                musty = any(k in low for k in [" shall ", " must ", " required ", " is required ", " will "])
+                if not musty and ("shall" not in low and "must" not in low):
+                    continue
+                h = hashlib.sha1(f"{rfp_id}|{fname}|{pi}|{s}".encode("utf-8")).hexdigest()
+                try:
+                    with _closing(conn.cursor()) as cur:
+                        # check dup by hash
+                        cur.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? AND hash=? LIMIT 1;", (int(rfp_id), h))
+                        if cur.fetchone():
+                            pass
+                        else:
+                            cur.execute(
+                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES(?,?,?,?,?,?)",
+                                (int(rfp_id), fname or "", int(pi), s[:2000], 1 if musty else 0, h)
+                            )
+                            added += 1
+                    conn.commit()
+                except Exception:
+                    pass
+                found += 1
+                if found >= limit_per_file:
+                    break
+            if found >= limit_per_file:
+                break
+    return int(added)
+
+
+
+def x5_render_transcript_viewer(conn: sqlite3.Connection, rfp_id: int) -> None:
+    """View chat history with color-coded roles, filters, and export."""
+    from contextlib import closing as _closing
+    import datetime as _dt
+
+    # Map file_id -> filename for scopes
+    files = {}
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id, filename FROM rfp_files WHERE rfp_id=?", (int(rfp_id),))
+            for rid, fn in cur.fetchall() or []:
+                files[int(rid)] = fn or ""
+    except Exception:
+        pass
+
+    # Load turns
+    turns = []
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""SELECT id, scope, role, content, created_at FROM rfp_chat_turns WHERE rfp_id=? ORDER BY id ASC;""", (int(rfp_id),))
+            for tid, scope, role, content, ts in cur.fetchall() or []:
+                label = "Global"
+                if (scope or "").startswith("file:"):
+                    try:
+                        fid = int((scope or "").split(":",1)[1])
+                        label = f"File: {files.get(fid, str(fid))}"
+                    except Exception:
+                        label = "File"
+                turns.append({
+                    "id": int(tid),
+                    "scope": scope or "global",
+                    "role": (role or "assistant").lower(),
+                    "content": content or "",
+                    "ts": ts or "",
+                    "label": label,
+                })
+    except Exception:
+        pass
+
+    # Filters
+    colA, colB = st.columns([2,3])
+    with colA:
+        scopes = ["All", "Global"] + [f"File: {fn}" for fn in files.values()]
+        chosen = st.selectbox("Scope", options=scopes, key=_uniq_key("x5_tv_scope", int(rfp_id)))
+    with colB:
+        query = st.text_input("Search", value="", key=_uniq_key("x5_tv_search", int(rfp_id))).strip().lower()
+
+    def _match(t):
+        scope_ok = (chosen == "All") or (chosen == "Global" and t["scope"] == "global") or (chosen.startswith("File:") and t["label"] == chosen)
+        if not scope_ok:
+            return False
+        if not query:
+            return True
+        blob = f"{t['role']} {t['label']} {t['content']} {t['ts']}".lower()
+        return query in blob
+
+    filtered = [t for t in turns if _match(t)]
+
+    # Legend
+    st.markdown(":blue[Human]  ·  :green[AI]")
+
+    # Render chat using role-based chat balloons
+    for t in filtered:
+        role = "user" if t["role"] == "user" else "assistant"
+        time_str = t["ts"]
+        scope_str = t["label"]
+        with st.chat_message(role):
+            st.caption(f"{scope_str} · {time_str}")
+            st.markdown(t["content"])
+
+    # Export CSV
+    import io, csv
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id","time","scope","role","content"])
+    for t in filtered:
+        writer.writerow([t["id"], t["ts"], t["label"], t["role"], t["content"]])
+    st.download_button(
+        "Export CSV",
+        data=buf.getvalue().encode("utf-8"),
+        file_name=f"rfp_{int(rfp_id)}_transcript.csv",
+        mime="text/csv",
+        key=_uniq_key("x5_tv_csv", int(rfp_id))
+    )
+
+    # Export Markdown
+    md_lines = []
+    for t in filtered:
+        md_lines.append(f"### {t['role'].title()} — {t['label']}  \n*{t['ts']}*")
+        md_lines.append("")
+        md_lines.append(t["content"])
+        md_lines.append("\n---")
+    md_blob = "\n".join(md_lines).encode("utf-8")
+    st.download_button(
+        "Export Markdown",
+        data=md_blob,
+        file_name=f"rfp_{int(rfp_id)}_transcript.md",
+        mime="text/markdown",
+        key=_uniq_key("x5_tv_md", int(rfp_id))
+    )
+
+
+def x6_coverage(conn: sqlite3.Connection, rfp_id: int) -> tuple[int, int]:
+    from contextlib import closing as _closing
+    total = 0
+    covered = 0
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT COUNT(*) FROM compliance_requirements WHERE rfp_id=?", (int(rfp_id),))
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute("SELECT COUNT(DISTINCT requirement_id) FROM compliance_links WHERE rfp_id=?", (int(rfp_id),))
+        covered = int(cur.fetchone()[0] or 0)
+    return covered, total
 
 
 def _x3_render_modal(conn, notice: dict):
@@ -4760,116 +4953,10 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get('Notice ID')))):
+                    if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get('Notice ID'))}"):
                         notice = row.to_dict()
                         _x3_open_modal(notice)
 
-                    # Render modal if requested
-                    if st.session_state.get("x3_show_modal") and (st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get('Notice ID')):
-                        try:
-                            ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get('Notice ID'))}")
-                        except Exception:
-                            ctx = st.container()
-                        with ctx:
-                            try:
-                                _notice = st.session_state.get("x3_modal_notice") or {}
-                                rfp_id = _ensure_rfp_for_notice(conn, _notice)
-                                st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
-                                # Attachments area
-                                try:
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("SELECT COUNT(*) FROM rfp_files WHERE rfp_id=?;", (int(rfp_id),))
-                                        n_files = int(cur.fetchone()[0])
-                                except Exception:
-                                    n_files = 0
-                                cA, cB = st.columns([2,1])
-                                with cA:
-                                    st.write(f"Attachments saved: **{n_files}**")
-                                with cB:
-                                    if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
-                                        c = _fetch_and_save_now(conn, str(row.get('Notice ID') or ""), int(rfp_id))
-                                        st.success(f"Fetched {c} attachment(s).")
-                                        st.rerun()
-
-                                # Index (light) and summary
-                                try:
-                                    y1_index_rfp(conn, int(rfp_id), rebuild=False)
-                                except Exception:
-                                    pass
-                                full_text, sources = _rfp_build_fulltext_from_db(conn, int(rfp_id))
-                                if not full_text:
-                                    st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
-                                    # Try SAM description fallback
-                                    try:
-                                        descs = sam_try_fetch_attachments(str(row.get('Notice ID') or "")) or []
-                                        for name, b in descs:
-                                            if name.endswith("_description.html"):
-                                                import bs4
-                                                soup = bs4.BeautifulSoup(b.decode('utf-8', errors='ignore'), 'html.parser')
-                                                full_text = soup.get_text(" ", strip=True)
-                                                break
-                                    except Exception:
-                                        pass
-                                with st.expander("AI Summary", expanded=True):
-                                    st.markdown(_rfp_ai_summary(full_text or "", row.to_dict()))
-
-                                # Per-document summarize chips
-                                try:
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("SELECT id, filename, mime FROM rfp_files WHERE rfp_id=? ORDER BY id;", (int(rfp_id),))
-                                        files = cur.fetchall() or []
-                                except Exception:
-                                    files = []
-                                if files:
-                                    st.write("Documents:")
-                                    for fid, fname, fmime in files[:12]:
-                                        if st.button(f"Summarize: {fname}", key=_uniq_key("sumdoc", int(fid))):
-                                            try:
-                                                blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(int(fid),)).iloc[0]
-                                                _text = "\n\n".join(extract_text_pages(blob['bytes'], blob.get('mime') or (fmime or '')) or [])
-                                            except Exception:
-                                                _text = ""
-                                            st.session_state["x3_docsum"] = _rfp_ai_summary(_text, row.to_dict())
-                                    if st.session_state.get("x3_docsum"):
-                                        with st.expander("Document Summary", expanded=True):
-                                            st.markdown(st.session_state.get("x3_docsum"))
-
-                                # Chat
-                                st.divider()
-                                st.subheader("Ask about this RFP")
-                                _chat_k = _uniq_key("x3_chat", int(rfp_id))
-                                hist_key = f"x3_chat_hist_{rfp_id}"
-                                st.session_state.setdefault(hist_key, [])
-                                for who, msg in st.session_state[hist_key]:
-                                    with st.chat_message(who):
-                                        st.markdown(msg)
-                                q = st.chat_input("Ask a question about the requirements, due dates, sections, etc.", key=_chat_k)
-                                if q:
-                                    st.session_state[hist_key].append(("user", q))
-                                    with st.chat_message("assistant"):
-                                        ans = _rfp_chat(conn, int(rfp_id), q)
-                                        st.session_state[hist_key].append(("assistant", ans))
-                                        st.markdown(ans)
-
-                                # Proposal hand-off
-                                st.divider()
-                                if st.button("Start Proposal Outline", key=_uniq_key("x3_outline", int(rfp_id))):
-                                    outline = [
-                                        "# Proposal Outline",
-                                        "1. Cover Letter",
-                                        "2. Executive Summary",
-                                        "3. Technical Approach",
-                                        "4. Management Approach",
-                                        "5. Past Performance",
-                                        "6. Pricing (separate volume if required)",
-                                        "7. Compliance Matrix",
-                                    ]
-                                    st.session_state[f"proposal_outline_{rfp_id}"] = "\n".join(outline)
-                                    st.success("Outline drafted and saved. Open Proposal Builder to continue.")
-                            except Exception as _e:
-                                st.error(f"Modal error: {_e}")
                     # Push notice to Analyzer tab (optional)
                     if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
                         try:
@@ -11182,107 +11269,18 @@ for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_
 
 
 # ==== X.6 Compliance Matrix v1 ====
-def _ensure_x6_schema(conn: sqlite3.Connection) -> None:
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS compliance_requirements(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfp_id INTEGER NOT NULL,
-            file TEXT,
-            page INTEGER,
-            text TEXT,
-            must_flag INTEGER DEFAULT 0,
-            hash TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS compliance_links(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfp_id INTEGER NOT NULL,
-            requirement_id INTEGER NOT NULL,
-            section TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """ )
-    conn.commit()
+def x6_requirements_df(conn: sqlite3.Connection, rfp_id: int):
+    import pandas as pd
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, must_flag, file, page, text FROM compliance_requirements WHERE rfp_id=? ORDER BY must_flag DESC, id ASC;",
+            conn, params=(int(rfp_id),)
+        )
+    except Exception:
+        import pandas as pd
+        df = pd.DataFrame(columns=["id","must_flag","file","page","text"])
+    return df
 
-def x6_sections_suggestions(rfp_id: int) -> list:
-    # prefer user outline from session, else defaults
-    outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "")
-    if outline:
-        # split numbered lines
-        items = [ln.strip() for ln in outline.splitlines() if ln.strip()]
-        # filter headers like '# Proposal Outline'
-        return [i for i in items if not i.startswith("#")]
-    return [
-        "Cover Letter",
-        "Executive Summary",
-        "Technical Approach",
-        "Management Approach",
-        "Past Performance",
-        "Pricing",
-        "Compliance Matrix",
-    ]
-
-def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_file: int = 400) -> int:
-    """Parse rfp_files for 'must' and 'shall' style requirements, upsert into compliance_requirements."""
-    import hashlib
-    from contextlib import closing as _closing
-    added = 0
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id ASC;", (int(rfp_id),))
-        files = cur.fetchall() or []
-    for fid, fname, bts, mime in files:
-        try:
-            pages = extract_text_pages(bts, mime or "")
-        except Exception:
-            pages = []
-        found = 0
-        for pi, page_txt in enumerate(pages or [], start=1):
-            if not page_txt:
-                continue
-            # Simple sentence split
-            parts = [s.strip() for s in page_txt.replace("\r", "\n").split("\n") if s.strip()]
-            for s in parts:
-                low = s.lower()
-                musty = any(k in low for k in [" shall ", " must ", " required ", " is required ", " will "])
-                if not musty and ("shall" not in low and "must" not in low):
-                    continue
-                h = hashlib.sha1(f"{rfp_id}|{fname}|{pi}|{s}".encode("utf-8")).hexdigest()
-                try:
-                    with _closing(conn.cursor()) as cur:
-                        # check dup by hash
-                        cur.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? AND hash=? LIMIT 1;", (int(rfp_id), h))
-                        if cur.fetchone():
-                            pass
-                        else:
-                            cur.execute(
-                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES(?,?,?,?,?,?)",
-                                (int(rfp_id), fname or "", int(pi), s[:2000], 1 if musty else 0, h)
-                            )
-                            added += 1
-                    conn.commit()
-                except Exception:
-                    pass
-                found += 1
-                if found >= limit_per_file:
-                    break
-            if found >= limit_per_file:
-                break
-    return int(added)
-
-def x6_coverage(conn: sqlite3.Connection, rfp_id: int) -> tuple[int, int]:
-    from contextlib import closing as _closing
-    total = 0
-    covered = 0
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT COUNT(*) FROM compliance_requirements WHERE rfp_id=?", (int(rfp_id),))
-        total = int(cur.fetchone()[0] or 0)
-        cur.execute("SELECT COUNT(DISTINCT requirement_id) FROM compliance_links WHERE rfp_id=?", (int(rfp_id),))
-        covered = int(cur.fetchone()[0] or 0)
-    return covered, total
 
 def x6_save_links(conn: sqlite3.Connection, rfp_id: int, mapping: list[tuple[int, str]]) -> int:
     from contextlib import closing as _closing
@@ -11438,106 +11436,6 @@ def x7_export_docx(conn: sqlite3.Connection, proposal_id: int) -> bytes | None:
 
 
 # ==== X.5 Transcript Viewer ====
-def x5_render_transcript_viewer(conn: sqlite3.Connection, rfp_id: int) -> None:
-    """View chat history with color-coded roles, filters, and export."""
-    from contextlib import closing as _closing
-    import datetime as _dt
-
-    # Map file_id -> filename for scopes
-    files = {}
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id, filename FROM rfp_files WHERE rfp_id=?", (int(rfp_id),))
-            for rid, fn in cur.fetchall() or []:
-                files[int(rid)] = fn or ""
-    except Exception:
-        pass
-
-    # Load turns
-    turns = []
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("""SELECT id, scope, role, content, created_at FROM rfp_chat_turns WHERE rfp_id=? ORDER BY id ASC;""", (int(rfp_id),))
-            for tid, scope, role, content, ts in cur.fetchall() or []:
-                label = "Global"
-                if (scope or "").startswith("file:"):
-                    try:
-                        fid = int((scope or "").split(":",1)[1])
-                        label = f"File: {files.get(fid, str(fid))}"
-                    except Exception:
-                        label = "File"
-                turns.append({
-                    "id": int(tid),
-                    "scope": scope or "global",
-                    "role": (role or "assistant").lower(),
-                    "content": content or "",
-                    "ts": ts or "",
-                    "label": label,
-                })
-    except Exception:
-        pass
-
-    # Filters
-    colA, colB = st.columns([2,3])
-    with colA:
-        scopes = ["All", "Global"] + [f"File: {fn}" for fn in files.values()]
-        chosen = st.selectbox("Scope", options=scopes, key=_uniq_key("x5_tv_scope", int(rfp_id)))
-    with colB:
-        query = st.text_input("Search", value="", key=_uniq_key("x5_tv_search", int(rfp_id))).strip().lower()
-
-    def _match(t):
-        scope_ok = (chosen == "All") or (chosen == "Global" and t["scope"] == "global") or (chosen.startswith("File:") and t["label"] == chosen)
-        if not scope_ok:
-            return False
-        if not query:
-            return True
-        blob = f"{t['role']} {t['label']} {t['content']} {t['ts']}".lower()
-        return query in blob
-
-    filtered = [t for t in turns if _match(t)]
-
-    # Legend
-    st.markdown(":blue[Human]  ·  :green[AI]")
-
-    # Render chat using role-based chat balloons
-    for t in filtered:
-        role = "user" if t["role"] == "user" else "assistant"
-        time_str = t["ts"]
-        scope_str = t["label"]
-        with st.chat_message(role):
-            st.caption(f"{scope_str} · {time_str}")
-            st.markdown(t["content"])
-
-    # Export CSV
-    import io, csv
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["id","time","scope","role","content"])
-    for t in filtered:
-        writer.writerow([t["id"], t["ts"], t["label"], t["role"], t["content"]])
-    st.download_button(
-        "Export CSV",
-        data=buf.getvalue().encode("utf-8"),
-        file_name=f"rfp_{int(rfp_id)}_transcript.csv",
-        mime="text/csv",
-        key=_uniq_key("x5_tv_csv", int(rfp_id))
-    )
-
-    # Export Markdown
-    md_lines = []
-    for t in filtered:
-        md_lines.append(f"### {t['role'].title()} — {t['label']}  \n*{t['ts']}*")
-        md_lines.append("")
-        md_lines.append(t["content"])
-        md_lines.append("\n---")
-    md_blob = "\n".join(md_lines).encode("utf-8")
-    st.download_button(
-        "Export Markdown",
-        data=md_blob,
-        file_name=f"rfp_{int(rfp_id)}_transcript.md",
-        mime="text/markdown",
-        key=_uniq_key("x5_tv_md", int(rfp_id))
-    )
 # ==== end X.5 Transcript Viewer ====
 
 
