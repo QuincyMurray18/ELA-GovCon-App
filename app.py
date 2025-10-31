@@ -1,4 +1,48 @@
 import streamlit as st
+
+# === Compliance Matrix safety guards ===
+try:
+    x6_requirements_df
+except NameError:
+    def x6_requirements_df(conn, rfp_id):
+        import pandas as pd
+        try:
+            return pd.read_sql_query(
+                "SELECT id, must_flag, file, page, text FROM compliance_requirements "
+                "WHERE rfp_id=? ORDER BY must_flag DESC, id ASC;",
+                conn, params=(int(rfp_id),)
+            )
+        except Exception:
+            return pd.DataFrame(columns=["id","must_flag","file","page","text"])
+
+try:
+    _ensure_x6_schema
+except NameError:
+    def _ensure_x6_schema(conn):
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS compliance_requirements(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rfp_id INTEGER NOT NULL,
+                file TEXT, page INTEGER, text TEXT,
+                must_flag INTEGER DEFAULT 0,
+                hash TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS compliance_links(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rfp_id INTEGER NOT NULL,
+                requirement_id INTEGER NOT NULL,
+                section TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """ )
+        conn.commit()
+# === end guards ===
+
 ## ELA Phase3 hybrid_api
 # Optional FastAPI backend (run separately) + client with graceful fallback.
 # Set GOVCON_API_BASE or st.secrets['api']['base_url'] to use the API.
