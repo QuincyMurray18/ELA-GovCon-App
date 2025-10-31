@@ -406,6 +406,201 @@ def _x3_open_modal(row_dict: dict):
     except Exception:
         pass
 
+def _ensure_x6_schema(conn: sqlite3.Connection) -> None:
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_requirements(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            file TEXT,
+            page INTEGER,
+            text TEXT,
+            must_flag INTEGER DEFAULT 0,
+            hash TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_links(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rfp_id INTEGER NOT NULL,
+            requirement_id INTEGER NOT NULL,
+            section TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """ )
+    conn.commit()
+
+def x6_sections_suggestions(rfp_id: int) -> list:
+    # prefer user outline from session, else defaults
+    outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "")
+    if outline:
+        # split numbered lines
+        items = [ln.strip() for ln in outline.splitlines() if ln.strip()]
+        # filter headers like '# Proposal Outline'
+        return [i for i in items if not i.startswith("#")]
+    return [
+        "Cover Letter",
+        "Executive Summary",
+        "Technical Approach",
+        "Management Approach",
+        "Past Performance",
+        "Pricing",
+        "Compliance Matrix",
+    ]
+
+def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_file: int = 400) -> int:
+    """Parse rfp_files for 'must' and 'shall' style requirements, upsert into compliance_requirements."""
+    import hashlib
+    from contextlib import closing as _closing
+    added = 0
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id ASC;", (int(rfp_id),))
+        files = cur.fetchall() or []
+    for fid, fname, bts, mime in files:
+        try:
+            pages = extract_text_pages(bts, mime or "")
+        except Exception:
+            pages = []
+        found = 0
+        for pi, page_txt in enumerate(pages or [], start=1):
+            if not page_txt:
+                continue
+            # Simple sentence split
+            parts = [s.strip() for s in page_txt.replace("\r", "\n").split("\n") if s.strip()]
+            for s in parts:
+                low = s.lower()
+                musty = any(k in low for k in [" shall ", " must ", " required ", " is required ", " will "])
+                if not musty and ("shall" not in low and "must" not in low):
+                    continue
+                h = hashlib.sha1(f"{rfp_id}|{fname}|{pi}|{s}".encode("utf-8")).hexdigest()
+                try:
+                    with _closing(conn.cursor()) as cur:
+                        # check dup by hash
+                        cur.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? AND hash=? LIMIT 1;", (int(rfp_id), h))
+                        if cur.fetchone():
+                            pass
+                        else:
+                            cur.execute(
+                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES(?,?,?,?,?,?)",
+                                (int(rfp_id), fname or "", int(pi), s[:2000], 1 if musty else 0, h)
+                            )
+                            added += 1
+                    conn.commit()
+                except Exception:
+                    pass
+                found += 1
+                if found >= limit_per_file:
+                    break
+            if found >= limit_per_file:
+                break
+    return int(added)
+
+
+
+def x5_render_transcript_viewer(conn: sqlite3.Connection, rfp_id: int) -> None:
+    """View chat history with color-coded roles, filters, and export."""
+    from contextlib import closing as _closing
+    import datetime as _dt
+
+    # Map file_id -> filename for scopes
+    files = {}
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id, filename FROM rfp_files WHERE rfp_id=?", (int(rfp_id),))
+            for rid, fn in cur.fetchall() or []:
+                files[int(rid)] = fn or ""
+    except Exception:
+        pass
+
+    # Load turns
+    turns = []
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""SELECT id, scope, role, content, created_at FROM rfp_chat_turns WHERE rfp_id=? ORDER BY id ASC;""", (int(rfp_id),))
+            for tid, scope, role, content, ts in cur.fetchall() or []:
+                label = "Global"
+                if (scope or "").startswith("file:"):
+                    try:
+                        fid = int((scope or "").split(":",1)[1])
+                        label = f"File: {files.get(fid, str(fid))}"
+                    except Exception:
+                        label = "File"
+                turns.append({
+                    "id": int(tid),
+                    "scope": scope or "global",
+                    "role": (role or "assistant").lower(),
+                    "content": content or "",
+                    "ts": ts or "",
+                    "label": label,
+                })
+    except Exception:
+        pass
+
+    # Filters
+    colA, colB = st.columns([2,3])
+    with colA:
+        scopes = ["All", "Global"] + [f"File: {fn}" for fn in files.values()]
+        chosen = st.selectbox("Scope", options=scopes, key=_uniq_key("x5_tv_scope", int(rfp_id)))
+    with colB:
+        query = st.text_input("Search", value="", key=_uniq_key("x5_tv_search", int(rfp_id))).strip().lower()
+
+    def _match(t):
+        scope_ok = (chosen == "All") or (chosen == "Global" and t["scope"] == "global") or (chosen.startswith("File:") and t["label"] == chosen)
+        if not scope_ok:
+            return False
+        if not query:
+            return True
+        blob = f"{t['role']} {t['label']} {t['content']} {t['ts']}".lower()
+        return query in blob
+
+    filtered = [t for t in turns if _match(t)]
+
+    # Legend
+    st.markdown(":blue[Human]  ·  :green[AI]")
+
+    # Render chat using role-based chat balloons
+    for t in filtered:
+        role = "user" if t["role"] == "user" else "assistant"
+        time_str = t["ts"]
+        scope_str = t["label"]
+        with st.chat_message(role):
+            st.caption(f"{scope_str} · {time_str}")
+            st.markdown(t["content"])
+
+    # Export CSV
+    import io, csv
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id","time","scope","role","content"])
+    for t in filtered:
+        writer.writerow([t["id"], t["ts"], t["label"], t["role"], t["content"]])
+    st.download_button(
+        "Export CSV",
+        data=buf.getvalue().encode("utf-8"),
+        file_name=f"rfp_{int(rfp_id)}_transcript.csv",
+        mime="text/csv",
+        key=_uniq_key("x5_tv_csv", int(rfp_id))
+    )
+
+    # Export Markdown
+    md_lines = []
+    for t in filtered:
+        md_lines.append(f"### {t['role'].title()} — {t['label']}  \n*{t['ts']}*")
+        md_lines.append("")
+        md_lines.append(t["content"])
+        md_lines.append("\n---")
+    md_blob = "\n".join(md_lines).encode("utf-8")
+    st.download_button(
+        "Export Markdown",
+        data=md_blob,
+        file_name=f"rfp_{int(rfp_id)}_transcript.md",
+        mime="text/markdown",
+        key=_uniq_key("x5_tv_md", int(rfp_id))
+    )
+
+
 def _x3_render_modal(conn, notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
@@ -11062,97 +11257,6 @@ for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_
 
 
 # ==== X.6 Compliance Matrix v1 ====
-def _ensure_x6_schema(conn: sqlite3.Connection) -> None:
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS compliance_requirements(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfp_id INTEGER NOT NULL,
-            file TEXT,
-            page INTEGER,
-            text TEXT,
-            must_flag INTEGER DEFAULT 0,
-            hash TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS compliance_links(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfp_id INTEGER NOT NULL,
-            requirement_id INTEGER NOT NULL,
-            section TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """ )
-    conn.commit()
-
-def x6_sections_suggestions(rfp_id: int) -> list:
-    # prefer user outline from session, else defaults
-    outline = st.session_state.get(f"proposal_outline_{int(rfp_id)}", "")
-    if outline:
-        # split numbered lines
-        items = [ln.strip() for ln in outline.splitlines() if ln.strip()]
-        # filter headers like '# Proposal Outline'
-        return [i for i in items if not i.startswith("#")]
-    return [
-        "Cover Letter",
-        "Executive Summary",
-        "Technical Approach",
-        "Management Approach",
-        "Past Performance",
-        "Pricing",
-        "Compliance Matrix",
-    ]
-
-def x6_extract_requirements(conn: sqlite3.Connection, rfp_id: int, limit_per_file: int = 400) -> int:
-    """Parse rfp_files for 'must' and 'shall' style requirements, upsert into compliance_requirements."""
-    import hashlib
-    from contextlib import closing as _closing
-    added = 0
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT id, filename, bytes, mime FROM rfp_files WHERE rfp_id=? ORDER BY id ASC;", (int(rfp_id),))
-        files = cur.fetchall() or []
-    for fid, fname, bts, mime in files:
-        try:
-            pages = extract_text_pages(bts, mime or "")
-        except Exception:
-            pages = []
-        found = 0
-        for pi, page_txt in enumerate(pages or [], start=1):
-            if not page_txt:
-                continue
-            # Simple sentence split
-            parts = [s.strip() for s in page_txt.replace("\r", "\n").split("\n") if s.strip()]
-            for s in parts:
-                low = s.lower()
-                musty = any(k in low for k in [" shall ", " must ", " required ", " is required ", " will "])
-                if not musty and ("shall" not in low and "must" not in low):
-                    continue
-                h = hashlib.sha1(f"{rfp_id}|{fname}|{pi}|{s}".encode("utf-8")).hexdigest()
-                try:
-                    with _closing(conn.cursor()) as cur:
-                        # check dup by hash
-                        cur.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? AND hash=? LIMIT 1;", (int(rfp_id), h))
-                        if cur.fetchone():
-                            pass
-                        else:
-                            cur.execute(
-                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES(?,?,?,?,?,?)",
-                                (int(rfp_id), fname or "", int(pi), s[:2000], 1 if musty else 0, h)
-                            )
-                            added += 1
-                    conn.commit()
-                except Exception:
-                    pass
-                found += 1
-                if found >= limit_per_file:
-                    break
-            if found >= limit_per_file:
-                break
-    return int(added)
-
 def x6_requirements_df(conn: sqlite3.Connection, rfp_id: int):
     import pandas as pd
     try:
@@ -11330,106 +11434,6 @@ def x7_export_docx(conn: sqlite3.Connection, proposal_id: int) -> bytes | None:
 
 
 # ==== X.5 Transcript Viewer ====
-def x5_render_transcript_viewer(conn: sqlite3.Connection, rfp_id: int) -> None:
-    """View chat history with color-coded roles, filters, and export."""
-    from contextlib import closing as _closing
-    import datetime as _dt
-
-    # Map file_id -> filename for scopes
-    files = {}
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id, filename FROM rfp_files WHERE rfp_id=?", (int(rfp_id),))
-            for rid, fn in cur.fetchall() or []:
-                files[int(rid)] = fn or ""
-    except Exception:
-        pass
-
-    # Load turns
-    turns = []
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("""SELECT id, scope, role, content, created_at FROM rfp_chat_turns WHERE rfp_id=? ORDER BY id ASC;""", (int(rfp_id),))
-            for tid, scope, role, content, ts in cur.fetchall() or []:
-                label = "Global"
-                if (scope or "").startswith("file:"):
-                    try:
-                        fid = int((scope or "").split(":",1)[1])
-                        label = f"File: {files.get(fid, str(fid))}"
-                    except Exception:
-                        label = "File"
-                turns.append({
-                    "id": int(tid),
-                    "scope": scope or "global",
-                    "role": (role or "assistant").lower(),
-                    "content": content or "",
-                    "ts": ts or "",
-                    "label": label,
-                })
-    except Exception:
-        pass
-
-    # Filters
-    colA, colB = st.columns([2,3])
-    with colA:
-        scopes = ["All", "Global"] + [f"File: {fn}" for fn in files.values()]
-        chosen = st.selectbox("Scope", options=scopes, key=_uniq_key("x5_tv_scope", int(rfp_id)))
-    with colB:
-        query = st.text_input("Search", value="", key=_uniq_key("x5_tv_search", int(rfp_id))).strip().lower()
-
-    def _match(t):
-        scope_ok = (chosen == "All") or (chosen == "Global" and t["scope"] == "global") or (chosen.startswith("File:") and t["label"] == chosen)
-        if not scope_ok:
-            return False
-        if not query:
-            return True
-        blob = f"{t['role']} {t['label']} {t['content']} {t['ts']}".lower()
-        return query in blob
-
-    filtered = [t for t in turns if _match(t)]
-
-    # Legend
-    st.markdown(":blue[Human]  ·  :green[AI]")
-
-    # Render chat using role-based chat balloons
-    for t in filtered:
-        role = "user" if t["role"] == "user" else "assistant"
-        time_str = t["ts"]
-        scope_str = t["label"]
-        with st.chat_message(role):
-            st.caption(f"{scope_str} · {time_str}")
-            st.markdown(t["content"])
-
-    # Export CSV
-    import io, csv
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["id","time","scope","role","content"])
-    for t in filtered:
-        writer.writerow([t["id"], t["ts"], t["label"], t["role"], t["content"]])
-    st.download_button(
-        "Export CSV",
-        data=buf.getvalue().encode("utf-8"),
-        file_name=f"rfp_{int(rfp_id)}_transcript.csv",
-        mime="text/csv",
-        key=_uniq_key("x5_tv_csv", int(rfp_id))
-    )
-
-    # Export Markdown
-    md_lines = []
-    for t in filtered:
-        md_lines.append(f"### {t['role'].title()} — {t['label']}  \n*{t['ts']}*")
-        md_lines.append("")
-        md_lines.append(t["content"])
-        md_lines.append("\n---")
-    md_blob = "\n".join(md_lines).encode("utf-8")
-    st.download_button(
-        "Export Markdown",
-        data=md_blob,
-        file_name=f"rfp_{int(rfp_id)}_transcript.md",
-        mime="text/markdown",
-        key=_uniq_key("x5_tv_md", int(rfp_id))
-    )
 # ==== end X.5 Transcript Viewer ====
 
 
