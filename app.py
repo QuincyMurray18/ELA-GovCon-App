@@ -601,6 +601,18 @@ def x5_render_transcript_viewer(conn: sqlite3.Connection, rfp_id: int) -> None:
     )
 
 
+def x6_coverage(conn: sqlite3.Connection, rfp_id: int) -> tuple[int, int]:
+    from contextlib import closing as _closing
+    total = 0
+    covered = 0
+    with _closing(conn.cursor()) as cur:
+        cur.execute("SELECT COUNT(*) FROM compliance_requirements WHERE rfp_id=?", (int(rfp_id),))
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute("SELECT COUNT(DISTINCT requirement_id) FROM compliance_links WHERE rfp_id=?", (int(rfp_id),))
+        covered = int(cur.fetchone()[0] or 0)
+    return covered, total
+
+
 def _x3_render_modal(conn, notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
@@ -11269,16 +11281,6 @@ def x6_requirements_df(conn: sqlite3.Connection, rfp_id: int):
         df = pd.DataFrame(columns=["id","must_flag","file","page","text"])
     return df
 
-def x6_coverage(conn: sqlite3.Connection, rfp_id: int) -> tuple[int, int]:
-    from contextlib import closing as _closing
-    total = 0
-    covered = 0
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT COUNT(*) FROM compliance_requirements WHERE rfp_id=?", (int(rfp_id),))
-        total = int(cur.fetchone()[0] or 0)
-        cur.execute("SELECT COUNT(DISTINCT requirement_id) FROM compliance_links WHERE rfp_id=?", (int(rfp_id),))
-        covered = int(cur.fetchone()[0] or 0)
-    return covered, total
 
 def x6_save_links(conn: sqlite3.Connection, rfp_id: int, mapping: list[tuple[int, str]]) -> int:
     from contextlib import closing as _closing
