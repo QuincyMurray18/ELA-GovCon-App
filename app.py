@@ -406,6 +406,36 @@ def _x3_open_modal(row_dict: dict):
     except Exception:
         pass
 
+
+def _x3_close_modal():
+    try:
+        st.session_state["x3_show_modal"] = False
+        st.session_state.pop("x3_modal_notice", None)
+    except Exception:
+        pass
+
+def _x3_modal_gate():
+    try:
+        _notice = st.session_state.get("x3_modal_notice")
+        if st.session_state.get("x3_show_modal") and _notice is not None:
+            try:
+                with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int((_notice or {}).get('Notice ID'))}"):
+                    _x3_render_modal(_notice)
+                    st.divider()
+                    if st.button("Close", key=f"x3_modal_close_{_safe_int((_notice or {}).get('Notice ID'))}"):
+                        _x3_close_modal()
+                        try:
+                            st.rerun()
+                        except Exception:
+                            pass
+            except Exception:
+                with st.expander("RFP Analyzer", expanded=True):
+                    _x3_render_modal(_notice)
+    except Exception:
+        pass
+
+
+
 def _x3_render_modal(notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
@@ -4214,7 +4244,7 @@ def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum
     if st.session_state.get("x3_show_modal"):
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
-            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get(\'Notice ID\'))}"):
                 _x3_render_modal(_notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
@@ -4475,12 +4505,17 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
+    try:
+        _x3_modal_gate()
+    except Exception:
+        pass
+
 
     # ---- X3 MODAL RENDERER ----
     if st.session_state.get("x3_show_modal"):
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
-            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(_notice.get("Notice ID")))):
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get(\'Notice ID\'))}"):
                 _x3_render_modal(_notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
@@ -4746,24 +4781,15 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
-                        notice = row.to_dict()
-                        st.session_state["x3_modal_notice"] = notice
-                        st.session_state["x3_show_modal"] = True
-                        try:
-                            with st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(notice.get("Notice ID")))):
-                                _x3_render_modal(notice)
-                        except Exception:
-                            with st.expander("RFP Analyzer", expanded=True):
-                                _x3_render_modal(notice)
+if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get('Notice ID'))}"):
+    _x3_open_modal(row.to_dict())
+    # rerun handled inside _x3_open_modal
 
-                        st.session_state["x3_modal_notice"] = row.to_dict()
-                        st.session_state["x3_show_modal"] = True
+# Render modal if requested
 
-                    # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
                         try:
-                            ctx = st.modal("RFP Analyzer", key=_uniq_key("x3_modal", _safe_int(row.get("Notice ID"))))
+                            ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get(\'Notice ID\'))}")
                         except Exception:
                             # Fallback if modal unavailable
                             ctx = st.container()
