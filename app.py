@@ -406,44 +406,7 @@ def _x3_open_modal(row_dict: dict):
     except Exception:
         pass
 
-
-def _x3_close_modal():
-    try:
-        st.session_state["x3_show_modal"] = False
-        st.session_state.pop("x3_modal_notice", None)
-    except Exception:
-        pass
-
-def _x3_modal_gate():
-    try:
-        _notice = st.session_state.get("x3_modal_notice")
-        if st.session_state.get("x3_show_modal") and _notice is not None:
-            try:
-                with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int((_notice or {}).get('Notice ID'))}"):
-                    _x3_render_modal(_notice)
-                    st.divider()
-                    if st.button("Close", key=f"x3_modal_close_{_safe_int((_notice or {}).get('Notice ID'))}"):
-                        _x3_close_modal()
-                        try:
-                            st.rerun()
-                        except Exception:
-                            pass
-            except Exception:
-                with st.expander("RFP Analyzer", expanded=True):
-                    _x3_render_modal(_notice)
-    except Exception:
-        pass
-
-
-
-def _x3_render_modal(notice: dict):
-    # Resolve DB connection for modal
-    conn = (globals().get('_O4_CONN')
-            or st.session_state.get('conn')
-            or (get_o4_conn() if 'get_o4_conn' in globals() else None))
-    if conn is None:
-        st.error('Database connection unavailable.')
-        return
+def _x3_render_modal(conn, notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
     except Exception as e:
@@ -4251,11 +4214,11 @@ def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum
     if st.session_state.get("x3_show_modal"):
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
-            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get('Notice ID'))}"):
-                _x3_render_modal(_notice)
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get("Notice ID")}")):
+                _x3_render_modal(conn, _notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
-                _x3_render_modal(_notice)
+                _x3_render_modal(conn, _notice)
     ai = y55_ai_parse(text or "")
     l_items2 = y55_merge_lm(l_items, ai.get("l_items", []))
     clins2 = y55_merge_clins(clins, ai.get("clins", []))
@@ -4512,10 +4475,16 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
-    try:
-        _x3_modal_gate()
-    except Exception:
-        pass
+
+    # ---- X3 MODAL RENDERER ----
+    if st.session_state.get("x3_show_modal"):
+        _notice = st.session_state.get("x3_modal_notice", {}) or {}
+        try:
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get("Notice ID")}")):
+                _x3_render_modal(conn, _notice)
+        except Exception:
+            with st.expander("RFP Analyzer", expanded=True):
+                _x3_render_modal(conn, _notice)
     st.header("SAM Watch")
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
@@ -4776,10 +4745,40 @@ if _has_rows:
                                 pass
                 with c5:
 
-                                # Ask RFP Analyzer (Phase 3 modal)
-                                if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get('Notice ID'))}"):
-                                    _x3_open_modal(row.to_dict())
-                                    # rerun handled inside _x3_open_modal
+                    # Ask RFP Analyzer (Phase 3 modal)
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
+                    notice = row.to_dict()
+                    _x3_open_modal(notice)
+
+
+                    # Render modal if requested
+                    if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
+                        try:
+                            ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get("Notice ID")}"))
+                        except Exception:
+                            # Fallback if modal unavailable
+                            ctx = st.container()
+                        with ctx:
+                            try:
+                                _notice = st.session_state.get("x3_modal_notice") or {}
+                                rfp_id = _ensure_rfp_for_notice(conn, _notice)
+                                st.caption(f"RFP #{rfp_id} · {row.get('Title') or ''}")
+                                # Attachments area
+                                try:
+                                    from contextlib import closing as _closing
+                                    with _closing(conn.cursor()) as cur:
+                                        cur.execute("SELECT COUNT(*) FROM rfp_files WHERE rfp_id=?;", (int(rfp_id),))
+                                        n_files = int(cur.fetchone()[0])
+                                except Exception:
+                                    n_files = 0
+                                cA, cB = st.columns([2,1])
+                                with cA:
+                                    st.write(f"Attachments saved: **{n_files}**")
+                                with cB:
+                                    if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
+                                        c = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id))
+                                        st.success(f"Fetched {c} attachment(s).")
+                                        st.rerun()
 
                                 # Index (light) and summary
                                 try:
@@ -11786,11 +11785,3 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as _e:
-        import streamlit as _st
-        _st.error(f"App crashed: {_e}")
