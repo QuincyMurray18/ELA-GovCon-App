@@ -1,4 +1,121 @@
+import re
 import streamlit as st
+import pandas as pd
+
+# === Phase 1 Helper: insert-or-skip rfp_file by sha256 ===
+def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | None, mime: str | None = None):
+    import hashlib, sqlite3
+    sha = hashlib.sha256((blob or b"")).hexdigest()
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO rfp_files (rfp_id, filename, mime, sha256, bytes, pages, created_at)
+                VALUES (?, ?, ?, ?, ?, NULL, datetime('now'))
+                ;
+                """,
+                (int(rfp_id), str(filename or ""), str(mime or "application/octet-stream"), sha, blob)
+            )
+        return True
+    except Exception as e:
+        try:
+            st.error(f"Attach insert failed for {filename}: {e}")
+        except Exception:
+            pass
+        return False
+
+# === Phase 1 Helper: one-click analyze orchestrator ===
+def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
+    try:
+        notice = None
+        _sam_url = (sam_url or "")
+        if not _sam_url:
+            try:
+                _sam_url = pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(int(rfp_id),)).iloc[0].get("sam_url") or ""
+            except Exception:
+                _sam_url = ""
+        try:
+            notice = _parse_sam_notice_id(_sam_url) if _sam_url else None
+        except Exception:
+            notice = None
+        # 1) Fetch SAM attachments if possible
+        if notice and 'sam_try_fetch_attachments' in globals():
+            try:
+                for name, data in sam_try_fetch_attachments(notice):
+                    _insert_or_skip_rfp_file(conn, int(rfp_id), name, data, None)
+            except Exception as e:
+                try: st.warning(f"SAM fetch skipped: {e}")
+                except Exception: pass
+        # 2) Rebuild search index
+        try:
+            y1_index_rfp(conn, int(rfp_id), rebuild=False)
+        except Exception as e:
+            try: st.warning(f"Index build issue: {e}")
+            except Exception: pass
+        # 3) Extract L/M, CLINs, Dates, POCs, Meta (lightweight)
+        try:
+            # collect full text from rfp_files (reuse existing util if present)
+            txt = ""
+            try:
+                df = pd.read_sql_query("SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+                if not df.empty:
+                    txt = "\n\n".join([str(x or "") for x in df["t"].tolist()])
+            except Exception:
+                txt = ""
+            try:
+                secs = extract_sections_L_M(txt)
+            except Exception:
+                secs = {}
+            try:
+                lm = (derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))) if secs else []
+            except Exception:
+                lm = []
+            # Persist LM items idempotently
+            try:
+                with conn:
+                    for it in lm[:300]:
+                        is_must = 1 if re.search(r"\b(shall|must|required|no later than|shall not|will)\b", it, re.I) else 0
+                        conn.execute(
+                            "INSERT OR IGNORE INTO lm_items (rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
+                            (int(rfp_id), it.strip(), is_must, "Open")
+                        )
+            except Exception:
+                pass
+            # Meta extraction (fallback heuristics)
+            try:
+                naics = _extract_naics(txt)
+            except Exception: naics = ""
+            try:
+                set_aside = _extract_set_aside(txt)
+            except Exception: set_aside = ""
+            try:
+                place = _extract_place(txt)
+            except Exception: place = ""
+            # Persist meta keys (idempotent inserts allowed)
+            try:
+                with conn:
+                    if naics: conn.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), "naics", str(naics)))
+                    if set_aside: conn.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), "set_aside", str(set_aside)))
+                    if place: conn.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), "place_of_performance", str(place)))
+            except Exception:
+                pass
+            # Prefill subcontractor filters into session_state
+            try:
+                if place:
+                    m = re.search(r"\b([A-Z]{2})\b", place.upper())
+                    if m:
+                        st.session_state['sub_default_state'] = m.group(1)
+                if naics:
+                    st.session_state['sub_default_naics'] = str(naics)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        try: st.error(f"One-Click Analyze failed: {e}")
+        except Exception: pass
+        return False
 
 # === Compliance Matrix safety guards ===
 try:
@@ -5207,9 +5324,20 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     if _save and _rid:
         if _update_rfp_meta(conn, _rid, title=_title.strip() or None, solnum=_solnum.strip() or None, sam_url=_sam_url.strip() or None):
             st.success("Saved")
+            try:
+                _one_click_analyze(conn, int(_rid), sam_url=_sam_url)
+            except Exception:
+                pass
             st.session_state["current_rfp_id"] = int(_rid)
             st.rerun()
 
+
+    # --- One-Click Analyze (Phase 1 convenience) ---
+    if _rid:
+        if st.button("One-Click Analyze ▶", type="primary", key="oneclick_analyze_top"):
+            with st.spinner("Fetching attachments, indexing, and extracting…"):
+                _one_click_analyze(conn, int(_rid), sam_url=_sam_url if '_sam_url' in locals() else None)
+            st.success("Analyzer is up to date for this RFP.")
     # === Phase 3: RTM + Amendment sidebar wiring ===
     try:
         _ctx = pd.read_sql_query("SELECT id, title, sam_url FROM rfps ORDER BY id DESC;", conn, params=())
@@ -6482,6 +6610,20 @@ def run_proposal_builder(conn: sqlite3.Connection) -> None:
             "Staffing and Key Personnel","Quality Assurance","Past Performance Summary","Pricing and CLINs","Certifications and Reps","Appendices",
         ]
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
+        if st.button("Draft All Sections ▶", key="pb_draft_all"):
+            with st.spinner("Drafting all selected sections…"):
+                for sec in selected:
+                    notes = st.session_state.get(f"pb_notes_{sec}", "")
+                    k = y_auto_k(f"{sec} {notes}")
+                    maxw = st.session_state.get(f"y3_maxw_{sec}", 220)
+                    acc = []
+                    # stream and accumulate (headless)
+                    for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes, k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
+                        acc.append(tok)
+                    drafted = "".join(acc).strip()
+                    if drafted:
+                        st.session_state[f"pb_section_{sec}"] = drafted
+            st.success("Drafted all sections.")
         content_map: Dict[str, str] = {}
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
@@ -6590,17 +6732,12 @@ def run_subcontractor_finder(conn: sqlite3.Connection) -> None:
     st.header("Subcontractor Finder")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
+    ctx = st.session_state.get("rfp_selected_notice", {})
+    default_naics = ctx.get("NAICS") or st.session_state.get("sub_default_naics","")
+    default_state = st.session_state.get("sub_default_state","")
 
-# ---- safe context defaults (no NameError) ----
-ctx = st.session_state.get("rfp_selected_notice") or {}
-def _parse_state_from_text(s: str) -> str:
-    import re as _re
-    if not s: return ""
-    m = _re.search(r"(AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)", str(s).upper())
-    return m.group(1) if m else ""
-default_naics = (ctx.get("NAICS") or st.session_state.get("sub_default_naics", "") or "")
-default_pop = (ctx.get("Place of Performance") or ctx.get("place_of_performance") or ctx.get("POP") or st.session_state.get("sub_default_state","") or "").strip()
-default_state = _parse_state_from_text(default_pop)
+    # Default Place of Performance from selected notice if available
+    default_pop = (ctx.get("Place of Performance") or ctx.get("place_of_performance") or ctx.get("POP") or "").strip()
 
     with st.expander("Filters", expanded=True):
         c1, c2, c3, c4 = st.columns([2,2,2,2])
