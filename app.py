@@ -5440,49 +5440,67 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
-
-        # === One-Page Analyzer (integrated) ===
+    # === One-Page Analyzer (default view in Phase 2) ===
     try:
         _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
         _df_rf_ctx = None
-    with st.container():
-        st.caption("RFP Analyzer · single-page mode")
-        if run_rfp_analyzer_onepage is None:
-            st.info("One-Page Analyzer module not found. Place rfp_onepage.py next to this app.")
-        elif _df_rf_ctx is None or _df_rf_ctx.empty:
-            st.info("No RFPs yet. Parse & save first.")
-        else:
-            _rid_one = st.selectbox(
-                "RFP context",
-                options=_df_rf_ctx["id"].tolist(),
-                format_func=lambda i: f"#{i} — {_df_rf_ctx.loc[_df_rf_ctx['id']==i,'title'].values[0]}",
-                key="onepage_rfp_sel"
-            )
-            if st.button("Open One-Page Analyzer", type="primary", key="onepage_go"):
-                try:
-                    _df_files = pd.read_sql_query(
-                        "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-                        conn, params=(int(_rid_one),)
-                    )
-                except Exception:
-                    _df_files = None
-                _pages = []
-                if _df_files is not None and not _df_files.empty:
-                    for _, _r in _df_files.iterrows():
-                        _b = _r.get("bytes"); _mime = _r.get("mime") or ""
-                        try:
-                            _texts = extract_text_pages(_b, _mime) or []
-                        except Exception:
-                            _texts = []
-                        for _i, _t in enumerate(_texts[:100], start=1):
-                            _pages.append({"file": _r.get("filename") or "", "page": _i, "text": _t or ""})
-                if not _pages:
-                    st.warning("No readable pages found in linked files.")
-                else:
-                    run_rfp_analyzer_onepage(_pages)
-                    st.stop()
-    # === end One-Page Analyzer ===
+
+    if run_rfp_analyzer_onepage is None:
+        st.info("One-Page Analyzer module is unavailable.")
+    elif _df_rf_ctx is None or _df_rf_ctx.empty:
+        st.info("No RFPs found. Use Parse & Save to add one.")
+    else:
+        # Prefer current_rfp_id if set; otherwise, latest
+        try:
+            _current_id = st.session_state.get('current_rfp_id')
+            if _current_id not in _df_rf_ctx["id"].tolist():
+                _current_id = None
+        except Exception:
+            _current_id = None
+
+        default_idx = 0
+        if _current_id:
+            try:
+                default_idx = _df_rf_ctx["id"].tolist().index(int(_current_id))
+            except Exception:
+                default_idx = 0
+
+        _rid_one = st.selectbox(
+            "RFP (One‑Page Analyzer)",
+            options=_df_rf_ctx["id"].tolist(),
+            index=default_idx,
+            format_func=lambda i: f"#{i} — " + _df_rf_ctx.loc[_df_rf_ctx['id']==i,'title'].values[0],
+            key="onepage_rfp_default"
+        )
+
+        # Optional: allow switching back to legacy Analyzer
+        use_legacy = st.toggle("Open legacy Analyzer instead", value=False, key="use_legacy_analyzer")
+
+        if not use_legacy and _rid_one:
+            try:
+                _df_files = pd.read_sql_query(
+                    "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                    conn, params=(int(_rid_one),)
+                )
+            except Exception:
+                _df_files = None
+            _pages = []
+            if _df_files is not None and not _df_files.empty:
+                for _, _r in _df_files.iterrows():
+                    _b = _r.get("bytes"); _mime = _r.get("mime") or ""
+                    try:
+                        _texts = extract_text_pages(_b, _mime) or []
+                    except Exception:
+                        _texts = []
+                    for _i, _t in enumerate(_texts[:100], start=1):
+                        _pages.append({"file": _r.get("filename") or "", "page": _i, "text": _t or ""})
+            if not _pages:
+                st.warning("No readable pages found in linked files for this RFP.")
+            else:
+                run_rfp_analyzer_onepage(_pages)
+                st.stop()
+    # === end One‑Page Analyzer ===
     # === end One‑Page Analyzer ===
 
     st.header("RFP Analyzer")
