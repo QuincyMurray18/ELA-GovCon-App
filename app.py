@@ -940,13 +940,6 @@ def _x3_render_modal(conn, notice: dict):
     with st.expander("AI Summary", expanded=True):
         st.markdown(_rfp_ai_summary(full_text or "", notice))
 
-        
-with st.expander("Saved Prompts", expanded=False):
-    try:
-        _render_saved_prompts_ui(conn, int(rfp_id), full_text or "")
-    except Exception as _pe:
-        st.info(f"Saved Prompts unavailable: {_pe}")
-
     # Per-document summarize chips
     try:
         from contextlib import closing as _closing
@@ -12097,72 +12090,3 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
-
-# === Saved Prompts Runner (single-file) ===
-_SAVED_PROMPTS = [
-    {"id":"main_requirements","label":"Main requirements or deliverables","q":"What are the main requirements or deliverables?"},
-    {"id":"key_dates","label":"Important dates and deadlines","q":"What are the important dates and deadlines in this solicitation? Include proposal due, Q&A due, and other milestones if stated."},
-    {"id":"contract_value","label":"Contract value or funding","q":"Does this solicitation mention the contract value or funding? If so, list exact amounts and funding type with citations."},
-    {"id":"eligibility","label":"Eligibility and set-asides","q":"Who is eligible to bid on this opportunity? Note any set-asides and eligibility constraints with citations."},
-    {"id":"risks","label":"Risks or unclear areas","q":"What are notable risks or unclear areas the bidder should watch?"},
-    {"id":"winning_approach","label":"Experienced contractor approach to win","q":"How would an experienced contractor approach this opportunity to win? Provide strategy points tied to requirements and evaluation factors."},
-]
-
-def _prompt_context_blocks(conn, rfp_id: int, query: str, k: int = 8):
-    try:
-        hits = y1_search(conn, int(rfp_id), query or "", k=int(k))
-    except Exception:
-        hits = []
-    blocks = []
-    for h in hits or []:
-        try:
-            src = f"{h.get('file') or ''} p.{h.get('page') or ''}".strip()
-            snippet = (h.get('text') or '')[:900]
-            blocks.append(f"[{src}] {snippet}")
-        except Exception:
-            continue
-    return blocks
-
-def _run_saved_prompt(conn, rfp_id: int, question: str, full_text: str | None = None, k: int = 8) -> str:
-    # Build grounded context from index, fallback to full_text
-    ctx_blocks = _prompt_context_blocks(conn, int(rfp_id), question, k=k)
-    if not ctx_blocks:
-        if full_text:
-            ctx_blocks = [full_text[:4000]]
-    system = (
-        "You are an acquisitions analyst for federal solicitations. "
-        "Answer using only the provided context. "
-        "Cite evidence in brackets like [filename p.X]. "
-        "If the answer is not present, say: Not stated in provided materials."
-    )
-    prompt = "\n\n".join(ctx_blocks + [f"Question: {question}"])
-    try:
-        client = get_ai()
-        model = _resolve_model()
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role":"system","content": system}, {"role":"user","content": prompt}],
-            temperature=0.1,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"AI error: {e}"
-
-def _render_saved_prompts_ui(conn, rfp_id: int, full_text: str | None = None):
-    import streamlit as st
-    st.write("Use vetted prompts to query the solicitation. Answers are grounded and cite page sources.")
-    labels = {p["id"]: p["label"] for p in _SAVED_PROMPTS}
-    pid = st.selectbox("Prompt", list(labels.keys()), format_func=lambda k: labels[k], key=_uniq_key("p_sel", int(rfp_id)))
-    run_one = st.button("Run selected", key=_uniq_key("p_run_one", int(rfp_id)))
-    run_all = st.button("Run all", key=_uniq_key("p_run_all", int(rfp_id)))
-
-    if run_one:
-        q = next((p["q"] for p in _SAVED_PROMPTS if p["id"] == pid), "")
-        ans = _run_saved_prompt(conn, int(rfp_id), q, full_text=full_text)
-        st.markdown(f"**Q:** {labels[pid]}\n\n{ans}")
-    if run_all:
-        for p in _SAVED_PROMPTS:
-            st.markdown(f"### {p['label']}")
-            ans = _run_saved_prompt(conn, int(rfp_id), p["q"], full_text=full_text)
-            st.markdown(ans)
-            st.divider()
