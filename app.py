@@ -401,11 +401,15 @@ import requests
 def _x3_open_modal(row_dict: dict):
     st.session_state["x3_modal_notice"] = dict(row_dict or {})
     st.session_state["x3_show_modal"] = True
+        try:
+            st.rerun()
+        except Exception:
+            pass
+
     try:
         st.rerun()
     except Exception:
         pass
-
 
 def _x3_close_modal():
     try:
@@ -4781,12 +4785,21 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get('Notice ID'))}"):
-    _x3_open_modal(row.to_dict())
-    # rerun handled inside _x3_open_modal
+                    if st.button("Ask RFP Analyzer", key=f"ask_rfp_{_safe_int(row.get(\'Notice ID\'))}"):
+                        notice = row.to_dict()
+                        st.session_state["x3_modal_notice"] = notice
+                        st.session_state["x3_show_modal"] = True
+                        try:
+                            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(notice.get(\'Notice ID\'))}"):
+                                _x3_render_modal(notice)
+                        except Exception:
+                            with st.expander("RFP Analyzer", expanded=True):
+                                _x3_render_modal(notice)
 
-# Render modal if requested
+                        st.session_state["x3_modal_notice"] = row.to_dict()
+                        st.session_state["x3_show_modal"] = True
 
+                    # Render modal if requested
                     if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
                         try:
                             ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get(\'Notice ID\'))}")
