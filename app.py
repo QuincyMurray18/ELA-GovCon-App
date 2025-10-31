@@ -455,7 +455,7 @@ def _x3_render_modal(conn, notice: dict):
                 # Save mappings
                 to_save = []
                 for i, row in edited.iterrows():
-                    sec = str(row.get("Map to section") or "").strip()
+                    sec = str(row.get('Map to section') or "").strip()
                     if sec:
                         to_save.append((int(row["id"]), sec))
                 if st.button("Save mappings", key=_uniq_key("x6_save", int(rfp_id))) and to_save:
@@ -543,7 +543,7 @@ def _x3_render_modal(conn, notice: dict):
         st.write(f"Attachments saved: **{n_files}**")
     with cB:
         if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
-            c = _fetch_and_save_now(conn, str(notice.get("Notice ID") or ""), int(rfp_id))
+            c = _fetch_and_save_now(conn, str(notice.get('Notice ID') or ""), int(rfp_id))
             st.success(f"Fetched {c} attachment(s).")
             try: st.rerun()
             except Exception: pass
@@ -557,7 +557,7 @@ def _x3_render_modal(conn, notice: dict):
     if not full_text:
         st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
         try:
-            descs = sam_try_fetch_attachments(str(notice.get("Notice ID") or "")) or []
+            descs = sam_try_fetch_attachments(str(notice.get('Notice ID') or "")) or []
             for name, b in descs:
                 if name.endswith("_description.html"):
                     try:
@@ -984,7 +984,7 @@ def rtm_build_requirements(conn: sqlite3.Connection, rfp_id: int, max_rows: int 
                     cur.execute("""
                         INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
                         VALUES(?,?,?,?,?,?,?, ?, ?);
-                    """, (int(rfp_id), key, "SOW", row.get("file_name"), int(row.get("page") or 0), s.strip(), "Open", now, now))
+                    """, (int(rfp_id), key, "SOW", row.get('file_name'), int(row.get('page') or 0), s.strip(), "Open", now, now))
                     inserted += 1
         if inserted >= max_rows:
             break
@@ -1116,10 +1116,10 @@ def render_rtm_ui(conn: sqlite3.Connection, rfp_id: int) -> None:
         # Status change
         with closing(conn.cursor()) as cur:
             cur.execute("UPDATE rtm_requirements SET status=?, updated_at=? WHERE id=?;",
-                        (row.get("status") or "Open", now, rid))
+                        (row.get('status') or "Open", now, rid))
         # New link
-        lt = (row.get("add_link_type") or "").strip()
-        tg = (row.get("add_link_target") or "").strip()
+        lt = (row.get('add_link_type') or "").strip()
+        tg = (row.get('add_link_target') or "").strip()
         if lt and tg:
             with closing(conn.cursor()) as cur:
                 cur.execute("INSERT INTO rtm_links(rtm_id, link_type, target, note, created_at, updated_at) VALUES(?,?,?,?,?,?);",
@@ -1873,10 +1873,10 @@ def y1_index_rfp(conn: sqlite3.Connection, rfp_id: int, max_pages: int = 100, re
     added = 0
     skipped = 0
     for _, row in df.iterrows():
-        fid = int(row["id"]); name = row.get("filename") or f"file_{fid}"
+        fid = int(row["id"]); name = row.get('filename') or f"file_{fid}"
         try:
             blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
-            b = blob["bytes"]; mime = blob.get("mime") or (row.get("mime") or "application/octet-stream")
+            b = blob["bytes"]; mime = blob.get("mime") or (row.get('mime') or "application/octet-stream")
         except Exception:
             continue
         pages = extract_text_pages(b, mime) or []
@@ -2075,8 +2075,8 @@ def y2_list_threads(conn: sqlite3.Connection, rfp_id: int):
         rid = int(row["id"])
         out.append({
             "id": rid,
-            "title": (row.get("title") or f"Thread #{rid}"),
-            "created_at": row.get("created_at") or ""
+            "title": (row.get('title') or f"Thread #{rid}"),
+            "created_at": row.get('created_at') or ""
         })
     return out
 
@@ -4214,7 +4214,7 @@ def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum
     if st.session_state.get("x3_show_modal"):
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
-            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get("Notice ID")}")):
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get('Notice ID'))}"):
                 _x3_render_modal(conn, _notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
@@ -4361,7 +4361,7 @@ def run_deals(conn: sqlite3.Connection) -> None:
 # ---- Phase 3 helpers: ensure RFP record, modal renderer ----
 def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
     from contextlib import closing as _closing
-    nid = str(notice_row.get("Notice ID") or "")
+    nid = str(notice_row.get('Notice ID') or "")
     if not nid:
         raise ValueError("Missing Notice ID")
     with _closing(conn.cursor()) as cur:
@@ -4371,7 +4371,7 @@ def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
             return int(row[0])
         cur.execute(
             "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-            (notice_row.get("Title") or "", notice_row.get("Solicitation") or "", nid, notice_row.get("SAM Link") or "", "")
+            (notice_row.get('Title') or "", notice_row.get('Solicitation') or "", nid, notice_row.get('SAM Link') or "", "")
         )
         rid = int(cur.lastrowid)
         conn.commit()
@@ -4480,7 +4480,7 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
     if st.session_state.get("x3_show_modal"):
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
-            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get("Notice ID")}")):
+            with st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(_notice.get('Notice ID'))}"):
                 _x3_render_modal(conn, _notice)
         except Exception:
             with st.expander("RFP Analyzer", expanded=True):
@@ -4701,17 +4701,17 @@ if _has_rows:
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                                     """,
                                     (
-                                        row.get("Title") or "",
-                                        row.get("Agency Path") or "",
+                                        row.get('Title') or "",
+                                        row.get('Agency Path') or "",
                                         "Bidding",
                                         None,
-                                        row.get("Notice ID") or "",
-                                        row.get("Solicitation") or "",
-                                        row.get("Posted") or "",
-                                        row.get("Response Due") or "",
-                                        row.get("NAICS") or "",
-                                        row.get("PSC") or "",
-                                        row.get("SAM Link") or "",
+                                        row.get('Notice ID') or "",
+                                        row.get('Solicitation') or "",
+                                        row.get('Posted') or "",
+                                        row.get('Response Due') or "",
+                                        row.get('NAICS') or "",
+                                        row.get('PSC') or "",
+                                        row.get('SAM Link') or "",
                                     ),
                                 )
                                 deal_id = cur.lastrowid
@@ -4746,17 +4746,15 @@ if _has_rows:
                 with c5:
 
                     # Ask RFP Analyzer (Phase 3 modal)
-                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get("Notice ID")))):
-                    notice = row.to_dict()
-                    _x3_open_modal(notice)
-
+                    if st.button("Ask RFP Analyzer", key=_uniq_key("ask_rfp", _safe_int(row.get('Notice ID')))):
+                        notice = row.to_dict()
+                        _x3_open_modal(notice)
 
                     # Render modal if requested
-                    if st.session_state.get("x3_show_modal") and st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get("Notice ID"):
+                    if st.session_state.get("x3_show_modal") and (st.session_state.get("x3_modal_notice", {}).get("Notice ID") == row.get('Notice ID')):
                         try:
-                            ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get("Notice ID")}"))
+                            ctx = st.modal("RFP Analyzer", key=f"x3_modal_{_safe_int(row.get('Notice ID'))}")
                         except Exception:
-                            # Fallback if modal unavailable
                             ctx = st.container()
                         with ctx:
                             try:
@@ -4776,7 +4774,7 @@ if _has_rows:
                                     st.write(f"Attachments saved: **{n_files}**")
                                 with cB:
                                     if st.button("Fetch attachments now", key=_uniq_key("x3_fetch", int(rfp_id))):
-                                        c = _fetch_and_save_now(conn, str(row.get("Notice ID") or ""), int(rfp_id))
+                                        c = _fetch_and_save_now(conn, str(row.get('Notice ID') or ""), int(rfp_id))
                                         st.success(f"Fetched {c} attachment(s).")
                                         st.rerun()
 
@@ -4790,7 +4788,7 @@ if _has_rows:
                                     st.info("No documents yet. You can still ask questions; I'll use the SAM description if available.")
                                     # Try SAM description fallback
                                     try:
-                                        descs = sam_try_fetch_attachments(str(row.get("Notice ID") or "")) or []
+                                        descs = sam_try_fetch_attachments(str(row.get('Notice ID') or "")) or []
                                         for name, b in descs:
                                             if name.endswith("_description.html"):
                                                 import bs4
@@ -4878,7 +4876,7 @@ if _has_rows:
                         try:
                             for _rec in st.session_state.get("sam_records_raw", []) or []:
                                 _nid = str(_rec.get("noticeId") or _rec.get("id") or "")
-                                if _nid == str(row.get("Notice ID") or ""):
+                                if _nid == str(row.get('Notice ID') or ""):
                                     _raw = _rec
                                     break
                         except Exception:
@@ -4894,7 +4892,7 @@ if _has_rows:
                             except Exception:
                                 return default
                 
-                        desc = row.get("Description") or _gx(_raw, "description", default="")
+                        desc = row.get('Description') or _gx(_raw, "description", default="")
                         pop_city = _gx(_raw, "placeOfPerformance", "city", default="")
                         pop_state = _gx(_raw, "placeOfPerformance", "state", default="")
                         pop = ", ".join([p for p in [pop_city, pop_state] if p])
@@ -4912,7 +4910,7 @@ if _has_rows:
                             from contextlib import closing as _closing
                             _db = globals().get("conn") or _db_connect(DB_PATH, check_same_thread=False)
                             with _closing(_db.cursor()) as cur:
-                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get("Notice ID") or ""),))
+                                cur.execute("SELECT id FROM rfps WHERE notice_id=? ORDER BY id DESC LIMIT 1", (str(row.get('Notice ID') or ""),))
                                 r = cur.fetchone()
                                 if r:
                                     _rfp_id = r[0]
@@ -4925,7 +4923,7 @@ if _has_rows:
                         except Exception:
                             pass
                 
-                        link = row.get("SAM Link") or ""
+                        link = row.get('SAM Link') or ""
                         if link:
                             st.markdown(f"[Open on SAM.gov]({link})")
 
@@ -5040,8 +5038,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     if _rid:
         try:
             _row = pd.read_sql_query("SELECT title, solnum FROM rfps WHERE id=?;", conn, params=(int(_rid),)).iloc[0]
-            _title0 = str(_row.get("title") or "")
-            _solnum0 = str(_row.get("solnum") or "")
+            _title0 = str(_row.get('title') or "")
+            _solnum0 = str(_row.get('solnum') or "")
         except Exception:
             pass
         try:
@@ -5684,9 +5682,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                             "SELECT filename, mime, bytes FROM rfp_files WHERE id=?;",
                             conn, params=(int(pick),)
                         ).iloc[0]
-                        fname = row.get("filename") or f"rfp_file_{int(pick)}"
-                        mime = row.get("mime") or "application/octet-stream"
-                        b = row.get("bytes")
+                        fname = row.get('filename') or f"rfp_file_{int(pick)}"
+                        mime = row.get('mime') or "application/octet-stream"
+                        b = row.get('bytes')
                         st.download_button("Download original", data=b, file_name=fname, mime=mime, key=f"dl_{pick}")
                         try:
                             pages = extract_text_pages(b, mime)
@@ -7519,8 +7517,8 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
             doc.add_paragraph(subtitle)
         if isinstance(sections, pd.DataFrame) and not sections.empty:
             for _, row in sections.iterrows():
-                sec = str(row.get("Section") or row.get("section") or row.get("name") or "Section")
-                body = str(row.get("Content") or row.get("content") or row.get("text") or "")
+                sec = str(row.get('Section') or row.get('section') or row.get('name') or "Section")
+                body = str(row.get('Content') or row.get('content') or row.get('text') or "")
                 doc.add_heading(sec, level=2)
                 for para in (body or "").split("\n\n"):
                     if para.strip():
@@ -9778,7 +9776,7 @@ def _o3_sender_accounts_from_secrets():
         accs = []
         try:
             for row in (st.secrets.get("gmail_accounts") or []):
-                if row.get("email") and row.get("app_password"):
+                if row.get('email') and row.get('app_password'):
                     accs.append({"email":row["email"],"app_password":row["app_password"],"name":row.get("name","")})
         except Exception:
             pass
