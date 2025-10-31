@@ -5120,6 +5120,10 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
                 st.markdown(f"[Open cached text]({rec['path']})")
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
+# === Phase 3 helpers: SAM updates, CRM wiring, Due-date iCal ===
+import datetime as _dt
+
+
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
         # === One-Page Analyzer (integrated) ===
@@ -11816,8 +11820,6 @@ def _chip(text: str, kind: str = 'neutral'):
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
 
 
-# === Phase 3 helpers: SAM updates, CRM wiring, Due-date iCal ===
-import datetime as _dt
 
 def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
     import hashlib
