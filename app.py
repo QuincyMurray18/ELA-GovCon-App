@@ -5605,6 +5605,7 @@ END:VCALENDAR
     return ics.encode("utf-8")
 
 
+
 def _run_rfp_analyzer_phase3(conn):
     import pandas as pd, streamlit as st
     st.header("RFP Analyzer")
@@ -5615,6 +5616,7 @@ def _run_rfp_analyzer_phase3(conn):
     if df_rfps is None or df_rfps.empty:
         st.info("No RFPs found. Use Parse & Save to add one.")
         return
+
     # Prefer current_rfp_id if set
     try:
         current_id = st.session_state.get("current_rfp_id")
@@ -5622,19 +5624,22 @@ def _run_rfp_analyzer_phase3(conn):
             current_id = None
     except Exception:
         current_id = None
+
     default_idx = 0
     if current_id:
         try:
             default_idx = df_rfps["id"].tolist().index(int(current_id))
         except Exception:
             default_idx = 0
-    rid = st.selectbox(
+
+    selected_rfp_id = st.selectbox(
         "RFP (One‑Page Analyzer)",
         options=df_rfps["id"].tolist(),
         index=default_idx,
         format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0],
         key="onepage_rfp_default"
     )
+
     use_legacy = st.toggle("Open legacy Analyzer instead", value=False, key="use_legacy_analyzer")
     if use_legacy:
         return  # fall through to legacy below
@@ -5646,18 +5651,18 @@ def _run_rfp_analyzer_phase3(conn):
         with cA:
             if st.button("Check for SAM updates ▶", key="p3_check_sam"):
                 with st.spinner("Checking SAM.gov for amendments and new attachments…"):
-                    res = _p3_check_sam_updates(conn, int(rid))
+                    res = _p3_check_sam_updates(conn, int(selected_rfp_id))
                     st.success(f"Attempted: {res.get('attempted',0)} — New/updated files (best-effort): {res.get('new_files',0)}")
                     errs = res.get("errors") or []
                     if errs:
-                        st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
+                        st.warning("Notes/Errors:\\n- " + "\\n- ".join(errs))
         with cB:
             if st.button("Ensure Deal & Contacts", key="p3_crm_wire"):
                 with st.spinner("Creating deal record and mirroring POCs into contacts…"):
-                    _p3_ensure_deal_and_contacts(conn, int(rid))
+                    _p3_ensure_deal_and_contacts(conn, int(selected_rfp_id))
                     st.success("CRM wiring complete (best-effort).")
         with cC:
-            due = _p3_due_date_for_rfp(conn, int(rid))
+            due = _p3_due_date_for_rfp(conn, int(selected_rfp_id))
             if due:
                 st.info(f"📅 Proposal Due: **{due}**")
                 ics_bytes = _p3_make_ics("Proposal Due", due)
@@ -5669,7 +5674,7 @@ def _run_rfp_analyzer_phase3(conn):
     try:
         df_files = pd.read_sql_query(
             "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-            conn, params=(int(rid),)
+            conn, params=(int(selected_rfp_id),)
         )
     except Exception:
         df_files = None
@@ -5691,6 +5696,7 @@ def _run_rfp_analyzer_phase3(conn):
             st.stop()
         except Exception as e:
             st.error(f"One-Page Analyzer error: {e}")
+
 
 def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === One-Page Analyzer (default view in Phase 2) ===
