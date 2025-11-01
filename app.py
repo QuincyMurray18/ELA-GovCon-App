@@ -5440,13 +5440,12 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
 
-# === Phase 3 helpers: SAM updates, CRM wiring, Due-date iCal ===
-import datetime as _dt
+# === Phase 3 helpers (core) ===
+import datetime as _dt, hashlib
 
 def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
-    import hashlib
-    sha = hashlib.sha256(blob or b"").hexdigest()
     from contextlib import closing as _closing
+    sha = hashlib.sha256(blob or b"").hexdigest()
     with _closing(conn.cursor()) as cur:
         cur.execute(
             "INSERT OR IGNORE INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
@@ -5479,10 +5478,11 @@ def _p3_rfp_meta_set(conn, rfp_id: int, key: str, value: str):
         conn.commit()
 
 def _p3_parse_notice_id(s: str) -> str:
+    import re as _re
     if not s: return ""
-    m = re.search(r"NoticeId=([A-Za-z0-9\-]+)", s)
+    m = _re.search(r"NoticeId=([A-Za-z0-9\-]+)", s)
     if m: return m.group(1)
-    if re.fullmatch(r"[A-Za-z0-9\-]{8,}", s):
+    if _re.fullmatch(r"[A-Za-z0-9\-]{8,}", s):
         return s
     return ""
 
@@ -5498,10 +5498,10 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
     except Exception as e:
         results["errors"].append(f"lookup error: {e}")
         nid = ""
+    fetcher = globals().get("sam_try_fetch_attachments") or globals().get("sam_fetch_attachments") or None
     if not nid:
         results["errors"].append("No SAM Notice ID/URL found.")
         return results
-    fetcher = globals().get("sam_try_fetch_attachments") or globals().get("sam_fetch_attachments") or None
     if not fetcher:
         results["errors"].append("SAM fetcher not available in this build.")
         return results
@@ -5515,6 +5515,7 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
                 results["errors"].append(f"{fname}: {e}")
     except Exception as e:
         results["errors"].append(f"fetch error: {e}")
+    # Re-index & re-extract (best-effort)
     try:
         if "y1_index_rfp" in globals():
             globals()["y1_index_rfp"](conn, int(rfp_id), rebuild=False)
@@ -5531,6 +5532,7 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
 def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     from contextlib import closing as _closing
     import pandas as _pd
+    # Deal
     try:
         df = _pd.read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
         title = (df.iloc[0]["title"] if not df.empty else f"RFP #{rfp_id}")
@@ -5546,6 +5548,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
             conn.commit()
     except Exception:
         pass
+    # Contacts
     try:
         dfp = _pd.read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
     except Exception:
@@ -5573,8 +5576,7 @@ def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
         import pandas as _pd
         df = _pd.read_sql_query(
             "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR label LIKE '%Close%') "
-            "ORDER BY id DESC LIMIT 1;",
-            conn, params=(int(rfp_id),)
+            "ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)
         )
         if not df.empty:
             return str(df.iloc[0]["value"] or "")
@@ -5645,33 +5647,31 @@ def _run_rfp_analyzer_phase3(conn):
         key="onepage_rfp_default"
     )
 
-    # Phase 3 — Monitoring & CRM
-    with st.container(border=True):
-        st.caption("Phase 3 — Monitoring & CRM")
-        cA, cB, cC = st.columns([1,1,2])
-        with cA:
-            if st.button("Check for SAM updates ▶", key="p3_check_sam"):
-                with st.spinner("Checking SAM.gov for amendments and new attachments…"):
-                    res = _p3_check_sam_updates(conn, int(selected_rfp_id))
-                    st.success(f"Attempted: {res.get('attempted',0)} — New/updated files (best-effort): {res.get('new_files',0)}")
-                    errs = res.get("errors") or []
-                    if errs:
-                        st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
-        with cB:
-            if st.button("Ensure Deal & Contacts", key="p3_crm_wire"):
-                with st.spinner("Creating deal record and mirroring POCs into contacts…"):
-                    _p3_ensure_deal_and_contacts(conn, int(selected_rfp_id))
-                    st.success("CRM wiring complete (best-effort).")
-        with cC:
-            due = _p3_due_date_for_rfp(conn, int(selected_rfp_id))
-            if due:
-                st.info(f"📅 Proposal Due: **{due}**")
-                ics_bytes = _p3_make_ics("Proposal Due", due)
-                st.download_button("Download Due Date (.ics)", data=ics_bytes, file_name="proposal_due.ics", mime="text/calendar")
-            else:
-                st.caption("No due date found in key_dates/meta.")
+    # Phase 3 controls
+    cA, cB, cC = st.columns([1,1,2])
+    with cA:
+        if st.button("Check for SAM updates ▶", key="p3_check_sam"):
+            with st.spinner("Checking SAM.gov for amendments and new attachments…"):
+                res = _p3_check_sam_updates(conn, int(selected_rfp_id))
+                st.success(f"Attempted: {res.get('attempted',0)} — New/updated files (best-effort): {res.get('new_files',0)}")
+                errs = res.get("errors") or []
+                if errs:
+                    st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
+    with cB:
+        if st.button("Ensure Deal & Contacts", key="p3_crm_wire"):
+            with st.spinner("Creating deal record and mirroring POCs into contacts…"):
+                _p3_ensure_deal_and_contacts(conn, int(selected_rfp_id))
+                st.success("CRM wiring complete (best-effort).")
+    with cC:
+        due = _p3_due_date_for_rfp(conn, int(selected_rfp_id))
+        if due:
+            st.info(f"📅 Proposal Due: **{due}**")
+            ics_bytes = _p3_make_ics("Proposal Due", due)
+            st.download_button("Download Due Date (.ics)", data=ics_bytes, file_name="proposal_due.ics", mime="text/calendar")
+        else:
+            st.caption("No due date found in key_dates/meta.")
 
-    # Add files (uploader + SAM fetch)
+    # Add files to this RFP
     with st.container(border=True):
         st.subheader("➕ Add files to this RFP")
         uploads = st.file_uploader(
@@ -5680,7 +5680,6 @@ def _run_rfp_analyzer_phase3(conn):
             accept_multiple_files=True,
             key="onepage_uploads",
         )
-
         _prefill_url = ""
         try:
             _df_url = pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(selected_rfp_id),))
@@ -5810,7 +5809,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         )
 
         # Optional: allow switching back to legacy Analyzer
-        use_legacy = st.toggle("Open legacy Analyzer instead", value=False, key="use_legacy_analyzer")
+        use_legacy = False
 
         if not use_legacy and _rid_one:
             try:
