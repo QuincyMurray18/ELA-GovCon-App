@@ -327,7 +327,13 @@ def _phase3_poll_status():
         return None
     return resp
 
-# ---- Enhance Ask RFP Analyzer dialog to use Phase 3 when available ----
+# ---- Enhance Ask 
+with st.sidebar:
+    try:
+        render_amendment_sidebar()
+    except Exception as _e:
+        st.info("Amendment sidebar unavailable.")
+RFP Analyzer dialog to use Phase 3 when available ----
 def _phase3_enhance_rfp_dialog():
     # integrate into existing dialog if present
     if "show_rfp_analyzer" in st.session_state and st.session_state.get("show_rfp_analyzer"):
@@ -5612,7 +5618,20 @@ def _run_rfp_analyzer_phase3(conn):
         df_rfps = None
     if df_rfps is None or df_rfps.empty:
         st.info("No RFPs found. Use Parse & Save to add one.")
-        return
+        
+# [Phase 3 patch] Auto-create a placeholder RFP so One-Page UI renders
+try:
+    with closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO rfps(title, created_at, updated_at) VALUES(?, datetime('now'), datetime('now'));",
+            ("Untitled",),
+        )
+        conn.commit()
+    _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    st.success("Created a placeholder RFP to enable One-Page Analyzer UI.")
+except Exception as _e:
+    st.info("No RFPs found and auto-create failed. Use Parse & Save to add one.")
+return
 
     # Prefer current_rfp_id if set
     try:
@@ -5759,7 +5778,7 @@ def _run_rfp_analyzer_phase3(conn):
     else:
         try:
             run_rfp_analyzer_onepage(pages)
-            st.stop()
+# # st.stop() disabled by Phase 3 patch  # disabled by Phase 3 patch
         except Exception as e:
             st.error(f"One-Page Analyzer error: {e}")
 
@@ -5774,7 +5793,20 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         st.info("One-Page Analyzer module is unavailable.")
     elif _df_rf_ctx is None or _df_rf_ctx.empty:
         st.info("No RFPs found. Use Parse & Save to add one.")
-    else:
+    
+# [Phase 3 patch] Auto-create a placeholder RFP so One-Page UI renders
+try:
+    with closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO rfps(title, created_at, updated_at) VALUES(?, datetime('now'), datetime('now'));",
+            ("Untitled",),
+        )
+        conn.commit()
+    _df_rf_ctx = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    st.success("Created a placeholder RFP to enable One-Page Analyzer UI.")
+except Exception as _e:
+    st.info("No RFPs found and auto-create failed. Use Parse & Save to add one.")
+else:
         # Prefer current_rfp_id if set; otherwise, latest
         try:
             _current_id = st.session_state.get('current_rfp_id')
@@ -5823,7 +5855,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 st.warning("No readable pages found in linked files for this RFP.")
             else:
                 run_rfp_analyzer_onepage(_pages)
-                st.stop()
+# # st.stop() disabled by Phase 3 patch  # disabled by Phase 3 patch
     # === end One‑Page Analyzer ===
     # === end One‑Page Analyzer ===
 
