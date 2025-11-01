@@ -5773,7 +5773,47 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     if run_rfp_analyzer_onepage is None:
         st.info("One-Page Analyzer module is unavailable.")
     elif _df_rf_ctx is None or _df_rf_ctx.empty:
-        st.info("No RFPs found. Use Parse & Save to add one.")
+        st.subheader("RFP Analyzer — One‑Page View")
+        st.caption("No RFPs yet. Add files below and the analyzer will populate automatically.")
+        up = st.file_uploader("Add files to this RFP", type=["pdf","doc","docx","txt","zip","xls","xlsx"], accept_multiple_files=True, key="rfp_add_files_empty")
+        pages = []
+        if up:
+            from contextlib import closing
+            rid = None
+            try:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("INSERT INTO rfps(title) VALUES(?);", ("Untitled RFP",))
+                    conn.commit()
+                    rid = cur.lastrowid
+                for f in up:
+                    try:
+                        pth = save_uploaded_file(f, subdir="rfps")
+                        with open(pth, "rb") as fb:
+                            bb = fb.read()
+                        mime = guess_mime_from_name(f.name)
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("INSERT INTO rfp_files(rfp_id, filename, mime, bytes) VALUES(?,?,?,?);", (rid, f.name, mime, bb))
+                            conn.commit()
+                    except Exception:
+                        pass
+                try:
+                    import pandas as _pd
+                    _df_files = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+                    if not _df_files.empty:
+                        for _, r in _df_files.iterrows():
+                            texts = extract_text_pages(r['bytes'], r['mime']) or []
+                            for i, t in enumerate(texts[:100], start=1):
+                                pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        # Always render One-Page UI even if pages is empty
+        try:
+            run_rfp_analyzer_onepage(pages)
+            st.stop()
+        except Exception as e:
+            st.error(f"One-Page Analyzer error: {e}")
     else:
         # Prefer current_rfp_id if set; otherwise, latest
         try:
@@ -5801,7 +5841,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # Optional: allow switching back to legacy Analyzer
         use_legacy = False
 
-        if not use_legacy and _rid_one:
+        if _rid_one:
             try:
                 _df_files = pd.read_sql_query(
                     "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
