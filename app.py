@@ -1,7 +1,6 @@
 import re
 import streamlit as st
 import pandas as pd
-import mimetypes, zipfile, io
 
 # === Phase 1 Helper: insert-or-skip rfp_file by sha256 ===
 def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | None, mime: str | None = None):
@@ -11632,7 +11631,7 @@ def __p_is_supp(conn, email):
     row = __p_db(conn, "SELECT 1 FROM outreach_optouts WHERE lower(email)=lower(?) LIMIT 1", (email,)).fetchone()
     return bool(row)
 
-def __p_smtp_send(sender, to_email, subject, html):
+def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
     msg.attach(_MText(html or "", "html"))
     if sender.get("tls", True):
@@ -11710,7 +11709,7 @@ def __p_o3_ui(conn):
         try:
             s_subj = _render(subj, {"name":"Test","company":"TestCo"})
             s_body = _with_unsub(_render(body, {"name":"Test","company":"TestCo"}), test_to)
-            __p_smtp_send(sender, test_to, s_subj, s_body)
+            __p_smtp_send(sender, test_to, s_subj, s_body, attachments=_attach_paths)
             __p_db(conn, "INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system","O3_TEST", test_to))
             _st.success("Test sent")
         except Exception as e:
@@ -11721,9 +11720,28 @@ def __p_o3_ui(conn):
             em=r["email"]
             if __p_is_supp(conn, em): skip+=1; continue
             try:
-                __p_smtp_send(sender, em, _render(subj,r), _with_unsub(_render(body,r), em))
+                __p_smtp_send(sender, em, _render(subj,r), _with_unsub(_render(body,r), em), attachments=_attach_paths)
                 sent+=1; _time2.sleep(0.25)
             except Exception: fail+=1
+    # Attachments (optional for outreach blast)
+    _ups = _st.file_uploader(
+        "Attachments (optional)",
+        type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"],
+        accept_multiple_files=True,
+        key="__p_o3_attachments"
+    )
+    _attach_paths = st.session_state.get("__p_o3_attach_paths", [])
+    if _ups:
+        _attach_paths = []
+        for _up in _ups:
+            try:
+                _p = save_uploaded_file(_up, subdir="outreach")
+                if _p: _attach_paths.append(_p)
+            except Exception:
+                pass
+        st.session_state["__p_o3_attach_paths"] = _attach_paths
+    if _attach_paths:
+        _st.caption("Attachments to include: " + ", ".join([os.path.basename(p) for p in _attach_paths]))
         _st.success(f"Done. Sent {sent}. Skipped {skip}. Failed {fail}.")
 
 def __p_o5_ui(conn):
