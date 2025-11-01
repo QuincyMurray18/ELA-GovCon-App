@@ -1801,9 +1801,9 @@ def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
         for i, h in enumerate(hits, start=1):
             cid = h.get("chunk_id", i)
             rid = h.get("rfp_id", rfp_id)
-            text = h.get("chunk") or h.get("text") or ""
+            frag_text = h.get("chunk") or h.get("text") or ""
             tag = f"[RFP-{rid}:{cid}]"
-            blocks.append(f"{tag} {text}")
+            blocks.append(f"{tag} {frag_text}")
         return "\n\n".join(blocks)
     except Exception:
         return None
@@ -2816,11 +2816,11 @@ def research_fetch(url: str, ttl_hours: int = 24) -> dict:
         import requests  # lazy import
         r = requests.get(url, timeout=20, headers={"User-Agent":"ELA-GovCon/1.0"})
         status = int(getattr(r, "status_code", 0) or 0)
-        text = r.text if hasattr(r, "text") else ""
+        resp_text = r.text if hasattr(r, "text") else ""
         # persist
         try:
             with open(txt_path, "w", encoding="utf-8") as fh:
-                fh.write(text or "")
+                fh.write(resp_text or "")
             with open(meta_path, "w", encoding="utf-8") as fh:
                 json.dump({"url": url, "status": status, "ts": time.time(), "path": txt_path}, fh)
         except Exception:
@@ -6289,10 +6289,10 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 _bytes = f.read()
                             except Exception:
                                 _bytes = b""
-                        text = _read_file(type('F', (), {'name': f.name, 'read': lambda self=None: _bytes})())
-                        if not text.strip():
+                        raw_text = _read_file(type('F', (), {'name': f.name, 'read': lambda self=None: _bytes})())
+                        if not raw_text.strip():
                             continue
-                        secs = extract_sections_L_M(text)
+                        secs = extract_sections_L_M(raw_text)
                         l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
                         clins = extract_clins(text) + (extract_clins_xlsx(_bytes) if (f.name or '').lower().endswith('.xlsx') else []); dates = extract_dates(text); pocs = extract_pocs(text)
                         meta = {
