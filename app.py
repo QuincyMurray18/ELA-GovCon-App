@@ -11666,6 +11666,15 @@ def __p_is_supp(conn, email):
 
 def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
+    try:
+        
+        # Ensure readable default size if raw HTML fragment provided
+        
+        if html and '<html' not in html.lower():
+            html = _o3_wrap_email_html(html)
+    
+    except Exception:
+        pass
     msg.attach(_MText(html or "", "html"))
     # Attachments
     try:
