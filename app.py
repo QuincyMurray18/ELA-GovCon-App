@@ -5440,8 +5440,8 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
 
-# === Phase 3 helpers (core) ===
-import datetime as _dt, hashlib
+# === Phase 3 helpers (core, injected) ===
+import datetime as _dt, hashlib, re as _re
 
 def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
     from contextlib import closing as _closing
@@ -5478,7 +5478,6 @@ def _p3_rfp_meta_set(conn, rfp_id: int, key: str, value: str):
         conn.commit()
 
 def _p3_parse_notice_id(s: str) -> str:
-    import re as _re
     if not s: return ""
     m = _re.search(r"NoticeId=([A-Za-z0-9\-]+)", s)
     if m: return m.group(1)
@@ -5515,7 +5514,6 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
                 results["errors"].append(f"{fname}: {e}")
     except Exception as e:
         results["errors"].append(f"fetch error: {e}")
-    # Re-index & re-extract (best-effort)
     try:
         if "y1_index_rfp" in globals():
             globals()["y1_index_rfp"](conn, int(rfp_id), rebuild=False)
@@ -5532,7 +5530,6 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
 def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     from contextlib import closing as _closing
     import pandas as _pd
-    # Deal
     try:
         df = _pd.read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
         title = (df.iloc[0]["title"] if not df.empty else f"RFP #{rfp_id}")
@@ -5541,14 +5538,12 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     try:
         with _closing(conn.cursor()) as cur:
             cur.execute(
-                "INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at) "
-                "VALUES(?, ?, COALESCE((SELECT stage FROM deals WHERE rfp_id=?), 'Intake'), datetime('now'))",
+                "INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at) VALUES(?, ?, COALESCE((SELECT stage FROM deals WHERE rfp_id=?), 'Intake'), datetime('now'))",
                 (int(rfp_id), str(title), int(rfp_id))
             )
             conn.commit()
     except Exception:
         pass
-    # Contacts
     try:
         dfp = _pd.read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
     except Exception:
@@ -5563,8 +5558,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at) "
-                        "VALUES(?,?,?,?,?, datetime('now'))",
+                        "INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at) VALUES(?,?,?,?,?, datetime('now'))",
                         (str(name), str(email), str(phone), str(job), str(agency))
                     )
                     conn.commit()
@@ -5575,8 +5569,8 @@ def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
     try:
         import pandas as _pd
         df = _pd.read_sql_query(
-            "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR label LIKE '%Close%') "
-            "ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)
+            "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR label LIKE '%Close%') ORDER BY id DESC LIMIT 1;",
+            conn, params=(int(rfp_id),)
         )
         if not df.empty:
             return str(df.iloc[0]["value"] or "")
@@ -5614,6 +5608,7 @@ END:VCALENDAR
 def _run_rfp_analyzer_phase3(conn):
     import pandas as pd, streamlit as st, io, zipfile, mimetypes
     st.header("RFP Analyzer")
+    st.caption("Build: P3-READY " + "{ts}".format(ts=_dt.datetime.utcnow().strftime("%Y%m%d-%H%M%SZ")))
 
     # RFP picker
     try:
