@@ -5440,7 +5440,7 @@ def run_research_tab(conn: sqlite3.Connection) -> None:
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
 
-# === Phase 3 helpers (core, injected) ===
+# === Phase 3 helpers (injected) ===
 import datetime as _dt, hashlib, re as _re
 
 def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
@@ -5530,6 +5530,7 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
 def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     from contextlib import closing as _closing
     import pandas as _pd
+    # Deal
     try:
         df = _pd.read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
         title = (df.iloc[0]["title"] if not df.empty else f"RFP #{rfp_id}")
@@ -5538,12 +5539,14 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     try:
         with _closing(conn.cursor()) as cur:
             cur.execute(
-                "INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at) VALUES(?, ?, COALESCE((SELECT stage FROM deals WHERE rfp_id=?), 'Intake'), datetime('now'))",
+                "INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at) "
+                "VALUES(?, ?, COALESCE((SELECT stage FROM deals WHERE rfp_id=?), 'Intake'), datetime('now'))",
                 (int(rfp_id), str(title), int(rfp_id))
             )
             conn.commit()
     except Exception:
         pass
+    # Contacts
     try:
         dfp = _pd.read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
     except Exception:
@@ -5558,7 +5561,8 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at) VALUES(?,?,?,?,?, datetime('now'))",
+                        "INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at) "
+                        "VALUES(?,?,?,?,?, datetime('now'))",
                         (str(name), str(email), str(phone), str(job), str(agency))
                     )
                     conn.commit()
@@ -5569,7 +5573,8 @@ def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
     try:
         import pandas as _pd
         df = _pd.read_sql_query(
-            "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR label LIKE '%Close%') ORDER BY id DESC LIMIT 1;",
+            "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR '%Close%') "
+            "ORDER BY id DESC LIMIT 1;",
             conn, params=(int(rfp_id),)
         )
         if not df.empty:
@@ -5591,24 +5596,14 @@ def _p3_make_ics(summary: str, when_str: str) -> bytes:
         dt = datetime.utcnow().replace(hour=12, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
     dt_utc = dt.strftime("%Y%m%dT%H%M%SZ")
     uid = f"ela-{int(_dt.datetime.utcnow().timestamp())}@local"
-    ics = f"""BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//ELA//RFP Due Date//EN
-BEGIN:VEVENT
-UID:{uid}
-DTSTAMP:{dt_utc}
-DTSTART:{dt_utc}
-SUMMARY:{summary}
-END:VEVENT
-END:VCALENDAR
-"""
+    ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ELA//RFP Due Date//EN\nBEGIN:VEVENT\nUID:" + uid +           "\nDTSTAMP:" + dt_utc + "\nDTSTART:" + dt_utc + "\nSUMMARY:" + summary + "\nEND:VEVENT\nEND:VCALENDAR\n"
     return ics.encode("utf-8")
 
 
 def _run_rfp_analyzer_phase3(conn):
     import pandas as pd, streamlit as st, io, zipfile, mimetypes
     st.header("RFP Analyzer")
-    st.caption("Build: P3-READY " + "{ts}".format(ts=_dt.datetime.utcnow().strftime("%Y%m%d-%H%M%SZ")))
+    st.caption("Build: OnePage+P3")
 
     # RFP picker
     try:
@@ -5643,8 +5638,8 @@ def _run_rfp_analyzer_phase3(conn):
     )
 
     # Phase 3 controls
-    cA, cB, cC = st.columns([1,1,2])
-    with cA:
+    colA, colB, colC = st.columns([1,1,2])
+    with colA:
         if st.button("Check for SAM updates ▶", key="p3_check_sam"):
             with st.spinner("Checking SAM.gov for amendments and new attachments…"):
                 res = _p3_check_sam_updates(conn, int(selected_rfp_id))
@@ -5652,12 +5647,12 @@ def _run_rfp_analyzer_phase3(conn):
                 errs = res.get("errors") or []
                 if errs:
                     st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
-    with cB:
+    with colB:
         if st.button("Ensure Deal & Contacts", key="p3_crm_wire"):
             with st.spinner("Creating deal record and mirroring POCs into contacts…"):
                 _p3_ensure_deal_and_contacts(conn, int(selected_rfp_id))
                 st.success("CRM wiring complete (best-effort).")
-    with cC:
+    with colC:
         due = _p3_due_date_for_rfp(conn, int(selected_rfp_id))
         if due:
             st.info(f"📅 Proposal Due: **{due}**")
@@ -5684,8 +5679,8 @@ def _run_rfp_analyzer_phase3(conn):
             pass
         sam_input = st.text_input("SAM.gov URL or NoticeId (optional)", value=_prefill_url, key="onepage_sam_input")
 
-        c1, c2 = st.columns([1,1])
-        with c1:
+        col1, col2 = st.columns([1,1])
+        with col1:
             if st.button("Ingest & Analyze ▶", type="primary", key="onepage_ingest"):
                 if not uploads:
                     st.warning("Choose at least one file.")
@@ -5725,7 +5720,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success("Files added and Analyzer updated.")
                     st.rerun()
 
-        with c2:
+        with col2:
             if st.button("Fetch from SAM.gov ▶", key="onepage_fetch_sam"):
                 with st.spinner("Fetching attachments from SAM.gov…"):
                     try:
