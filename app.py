@@ -10383,6 +10383,22 @@ def render_outreach_mailmerge(conn):
     # 2) Template inputs
     subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
     body = st.text_area("HTML Body", value=st.session_state.get("outreach_body",""), height=260, key="o3_body")
+
+    # Attachments for this blast
+    ups = st.file_uploader("Attachments (optional)", type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"], accept_multiple_files=True, key="o3_attachments")
+    attach_paths = st.session_state.get("o3_attach_paths", [])
+    if ups:
+        attach_paths = []
+        for up in ups:
+            try:
+                p = save_uploaded_file(up, subdir="outreach")
+                if p:
+                    attach_paths.append(p)
+            except Exception:
+                pass
+        st.session_state["o3_attach_paths"] = attach_paths
+    if attach_paths:
+        st.caption("Attachments to include: " + ", ".join([os.path.basename(p) for p in attach_paths]))
     # 3) Sender
     st.subheader("Sender")
     sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
@@ -10404,9 +10420,9 @@ def render_outreach_mailmerge(conn):
                 if test:
                     st.info("Test run: rendering only, no SMTP.")
                     # call with test_only=True
-                    out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn))
+                    out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn), attachments=attach_paths)
                 else:
-                    out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn))
+                    out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn), attachments=attach_paths)
                 st.success("Send function executed")
             else:
                 st.warning("Send function not available in this build.")
@@ -10631,7 +10647,7 @@ except Exception:
         SMTP_SSL = _smtplib.SMTP_SSL
         SMTP = _smtplib.SMTP
 
-def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500):
+def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500, attachments: list[str] | None = None):
     # Ensure required email and SMTP aliases are available
     try:
         from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
@@ -10702,6 +10718,23 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     msg["Subject"] = subj
                     html = _o3_wrap_email_html(html)
                     msg.attach(_O3MIMEText(html, "html", "utf-8"))
+                    # Attach files if provided
+                    try:
+                        if attachments:
+                            from email.mime.base import MIMEBase as _MBase
+                            from email import encoders as _enc
+                            for _ap in attachments:
+                                try:
+                                    with open(_ap, 'rb') as _f:
+                                        _part = _MBase('application', 'octet-stream'); _part.set_payload(_f.read())
+                                    _enc.encode_base64(_part)
+                                    import os as _os
+                                    _part.add_header('Content-Disposition', f'attachment; filename="{_os.path.basename(_ap)}"')
+                                    msg.attach(_part)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                     smtp.sendmail(sender["email"], [to_email], msg.as_string())
                     status = "Sent"; err = ""
                 except Exception as e:
@@ -11634,6 +11667,23 @@ def __p_is_supp(conn, email):
 def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
     msg.attach(_MText(html or "", "html"))
+    # Attachments
+    try:
+        if attachments:
+            from email.mime.base import MIMEBase as _MBase
+            from email import encoders as _enc
+            for _ap in attachments:
+                try:
+                    with open(_ap, 'rb') as _f:
+                        _part = _MBase('application','octet-stream'); _part.set_payload(_f.read())
+                    _enc.encode_base64(_part)
+                    import os as _os
+                    _part.add_header('Content-Disposition', f'attachment; filename="{_os.path.basename(_ap)}"')
+                    msg.attach(_part)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     if sender.get("tls", True):
         s = _smtp2.SMTP(sender["host"], int(sender.get("port",587))); s.ehlo(); s.starttls(context=_ssl2.create_default_context()); s.login(sender["email"], sender["app_password"])
     else:
@@ -11709,7 +11759,7 @@ def __p_o3_ui(conn):
         try:
             s_subj = _render(subj, {"name":"Test","company":"TestCo"})
             s_body = _with_unsub(_render(body, {"name":"Test","company":"TestCo"}), test_to)
-            __p_smtp_send(sender, test_to, s_subj, s_body, attachments=_attach_paths)
+            __p_smtp_send(sender, test_to, s_subj, s_body)
             __p_db(conn, "INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system","O3_TEST", test_to))
             _st.success("Test sent")
         except Exception as e:
@@ -11720,28 +11770,9 @@ def __p_o3_ui(conn):
             em=r["email"]
             if __p_is_supp(conn, em): skip+=1; continue
             try:
-                __p_smtp_send(sender, em, _render(subj,r), _with_unsub(_render(body,r), em), attachments=_attach_paths)
+                __p_smtp_send(sender, em, _render(subj,r), _with_unsub(_render(body,r), em))
                 sent+=1; _time2.sleep(0.25)
             except Exception: fail+=1
-    # Attachments (optional for outreach blast)
-    _ups = _st.file_uploader(
-        "Attachments (optional)",
-        type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"],
-        accept_multiple_files=True,
-        key="__p_o3_attachments"
-    )
-    _attach_paths = st.session_state.get("__p_o3_attach_paths", [])
-    if _ups:
-        _attach_paths = []
-        for _up in _ups:
-            try:
-                _p = save_uploaded_file(_up, subdir="outreach")
-                if _p: _attach_paths.append(_p)
-            except Exception:
-                pass
-        st.session_state["__p_o3_attach_paths"] = _attach_paths
-    if _attach_paths:
-        _st.caption("Attachments to include: " + ", ".join([os.path.basename(p) for p in _attach_paths]))
         _st.success(f"Done. Sent {sent}. Skipped {skip}. Failed {fail}.")
 
 def __p_o5_ui(conn):
