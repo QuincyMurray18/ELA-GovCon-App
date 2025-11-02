@@ -9520,7 +9520,7 @@ def run_rfp_analyzer(conn) -> None:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
             try:
                 _one_click_analyze(conn, int(rid))
-                st.experimental_rerun()
+                st.rerun()
             except Exception as e:
                 st.error(f"Ingest failed: {e}")
 
@@ -9544,7 +9544,7 @@ def run_rfp_analyzer(conn) -> None:
                     y1_index_rfp(conn, int(rid), rebuild=False)
                 except Exception:
                     pass
-                st.experimental_rerun()
+                st.rerun()
 
     # Build pages and render One-Page
     try:
