@@ -5602,9 +5602,6 @@ def _p3_make_ics(summary: str, when_str: str) -> bytes:
 
 def _run_rfp_analyzer_phase3(conn):
     import pandas as pd, streamlit as st, io, zipfile, mimetypes
-    st.stop()
-    # Legacy Analyzer removed
-    # st.header("RFP Analyzer")
     st.caption("Build: OnePage+P3")
 
     # RFP picker
@@ -5838,7 +5835,8 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             st.rerun()
         except Exception as _e:
             st.error(f"Create & ingest failed: {_e}")
-    st.stop()else:
+    st.stop()
+else:
         # Prefer current_rfp_id if set; otherwise, latest
         try:
             _current_id = st.session_state.get('current_rfp_id')
@@ -5862,10 +5860,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
             key="onepage_rfp_default"
         )
 
-        # Optional: allow switching back to legacy Analyzer
-        use_legacy = False
-
-        if not use_legacy and _rid_one:
+        if _rid_one:
             try:
                 _df_files = pd.read_sql_query(
                     "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
@@ -5891,9 +5886,6 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === end One‑Page Analyzer ===
     # === end One‑Page Analyzer ===
 
-    st.stop()
-    # Legacy Analyzer removed
-    # st.header("RFP Analyzer")
     # --- RFP Meta Editor ---
 
     # --- RFP Meta Editor (safe) ---
