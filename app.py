@@ -1801,9 +1801,9 @@ def _y6_fetch_y1_context(conn, rfp_id, question: str, k_auto_fn=None):
         for i, h in enumerate(hits, start=1):
             cid = h.get("chunk_id", i)
             rid = h.get("rfp_id", rfp_id)
-            frag_text = h.get("chunk") or h.get("text") or ""
+            text = h.get("chunk") or h.get("text") or ""
             tag = f"[RFP-{rid}:{cid}]"
-            blocks.append(f"{tag} {frag_text}")
+            blocks.append(f"{tag} {text}")
         return "\n\n".join(blocks)
     except Exception:
         return None
@@ -2816,11 +2816,11 @@ def research_fetch(url: str, ttl_hours: int = 24) -> dict:
         import requests  # lazy import
         r = requests.get(url, timeout=20, headers={"User-Agent":"ELA-GovCon/1.0"})
         status = int(getattr(r, "status_code", 0) or 0)
-        resp_text = r.text if hasattr(r, "text") else ""
+        text = r.text if hasattr(r, "text") else ""
         # persist
         try:
             with open(txt_path, "w", encoding="utf-8") as fh:
-                fh.write(resp_text or "")
+                fh.write(text or "")
             with open(meta_path, "w", encoding="utf-8") as fh:
                 json.dump({"url": url, "status": status, "ts": time.time(), "path": txt_path}, fh)
         except Exception:
@@ -5602,7 +5602,9 @@ def _p3_make_ics(summary: str, when_str: str) -> bytes:
 
 def _run_rfp_analyzer_phase3(conn):
     import pandas as pd, streamlit as st, io, zipfile, mimetypes
-    st.header("RFP Analyzer")
+    st.stop()
+    # Legacy Analyzer removed
+    # st.header("RFP Analyzer")
     st.caption("Build: OnePage+P3")
 
     # RFP picker
@@ -5773,48 +5775,70 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     if run_rfp_analyzer_onepage is None:
         st.info("One-Page Analyzer module is unavailable.")
     elif _df_rf_ctx is None or _df_rf_ctx.empty:
-        st.subheader("RFP Analyzer — One‑Page View")
-        st.caption("No RFPs yet. Add files below and the analyzer will populate automatically.")
-        up = st.file_uploader("Add files to this RFP", type=["pdf","doc","docx","txt","zip","xls","xlsx"], accept_multiple_files=True, key="rfp_add_files_empty")
-        pages = []
-        if up:
-            from contextlib import closing
-            rid = None
-            try:
-                with closing(conn.cursor()) as cur:
-                    cur.execute("INSERT INTO rfps(title) VALUES(?);", ("Untitled RFP",))
-                    conn.commit()
-                    rid = cur.lastrowid
-                for f in up:
+    # No RFPs yet — allow creating a new one right here (One‑Page Analyzer only)
+    st.info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
+    from contextlib import closing as _closing
+    # Prefill from any pushed SAM notice (if present)
+    _ctx = st.session_state.get("rfp_selected_notice") or {}
+    _title = st.text_input("RFP Title", value=str(_ctx.get("Title") or ""), key="op_new_title")
+    _sol = st.text_input("Solicitation #", value=str(_ctx.get("Solicitation") or ""), key="op_new_sol")
+    _sam = st.text_input("SAM URL", value=str(_ctx.get("SAM Link") or ""), key="op_new_sam", placeholder="https://sam.gov/")
+    ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"], accept_multiple_files=True, key="op_new_files")
+    go = st.button("Create RFP & Ingest", key="op_create_ingest")
+    if go:
+        try:
+            with _closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                    ((_title or "Untitled RFP").strip(), (_sol or "").strip(), (_parse_sam_notice_id(_sam) or ""), (_sam or "").strip(), "")
+                )
+                _new_id = cur.lastrowid
+                conn.commit()
+            # Save uploads (ZIPs expanded)
+            import io as _io, zipfile as _zip
+            _saved = 0
+            for f in (ups or []):
+                try:
+                    _name = (f.name or "").lower()
+                    _b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+                except Exception:
+                    _name = (getattr(f, "name", "upload") or "").lower()
                     try:
-                        pth = save_uploaded_file(f, subdir="rfps")
-                        with open(pth, "rb") as fb:
-                            bb = fb.read()
-                        mime = guess_mime_from_name(f.name)
-                        with closing(conn.cursor()) as cur:
-                            cur.execute("INSERT INTO rfp_files(rfp_id, filename, mime, bytes) VALUES(?,?,?,?);", (rid, f.name, mime, bb))
-                            conn.commit()
+                        _b = f.read()
+                    except Exception:
+                        _b = b""
+                if _name.endswith(".zip") and _b:
+                    try:
+                        zf = _zip.ZipFile(_io.BytesIO(_b))
+                        for zname in zf.namelist()[:80]:
+                            if zname.endswith("/"):
+                                continue
+                            try:
+                                save_rfp_file_db(conn, int(_new_id), zname.split("/")[-1], zf.read(zname))
+                                _saved += 1
+                            except Exception:
+                                pass
                     except Exception:
                         pass
-                try:
-                    import pandas as _pd
-                    _df_files = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
-                    if not _df_files.empty:
-                        for _, r in _df_files.iterrows():
-                            texts = extract_text_pages(r['bytes'], r['mime']) or []
-                            for i, t in enumerate(texts[:100], start=1):
-                                pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
-                except Exception:
-                    pass
+                else:
+                    try:
+                        save_rfp_file_db(conn, int(_new_id), f.name, _b)
+                        _saved += 1
+                    except Exception:
+                        pass
+            # Build search index (best-effort)
+            try:
+                y1_index_rfp(conn, int(_new_id), rebuild=False)
             except Exception:
                 pass
-        # Always render One-Page UI even if pages is empty
-        try:
-            run_rfp_analyzer_onepage(pages)
-            st.stop()
-        except Exception as e:
-            st.error(f"One-Page Analyzer error: {e}")
-    else:
+            st.session_state["current_rfp_id"] = int(_new_id)
+            st.success(f"RFP #{int(_new_id)} created with {_saved} file(s). Jumping to analysis…")
+            # Jump to Analyzer explicitly on next run
+            st.session_state["nav_target"] = "RFP Analyzer"
+            st.rerun()
+        except Exception as _e:
+            st.error(f"Create & ingest failed: {_e}")
+    st.stop()else:
         # Prefer current_rfp_id if set; otherwise, latest
         try:
             _current_id = st.session_state.get('current_rfp_id')
@@ -5841,7 +5865,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
         # Optional: allow switching back to legacy Analyzer
         use_legacy = False
 
-        if _rid_one:
+        if not use_legacy and _rid_one:
             try:
                 _df_files = pd.read_sql_query(
                     "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
@@ -5867,7 +5891,9 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
     # === end One‑Page Analyzer ===
     # === end One‑Page Analyzer ===
 
-    st.header("RFP Analyzer")
+    st.stop()
+    # Legacy Analyzer removed
+    # st.header("RFP Analyzer")
     # --- RFP Meta Editor ---
 
     # --- RFP Meta Editor (safe) ---
@@ -6289,10 +6315,10 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                                 _bytes = f.read()
                             except Exception:
                                 _bytes = b""
-                        raw_text = _read_file(type('F', (), {'name': f.name, 'read': lambda self=None: _bytes})())
-                        if not raw_text.strip():
+                        text = _read_file(type('F', (), {'name': f.name, 'read': lambda self=None: _bytes})())
+                        if not text.strip():
                             continue
-                        secs = extract_sections_L_M(raw_text)
+                        secs = extract_sections_L_M(text)
                         l_items = derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))
                         clins = extract_clins(text) + (extract_clins_xlsx(_bytes) if (f.name or '').lower().endswith('.xlsx') else []); dates = extract_dates(text); pocs = extract_pocs(text)
                         meta = {
@@ -9572,6 +9598,14 @@ def nav() -> str:
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
+    
+    # Auto-jump to One‑Page Analyzer when a SAM notice was pushed,
+    # or when a one-shot nav_target is set.
+    if st.session_state.get("rfp_selected_notice"):
+        return "RFP Analyzer"
+    _tgt = st.session_state.pop("nav_target", None)
+    if _tgt:
+        return _tgt
     return st.sidebar.selectbox(
         "Go to",
         [
@@ -11706,15 +11740,6 @@ def __p_is_supp(conn, email):
 
 def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
-    try:
-        
-        # Ensure readable default size if raw HTML fragment provided
-        
-        if html and '<html' not in html.lower():
-            html = _o3_wrap_email_html(html)
-    
-    except Exception:
-        pass
     msg.attach(_MText(html or "", "html"))
     # Attachments
     try:
