@@ -5220,13 +5220,13 @@ if _has_rows:
         # Pager controls
         p1, p2, p3 = st.columns([1, 3, 1])
         with p1:
-            if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
+            if st.button("◀ Prev", key="sam_prev_btn_1", disabled=(cur_page <= 1)):
                 st.session_state["sam_page"] = cur_page - 1
                 st.rerun()
         with p2:
             st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
         with p3:
-            if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
+            if st.button("Next ▶", key="sam_next_btn_1", disabled=(cur_page >= total_pages)):
                 st.session_state["sam_page"] = cur_page + 1
                 st.rerun()
 
@@ -9008,13 +9008,13 @@ if _has_rows:
         # Pager controls
         p1, p2, p3 = st.columns([1, 3, 1])
         with p1:
-            if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
+            if st.button("◀ Prev", key="sam_prev_btn_2", disabled=(cur_page <= 1)):
                 st.session_state["sam_page"] = cur_page - 1
                 st.rerun()
         with p2:
             st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
         with p3:
-            if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
+            if st.button("Next ▶", key="sam_next_btn_2", disabled=(cur_page >= total_pages)):
                 st.session_state["sam_page"] = cur_page + 1
                 st.rerun()
 
@@ -9624,7 +9624,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
                 st.error(f"Create & ingest failed: {_e}")
         st.stop()
     else:
-        _styled_dataframe(flags, use_container_width=True, hide_index=True)
+        _styled_dataframe(_df_rf_ctx, use_container_width=True, hide_index=True)
 
 
 
