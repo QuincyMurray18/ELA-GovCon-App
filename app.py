@@ -5252,7 +5252,7 @@ if _has_rows:
 
                 c3, c4, c5 = st.columns([2, 2, 2])
                 with c3:
-                    if st.button("View details", key=f"sam_view_{i}"):
+                    if st.button("View details", key=f"sam_view_1_{i}"):
                         st.session_state["sam_selected_idx"] = i
                         st.rerun()
                 with c4:
@@ -9040,7 +9040,7 @@ if _has_rows:
 
                 c3, c4, c5 = st.columns([2, 2, 2])
                 with c3:
-                    if st.button("View details", key=f"sam_view_{i}"):
+                    if st.button("View details", key=f"sam_view_2_{i}"):
                         st.session_state["sam_selected_idx"] = i
                         st.rerun()
                 with c4:
