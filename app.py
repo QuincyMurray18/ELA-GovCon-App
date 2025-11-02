@@ -2572,6 +2572,32 @@ def ask_ai_with_citations(conn: sqlite3.Connection, rfp_id: int, question: str, 
             strict = True
         if strict:
             yield "[system] Insufficient evidence in linked RFP files. Build or Update the search index for this RFP on 'Ask with citations (Y1)', then ask again. General answers are disabled in CO Chat."
+# PATCH: Rerun-safe Y1 ask form
+with st.form(f"y1_form_{int(selected_rfp_id)}", clear_on_submit=False):
+    q = st.text_area(
+        "Your question",
+        key=f"y1_q_{int(selected_rfp_id)}",
+        height=120,
+        placeholder="e.g., Summarize Section L submission requirements."
+    )
+    k = st.slider(
+        "Citations (k)",
+        min_value=3,
+        max_value=10,
+        value=y_auto_k(st.session_state.get(f"y1_q_{int(selected_rfp_id)}", ""))
+    )
+    ask = st.form_submit_button("Ask with citations (Y1)", type="primary", use_container_width=True)
+
+if ask:
+    st.session_state["x3_show_modal"] = True
+    with st.status("Searching and answering...", expanded=True):
+        hits = y1_search(conn, int(selected_rfp_id), q or "", k=int(k)) or []
+        ph = st.empty()
+        buf = []
+        for tok in ask_ai_with_citations(conn, int(selected_rfp_id), q or "", k=int(k), temperature=0.2):
+            buf.append(tok)
+            ph.markdown("".join(buf))
+
             return
         for tok in ask_ai([{"role":"user","content": (question or "").strip()}], temperature=temperature):
             yield tok
@@ -4782,6 +4808,17 @@ def y55_merge_pocs(base_rows, ai_rows):
 def y55_apply_enhancement(text, l_items, clins, dates, pocs, meta, title, solnum):
 
     # ---- X3 MODAL RENDERER ----
+# PATCH: safer modal rendering on reruns
+if st.session_state.get("x3_show_modal"):
+    _notice = st.session_state.get("x3_modal_notice", {}) or {}
+    _nid = _safe_int(_notice.get("Notice ID"))
+    with st.modal("RFP Analyzer", key=f"x3_modal_{_nid}"):
+        try:
+            _x3_render_modal(conn, _notice)
+        except Exception as e:
+            st.error(f"Analyzer error: {e}")
+            st.stop()
+
     if st.session_state.get("x3_show_modal"):
         _notice = st.session_state.get("x3_modal_notice", {}) or {}
         try:
