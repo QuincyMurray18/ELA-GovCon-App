@@ -1,4 +1,10 @@
 import re
+
+# === Early stub alias to ensure router resolves "L and M Checklist" ===
+if "run_l_and_m_checklist" not in globals():
+    def run_l_and_m_checklist(conn):
+        return globals().get("run_lm_checklist", lambda c: None)(conn)
+
 import streamlit as st
 import pandas as pd
 
@@ -9631,7 +9637,7 @@ def run_rfp_analyzer(conn: sqlite3.Connection) -> None:
 
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
-        y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_lm_checklist_y6", title="Ask the CO about L&M")
+        st.info('Open the \"L and M Checklist\" page from the sidebar to work L & M items.')
     except Exception:
         pass
 
@@ -14878,8 +14884,10 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
 
 # --- Tab name alias ---
 def run_l_and_m_checklist(conn):
-    return run_lm_checklist(conn)
-
+    import streamlit as st
+    st.session_state['nav_target'] = 'L and M Checklist'
+    st.rerun()
+    return None
 
 # --- Tab name alias ---
 def run_backup_data(conn):
