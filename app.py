@@ -5500,6 +5500,9 @@ if _has_rows:
                             st.session_state["nav_target"] = "RFP Analyzer"
                             st.session_state["_force_rfp_analyzer"] = True
                             st.success("Opening RFP Analyzer…")
+                            st.session_state['page_override'] = 'RFP Analyzer'
+                            st.session_state['nav_target'] = 'RFP Analyzer'
+                            st.toast('Opening RFP Analyzer…')
                             st.rerun()
                         except Exception as e:
                             st.error(f"Unable to push to RFP Analyzer: {e}")
