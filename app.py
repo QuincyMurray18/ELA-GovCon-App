@@ -5454,6 +5454,11 @@ if _has_rows:
                     # Push notice to Analyzer tab (optional)
                     if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
                         # Create or get RFP for this notice, fetch attachments, and navigate
+                    st.toast("Opening RFP Analyzer…")
+                    st.session_state['_force_rfp_analyzer'] = True
+                    st.session_state['nav_target'] = 'RFP Analyzer'
+                    st.rerun()
+
                         try:
                             notice = row.to_dict()
                         except Exception:
@@ -9560,6 +9565,8 @@ def init_session() -> None:
 
 
 def nav() -> str:
+    if st.session_state.pop("_force_rfp_analyzer", False):
+        return "RFP Analyzer"
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
