@@ -1,18 +1,6 @@
 import re
 import streamlit as st
 
-def _goto_rfp_analyzer(rid, notice=None):
-    import streamlit as st
-    try:
-        st.session_state["current_rfp_id"] = int(rid) if rid is not None else None
-    except Exception:
-        st.session_state["current_rfp_id"] = rid
-    if notice is not None:
-        st.session_state["rfp_selected_notice"] = notice
-    st.session_state["nav_target"] = "RFP Analyzer"
-    st.rerun()
-
-
 # === Phase 1: schema + helpers for attachments reliability ===
 import hashlib, time, requests, sqlite3
 from contextlib import closing as _closing
@@ -5491,45 +5479,30 @@ if _has_rows:
 
                     # Push notice to Analyzer tab (optional)
                     if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
-                        # Create or get RFP for this notice, fetch attachments, and jump directly to Analyzer
                         try:
                             notice = row.to_dict()
-                        except Exception:
-                            notice = {}  # fallback
-                        rid = None
-                        try:
-                            rid = _ensure_rfp_for_notice(conn, notice)
-                            st.session_state["current_rfp_id"] = int(rid)
-                        except Exception as _e:
-                            st.warning(f"RFP record not created: {_e}")
-                        # Phase 1 fetch (best-effort)
-                        try:
-                            _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
-                            _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
-                            if rid and _nid:
-                                try:
-                                    _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                        st.session_state["rfp_selected_notice"] = notice
-                        st.session_state["nav_target"] = "RFP Analyzer"
-                        st.success("Opening RFP Analyzer…")
-                        try:
-                            _goto_rfp_analyzer(st.session_state.get('current_rfp_id'))
-                            st.stop()
-                        except Exception as _e:
+                            rid = None
                             try:
-                                st.rerun()
+                                rid = _ensure_rfp_for_notice(conn, notice)
                             except Exception:
-                                try:
-                                    # If 'row' exists, surface context so the analyzer can pick it up
-                                    st.session_state["rfp_selected_notice"] = row.to_dict() if 'row' in locals() else None
-                                except Exception:
-                                    pass
-                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-                                st.error(f"Unable to push to RFP Analyzer: {_e}")# Inline details view for the selected card
+                                rid = st.session_state.get("current_rfp_id")
+                            try:
+                                _sam_u = (notice.get("SAM URL") or notice.get("url") or "")
+                                _nid = _parse_sam_notice_id(_sam_u) if '_parse_sam_notice_id' in globals() else (notice.get("Notice ID") or _sam_u)
+                                if rid and _nid and '_phase1_fetch_sam_attachments' in globals():
+                                    try:
+                                        _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                            st.session_state["rfp_selected_notice"] = notice
+                            st.session_state["nav_target"] = "RFP Analyzer"
+                            st.session_state["_force_rfp_analyzer"] = True
+                            st.success("Opening RFP Analyzer…")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Unable to push to RFP Analyzer: {e}")
                 try:
                     _sel = st.session_state.get("sam_selected_idx")
                 except Exception:
