@@ -5479,12 +5479,6 @@ if _has_rows:
                         st.session_state["nav_target"] = "RFP Analyzer"
                         st.success(f"RFP #{rid or ''} ready in Analyzer.")
                         st.rerun()
-
-                            st.session_state["rfp_selected_notice"] = row.to_dict()
-                            st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-                        except Exception as _e:
-                            st.error(f"Unable to push to RFP Analyzer: {_e}")
-
                 # Inline details view for the selected card
                 try:
                     _sel = st.session_state.get("sam_selected_idx")
