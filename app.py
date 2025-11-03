@@ -9837,7 +9837,13 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     # explicit fallbacks for known variant names
     if not callable(fn):
         alt = {
-            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+            "RFP Analyzer": ["run_rfp_analyzer", "run_rfp_analyzer_onepage", "render_rfp_analyzer_onepage"],
+"RFP Analyzer — One‑Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
+"RFP Analyzer - One-Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
+"RFP Analyzer One‑Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
+"RFP Analyzer One-Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
+"RFP Analyzer One Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
+"L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
             "Backup & Data": ["run_backup_data", "run_backup_and_data"],
         }.get((page or "").strip(), [])
         for a in alt:
