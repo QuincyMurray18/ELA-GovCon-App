@@ -9848,6 +9848,14 @@ def main() -> None:
         y0_ai_panel()
     except Exception:
         pass
+    override = st.session_state.pop('page_override', None)
+
+    if override:
+
+        router(override, conn)
+
+        st.stop()
+
     router(nav(), conn)
 
 
