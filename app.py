@@ -12706,3 +12706,14 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
+
+with c5:
+    if st.button("Open in RFP Analyzer ▶", key=f"open_rfp_{i}"):
+        st.session_state["_force_rfp_analyzer"] = True
+        st.session_state["nav_target"] = "RFP Analyzer"
+        try:
+            st.toast("Opening RFP Analyzer…")
+        except Exception:
+            st.success("Opening RFP Analyzer…")
+        st.rerun()
+
