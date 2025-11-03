@@ -1,6 +1,36 @@
 import re
 import streamlit as st
 
+# === Phase 2: Saved Searches & Alerts schema (SAM-only) ===
+def _ensure_phase2_schema(conn):
+    try:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS saved_searches (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    query_json TEXT,
+                    cadence TEXT DEFAULT 'daily',
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY,
+                    saved_search_id INTEGER,
+                    last_run_at TEXT,
+                    last_result_count INTEGER,
+                    last_error TEXT,
+                    enabled INTEGER DEFAULT 1,
+                    FOREIGN KEY(saved_search_id) REFERENCES saved_searches(id)
+                );
+            """)
+    except Exception as e:
+        try:
+            st.warning(f"Phase 2 schema init failed: {e}")
+        except Exception:
+            pass
+
 # === Phase 1: schema + helpers for attachments reliability ===
 import hashlib, time, requests, sqlite3
 from contextlib import closing as _closing
@@ -5213,6 +5243,34 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             with st.expander("RFP Analyzer", expanded=True):
                 _x3_render_modal(conn, _notice)
     st.header("SAM Watch")
+st.markdown("#### Smart search (natural language)")
+nl_query = st.text_input("Try: '8a construction in TX due < 30 days'",
+                         key="sam_nl_query",
+                         placeholder="Describe what you want")
+if nl_query:
+    _nl = parse_nl_query(nl_query)
+    st.caption(f"Parsed: {_nl}")
+    st.session_state["sam_nl_filters"] = _nl
+
+col_s1, col_s2 = st.columns([1,1])
+with col_s1:
+    save_name = st.text_input("Save this search as", key="save_search_name", placeholder="e.g., 8a Construction TX")
+with col_s2:
+    cadence = st.selectbox("Alert cadence", ["daily","weekly","off"], index=0, key="save_search_cadence")
+
+if st.button("💾 Save this search"):
+    try:
+        _ensure_phase2_schema(conn)
+        payload = {"nl": st.session_state.get("sam_nl_filters") or {}, "filters": st.session_state.get("sam_filters") or {}}
+        with conn:
+            conn.execute("INSERT INTO saved_searches (name, query_json, cadence) VALUES (?,?,?);",
+                         (save_name or "Saved search", json.dumps(payload), cadence))
+            sid = conn.execute("SELECT last_insert_rowid();").fetchone()[0]
+            conn.execute("INSERT INTO alerts (saved_search_id, enabled) VALUES (?, ?);", (int(sid), 1 if cadence!='off' else 0))
+        st.success("Saved ✔")
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+
     st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
     api_key = get_sam_api_key()
@@ -5479,33 +5537,45 @@ if _has_rows:
 
                     # Push notice to Analyzer tab (optional)
                     if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
+                        # Create or get RFP for this notice, fetch attachments, and jump directly to Analyzer
                         try:
                             notice = row.to_dict()
-                            rid = None
+                        except Exception:
+                            notice = {}  # fallback
+                        rid = None
+                        try:
+                            rid = _ensure_rfp_for_notice(conn, notice)
+                            st.session_state["current_rfp_id"] = int(rid)
+                        except Exception as _e:
+                            st.warning(f"RFP record not created: {_e}")
+                        # Phase 1 fetch (best-effort)
+                        try:
+                            _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
+                            _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
+                            if rid and _nid:
+                                try:
+                                    _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        st.session_state["rfp_selected_notice"] = notice
+                        st.session_state["nav_target"] = "RFP Analyzer"
+                        st.success("Opening RFP Analyzer…")
+                        try:
+                            router("RFP Analyzer", conn)
+                            st.stop()
+                        except Exception as _e:
                             try:
-                                rid = _ensure_rfp_for_notice(conn, notice)
+                                st.rerun()
                             except Exception:
-                                rid = st.session_state.get("current_rfp_id")
-                            try:
-                                _sam_u = (notice.get("SAM URL") or notice.get("url") or "")
-                                _nid = _parse_sam_notice_id(_sam_u) if '_parse_sam_notice_id' in globals() else (notice.get("Notice ID") or _sam_u)
-                                if rid and _nid and '_phase1_fetch_sam_attachments' in globals():
-                                    try:
-                                        _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            st.session_state["rfp_selected_notice"] = notice
-                            st.session_state["nav_target"] = "RFP Analyzer"
-                            st.session_state["_force_rfp_analyzer"] = True
-                            st.success("Opening RFP Analyzer…")
-                            st.session_state['page_override'] = 'RFP Analyzer'
-                            st.session_state['nav_target'] = 'RFP Analyzer'
-                            st.toast('Opening RFP Analyzer…')
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Unable to push to RFP Analyzer: {e}")
+                                try:
+                                    # If 'row' exists, surface context so the analyzer can pick it up
+                                    st.session_state["rfp_selected_notice"] = row.to_dict() if 'row' in locals() else None
+                                except Exception:
+                                    pass
+                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                                st.error(f"Unable to push to RFP Analyzer: {_e}")# Inline details view for the selected card
                 try:
                     _sel = st.session_state.get("sam_selected_idx")
                 except Exception:
@@ -9840,13 +9910,7 @@ def router(page: str, conn: sqlite3.Connection) -> None:
     # explicit fallbacks for known variant names
     if not callable(fn):
         alt = {
-            "RFP Analyzer": ["run_rfp_analyzer", "run_rfp_analyzer_onepage", "render_rfp_analyzer_onepage"],
-"RFP Analyzer — One‑Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
-"RFP Analyzer - One-Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
-"RFP Analyzer One‑Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
-"RFP Analyzer One-Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
-"RFP Analyzer One Page": ["run_rfp_analyzer_onepage", "run_rfp_analyzer"],
-"L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
+            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
             "Backup & Data": ["run_backup_data", "run_backup_and_data"],
         }.get((page or "").strip(), [])
         for a in alt:
@@ -12700,3 +12764,103 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'warn': cls += ' ela-warn'
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
+
+
+# === Phase 2: NL Query Parsing & Relevance Score (SAM-only) ===
+import math, datetime, re, json
+from datetime import datetime as _dt, timedelta as _td
+
+def parse_nl_query(q: str) -> dict:
+    if not q: return {}
+    s = q.lower()
+    out = {"keywords": [], "naics": [], "state": None, "set_aside": None, "due_lte_days": None}
+    for m in re.findall(r"\b(\d{5,6})\b", s):
+        out["naics"].append(m)
+    for key, aliases in {
+        "8a": ["8a", "8(a)"],
+        "sdvosb": ["sdvosb", "service disabled", "service-disabled"],
+        "wosb": ["wosb", "women owned"],
+        "hubzone": ["hubzone"],
+        "sdb": ["sdb", "small disadvantaged"],
+        "veteran": ["veteran", "vosb"]
+    }.items():
+        if any(a in s for a in aliases):
+            out["set_aside"] = key.upper(); break
+    for m in re.findall(r"\bin\s+([a-z]{2})\b", s):
+        out["state"] = m.upper()
+    m = re.search(r"due\s*<\s*(\d+)\s*days", s) or re.search(r"due\s*<=\s*(\d+)\s*days", s)
+    if m: out["due_lte_days"] = int(m.group(1))
+    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9\-/]+", s)
+    banned = set(["in","due","days","sdvosb","wosb","hubzone","8a","8","veteran","sdb"] + out["naics"])
+    out["keywords"] = [t for t in tokens if t not in banned]
+    return out
+
+def relevance_score(row: dict, profile: dict | None = None) -> float:
+    score = 0.0
+    try:
+        pref_naics = set((profile or {}).get("preferred_naics", []))
+        pref_set = (profile or {}).get("preferred_set_aside", "").upper().strip()
+        r_naics = set(str(row.get("naics") or "").replace(";",",").split(","))
+        if pref_naics and r_naics & pref_naics: score += 2.5
+        if pref_set and str(row.get("set_aside") or "").upper().startswith(pref_set): score += 2.0
+        due = str(row.get("due_date") or "")
+        if due:
+            try:
+                dd = _dt.fromisoformat(due.replace("Z","").replace("T"," ")); days = (dd - _dt.utcnow()).days
+                if days <= 14: score += 1.5
+                elif days <= 30: score += 0.5
+            except Exception: pass
+        kw = (profile or {}).get("keywords", [])
+        hay = (str(row.get("title") or "") + " " + str(row.get("description") or "")).lower()
+        hits = sum(1 for k in kw if k.lower() in hay); score += min(2.0, 0.3 * hits)
+    except Exception: pass
+    return round(score, 3)
+
+# === Phase 2: Alerts Center (SAM-only) ===
+def run_alerts_center(conn):
+    st.title("Alerts")
+    _ensure_phase2_schema(conn)
+    try:
+        df = pd.read_sql_query("""
+            SELECT s.id, s.name, s.cadence, a.enabled, a.last_run_at, a.last_result_count, a.last_error
+            FROM saved_searches s
+            LEFT JOIN alerts a ON a.saved_search_id = s.id
+            ORDER BY s.id DESC;
+        """, conn)
+    except Exception as e:
+        st.error(f"Load failed: {e}")
+        df = pd.DataFrame()
+
+    if df is None or df.empty:
+        st.info("No saved searches yet.")
+        return
+
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    sel = st.multiselect("Select saved search IDs", options=df["id"].tolist(), key="alert_sel_ids")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Run now"):
+            ok = 0; err = 0
+            for sid in sel:
+                try:
+                    row = conn.execute("SELECT query_json FROM saved_searches WHERE id=?;", (int(sid),)).fetchone()
+                    payload = json.loads(row[0]) if row and row[0] else {}
+                    filters = payload.get("filters") or {}
+                    count = len(filters.keys())
+                    with conn:
+                        conn.execute("UPDATE alerts SET last_run_at=datetime('now'), last_result_count=? WHERE saved_search_id=?;",
+                                     (int(count), int(sid)))
+                    ok += 1
+                except Exception:
+                    err += 1
+            st.success(f"Ran {ok} search(es), errors={err}")
+    with c2:
+        if st.button("Enable"):
+            with conn:
+                for sid in sel: conn.execute("UPDATE alerts SET enabled=1 WHERE saved_search_id=?;", (int(sid),))
+            st.success("Enabled")
+    with c3:
+        if st.button("Disable"):
+            with conn:
+                for sid in sel: conn.execute("UPDATE alerts SET enabled=0 WHERE saved_search_id=?;", (int(sid),))
+            st.success("Disabled")
