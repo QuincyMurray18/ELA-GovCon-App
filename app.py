@@ -5480,7 +5480,6 @@ if _has_rows:
                         st.session_state["nav_target"] = "RFP Analyzer"
                         st.toast("Opening RFP Analyzer…")
                         st.rerun()
-
                     st.toast("Opening RFP Analyzer…")
                     st.session_state['_force_rfp_analyzer'] = True
                     st.session_state['nav_target'] = 'RFP Analyzer'
