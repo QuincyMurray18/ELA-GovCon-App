@@ -1,20 +1,159 @@
 import re
 import streamlit as st
+# === Phase 1: schema + helpers for attachments reliability ===
+import hashlib, time, requests, sqlite3
+from contextlib import closing as _closing
+
+def _ensure_phase1_schema(conn: sqlite3.Connection) -> None:
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(rfp_files);").fetchall()}
+    except Exception:
+        cols = set()
+    def _add(col, ddl):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE rfp_files ADD COLUMN {ddl};")
+    with conn:
+        _add("status", "status TEXT")         # queued | downloaded | failed | hash_mismatch
+        _add("last_error", "last_error TEXT") # last error text
+        _add("src_url", "src_url TEXT")       # original download URL when known
+
+def _p1_set_status(conn, file_id: int, status: str, err: str | None = None):
+    try:
+        with conn:
+            conn.execute("UPDATE rfp_files SET status=?, last_error=? WHERE id=?;", (status, err or "", int(file_id)))
+    except Exception:
+        pass
+
+def _download_with_retry(url: str, retries: int = 3, timeout: int = 30) -> tuple[bytes | None, str | None]:
+    last_err = None
+    for i in range(retries):
+        try:
+            r = requests.get(url, timeout=timeout)
+            if r.status_code == 200 and r.content:
+                return r.content, None
+            last_err = f"http {r.status_code} empty={len(r.content)==0}"
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(2 * (i + 1))
+    return None, last_err
+
+def _phase1_fetch_sam_attachments(conn: sqlite3.Connection, rfp_id: int, notice: str | dict) -> int:
+    """
+    Preferred path:
+      - sam_list_attachments(notice) -> iterable of dicts {'name':..., 'url':...}
+      - download each with retry, store to rfp_files with sha256 + bytes, set status
+    Fallback path:
+      - sam_try_fetch_attachments(notice) -> iterable of (name, blob)
+    """
+    _ensure_phase1_schema(conn)
+    added = 0
+
+    items = []
+    if 'sam_list_attachments' in globals():
+        try:
+            items = list(sam_list_attachments(notice) or [])
+        except Exception:
+            items = []
+
+    if items:
+        for it in items:
+            name = (it.get("name") or "").strip() or "attachment"
+            url  = (it.get("url")  or "").strip()
+            if not url:
+                continue
+            try:
+                with conn:
+                    conn.execute("""
+                        INSERT INTO rfp_files (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
+                        VALUES (?, ?, 'application/octet-stream', '', ?, NULL, datetime('now'), 'queued', '', ?);
+                    """, (int(rfp_id), name, sqlite3.Binary(b""), url))
+                fid = conn.execute(
+                    "SELECT id FROM rfp_files WHERE rfp_id=? AND filename=? ORDER BY id DESC LIMIT 1;",
+                    (int(rfp_id), name)
+                ).fetchone()[0]
+                blob, err = _download_with_retry(url)
+                if blob is None:
+                    _p1_set_status(conn, fid, "failed", err)
+                    continue
+                sha = hashlib.sha256(blob).hexdigest()
+                dup = conn.execute(
+                    "SELECT id FROM rfp_files WHERE rfp_id=? AND sha256=? AND id<>? LIMIT 1;",
+                    (int(rfp_id), sha, int(fid))
+                ).fetchone()
+                if dup:
+                    _p1_set_status(conn, fid, "hash_mismatch", "duplicate content")
+                    continue
+                with conn:
+                    conn.execute("""
+                        UPDATE rfp_files 
+                           SET bytes=?, sha256=?, status='downloaded', last_error=''
+                         WHERE id=?;
+                    """, (sqlite3.Binary(blob), sha, int(fid)))
+                added += 1
+            except Exception as e:
+                try:
+                    _p1_set_status(conn, fid, "failed", str(e))
+                except Exception:
+                    pass
+        return added
+
+    if 'sam_try_fetch_attachments' in globals():
+        try:
+            for name, data in sam_try_fetch_attachments(notice):
+                sha = hashlib.sha256(data or b"").hexdigest()
+                with conn:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO rfp_files 
+                          (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
+                        VALUES (?, ?, 'application/octet-stream', ?, ?, NULL, datetime('now'), 'downloaded', '', NULL);
+                    """, (int(rfp_id), str(name or ""), sha, sqlite3.Binary(data or b"")))
+                added += 1
+        except Exception:
+            pass
+    return added
+
+def _phase1_retry_file(conn: sqlite3.Connection, file_id: int) -> bool:
+    _ensure_phase1_schema(conn)
+    row = None
+    try:
+        row = conn.execute("SELECT src_url FROM rfp_files WHERE id=?;", (int(file_id),)).fetchone()
+    except Exception:
+        row = None
+    if not row or not (row[0] or "").strip():
+        _p1_set_status(conn, file_id, "failed", "no src_url")
+        return False
+    blob, err = _download_with_retry(row[0])
+    if blob is None:
+        _p1_set_status(conn, file_id, "failed", err)
+        return False
+    sha = hashlib.sha256(blob).hexdigest()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE rfp_files SET bytes=?, sha256=?, status='downloaded', last_error='' WHERE id=?;",
+                (sqlite3.Binary(blob), sha, int(file_id))
+            )
+        return True
+    except Exception as e:
+        _p1_set_status(conn, file_id, "failed", str(e))
+        return False
 import pandas as pd
 
 # === Phase 1 Helper: insert-or-skip rfp_file by sha256 ===
-def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | None, mime: str | None = None):
-    import hashlib, sqlite3
+def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | None,
+                             mime: str | None = None, src_url: str | None = None, status: str = "downloaded"):
+    _ensure_phase1_schema(conn)
     sha = hashlib.sha256((blob or b"")).hexdigest()
     try:
         with conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO rfp_files (rfp_id, filename, mime, sha256, bytes, pages, created_at)
-                VALUES (?, ?, ?, ?, ?, NULL, datetime('now'))
-                ;
+                INSERT OR IGNORE INTO rfp_files 
+                    (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
+                VALUES (?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
                 """,
-                (int(rfp_id), str(filename or ""), str(mime or "application/octet-stream"), sha, blob)
+                (int(rfp_id), str(filename or ""), str(mime or "application/octet-stream"),
+                 sha, sqlite3.Binary(blob or b""), status, src_url or "")
             )
         return True
     except Exception as e:
@@ -24,7 +163,6 @@ def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | Non
             pass
         return False
 
-# === Phase 1 Helper: one-click analyze orchestrator ===
 def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
     try:
         notice = None
@@ -38,14 +176,20 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
             notice = _parse_sam_notice_id(_sam_url) if _sam_url else None
         except Exception:
             notice = None
-        # 1) Fetch SAM attachments if possible
-        if notice and 'sam_try_fetch_attachments' in globals():
+        
+        # 1) Fetch SAM attachments (Phase 1)
+        if notice:
             try:
-                for name, data in sam_try_fetch_attachments(notice):
-                    _insert_or_skip_rfp_file(conn, int(rfp_id), name, data, None)
+                added = _phase1_fetch_sam_attachments(conn, int(rfp_id), notice)
+                try:
+                    st.success(f"Fetched {added} attachment(s) from SAM")
+                except Exception:
+                    pass
             except Exception as e:
-                try: st.warning(f"SAM fetch skipped: {e}")
-                except Exception: pass
+                try:
+                    st.warning(f"SAM fetch skipped: {e}")
+                except Exception:
+                    pass
         # 2) Rebuild search index
         try:
             y1_index_rfp(conn, int(rfp_id), rebuild=False)
@@ -6462,6 +6606,38 @@ def _run_rfp_analyzer_phase3(conn):
                         st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Link failed: {e}")
+        st.markdown("### Attachments status")
+        try:
+            df_status = pd.read_sql_query("""
+                SELECT id, filename, COALESCE(mime,'') AS mime, 
+                       length(bytes) AS size_bytes,
+                       COALESCE(sha256,'') AS sha256,
+                       COALESCE(status,'') AS status,
+                       COALESCE(last_error,'') AS last_error,
+                       COALESCE(src_url,'') AS src_url
+                FROM rfp_files 
+                WHERE rfp_id=? 
+                ORDER BY id DESC;
+            """, conn, params=(int(rid),))
+        except Exception:
+            df_status = pd.DataFrame()
+        if df_status is None or df_status.empty:
+            st.caption("No files yet.")
+        else:
+            _styled_dataframe(df_status, use_container_width=True, hide_index=True)
+            bad = df_status[df_status["status"].isin(["failed","hash_mismatch"])]
+            if not bad.empty:
+                sel_retry = st.multiselect("Retry download for file IDs", options=bad["id"].tolist(), key=f"p1_retry_{rid}")
+                if st.button("Retry failed downloads", key=f"p1_retry_btn_{rid}") and sel_retry:
+                    ok, fail = 0, 0
+                    for fid in sel_retry:
+                        try:
+                            ok += 1 if _phase1_retry_file(conn, int(fid)) else 0
+                        except Exception:
+                            fail += 1
+                    st.success(f"Retried {len(sel_retry)}. OK={ok} Fail={fail}")
+                    st.rerun()
+
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
