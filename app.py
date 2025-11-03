@@ -252,8 +252,7 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
         except Exception:
             pass
         return True
-    except Exception as e:
-        try: st.error(f"One-Click Analyze failed: {e}")
+        st.error(f"One-Click Analyze failed: {e}")
         # Phase 1: auto-fetch SAM attachments if we have a notice context
         try:
             _ctx = st.session_state.get('rfp_selected_notice') or {}
@@ -263,7 +262,6 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
                 _ = _phase1_fetch_sam_attachments(conn, _rid, _nid)
         except Exception:
             pass
-        except Exception: pass
         return False
 
 # === Compliance Matrix safety guards ===
