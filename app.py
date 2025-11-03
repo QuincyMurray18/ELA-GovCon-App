@@ -3249,8 +3249,8 @@ def y4_ui_review(conn: sqlite3.Connection) -> None:
 
     k = y_auto_k(draft_text or "review")
     chunking = st.checkbox("Auto-chunk long text", value=True, key="y5_chunk_on")
-    run = st.button("Run CO Review", type="primary", key="y4_go")
-    if run:
+    clicked_run_co_review = st.button("Run CO Review", type="primary", key="y4_go")
+    if clicked_run_co_review:
         ok_gate, missing_gate = require_LM_minimum(conn, int(rfp_id))
         if not ok_gate:
             st.error("L/M compliance gate failed. Missing: " + ", ".join(missing_gate))
@@ -5334,11 +5334,11 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with g2:
             max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3)
 
-        run = st.button("Run Search", type="primary")
+        clicked_run_search = st.button("Run Search", type="primary")
 
     results_df = st.session_state.get("sam_results_df", pd.DataFrame())
 
-    if run:
+    if clicked_run_search:
         if not api_key:
             st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
             return
@@ -6173,7 +6173,7 @@ def _run_rfp_analyzer_phase3(conn):
             mode = st.radio("Save mode", ["One record per file", "Combine all into one RFP"], index=0, horizontal=True)
         with colB:
             st.markdown("**Parse Controls**")
-            run = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
+            clicked_parse_save = st.button("Parse & Save", type="primary", key="rfp_parse_btn")
             st.caption("We'll auto-extract L/M checklist items, CLINs, key dates, and POCs.")
 
         def _read_file(file):
@@ -6212,7 +6212,7 @@ def _run_rfp_analyzer_phase3(conn):
             st.error(f"Unsupported file type: {file.name}")
             return ""
 
-        if run:
+        if clicked_parse_save:
             if (not ups) and (not pasted):
                 st.error("No input. Upload at least one file or paste text.")
             else:
