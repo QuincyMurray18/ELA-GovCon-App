@@ -252,22 +252,24 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
         except Exception:
             pass
         return True
-        st.error(f"One-Click Analyze failed: {e}")
-        # Phase 1: auto-fetch SAM attachments if we have a notice context
+    except Exception as e:
         try:
-            _ctx = st.session_state.get('rfp_selected_notice') or {}
-            _rid = int(st.session_state.get('current_rfp_id') or 0)
-            _nid = _ctx.get('Notice ID') or _ctx.get('noticeId') or _ctx.get('id') or ''
-            if _rid and _nid:
-                _ = _phase1_fetch_sam_attachments(conn, _rid, _nid)
+            st.error(f"One-Click Analyze failed: {e}")
         except Exception:
             pass
-        return False
+        # Phase 1: auto-fetch SAM attachments if we have a notice context
+    try:
+        _ctx = st.session_state.get('rfp_selected_notice') or {}
+        _rid = int(st.session_state.get('current_rfp_id') or 0)
+        _nid = _ctx.get('Notice ID') or _ctx.get('noticeId') or _ctx.get('id') or ''
+        if _rid and _nid:
+            _ = _phase1_fetch_sam_attachments(conn, _rid, _nid)
+    except Exception:
+        pass
+    return False
 
 # === Compliance Matrix safety guards ===
-try:
-    x6_requirements_df
-except NameError:
+if "x6_requirements_df" not in globals():
     def x6_requirements_df(conn, rfp_id):
         import pandas as pd
         try:
@@ -279,9 +281,7 @@ except NameError:
         except Exception:
             return pd.DataFrame(columns=["id","must_flag","file","page","text"])
 
-try:
-    _ensure_x6_schema
-except NameError:
+if "_ensure_x6_schema" not in globals():
     def _ensure_x6_schema(conn):
         from contextlib import closing as _closing
         with _closing(conn.cursor()) as cur:
@@ -5507,15 +5507,17 @@ if _has_rows:
                         try:
                             router("RFP Analyzer", conn)
                             st.stop()
-                        except Exception:
-                            st.rerun()
-
-                            st.session_state["rfp_selected_notice"] = row.to_dict()
-                            st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                         except Exception as _e:
-                            st.error(f"Unable to push to RFP Analyzer: {_e}")
-
-                # Inline details view for the selected card
+                            try:
+                                st.rerun()
+                            except Exception:
+                                try:
+                                    # If 'row' exists, surface context so the analyzer can pick it up
+                                    st.session_state["rfp_selected_notice"] = row.to_dict() if 'row' in locals() else None
+                                except Exception:
+                                    pass
+                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                                st.error(f"Unable to push to RFP Analyzer: {_e}")# Inline details view for the selected card
                 try:
                     _sel = st.session_state.get("sam_selected_idx")
                 except Exception:
@@ -9601,7 +9603,7 @@ def init_session() -> None:
 def nav() -> str:
     if st.session_state.pop('_force_rfp_analyzer', False):
         return 'RFP Analyzer'
-st.sidebar.title("Workspace")
+    st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
     # Auto-jump to One‑Page Analyzer when a SAM notice was pushed,
