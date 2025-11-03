@@ -1,6 +1,18 @@
 import re
 import streamlit as st
 
+def _goto_rfp_analyzer(rid, notice=None):
+    import streamlit as st
+    try:
+        st.session_state["current_rfp_id"] = int(rid) if rid is not None else None
+    except Exception:
+        st.session_state["current_rfp_id"] = rid
+    if notice is not None:
+        st.session_state["rfp_selected_notice"] = notice
+    st.session_state["nav_target"] = "RFP Analyzer"
+    st.rerun()
+
+
 # === Phase 1: schema + helpers for attachments reliability ===
 import hashlib, time, requests, sqlite3
 from contextlib import closing as _closing
@@ -5505,7 +5517,8 @@ if _has_rows:
                         st.session_state["nav_target"] = "RFP Analyzer"
                         st.success("Opening RFP Analyzer…")
                         try:
-                            st.rerun()
+                            _goto_rfp_analyzer(st.session_state.get('current_rfp_id'))
+                            st.stop()
                         except Exception as _e:
                             try:
                                 st.rerun()
