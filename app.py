@@ -5454,6 +5454,33 @@ if _has_rows:
                     # Push notice to Analyzer tab (optional)
                     if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
                         # Create or get RFP for this notice, fetch attachments, and navigate
+                        try:
+                            notice = row.to_dict()
+                        except Exception:
+                            notice = {}  # fallback
+                        rid = None
+                        try:
+                            rid = _ensure_rfp_for_notice(conn, notice)
+                            st.session_state["current_rfp_id"] = int(rid)
+                        except Exception as _e:
+                            st.warning(f"RFP record not created: {_e}")
+                        # Optional: Phase 1 fetch now if we have a URL or Notice ID
+                        try:
+                            _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
+                            _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
+                            if rid and _nid:
+                                try:
+                                    _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        st.session_state["rfp_selected_notice"] = notice
+                        st.session_state["_force_rfp_analyzer"] = True
+                        st.session_state["nav_target"] = "RFP Analyzer"
+                        st.toast("Opening RFP Analyzer…")
+                        st.rerun()
+
                     st.toast("Opening RFP Analyzer…")
                     st.session_state['_force_rfp_analyzer'] = True
                     st.session_state['nav_target'] = 'RFP Analyzer'
