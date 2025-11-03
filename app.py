@@ -5505,8 +5505,7 @@ if _has_rows:
                         st.session_state["nav_target"] = "RFP Analyzer"
                         st.success("Opening RFP Analyzer…")
                         try:
-                            router("RFP Analyzer", conn)
-                            st.stop()
+                            st.rerun()
                         except Exception as _e:
                             try:
                                 st.rerun()
