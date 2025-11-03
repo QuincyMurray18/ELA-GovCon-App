@@ -5503,9 +5503,9 @@ if _has_rows:
                             pass
                         st.session_state["rfp_selected_notice"] = notice
                         st.session_state["nav_target"] = "RFP Analyzer"
-st.session_state["page_override"] = "RFP Analyzer"
-st.toast("Opening RFP Analyzer…")
-st.rerun()
+                        st.session_state["page_override"] = "RFP Analyzer"
+                        st.toast("Opening RFP Analyzer…")
+                        st.rerun()
 
                         st.success("Opening RFP Analyzer…")
                         try:
@@ -9711,9 +9711,9 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
-st.session_state["page_override"] = "RFP Analyzer"
-st.toast("Opening RFP Analyzer…")
-st.rerun()
+                st.session_state["page_override"] = "RFP Analyzer"
+                st.toast("Opening RFP Analyzer…")
+                st.rerun()
 
                 st.rerun()
             except Exception as e:
