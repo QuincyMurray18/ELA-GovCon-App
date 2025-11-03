@@ -5503,6 +5503,10 @@ if _has_rows:
                             pass
                         st.session_state["rfp_selected_notice"] = notice
                         st.session_state["nav_target"] = "RFP Analyzer"
+st.session_state["page_override"] = "RFP Analyzer"
+st.toast("Opening RFP Analyzer…")
+st.rerun()
+
                         st.success("Opening RFP Analyzer…")
                         try:
                             router("RFP Analyzer", conn)
@@ -9657,7 +9661,7 @@ def run_rfp_analyzer(conn) -> None:
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
         st.info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
-        ctx0 = st.session_state.get("rfp_selected_notice") or {}
+        ctx0 = st.session_stateget("rfp_selected_notice") or {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_new_title")
         s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_new_sol")
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_new_sam", placeholder="https://sam.gov/")
@@ -9707,6 +9711,10 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
+st.session_state["page_override"] = "RFP Analyzer"
+st.toast("Opening RFP Analyzer…")
+st.rerun()
+
                 st.rerun()
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
