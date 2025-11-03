@@ -5243,73 +5243,73 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
             with st.expander("RFP Analyzer", expanded=True):
                 _x3_render_modal(conn, _notice)
     st.header("SAM Watch")
-st.markdown("#### Smart search (natural language)")
-nl_query = st.text_input("Try: '8a construction in TX due < 30 days'",
-                         key="sam_nl_query",
-                         placeholder="Describe what you want")
-if nl_query:
-    _nl = parse_nl_query(nl_query)
-    st.caption(f"Parsed: {_nl}")
-    st.session_state["sam_nl_filters"] = _nl
+    st.markdown("#### Smart search (natural language)")
+    nl_query = st.text_input("Try: '8a construction in TX due < 30 days'",
+                             key="sam_nl_query",
+                             placeholder="Describe what you want")
+    if nl_query:
+        _nl = parse_nl_query(nl_query)
+        st.caption(f"Parsed: {_nl}")
+        st.session_state["sam_nl_filters"] = _nl
 
-col_s1, col_s2 = st.columns([1,1])
-with col_s1:
-    save_name = st.text_input("Save this search as", key="save_search_name", placeholder="e.g., 8a Construction TX")
-with col_s2:
-    cadence = st.selectbox("Alert cadence", ["daily","weekly","off"], index=0, key="save_search_cadence")
+    col_s1, col_s2 = st.columns([1,1])
+    with col_s1:
+        save_name = st.text_input("Save this search as", key="save_search_name", placeholder="e.g., 8a Construction TX")
+    with col_s2:
+        cadence = st.selectbox("Alert cadence", ["daily","weekly","off"], index=0, key="save_search_cadence")
 
-if st.button("💾 Save this search"):
-    try:
-        _ensure_phase2_schema(conn)
-        payload = {"nl": st.session_state.get("sam_nl_filters") or {}, "filters": st.session_state.get("sam_filters") or {}}
-        with conn:
-            conn.execute("INSERT INTO saved_searches (name, query_json, cadence) VALUES (?,?,?);",
-                         (save_name or "Saved search", json.dumps(payload), cadence))
-            sid = conn.execute("SELECT last_insert_rowid();").fetchone()[0]
-            conn.execute("INSERT INTO alerts (saved_search_id, enabled) VALUES (?, ?);", (int(sid), 1 if cadence!='off' else 0))
-        st.success("Saved ✔")
-    except Exception as e:
-        st.error(f"Save failed: {e}")
+    if st.button("💾 Save this search"):
+        try:
+            _ensure_phase2_schema(conn)
+            payload = {"nl": st.session_state.get("sam_nl_filters") or {}, "filters": st.session_state.get("sam_filters") or {}}
+            with conn:
+                conn.execute("INSERT INTO saved_searches (name, query_json, cadence) VALUES (?,?,?);",
+                             (save_name or "Saved search", json.dumps(payload), cadence))
+                sid = conn.execute("SELECT last_insert_rowid();").fetchone()[0]
+                conn.execute("INSERT INTO alerts (saved_search_id, enabled) VALUES (?, ?);", (int(sid), 1 if cadence!='off' else 0))
+            st.success("Saved ✔")
+        except Exception as e:
+            st.error(f"Save failed: {e}")
 
-    st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
+        st.caption("Live search from SAM.gov v2 API. Push selected notices to Deals or RFP Analyzer.")
 
-    api_key = get_sam_api_key()
+        api_key = get_sam_api_key()
 
-    # Search filters (dates optional)
-    with st.expander("Search Filters", expanded=True):
-        today = datetime.now().date()
-        default_from = today - timedelta(days=30)
+        # Search filters (dates optional)
+        with st.expander("Search Filters", expanded=True):
+            today = datetime.now().date()
+            default_from = today - timedelta(days=30)
 
-        c1, c2, c3 = st.columns([2, 2, 2])
-        with c1:
-            use_dates = st.checkbox("Filter by posted date", value=False)
-        with c2:
-            active_only = st.checkbox("Active only", value=True)
-        with c3:
-            org_name = st.text_input("Organization/Agency contains")
+            c1, c2, c3 = st.columns([2, 2, 2])
+            with c1:
+                use_dates = st.checkbox("Filter by posted date", value=False)
+            with c2:
+                active_only = st.checkbox("Active only", value=True)
+            with c3:
+                org_name = st.text_input("Organization/Agency contains")
 
-        if use_dates:
-            d1, d2 = st.columns([2, 2])
-            with d1:
-                posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
-            with d2:
-                posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
+            if use_dates:
+                d1, d2 = st.columns([2, 2])
+                with d1:
+                    posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
+                with d2:
+                    posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
 
-        e1, e2, e3 = st.columns([2, 2, 2])
-        with e1:
-            keywords = st.text_input("Keywords (Title contains)")
-        with e2:
-            naics = st.text_input("NAICS (6-digit)")
-        with e3:
-            psc = st.text_input("PSC")
+            e1, e2, e3 = st.columns([2, 2, 2])
+            with e1:
+                keywords = st.text_input("Keywords (Title contains)")
+            with e2:
+                naics = st.text_input("NAICS (6-digit)")
+            with e3:
+                psc = st.text_input("PSC")
 
-        e4, e5, e6 = st.columns([2, 2, 2])
-        with e4:
-            state = st.text_input("Place of Performance State (e.g., TX)")
-        with e5:
-            set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
-        with e6:
-            pass
+            e4, e5, e6 = st.columns([2, 2, 2])
+            with e4:
+                state = st.text_input("Place of Performance State (e.g., TX)")
+            with e5:
+                set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)")
+            with e6:
+                pass
 
         ptype_map = {
             "Pre-solicitation": "p",
