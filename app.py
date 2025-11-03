@@ -1,5 +1,6 @@
 import re
 import streamlit as st
+
 # === Phase 1: schema + helpers for attachments reliability ===
 import hashlib, time, requests, sqlite3
 from contextlib import closing as _closing
@@ -13,9 +14,9 @@ def _ensure_phase1_schema(conn: sqlite3.Connection) -> None:
         if col not in cols:
             conn.execute(f"ALTER TABLE rfp_files ADD COLUMN {ddl};")
     with conn:
-        _add("status", "status TEXT")         # queued | downloaded | failed | hash_mismatch
-        _add("last_error", "last_error TEXT") # last error text
-        _add("src_url", "src_url TEXT")       # original download URL when known
+        _add("status", "status TEXT")
+        _add("last_error", "last_error TEXT")
+        _add("src_url", "src_url TEXT")
 
 def _p1_set_status(conn, file_id: int, status: str, err: str | None = None):
     try:
@@ -38,28 +39,19 @@ def _download_with_retry(url: str, retries: int = 3, timeout: int = 30) -> tuple
     return None, last_err
 
 def _phase1_fetch_sam_attachments(conn: sqlite3.Connection, rfp_id: int, notice: str | dict) -> int:
-    """
-    Preferred path:
-      - sam_list_attachments(notice) -> iterable of dicts {'name':..., 'url':...}
-      - download each with retry, store to rfp_files with sha256 + bytes, set status
-    Fallback path:
-      - sam_try_fetch_attachments(notice) -> iterable of (name, blob)
-    """
     _ensure_phase1_schema(conn)
     added = 0
-
     items = []
     if 'sam_list_attachments' in globals():
         try:
             items = list(sam_list_attachments(notice) or [])
         except Exception:
             items = []
-
     if items:
         for it in items:
             name = (it.get("name") or "").strip() or "attachment"
             url  = (it.get("url")  or "").strip()
-            if not url:
+            if not url: 
                 continue
             try:
                 with conn:
@@ -67,28 +59,21 @@ def _phase1_fetch_sam_attachments(conn: sqlite3.Connection, rfp_id: int, notice:
                         INSERT INTO rfp_files (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
                         VALUES (?, ?, 'application/octet-stream', '', ?, NULL, datetime('now'), 'queued', '', ?);
                     """, (int(rfp_id), name, sqlite3.Binary(b""), url))
-                fid = conn.execute(
-                    "SELECT id FROM rfp_files WHERE rfp_id=? AND filename=? ORDER BY id DESC LIMIT 1;",
-                    (int(rfp_id), name)
-                ).fetchone()[0]
+                fid = conn.execute("SELECT id FROM rfp_files WHERE rfp_id=? AND filename=? ORDER BY id DESC LIMIT 1;",
+                                   (int(rfp_id), name)).fetchone()[0]
                 blob, err = _download_with_retry(url)
                 if blob is None:
                     _p1_set_status(conn, fid, "failed", err)
                     continue
                 sha = hashlib.sha256(blob).hexdigest()
-                dup = conn.execute(
-                    "SELECT id FROM rfp_files WHERE rfp_id=? AND sha256=? AND id<>? LIMIT 1;",
-                    (int(rfp_id), sha, int(fid))
-                ).fetchone()
+                dup = conn.execute("SELECT id FROM rfp_files WHERE rfp_id=? AND sha256=? AND id<>? LIMIT 1;",
+                                   (int(rfp_id), sha, int(fid))).fetchone()
                 if dup:
                     _p1_set_status(conn, fid, "hash_mismatch", "duplicate content")
                     continue
                 with conn:
-                    conn.execute("""
-                        UPDATE rfp_files 
-                           SET bytes=?, sha256=?, status='downloaded', last_error=''
-                         WHERE id=?;
-                    """, (sqlite3.Binary(blob), sha, int(fid)))
+                    conn.execute("UPDATE rfp_files SET bytes=?, sha256=?, status='downloaded', last_error='' WHERE id=?;",
+                                 (sqlite3.Binary(blob), sha, int(fid)))
                 added += 1
             except Exception as e:
                 try:
@@ -96,7 +81,6 @@ def _phase1_fetch_sam_attachments(conn: sqlite3.Connection, rfp_id: int, notice:
                 except Exception:
                     pass
         return added
-
     if 'sam_try_fetch_attachments' in globals():
         try:
             for name, data in sam_try_fetch_attachments(notice):
@@ -114,7 +98,6 @@ def _phase1_fetch_sam_attachments(conn: sqlite3.Connection, rfp_id: int, notice:
 
 def _phase1_retry_file(conn: sqlite3.Connection, file_id: int) -> bool:
     _ensure_phase1_schema(conn)
-    row = None
     try:
         row = conn.execute("SELECT src_url FROM rfp_files WHERE id=?;", (int(file_id),)).fetchone()
     except Exception:
@@ -129,10 +112,8 @@ def _phase1_retry_file(conn: sqlite3.Connection, file_id: int) -> bool:
     sha = hashlib.sha256(blob).hexdigest()
     try:
         with conn:
-            conn.execute(
-                "UPDATE rfp_files SET bytes=?, sha256=?, status='downloaded', last_error='' WHERE id=?;",
-                (sqlite3.Binary(blob), sha, int(file_id))
-            )
+            conn.execute("UPDATE rfp_files SET bytes=?, sha256=?, status='downloaded', last_error='' WHERE id=?;",
+                         (sqlite3.Binary(blob), sha, int(file_id)))
         return True
     except Exception as e:
         _p1_set_status(conn, file_id, "failed", str(e))
@@ -140,6 +121,7 @@ def _phase1_retry_file(conn: sqlite3.Connection, file_id: int) -> bool:
 import pandas as pd
 
 # === Phase 1 Helper: insert-or-skip rfp_file by sha256 ===
+
 def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | None,
                              mime: str | None = None, src_url: str | None = None, status: str = "downloaded"):
     _ensure_phase1_schema(conn)
@@ -176,20 +158,15 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
             notice = _parse_sam_notice_id(_sam_url) if _sam_url else None
         except Exception:
             notice = None
-        
         # 1) Fetch SAM attachments (Phase 1)
         if notice:
             try:
                 added = _phase1_fetch_sam_attachments(conn, int(rfp_id), notice)
-                try:
-                    st.success(f"Fetched {added} attachment(s) from SAM")
-                except Exception:
-                    pass
+                try: st.success(f"Fetched {added} attachment(s) from SAM")
+                except Exception: pass
             except Exception as e:
-                try:
-                    st.warning(f"SAM fetch skipped: {e}")
-                except Exception:
-                    pass
+                try: st.warning(f"SAM fetch skipped: {e}")
+                except Exception: pass
         # 2) Rebuild search index
         try:
             y1_index_rfp(conn, int(rfp_id), rebuild=False)
@@ -5476,7 +5453,33 @@ if _has_rows:
 
                     # Push notice to Analyzer tab (optional)
                     if st.button("Push to RFP Analyzer", key=_uniq_key("push_to_rfp", int(i))):
+                        # Create or get RFP for this notice, fetch attachments, and navigate
                         try:
+                            notice = row.to_dict()
+                        except Exception:
+                            notice = {}  # fallback
+                        rid = None
+                        try:
+                            rid = _ensure_rfp_for_notice(conn, notice)
+                            st.session_state["current_rfp_id"] = int(rid)
+                        except Exception as _e:
+                            st.warning(f"RFP record not created: {_e}")
+                        # Optional: Phase 1 fetch now if we have a URL or Notice ID
+                        try:
+                            _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
+                            _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
+                            if rid and _nid:
+                                try:
+                                    _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        st.session_state["rfp_selected_notice"] = notice
+                        st.session_state["nav_target"] = "RFP Analyzer"
+                        st.success(f"RFP #{rid or ''} ready in Analyzer.")
+                        st.rerun()
+
                             st.session_state["rfp_selected_notice"] = row.to_dict()
                             st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                         except Exception as _e:
