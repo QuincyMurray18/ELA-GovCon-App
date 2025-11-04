@@ -13307,24 +13307,106 @@ def _extract_text_guess(name: str, b: bytes) -> str:
 
 _date_pat = re.compile(r"(?:due|proposal due|closing|responses? due)\s*[:\-–]?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", re.IGNORECASE)
 
-def _detect_due_date(text: str):
+
+_TZMAP = {
+    "ET":"-0500","EST":"-0500","EDT":"-0400",
+    "CT":"-0600","CST":"-0600","CDT":"-0500",
+    "MT":"-0700","MST":"-0700","MDT":"-0600",
+    "PT":"-0800","PST":"-0800","PDT":"-0700",
+    "UTC":"+0000","Z":"+0000","GMT":"+0000"
+}
+# Dates like "November 5, 2025 2:00 PM ET", "11/05/2025 1400 CT", "2025-11-05 14:00"
+_date_time_pat = re.compile(
+    r"(?:(?:proposal|proposals?|responses?)\s*(?:are\s*)?(?:due|closing|close|response\s*due|submission\s*deadline)\s*[:\-–]?\s*)?"
+    r"("
+    r"(?:[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)"
+    r"|(?:\d{1,2}/\d{1,2}/\d{2,4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)"
+    r"|(?:\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?)"
+    r")"
+    r"(?:\s*(?:hrs|hours|h|at|by)?\s*(\d{3,4})(?:\s*(?:hrs|hours|h))?)?"
+    r"(?:\s*(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|UTC|GMT|Z))?",
+    re.IGNORECASE
+)
+
+def _parse_dt_guess(s: str):
     try:
-        m = _date_pat.search(text or "")
-        if not m: return None, None
-        raw = m.group(1)
-        # Normalize
-        from datetime import datetime
-        for fmt in ("%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+        from dateutil import parser as _dp
+        return _dp.parse(s, fuzzy=True)
+    except Exception:
+        # very rough fallback: YYYY-MM-DD or MM/DD/YYYY
+        for fmt in ("%B %d, %Y %I:%M %p", "%B %d, %Y", "%b %d, %Y %I:%M %p", "%b %d, %Y",
+                    "%m/%d/%Y %I:%M %p", "%m/%d/%Y", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
             try:
-                dt = datetime.strptime(raw, fmt)
-                return raw, dt
+                from datetime import datetime
+                return datetime.strptime(s, fmt)
             except Exception:
                 continue
-        return raw, None
-    except Exception:
-        return None, None
+    return None
+
+def _detect_due_date(text: str, notice: dict=None):
+    """Find best due date from text + notice fields, with TZ support and multiple formats."""
+    candidates = []
+
+    # 1) Notice fields first (common keys)
+    if isinstance(notice, dict):
+        for key in ["Response Date", "Close Date", "Due Date", "Archive Date", "Date Response Due", "Offers Due Date", "Offers Due", "Closing Date", "Response Deadline"]:
+            val = notice.get(key)
+            if val and isinstance(val, str):
+                dt = _parse_dt_guess(val)
+                if dt: candidates.append(("notice:"+key, val, dt))
+
+    # 2) Regex scan of full text
+    for m in _date_time_pat.finditer(text or ""):
+        chunk = m.group(1)
+        hhmm = m.group(2)
+        tz = (m.group(3) or "").upper()
+        s = chunk
+        if hhmm and (":" not in s):
+            # append HHMM as HH:MM
+            try:
+                s = s.strip() + f" {hhmm[:-2]}:{hhmm[-2:]}"
+            except Exception:
+                pass
+        if tz in _TZMAP:
+            s = s + " " + _TZMAP[tz]
+        dt = _parse_dt_guess(s)
+        if dt:
+            candidates.append(("text", s, dt))
+
+    # Choose earliest future-ish date; else earliest overall
+    chosen = None
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    future = [(src, raw, dt) for (src, raw, dt) in candidates if dt and dt >= now - timedelta(days=3)]
+    pool = future or candidates
+    if pool:
+        pool.sort(key=lambda x: x[2])
+        chosen = pool[0]
+
+    if chosen:
+        return chosen[1], chosen[2]
+    return None, None
 
 def _make_ics(title: str, dt):
+    try:
+        if not dt:
+            return None
+        # If time is midnight, treat as all-day
+        if dt.hour == 0 and dt.minute == 0:
+            ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//RFP//Analyzer//EN\nBEGIN:VEVENT\n"
+            ics += f"SUMMARY:{title or 'Proposal Due'}\n"
+            ics += f"DTSTART;VALUE=DATE:{dt.strftime('%Y%m%d')}\n"
+            ics += "END:VEVENT\nEND:VCALENDAR\n"
+            return ics.encode("utf-8")
+        # Otherwise include time (UTC naive)
+        ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//RFP//Analyzer//EN\nBEGIN:VEVENT\n"
+        ics += f"SUMMARY:{title or 'Proposal Due'}\n"
+        ics += f"DTSTART:{dt.strftime('%Y%m%dT%H%M00Z')}\n"
+        ics += "DURATION:PT1H\nEND:VEVENT\nEND:VCALENDAR\n"
+        return ics.encode("utf-8")
+    except Exception:
+        return None
+
     try:
         if not dt: return None
         ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//RFP//Analyzer//EN\nBEGIN:VEVENT\n"
