@@ -1,6 +1,50 @@
 import re
 import streamlit as st
 
+# --- Phase 2 schema: saved_searches + alerts (with migration) ---
+def _ensure_phase2_schema(conn):
+    """Create Phase‑2 tables and migrate missing columns safely."""
+    try:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS saved_searches (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    nl_query TEXT,
+                    cadence TEXT DEFAULT 'daily',
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY,
+                    saved_search_id INTEGER,
+                    enabled INTEGER DEFAULT 1,
+                    last_run_at TEXT,
+                    last_result_count INTEGER,
+                    last_error TEXT,
+                    FOREIGN KEY(saved_search_id) REFERENCES saved_searches(id)
+                );
+            """)
+        # Migration: add missing columns (idempotent)
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(saved_searches);").fetchall()]
+            if 'nl_query' not in cols:
+                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN nl_query TEXT;")
+            if 'cadence' not in cols:
+                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN cadence TEXT DEFAULT 'daily';")
+            if 'created_at' not in cols:
+                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN created_at TEXT DEFAULT (datetime('now'));")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            st.warning(f"Phase 2 schema init failed: {e}")
+        except Exception:
+            pass
+
+
+
 # === Modals ===
 
 
