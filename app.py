@@ -1,8 +1,7 @@
 import re
 import streamlit as st
-import streamlit.components.v1 as components
 
-# === Phase 2.5 helpers ===
+# === Phase 2.5 helpers (canonical) ===
 def notify(msg: str, level: str = "info"):
     """Consistent toast/notice across Streamlit versions."""
     try:
@@ -25,16 +24,34 @@ def _ensure_db_meta(conn):
         try: st.warning(f"db_meta init failed: {e}")
         except Exception: pass
 
-def _backup_db_sql(conn, dest_dir="/mnt/data"):
-    """Write a .sql dump of the current DB (best-effort)."""
+def _backup_db_sql(conn, dest_dir=None):
+    """Write a .sql dump of the current DB (best-effort with fallbacks)."""
     try:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs(dest_dir, exist_ok=True)
-        out_path = os.path.join(dest_dir, f"samwatch_backup_{ts}.sql")
-        with open(out_path, "w", encoding="utf-8") as f:
-            for line in conn.iterdump():
-                f.write(f"{line}\n")
-        return out_path
+        # Choose a writable destination
+        dirs = []
+        if dest_dir: dirs.append(dest_dir)
+        dirs += ["./backups", os.path.join(os.path.expanduser("~"), ".samwatch", "backups"), "/tmp"]
+        out_path = None
+        for d in dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+                out_path = os.path.join(d, f"samwatch_backup_{ts}.sql")
+                with open(out_path, "w", encoding="utf-8") as f:
+                    for line in conn.iterdump():
+                        f.write(f"{line}\n")
+                break
+            except Exception:
+                out_path = None
+                continue
+        if out_path:
+            try: st.info(f"Backup saved: {out_path}")
+            except Exception: pass
+            return out_path
+        else:
+            try: st.info("Backup skipped: no writable location found.")
+            except Exception: pass
+            return None
     except Exception as e:
         try: st.info(f"Backup skipped: {e}")
         except Exception: pass
@@ -49,16 +66,13 @@ def phase2_5_bootstrap(conn):
     except Exception:
         pass
     try:
-        # Ensure Phase 2 schema exists
         _ensure_phase2_schema(conn)
     except Exception as e:
         try: st.warning(f"Schema check failed (Phase 2.5): {e}")
         except Exception: pass
-    # Best-effort backup
     _backup_db_sql(conn)
     st.session_state["_p25_bootstrapped"] = True
 
-# CSS polish: sticky action bar + health ribbon look
 def _inject_phase25_css():
     st.markdown(
         """
@@ -78,89 +92,16 @@ def _inject_phase25_css():
         unsafe_allow_html=True,
     )
 
+import streamlit.components.v1 as components
 
-# --- Phase 2 schema: saved_searches + alerts (with migration) ---
-def _ensure_phase2_schema(conn):
-    """Create Phase‑2 tables and migrate missing columns safely."""
-    try:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS saved_searches (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    nl_query TEXT,
-                    cadence TEXT DEFAULT 'daily',
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id INTEGER PRIMARY KEY,
-                    saved_search_id INTEGER,
-                    enabled INTEGER DEFAULT 1,
-                    last_run_at TEXT,
-                    last_result_count INTEGER,
-                    last_error TEXT,
-                    FOREIGN KEY(saved_search_id) REFERENCES saved_searches(id)
-                );
-            """)
-        # Migration: add missing columns (idempotent)
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(saved_searches);").fetchall()]
-            if 'nl_query' not in cols:
-                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN nl_query TEXT;")
-            if 'cadence' not in cols:
-                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN cadence TEXT DEFAULT 'daily';")
-            if 'created_at' not in cols:
-                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN created_at TEXT DEFAULT (datetime('now'));")
-        except Exception:
-            pass
-    except Exception as e:
-        try:
-            st.warning(f"Phase 2 schema init failed: {e}")
-        except Exception:
-            pass
+# === Phase 2.5 helpers ===
 
 
 
-# === Modals ===
 
 
-# --- Ask RFP Analyzer Modal (expander-based, version-safe) ---
-def _ask_rfp_analyzer_modal(notice: dict):
-    """Open the Ask RFP Analyzer 'modal' using an expander (works across Streamlit versions)."""
-    import streamlit as st
 
-    _title = (notice or {}).get("Title") or (notice or {}).get("Solicitation") or "Selected Notice"
-    _qid = (notice or {}).get("Notice ID") or (notice or {}).get("Solicitation") or ""
-    _qkey = f"ask_rfp_q_{_qid}"
 
-    # Use session-state flag to auto-open the expander on next rerun
-    st.session_state["ask_rfp_open"] = True
-    st.session_state["ask_rfp_notice"] = notice or {}
-
-    # Render the expander immediately as well (no need to rely on a rerun)
-    st.markdown('<a id="ask-rfp-anchor"></a>', unsafe_allow_html=True)
-    with st.expander(f"Ask RFP Analyzer — {_title}", expanded=True):
-        try:
-            components.html('<script>var el=document.getElementById("ask-rfp-anchor"); if(el){el.scrollIntoView({behavior:"smooth", block:"start"});}</script>', height=0)
-        except Exception:
-            pass
-        st.write("**Title:**", _title)
-        q = st.text_area(
-            "Your question",
-            key=_qkey,
-            placeholder="e.g., Summarize key requirements and due dates…"
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Send", key=f"ask_rfp_send_{_qid}"):
-                st.session_state["rfp_selected_notice"] = notice or {}
-                st.session_state["rfp_question"] = q or ""
-                st.success("Sent to Analyzer context.")
-        with c2:
-            if st.button("Close", key=f"ask_rfp_close_{_qid}"):
-                st.session_state["ask_rfp_open"] = False
 
 
 
@@ -2109,6 +2050,7 @@ from typing import Optional, Any, Dict, List, Tuple
 import io
 import json
 import os
+import tempfile
 import re
 import math
 import sqlite3
@@ -2664,6 +2606,7 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
 
 
 import os
+import tempfile
 
 def _resolve_model():
     # Priority: Streamlit secrets -> env var -> safe default
