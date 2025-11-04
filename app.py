@@ -2,6 +2,162 @@ import re
 import streamlit as st
 import zipfile
 
+# --- Phase 3 inline Analyzer (fallback if run_rfp_analyzer is missing) ---
+def _phase3_analyzer_inline(conn):
+    import os, io, zipfile, tempfile, re
+    import streamlit as st
+    from datetime import datetime
+
+    # Safety: ensure required helpers exist
+    try:
+        _ensure_phase2_schema(conn)
+    except Exception as e:
+        st.info(f"Phase 2 schema: {e}")
+    if ' _ensure_phase3_schema' not in globals():
+        pass  # defined elsewhere in this file in Phase 3 block
+    else:
+        _ensure_phase3_schema(conn)
+
+    st.markdown("### 🧠 Phase 3 — One‑Page Analyzer")
+    notice = st.session_state.get("rfp_selected_notice") or {}
+    title = notice.get("Title") or notice.get("Solicitation") or "Untitled RFP"
+    sam_url = notice.get("SAM Link") or notice.get("URL") or ""
+
+    # Prepare RFP record & dirs
+    try:
+        rfp_id = _get_or_create_rfp(conn, notice)
+    except Exception:
+        # minimal record if helper missing
+        rfp_id = 1
+    base_dir = "./rfp_store"
+    try: os.makedirs(base_dir, exist_ok=True)
+    except Exception:
+        base_dir = "/tmp/rfp_store"; os.makedirs(base_dir, exist_ok=True)
+    rfp_dir = os.path.join(base_dir, f"rfp_{rfp_id}"); os.makedirs(rfp_dir, exist_ok=True)
+    extracted_dir = os.path.join(rfp_dir, "extracted"); os.makedirs(extracted_dir, exist_ok=True)
+
+    c1, c2 = st.columns([3,1])
+    with c1:
+        st.subheader(title)
+        if sam_url: st.markdown(f"[Open in SAM]({sam_url})")
+    with c2:
+        st.caption(f"RFP ID: {rfp_id}")
+
+    st.divider()
+
+    up1, up2 = st.columns([2,1])
+    with up1:
+        files = st.file_uploader("➕ Add files to this RFP", type=["pdf","docx","txt","zip","xlsx","xls","csv","md","rtf"], accept_multiple_files=True, key=f"an_u_{rfp_id}")
+        if files:
+            with conn:
+                for f in files:
+                    data = f.read()
+                    path = os.path.join(rfp_dir, f.name)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "wb") as fh: fh.write(data)
+                    try:
+                        conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES(?,?,?,?,?);", (rfp_id, f.name, path, f.type, len(data)))
+                    except Exception:
+                        pass
+            st.success(f"Saved {len(files)} file(s).")
+    with up2:
+        st.caption("SAM.gov")
+        api = st.text_input("API Key", type="password", key=f"an_api_{rfp_id}")
+        cookie = st.text_input("Cookie (optional)", type="password", key=f"an_cookie_{rfp_id}")
+        if st.button("Fetch from SAM.gov ▶", key=f"an_fetch_{rfp_id}"):
+            try:
+                att_dir = os.path.join(rfp_dir, "attachments"); os.makedirs(att_dir, exist_ok=True)
+                pulled, errs = _fetch_sam_attachments(notice, api or st.session_state.get("sam_api_key"), att_dir, cookie or st.session_state.get("sam_cookie"))
+                if pulled:
+                    with conn:
+                        for p in pulled:
+                            fn = os.path.basename(p)
+                            cur = conn.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND filename=?;", (rfp_id, fn))
+                            if not cur.fetchone():
+                                conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES(?,?,?,?,?);", (rfp_id, fn, p, "downloaded", os.path.getsize(p)))
+                if pulled: st.success(f"Pulled {len(pulled)} attachment(s).")
+                else: st.info("No attachments found from API/HTML.")
+                if errs:
+                    with st.expander("Fetch log"):
+                        for e in errs: st.write("•", e)
+            except Exception as e:
+                st.warning(f"Fetch unavailable: {e}")
+
+    st.divider()
+
+    if st.button("One-Click Analyze ▶", type="primary", key=f"an_analyze_{rfp_id}"):
+        try:
+            cur = conn.execute("SELECT id, filename, path FROM rfp_files WHERE rfp_id = ? ORDER BY id;", (rfp_id,))
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        extracted_count = 0; combined = []
+        for fid, fname, fpath in rows:
+            try:
+                with open(fpath, "rb") as fh:
+                    b = fh.read()
+                text = _extract_text_guess(fname, b) if " _extract_text_guess" in globals() else "[extraction helper missing]"
+                out_txt = os.path.join(extracted_dir, f"{os.path.splitext(os.path.basename(fname))[0]}.txt")
+                with open(out_txt, "w", encoding="utf-8", errors="ignore") as out:
+                    out.write(text)
+                try: conn.execute("UPDATE rfp_files SET extracted_path = ? WHERE id = ?;", (out_txt, fid))
+                except Exception: pass
+                extracted_count += 1; combined.append(text[:100000])
+            except Exception as e:
+                st.warning(f"Extract failed for {fname}: {e}")
+        st.success(f"Extracted {extracted_count} file(s).")
+        whole = "\\n\\n".join(combined)
+        # Due date
+        try:
+            raw_due, dt_due = _detect_due_date(whole, notice)
+        except Exception:
+            raw_due, dt_due = None, None
+        if raw_due:
+            st.info(f"📅 Proposal Due (detected): {raw_due}")
+            try:
+                ics = _make_ics(title, dt_due)
+                if ics: st.download_button("Download Due Date (.ics)", data=ics, file_name=f"due_{rfp_id}.ics", mime="text/calendar", key=f"an_ics_{rfp_id}")
+            except Exception: pass
+        else:
+            st.caption("No due date detected.")
+
+        # Quick brief
+        bullets = []
+        try:
+            for kw in ["statement of work","sow","requirements","evaluation","period of performance","pop","deliverables"]:
+                if re.search(rf"\\b{kw}\\b", whole, re.IGNORECASE):
+                    bullets.append(f"Contains section: **{kw.title()}**")
+        except Exception:
+            pass
+        if not bullets: bullets.append("No obvious SOW/evaluation markers detected.")
+        st.markdown("### Quick Brief")
+        st.markdown("\\n".join([f"- {b}" for b in bullets]))
+
+    # Files list
+    st.markdown("### Files")
+    try:
+        cur = conn.execute("SELECT id, filename, path, extracted_path, bytes FROM rfp_files WHERE rfp_id = ? ORDER BY id;", (rfp_id,))
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        st.caption("No files yet. Use the uploader above.")
+    else:
+        for fid, fname, fpath, xpath, nbytes in rows:
+            with st.expander(f"{fname}  •  {nbytes or 0} bytes", expanded=False):
+                st.code(fpath)
+                if xpath and os.path.exists(xpath):
+                    try:
+                        with open(xpath, "r", encoding="utf-8", errors="ignore") as r:
+                            txt = r.read(2000)
+                        st.text_area("Extract preview", value=txt, height=160, key=f"an_xp_{fid}")
+                    except Exception as e:
+                        st.caption(f"[preview unavailable: {e}]")
+                else:
+                    st.caption("No extracted text yet. Click One-Click Analyze.")
+
+
+
 # === Phase 3: RFP ingest schema & helpers ===
 def _ensure_phase3_schema(conn):
     """Minimal schema for RFP records & files (idempotent)."""
@@ -5683,9 +5839,12 @@ def run_sam_watch(conn) -> None:
     # Phase 3 Analyzer tab (renders even if Smart Search errors)
     with tab_analyzer:
         try:
-            run_rfp_analyzer(conn)
+            if "run_rfp_analyzer" in globals():
+                run_rfp_analyzer(conn)
+            else:
+                _phase3_analyzer_inline(conn)
         except Exception as e:
-            st.error(f"Analyzer failed to render: {e}")
+            st.exception(e)
     
     with tab_search:
         api_key = get_sam_api_key()
