@@ -13397,7 +13397,8 @@ def _get_conn(db_path="samwatch.db"):
     except Exception:
         return sqlite3.connect(":memory:", check_same_thread=False)
 
-if __name__ == "__main__":
+# (Phase 3 router entry removed to avoid duplicate UI in host app)
+
     st.set_page_config(page_title="GovCon — SAM Watch & Analyzer", layout="wide")
     conn = _get_conn()
     try:
