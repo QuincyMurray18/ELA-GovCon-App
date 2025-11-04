@@ -5432,6 +5432,13 @@ def run_sam_watch(conn) -> None:
         st.session_state["sam_nl_text"] = ""
 
     # ---------- SEARCH TAB ----------
+    with tab_alerts:
+        try:
+            run_alerts_center(conn)
+        except Exception as e:
+            st.info("Alerts Center not available in this build.")
+            st.caption(str(e))
+
     with tab_search:
         api_key = get_sam_api_key()
 
@@ -5795,13 +5802,6 @@ def run_sam_watch(conn) -> None:
                             st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
     # ---------- ALERTS TAB ----------
-    with tab_alerts:
-        try:
-            run_alerts_center(conn)
-        except Exception as e:
-            st.info("Alerts Center not available in this build.")
-            st.caption(str(e))
-
 def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/")
