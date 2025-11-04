@@ -52,7 +52,7 @@ except NameError:
 
 # --- Phase 2 schema: saved_searches + alerts (with migration) ---
 def _ensure_phase2_schema(conn):
-    """Create Phase-2 tables and migrate missing columns safely."""
+    """Create Phase‑2 tables and migrate missing columns safely."""
     try:
         with conn:
             conn.execute("""
@@ -75,7 +75,7 @@ def _ensure_phase2_schema(conn):
                     FOREIGN KEY(saved_search_id) REFERENCES saved_searches(id)
                 );
             """)
-        # --- migration: add columns if they are missing ---
+        # migration: add missing columns (idempotent)
         try:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(saved_searches);").fetchall()]
             if 'nl_query' not in cols:
@@ -5289,49 +5289,49 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 
 
 def run_sam_watch(conn) -> None:
-    """
-    Phase 2 cleanup:
-    - Always render the SAM Watch UI (no gating behind Save Search).
-    - Adds tabs: Smart Search | Alerts.
-    - Adds a Score column computed from NL query (fallback heuristics if scorer is missing).
-    - Prevents accidental page jumps by clearing one-shot redirects.
+    """Phase‑2 SAM Watch:
+    - Tabs: Smart Search + Alerts
+    - Always-on filters and results
+    - Score column (list + table)
+    - "Ask RFP Analyzer" restored per row
     """
     import pandas as pd
+    from contextlib import closing
     from datetime import datetime, timedelta
 
     st.header("SAM Watch")
+    _ensure_phase2_schema(conn)
 
-    # --- Tabs ---
     tab_search, tab_alerts = st.tabs(["🔎 Smart Search", "🔔 Alerts"])
 
-    # Remember last search text for scoring context
-    if "sam_nl_text" not in st.session_state:
-        st.session_state["sam_nl_text"] = ""
+    with tab_alerts:
+        try:
+            run_alerts_center(conn)
+        except Exception as e:
+            st.error("Alerts Center not available in this build.")
+            st.caption(str(e))
 
-    # ---------- SEARCH TAB ----------
     with tab_search:
-        api_key = get_sam_api_key()
-
-        with st.expander("Search Filters", expanded=True):
-            today = datetime.now().date()
-            default_from = today - timedelta(days=30)
-
-            c1, c2, c3 = st.columns([2, 2, 2])
+        # Filters
+        today = datetime.now().date()
+        default_from = today - timedelta(days=30)
+        with st.expander("Filters", expanded=True):
+            c1, c2, c3 = st.columns([2,2,2])
             with c1:
-                use_dates = st.checkbox("Filter by posted date", value=False, key="sam_use_dates")
+                st.session_state.setdefault("sam_nl_text", "")
+                st.text_input("Smart search (natural language)", key="sam_nl_text", placeholder="e.g., sdvosb cyber 541512 tx due < 30 days")
             with c2:
-                active_only = st.checkbox("Active only", value=True, key="sam_active_only")
+                use_dates = st.checkbox("Filter by posted date", value=False, key="sam_use_dates")
             with c3:
-                org_name = st.text_input("Organization/Agency contains", key="sam_org")
+                active_only = st.checkbox("Active only", value=True, key="sam_active_only")
 
-            if use_dates:
-                d1, d2 = st.columns([2, 2])
-                with d1:
-                    posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
-                with d2:
-                    posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
+            d1, d2 = st.columns([2,2])
+            with d1:
+                posted_from = st.date_input("Posted From", value=default_from, key="sam_posted_from")
+            with d2:
+                posted_to = st.date_input("Posted To", value=today, key="sam_posted_to")
 
-            e1, e2, e3 = st.columns([2, 2, 2])
+            e1, e2, e3 = st.columns([2,2,2])
             with e1:
                 keywords = st.text_input("Keywords (Title contains)", key="sam_keywords")
             with e2:
@@ -5339,13 +5339,45 @@ def run_sam_watch(conn) -> None:
             with e3:
                 psc = st.text_input("PSC", key="sam_psc")
 
-            e4, e5, e6 = st.columns([2, 2, 2])
+            e4, e5, e6 = st.columns([2,2,2])
             with e4:
                 state = st.text_input("Place of Performance State (e.g., TX)", key="sam_state")
             with e5:
                 set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key="sam_set_aside")
             with e6:
+                org_name = st.text_input("Organization/Agency contains", key="sam_org")
+
+            g1, g2 = st.columns([2,2])
+            with g1:
+                limit = st.number_input("Results per page", min_value=1, max_value=1000, value=100, step=50, key="sam_limit")
+            with g2:
+                max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3, key="sam_max_pages")
+
+            b1, b2, b3 = st.columns([1,1,1])
+            with b1:
+                _set_flag("clicked_run_search", st.button("Run Search", type="primary", key="sam_run_btn"))
+            with b2:
+                if st.button("💾 Save this search", key="sam_save_btn"):
+                    try:
+                        name = (st.session_state.get("sam_keywords") or st.session_state.get("sam_nl_text") or "Saved search").strip()
+                        with conn:
+                            conn.execute(
+                                "INSERT INTO saved_searches(name, nl_query, cadence, created_at) VALUES(?, ?, 'daily', datetime('now'));",
+                                (name, st.session_state.get("sam_nl_text") or "")
+                            )
+                        st.success("Search saved.")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+            with b3:
                 pass
+
+        # Run search
+        results_df = st.session_state.get("sam_results_df")
+        if _get_flag("clicked_run_search"):
+            api_key = get_sam_api_key()
+            if not api_key:
+                st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
+                return
 
             ptype_map = {
                 "Pre-solicitation": "p",
@@ -5358,50 +5390,6 @@ def run_sam_watch(conn) -> None:
                 "Intent to Bundle (DoD)": "i",
                 "Award Notice": "a",
             }
-            types = st.multiselect(
-                "Notice Types",
-                list(ptype_map.keys()),
-                default=["Solicitation", "Combined Synopsis/Solicitation", "Sources Sought"],
-                key="sam_types",
-            )
-
-            g1, g2 = st.columns([2, 2])
-            with g1:
-                limit = st.number_input("Results per page", min_value=1, max_value=1000, value=100, step=50, key="sam_limit")
-            with g2:
-                max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3, key="sam_max_pages")
-
-            st.text_input("Smart search (natural language)", placeholder="ex: sdvosb cyber NAICS 541512 due < 30 days no NASA", key="sam_nl_text")
-
-            cbtn1, cbtn2 = st.columns([1,1])
-            with cbtn1:
-                _set_flag("clicked_run_search", st.button("Run Search", type="primary", key="sam_run_btn"))
-            with cbtn2:
-                clicked_save = st.button("💾 Save this search", key="sam_save_btn")
-
-        # Save search does NOT gate the rest of the UI
-        if clicked_save:
-            try:
-                with closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "INSERT INTO saved_searches(name, nl_query, created_at) VALUES(?,?, datetime('now'));",
-                        (
-                            (st.session_state.get("sam_keywords") or st.session_state.get("sam_nl_text") or "Saved search").strip(),
-                            st.session_state.get("sam_nl_text") or "",
-                        ),
-                    )
-                    conn.commit()
-                st.success("Search saved.")
-            except Exception as e:
-                st.error(f"Save failed: {e}")
-
-        # Run search
-        results_df = st.session_state.get("sam_results_df")
-        if _get_flag("clicked_run_search"):
-            if not api_key:
-                st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
-                return
-
             params = {
                 "api_key": api_key,
                 "limit": int(st.session_state.get("sam_limit", 100)),
@@ -5418,27 +5406,20 @@ def run_sam_watch(conn) -> None:
                 _from = _today - timedelta(days=30)
                 params["postedFrom"] = _from.strftime("%m/%d/%Y")
                 params["postedTo"] = _today.strftime("%m/%d/%Y")
-            if st.session_state.get("sam_keywords"):
-                params["title"] = st.session_state["sam_keywords"]
-            if st.session_state.get("sam_naics"):
-                params["ncode"] = st.session_state["sam_naics"]
-            if st.session_state.get("sam_psc"):
-                params["ccode"] = st.session_state["sam_psc"]
-            if st.session_state.get("sam_state"):
-                params["state"] = st.session_state["sam_state"]
-            if st.session_state.get("sam_set_aside"):
-                params["typeOfSetAside"] = st.session_state["sam_set_aside"]
-            if st.session_state.get("sam_org"):
-                params["organizationName"] = st.session_state["sam_org"]
-            if st.session_state.get("sam_types"):
-                params["ptype"] = ",".join(ptype_map[t] for t in st.session_state["sam_types"] if t in ptype_map)
+            if st.session_state.get("sam_keywords"): params["title"] = st.session_state["sam_keywords"]
+            if st.session_state.get("sam_naics"): params["ncode"] = st.session_state["sam_naics"]
+            if st.session_state.get("sam_psc"): params["ccode"] = st.session_state["sam_psc"]
+            if st.session_state.get("sam_state"): params["state"] = st.session_state["sam_state"]
+            if st.session_state.get("sam_set_aside"): params["typeOfSetAside"] = st.session_state["sam_set_aside"]
+            if st.session_state.get("sam_org"): params["organizationName"] = st.session_state["sam_org"]
+            # Types
+            _types = st.session_state.get("sam_types") or ["Solicitation","Combined Synopsis/Solicitation","Sources Sought"]
+            params["ptype"] = ",".join({"Pre-solicitation":"p","Sources Sought":"r","Special Notice":"s","Solicitation":"o","Combined Synopsis/Solicitation":"k","Justification (J&A)":"u","Sale of Surplus Property":"g","Intent to Bundle (DoD)":"i","Award Notice":"a"}[t] for t in _types if t in {"Pre-solicitation","Sources Sought","Special Notice","Solicitation","Combined Synopsis/Solicitation","Justification (J&A)","Sale of Surplus Property","Intent to Bundle (DoD)","Award Notice"})
 
             with st.spinner("Searching SAM.gov"):
                 out = sam_search_cached(params)
-
             if out.get("error"):
-                st.error(out["error"])
-                return
+                st.error(out["error"]); return
 
             recs = out.get("records", [])
             results_df = flatten_records(recs)
@@ -5447,209 +5428,143 @@ def run_sam_watch(conn) -> None:
             st.session_state.pop("sam_selected_idx", None)
             st.success(f"Fetched {len(results_df)} notices")
 
-        # --- Always show the search body, even with no results yet ---
+        # Render results (always show the body)
         if results_df is None or (hasattr(results_df, "empty") and results_df.empty):
-            st.info("No results yet. Enter filters above and click **Run Search**.")
-        else:
-            # Compute a simple relevance Score (0-100). Use project's scorer if available.
-            nl_text = st.session_state.get("sam_nl_text") or ""
-            def _fallback_score(row):
-                title = str(row.get("Title") or "").lower()
-                desc = str(row.get("Description") or "").lower()
-                q = nl_text.lower()
-                terms = [t for t in re.split(r"[^a-z0-9]+", q) if t]
-                if not terms:
-                    return 0
-                hits = sum(1 for t in terms if (t in title or t in desc))
-                return int(min(100, round(100 * hits / max(1, len(set(terms))))))
-            scorer = globals().get("relevance_score") or (lambda r, profile=None: _fallback_score(r))
+            st.info("No results yet. Enter filters and click **Run Search**.")
+            return
 
-            try:
-                # Add Score column if missing
-                if "Score" not in results_df.columns:
-                    results_df = results_df.copy()
-                    results_df["Score"] = [
-                        (scorer(row.to_dict(), st.session_state.get("company_profile")) if hasattr(row, "to_dict")
-                         else _fallback_score(row))
-                        for _, row in results_df.iterrows()
-                    ]
-                    st.session_state["sam_results_df"] = results_df
-            except Exception as e:
-                st.warning(f"Scoring unavailable: {e}")
+        # Compute Score
+        nl_text = st.session_state.get("sam_nl_text") or ""
+        def _fallback_score(row):
+            title = str(row.get("Title") or "").lower()
+            desc = str(row.get("Description") or "").lower()
+            q = nl_text.lower()
+            import re as _re
+            terms = [t for t in _re.split(r"[^a-z0-9]+", q) if t]
+            if not terms: return 0
+            hits = sum(1 for t in terms if (t in title or t in desc))
+            return int(min(100, round(100 * hits / max(1, len(set(terms))))))
+        scorer = globals().get("relevance_score") or (lambda r, profile=None: _fallback_score(r))
 
-            # Optional: Table toggle
-            show_table = st.toggle("Show table view", value=False, key="sam_table_toggle")
-            if show_table:
-                cols = [c for c in ["Score","Title","Solicitation","Type","Set-Aside","NAICS","PSC","Posted","Response Due","Agency Path","SAM Link"] if c in results_df.columns]
-                st.dataframe(results_df[cols].sort_values("Score", ascending=False), use_container_width=True, hide_index=True)
-
-            # List view with simple pagination
-            try:
-                page_size = int(st.session_state.get("sam_limit", 100))
-            except Exception:
-                page_size = 100
-            total = len(results_df)
-            total_pages = max(1, (total + page_size - 1) // page_size)
-            cur_page = int(st.session_state.get("sam_page", 1))
-            cur_page = max(1, min(cur_page, total_pages))
-            st.session_state["sam_page"] = cur_page
-
-            p1, p2, p3 = st.columns([1, 3, 1])
-            with p1:
-                if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
-                    st.session_state["sam_page"] = cur_page - 1
-                    st.rerun()
-            with p2:
-                st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
-            with p3:
-                if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
-                    st.session_state["sam_page"] = cur_page + 1
-                    st.rerun()
-
-            start_i = (cur_page - 1) * page_size
-            end_i = min(start_i + page_size, total)
-
-            for i in range(start_i, end_i):
-                row = results_df.iloc[i]
-                with st.container():
-                    st.markdown(f"**{row.get('Title','')}**  \n:gray[Score:] **{int(row.get('Score',0))}**")
-                    meta_line = " | ".join([
-                        f"Solicitation: {row.get('Solicitation') or '—'}",
-                        f"Type: {row.get('Type') or '—'}",
-                        f"Set-Aside: {row.get('Set-Aside') or '—'}",
-                        f"NAICS: {row.get('NAICS') or '—'}",
-                        f"PSC: {row.get('PSC') or '—'}",
-                    ])
-                    st.caption(meta_line)
-                    st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
-                    if row.get('SAM Link'):
-                        st.markdown(f"[Open in SAM]({row.get('SAM Link')})")
-
-                    c3, c4, c5 = st.columns([2, 2, 2])
-                    with c3:
-                        if st.button("View details", key=f"sam_view_{i}"):
-                            st.session_state["sam_selected_idx"] = i
-                            st.rerun()
-                    with c4:
-                        # Add to Deals (kept as-is; relies on project helpers)
-                        if st.button("Add to Deals", key=f"add_to_deals_{i}"):
-                            try:
-                                from contextlib import closing as _closing
-                                _db = globals().get('conn')
-                                _owned = False
-                                if _db is None:
-                                    import sqlite3 as _sqlite3
-                                    _owned = True
-                                    _db = _sqlite3.connect(DB_PATH, check_same_thread=False)
-                                with _closing(_db.cursor()) as cur:
-                                    cur.execute(
-                                        """
-                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                        """,
-                                        (
-                                            row.get('Title') or "",
-                                            row.get('Agency Path') or "",
-                                            "Bidding",
-                                            None,
-                                            row.get('Notice ID') or "",
-                                            row.get('Solicitation') or "",
-                                            row.get('Posted') or "",
-                                            row.get('Response Due') or "",
-                                            row.get('NAICS') or "",
-                                            row.get('PSC') or "",
-                                            row.get('SAM Link') or "",
-                                        ),
-                                    )
-                                    deal_id = cur.lastrowid
-                                    _db.commit()
-                                try:
-                                    with _closing(_db.cursor()) as cur:
-                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
-                                        rfp_id = cur.lastrowid
-                                        _db.commit()
-                                    att_saved = 0
-                                    try:
-                                        for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
-                                            try:
-                                                save_rfp_file_db(_db, rfp_id, fname, fbytes)
-                                                att_saved += 1
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
-                                st.success(f"Saved to Deals{' · ' + str(att_saved) + ' attachment(s) pulled' if att_saved else ''}")
-                            except Exception as e:
-                                st.error("Failed to save deal: %s" % (e,))
-                            finally:
-                                try:
-                                    if _owned:
-                                        _db.close()
-                                except Exception:
-                                    pass
-                    with c5:
-                        # Push notice to Analyzer tab
-                        if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
-                            try:
-                                notice = row.to_dict()
-                            except Exception:
-                                notice = {}
-                            rid = None
-                            try:
-                                rid = _ensure_rfp_for_notice(conn, notice)
-                                st.session_state["current_rfp_id"] = int(rid)
-                            except Exception as _e:
-                                st.warning(f"RFP record not created: {_e}")
-                            try:
-                                _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
-                                _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
-                                if rid and _nid:
-                                    try:
-                                        _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            st.session_state["rfp_selected_notice"] = notice
-                            st.session_state["nav_target"] = "RFP Analyzer"
-                            st.success("Opening RFP Analyzer…")
-                            try:
-                                router("RFP Analyzer", conn); st.stop()
-                            except Exception:
-                                try: st.rerun()
-                                except Exception:
-                                    st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-
-            # Selected details panel
-            st.divider()
-            sel_idx = st.session_state.get("sam_selected_idx")
-            if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
-                row = results_df.iloc[sel_idx]
-                with st.expander("Opportunity Details", expanded=True):
-                    c1, c2 = st.columns([3,2])
-                    with c1:
-                        st.write(f"**Title:** {row.get('Title') or ''}")
-                        st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
-                        st.write(f"**Type:** {row.get('Type') or '—'}")
-                        st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
-                        st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
-                        st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
-                    with c2:
-                        st.write(f"**Posted:** {row.get('Posted') or '—'}")
-                        st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
-                        st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
-                        if row.get('SAM Link'):
-                            st.markdown(f"[Open in SAM]({row['SAM Link']})")
-
-    # ---------- ALERTS TAB ----------
-    with tab_alerts:
         try:
-            run_alerts_center(conn)
+            if "Score" not in results_df.columns:
+                results_df = results_df.copy()
+                results_df["Score"] = [scorer(row.to_dict(), st.session_state.get("company_profile")) for _, row in results_df.iterrows()]
+                st.session_state["sam_results_df"] = results_df
         except Exception as e:
-            st.info("Alerts Center not available in this build.")
-            st.caption(str(e))
+            st.warning(f"Scoring unavailable: {e}")
+
+        # Views
+        show_table = st.toggle("Show table view", value=False, key="sam_table_toggle")
+        if show_table:
+            cols = [c for c in ["Score","Title","Solicitation","Type","Set-Aside","NAICS","PSC","Posted","Response Due","Agency Path","SAM Link"] if c in results_df.columns]
+            st.dataframe(results_df[cols].sort_values("Score", ascending=False), use_container_width=True, hide_index=True)
+
+        # Pagination
+        try:
+            page_size = int(st.session_state.get("sam_limit", 100))
+        except Exception:
+            page_size = 100
+        total = len(results_df)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        cur_page = int(st.session_state.get("sam_page", 1))
+        cur_page = max(1, min(cur_page, total_pages))
+        st.session_state["sam_page"] = cur_page
+
+        p1, p2, p3 = st.columns([1,3,1])
+        with p1:
+            if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
+                st.session_state["sam_page"] = cur_page - 1; st.rerun()
+        with p2:
+            st.caption(f"Page {cur_page} of {total_pages}")
+        with p3:
+            if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
+                st.session_state["sam_page"] = cur_page + 1; st.rerun()
+
+        start_i = (cur_page - 1) * page_size
+        end_i = min(start_i + page_size, total)
+
+        for i in range(start_i, end_i):
+            row = results_df.iloc[i]
+            with st.container():
+                st.markdown(f"**{row.get('Title','')}**  \n:gray[Score:] **{int(row.get('Score',0))}**")
+                meta_line = " | ".join([
+                    f"Solicitation: {row.get('Solicitation') or '—'}",
+                    f"Type: {row.get('Type') or '—'}",
+                    f"Set-Aside: {row.get('Set-Aside') or '—'}",
+                    f"NAICS: {row.get('NAICS') or '—'}",
+                    f"PSC: {row.get('PSC') or '—'}",
+                ])
+                st.caption(meta_line)
+                st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
+                if row.get('SAM Link'):
+                    st.markdown(f"[Open in SAM]({row.get('SAM Link')})")
+
+                c3, c4, c5 = st.columns([2,2,2])
+                with c3:
+                    if st.button("View details", key=f"sam_view_{i}"):
+                        st.session_state["sam_selected_idx"] = i; st.rerun()
+                with c4:
+                    if st.button("Add to Deals", key=f"add_to_deals_{i}"):
+                        try:
+                            _db = conn
+                            with closing(_db.cursor()) as cur:
+                                cur.execute(
+                                    "INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url) VALUES (?,?,?,?,?,?,?,?,?,?,?);",
+                                    (
+                                        row.get('Title') or "",
+                                        row.get('Agency Path') or "",
+                                        "Bidding",
+                                        None,
+                                        row.get('Notice ID') or "",
+                                        row.get('Solicitation') or "",
+                                        row.get('Posted') or "",
+                                        row.get('Response Due') or "",
+                                        row.get('NAICS') or "",
+                                        row.get('PSC') or "",
+                                        row.get('SAM Link') or "",
+                                    ),
+                                )
+                                deal_id = cur.lastrowid
+                                _db.commit()
+                            st.success("Saved to Deals")
+                        except Exception as e:
+                            st.error(f"Failed to save deal: {e}")
+                with c5:
+                    # Restore Ask RFP Analyzer
+                    if st.button("Ask RFP Analyzer 💬", key=f"ask_rfp_{i}"):
+                        try: notice = row.to_dict()
+                        except Exception: notice = {}
+                        st.session_state["rfp_selected_notice"] = notice
+                        st.session_state["nav_target"] = "RFP Analyzer"
+                        st.success("Opening RFP Analyzer…")
+                        try:
+                            router("RFP Analyzer", conn); st.stop()
+                        except Exception:
+                            try: st.rerun()
+                            except Exception:
+                                st.info("Sent to RFP Analyzer. Switch tabs if needed.")
+
+        # Selected details
+        st.divider()
+        sel_idx = st.session_state.get("sam_selected_idx")
+        if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
+            row = results_df.iloc[sel_idx]
+            with st.expander("Opportunity Details", expanded=True):
+                c1, c2 = st.columns([3,2])
+                with c1:
+                    st.write(f"**Title:** {row.get('Title') or ''}")
+                    st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
+                    st.write(f"**Type:** {row.get('Type') or '—'}")
+                    st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
+                    st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
+                    st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
+                with c2:
+                    st.write(f"**Posted:** {row.get('Posted') or '—'}")
+                    st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
+                    st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
+                    if row.get('SAM Link'):
+                        st.markdown(f"[Open in SAM]({row['SAM Link']})")
 
 def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
