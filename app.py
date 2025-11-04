@@ -5441,24 +5441,25 @@ def run_sam_watch(conn) -> None:
                 clicked_save = st.button("💾 Save this search", key="sam_save_btn")
 
         # Save search does NOT gate the rest of the UI
+
         if clicked_save:
-                        try:
+            try:
                 _ensure_phase2_schema(conn)
             except Exception:
                 pass
-try:
-                with closing(conn.cursor()) as cur:
-                    cur.execute(
+            try:
+                with conn:
+                    conn.execute(
                         "INSERT INTO saved_searches(name, nl_query, created_at) VALUES(?,?, datetime('now'));",
                         (
                             (st.session_state.get("sam_keywords") or st.session_state.get("sam_nl_text") or "Saved search").strip(),
                             st.session_state.get("sam_nl_text") or "",
                         ),
                     )
-                    conn.commit()
                 st.success("Search saved.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
+
 
         # Run search
         results_df = st.session_state.get("sam_results_df")
