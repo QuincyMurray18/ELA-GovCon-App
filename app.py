@@ -1,5 +1,83 @@
 import re
 import streamlit as st
+import streamlit.components.v1 as components
+
+# === Phase 2.5 helpers ===
+def notify(msg: str, level: str = "info"):
+    """Consistent toast/notice across Streamlit versions."""
+    try:
+        st.toast(msg)
+    except Exception:
+        fn = getattr(st, level, st.info)
+        fn(msg)
+
+def _ensure_db_meta(conn):
+    """Create a tiny db_meta table (idempotent)."""
+    try:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS db_meta(
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+            """)
+    except Exception as e:
+        try: st.warning(f"db_meta init failed: {e}")
+        except Exception: pass
+
+def _backup_db_sql(conn, dest_dir="/mnt/data"):
+    """Write a .sql dump of the current DB (best-effort)."""
+    try:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs(dest_dir, exist_ok=True)
+        out_path = os.path.join(dest_dir, f"samwatch_backup_{ts}.sql")
+        with open(out_path, "w", encoding="utf-8") as f:
+            for line in conn.iterdump():
+                f.write(f"{line}\n")
+        return out_path
+    except Exception as e:
+        try: st.info(f"Backup skipped: {e}")
+        except Exception: pass
+        return None
+
+def phase2_5_bootstrap(conn):
+    """Run once per session: ensure meta table, schema, and create a small backup."""
+    if st.session_state.get("_p25_bootstrapped"):
+        return
+    try:
+        _ensure_db_meta(conn)
+    except Exception:
+        pass
+    try:
+        # Ensure Phase 2 schema exists
+        _ensure_phase2_schema(conn)
+    except Exception as e:
+        try: st.warning(f"Schema check failed (Phase 2.5): {e}")
+        except Exception: pass
+    # Best-effort backup
+    _backup_db_sql(conn)
+    st.session_state["_p25_bootstrapped"] = True
+
+# CSS polish: sticky action bar + health ribbon look
+def _inject_phase25_css():
+    st.markdown(
+        """
+        <style>
+        .sticky-actions { position: sticky; top: 0; z-index: 999; 
+            background: var(--background-color,#ffffff); 
+            padding: .5rem .75rem; border-bottom: 1px solid rgba(49,51,63,.2);
+            border-radius: .5rem; margin-bottom: .5rem;
+        }
+        .health-ribbon { background: rgba(49,51,63,.05); padding: .5rem .75rem;
+            border-radius: .5rem; display: inline-block; margin: .25rem 0 .75rem 0;
+            font-size: 0.9rem;
+        }
+        .health-ribbon b { margin-right: .25rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # --- Phase 2 schema: saved_searches + alerts (with migration) ---
 def _ensure_phase2_schema(conn):
@@ -52,6 +130,7 @@ def _ensure_phase2_schema(conn):
 def _ask_rfp_analyzer_modal(notice: dict):
     """Open the Ask RFP Analyzer 'modal' using an expander (works across Streamlit versions)."""
     import streamlit as st
+
     _title = (notice or {}).get("Title") or (notice or {}).get("Solicitation") or "Selected Notice"
     _qid = (notice or {}).get("Notice ID") or (notice or {}).get("Solicitation") or ""
     _qkey = f"ask_rfp_q_{_qid}"
@@ -61,7 +140,12 @@ def _ask_rfp_analyzer_modal(notice: dict):
     st.session_state["ask_rfp_notice"] = notice or {}
 
     # Render the expander immediately as well (no need to rely on a rerun)
+    st.markdown('<a id="ask-rfp-anchor"></a>', unsafe_allow_html=True)
     with st.expander(f"Ask RFP Analyzer — {_title}", expanded=True):
+        try:
+            components.html('<script>var el=document.getElementById("ask-rfp-anchor"); if(el){el.scrollIntoView({behavior:"smooth", block:"start"});}</script>', height=0)
+        except Exception:
+            pass
         st.write("**Title:**", _title)
         q = st.text_area(
             "Your question",
@@ -82,64 +166,99 @@ def _ask_rfp_analyzer_modal(notice: dict):
 
 def run_alerts_center(conn):
     import pandas as pd
+    _inject_phase25_css()
+    phase2_5_bootstrap(conn)
 
-    st.title("Alerts")
-    _ensure_phase2_schema(conn)
+    st.subheader("Alerts Center")
+
     try:
-        df = pd.read_sql_query("""
-            SELECT s.id, s.name, s.cadence, a.enabled, a.last_run_at, a.last_result_count, a.last_error
+        _ensure_phase2_schema(conn)
+    except Exception as e:
+        st.warning(f"Schema init failed in Alerts Center: {e}")
+
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT s.id, s.name, s.nl_query, s.cadence,
+                   COALESCE(a.enabled, 0) AS enabled,
+                   a.last_run_at, a.last_result_count, a.last_error
             FROM saved_searches s
             LEFT JOIN alerts a ON a.saved_search_id = s.id
             ORDER BY s.id DESC;
-        """, conn)
+            """,
+            conn,
+        )
     except Exception as e:
-        st.error(f"Load failed: {e}")
+        st.error(f"Failed to load saved searches: {e}")
         df = pd.DataFrame()
 
+    # Health ribbon always visible
+    count_total = int(len(df)) if df is not None else 0
+    count_enabled = int(df["enabled"].sum()) if (df is not None and "enabled" in df.columns) else 0
+    st.markdown(
+        f"<div class='health-ribbon'><b>Saved searches:</b> {count_total} &nbsp; • &nbsp; <b>Enabled alerts:</b> {count_enabled}</div>",
+        unsafe_allow_html=True,
+    )
+
     if df is None or df.empty:
-        st.info("No saved searches yet.")
+        st.info("No saved searches yet. Save one in Smart Search, then return here.")
         return
 
     st.dataframe(df, use_container_width=True, hide_index=True)
-    sel = st.multiselect("Select saved search IDs", options=df["id"].tolist(), key="alert_sel_ids")
+
+    sel = st.multiselect("Select saved search IDs", options=df["id"].tolist(), key="alerts_sel_ids")
+
+    # Sticky action bar
+    st.markdown("<div class='sticky-actions'>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Run now"):
             ok = 0; err = 0
             for sid in sel:
                 try:
-                    row = conn.execute("SELECT query_json FROM saved_searches WHERE id=?;", (int(sid),)).fetchone()
-                    payload = json.loads(row[0]) if row and row[0] else {}
-                    filters = payload.get("filters") or {}
-                    count = len(filters.keys())
                     with conn:
-                        conn.execute("UPDATE alerts SET last_run_at=datetime('now'), last_result_count=? WHERE saved_search_id=?;",
-                                     (int(count), int(sid)))
+                        conn.execute(
+                            "INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 1) ON CONFLICT(saved_search_id) DO NOTHING;",
+                            (int(sid),),
+                        )
+                        conn.execute(
+                            "UPDATE alerts SET last_run_at = datetime('now'), last_result_count = COALESCE(last_result_count, 0) WHERE saved_search_id = ?;",
+                            (int(sid),),
+                        )
                     ok += 1
                 except Exception:
                     err += 1
-            st.success(f"Ran {ok} search(es), errors={err}")
+            notify(f"Ran {ok} search(es), errors={err}", "success")
     with c2:
         if st.button("Enable"):
             with conn:
-                for sid in sel: conn.execute("UPDATE alerts SET enabled=1 WHERE saved_search_id=?;", (int(sid),))
-            st.success("Enabled")
+                for sid in sel:
+                    conn.execute(
+                        "INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 1) ON CONFLICT(saved_search_id) DO UPDATE SET enabled=1;",
+                        (int(sid),),
+                    )
+            notify("Enabled", "success")
     with c3:
         if st.button("Disable"):
             with conn:
-                for sid in sel: conn.execute("UPDATE alerts SET enabled=0 WHERE saved_search_id=?;", (int(sid),))
-            st.success("Disabled")
+                for sid in sel:
+                    conn.execute(
+                        "INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 0) ON CONFLICT(saved_search_id) DO UPDATE SET enabled=0;",
+                        (int(sid),),
+                    )
+            notify("Disabled", "success")
+    st.markdown("</div>", unsafe_allow_html=True)
+
     st.markdown("### Edit selected")
-    # Prefill when exactly one row selected
     _name_default = ""
     _cad_default = "daily"
-    try:
-        if sel and len(sel) == 1:
+    if sel and len(sel) == 1:
+        try:
             _row = df[df["id"] == sel[0]].iloc[0]
             _name_default = str(_row.get("name") or "")
             _cad_default = str((_row.get("cadence") or "daily")).lower()
-    except Exception:
-        pass
+        except Exception:
+            pass
     _name_in = st.text_input("New name", value=_name_default, key="alerts_edit_name")
     _cadence_opts = ["daily", "weekly", "monthly"]
     try:
@@ -161,7 +280,7 @@ def run_alerts_center(conn):
                             conn.execute("UPDATE saved_searches SET name=? WHERE id=?;", (_name_in.strip(), int(sid)))
                         elif _cad_in:
                             conn.execute("UPDATE saved_searches SET cadence=? WHERE id=?;", (_cad_in, int(sid)))
-                st.success("Updated.")
+                notify("Updated.", "success")
                 try:
                     st.rerun()
                 except Exception:
@@ -170,13 +289,6 @@ def run_alerts_center(conn):
                 st.error(f"Update failed: {_e}")
 
 
-
-# --- Helpers: session-state backed click flags ---
-def _get_flag(name: str, default: bool = False) -> bool:
-    try:
-        return bool(st.session_state.get(name, default))
-    except Exception:
-        return default
 
 def _set_flag(name: str, value: bool) -> None:
     try:
@@ -741,6 +853,7 @@ def _ensure_indices(conn):
 def _db_connect(db_path: str, **kwargs):
     import sqlite3
     import streamlit as st
+
     # Build connect kwargs with safe defaults
     base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
     try:
@@ -791,6 +904,7 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 # Expand Phase 0 write guard to clear caches after commits
 def _write_guard(conn, fn, *args, **kwargs):
     import streamlit as st
+
     with conn:
         out = fn(*args, **kwargs)
     try:
@@ -850,6 +964,7 @@ if "apply_theme" not in globals():
 # ===== Phase 1 Theme (auto-injected) =====
 def _apply_theme_old():
     import streamlit as st
+
     if st.session_state.get("_phase1_theme_applied"):
         return
     st.session_state["_phase1_theme_applied"] = True
@@ -1397,6 +1512,7 @@ def get_db():
 
 def get_o4_conn():
     import streamlit as st
+
     global _O4_CONN
 
     # reuse cached connection if present
@@ -2011,6 +2127,7 @@ except Exception:
 import smtplib
 import streamlit as st
 
+
 # --- DB helpers: ensure column exists ---
 def _ensure_column(conn, table, col, type_sql):
     cur = conn.cursor()
@@ -2238,6 +2355,7 @@ import textwrap
 from typing import List, Dict, Any
 
 import streamlit as st
+
 
 # ---- Minimal AI helpers (mirror app helpers; safe fallbacks) ----
 def _resolve_openai_client():
@@ -2506,6 +2624,7 @@ BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Su
 
 def apply_theme_phase1():
     import streamlit as st
+
     if st.session_state.get("_phase1_theme_applied"):
         return
     st.session_state["_phase1_theme_applied"] = True
@@ -2549,7 +2668,8 @@ import os
 def _resolve_model():
     # Priority: Streamlit secrets -> env var -> safe default
     try:
-        import streamlit as st  # noqa: F401
+        import streamlit as st
+
         for key in ("OPENAI_MODEL", "openai_model", "model"):
             try:
                 val = st.secrets.get(key)  # type: ignore[attr-defined]
@@ -2563,7 +2683,8 @@ def _resolve_model():
 
 _ai_client = None
 def get_ai():
-    import streamlit as st  # ensure st exists
+    import streamlit as st
+
     global _ai_client
     if _ai_client is None:
         if _Y0OpenAI is None:
@@ -7529,6 +7650,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     import math
     import streamlit as st
+
     n = 0 if df is None else len(df)
     page_size = max(5, int(page_size or 25))
     pages = max(1, math.ceil((n or 0) / page_size))
@@ -9841,6 +9963,7 @@ def nav() -> str:
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
     import streamlit as st
+
     from contextlib import closing as _closing
 
     # Load RFP list
@@ -10150,6 +10273,7 @@ if "_o3_collect_recipients_ui" not in globals():
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker_legacy():
         import streamlit as st
+
         conn = get_o4_conn()
         try:
             ensure_outreach_o1_schema(conn)
@@ -10177,6 +10301,7 @@ if "_o3_render_sender_picker" not in globals():
                         st.success("Saved")
                         try:
                             import streamlit as st
+
                             st.session_state["o4_sender_sel"] = email.strip()
                         except Exception:
                             pass
@@ -10568,7 +10693,8 @@ def s1_save_vendor(conn, v:dict)->int|None:
 def s1_calc_radius_meters(miles:int)->int:
     return int(float(miles) * 1609.344)
 def s1_render_places_panel(conn, default_addr:str|None=None):
-    import streamlit as st, pandas as pd
+    import streamlit as st
+
     ensure_subfinder_s1_schema(conn)
     st.markdown("### Google Places search")
     key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
@@ -10813,6 +10939,7 @@ def o4_sender_accounts_ui(conn):
 def render_outreach_mailmerge(conn):
     globals()['_O4_CONN'] = conn
     import streamlit as st
+
     import pandas as _pd
     # 1) Recipients
     rows = _o3_collect_recipients_ui(conn) if "_o3_collect_recipients_ui" in globals() else None
@@ -10869,6 +10996,7 @@ def render_outreach_mailmerge(conn):
 
 def run_outreach(conn):
     import streamlit as st
+
 
     # O4 badge if present
     try:
@@ -10994,7 +11122,8 @@ def _o3_load_vendors_df(conn):
     return df
 
 def _o3_collect_recipients_ui(conn):
-    import streamlit as st, pandas as _pd
+    import streamlit as st
+
     _o3_ensure_schema(conn)
     st.subheader("Recipients")
     tabs = st.tabs(["From Vendors","Upload CSV","Manual"])
@@ -11092,7 +11221,8 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         import smtplib as _o3smtp
     except Exception:
         pass
-    import streamlit as st, datetime as _dt, pandas as _pd, socket as _socket
+    import streamlit as st
+
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
         st.error("No recipients"); return 0, []
@@ -11233,7 +11363,9 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
 def _o4_accounts_ui(conn):
     import streamlit as st
-    import streamlit as st, pandas as _pd
+
+    import streamlit as st
+
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email").fetchall()
     if rows:
@@ -11283,6 +11415,7 @@ def _o4_accounts_ui(conn):
 
 def _o3_render_sender_picker():
     import streamlit as st
+
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
     conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
@@ -11326,7 +11459,8 @@ def _o3_render_sender_picker():
     return chosen
 
 def _o4_optout_ui(conn):
-    import streamlit as st, pandas as _pd
+    import streamlit as st
+
     # tables already created by O3; ensure again for safety
     with conn:
         conn.execute("CREATE TABLE IF NOT EXISTS outreach_optouts(id INTEGER PRIMARY KEY, email TEXT UNIQUE)")
@@ -11354,7 +11488,8 @@ def _o4_optout_ui(conn):
         pass
 
 def _o4_audit_ui(conn):
-    import streamlit as st, pandas as _pd
+    import streamlit as st
+
     try:
         blasts = _pd.read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
         st.markdown("**Recent blasts**")
@@ -11797,6 +11932,7 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
 
 def _s1d_render_from_cache(conn, df):
     import streamlit as st
+
     import pandas as _pd
     if df is None or getattr(df, "empty", True):
         st.info("No cached results.")
@@ -12041,6 +12177,7 @@ def _wrap_run_subfinder():
         return
     def wrapped(conn):
         import streamlit as st
+
         st.header("Subcontractor Finder")
         try:
             render_subfinder_s1d(conn)
@@ -12447,7 +12584,8 @@ import time as _time
 
 # ---- Streamlit write guard: suppress rendering of None ----
 try:
-    import streamlit as st  # ensure st is present
+    import streamlit as st
+
     if not hasattr(st, "_write_wrapped"):
         _orig_write = st.write
         def _write_no_none(*args, **kwargs):
@@ -12466,7 +12604,8 @@ try:
 except Exception:
     _title_safe = "ELA GovCon Suite"
 try:
-    import streamlit as st  # ensure st in scope if file order is unusual
+    import streamlit as st
+
     st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
 except Exception:
     pass
@@ -12746,6 +12885,7 @@ def run_backup_data(conn):
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
+
         from contextlib import closing
         host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
         try:
@@ -12773,6 +12913,7 @@ try:
     _orig__render_outreach_mailmerge = render_outreach_mailmerge
     def render_outreach_mailmerge(conn):
         import streamlit as st
+
         sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
         if sender and "username" in sender and "email" not in sender:
             sender["email"] = sender.get("username","")
@@ -12791,6 +12932,7 @@ except Exception:
 def o1_sender_accounts_ui(conn):
     globals()['_O4_CONN'] = conn
     import streamlit as st
+
     import pandas as _pd
     ensure_outreach_o1_schema(conn)
     st.subheader("Sender accounts")
@@ -12819,6 +12961,7 @@ def o1_sender_accounts_ui(conn):
             st.success("Saved")
     try:
         import streamlit as st
+
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
@@ -12959,6 +13102,6 @@ def relevance_score(row: dict, profile: dict | None = None) -> float:
 def _render_ask_rfp_autorender():
     """If a previous click requested the Ask RFP modal, render it open on rerun."""
     import streamlit as st
+
     if st.session_state.get("ask_rfp_open"):
         _ask_rfp_analyzer_modal(st.session_state.get("ask_rfp_notice") or {})
-
