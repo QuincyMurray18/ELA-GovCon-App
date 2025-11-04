@@ -91,6 +91,46 @@ def run_alerts_center(conn):
             with conn:
                 for sid in sel: conn.execute("UPDATE alerts SET enabled=0 WHERE saved_search_id=?;", (int(sid),))
             st.success("Disabled")
+    st.markdown("### Edit selected")
+    # Prefill when exactly one row selected
+    _name_default = ""
+    _cad_default = "daily"
+    try:
+        if sel and len(sel) == 1:
+            _row = df[df["id"] == sel[0]].iloc[0]
+            _name_default = str(_row.get("name") or "")
+            _cad_default = str((_row.get("cadence") or "daily")).lower()
+    except Exception:
+        pass
+    _name_in = st.text_input("New name", value=_name_default, key="alerts_edit_name")
+    _cadence_opts = ["daily", "weekly", "monthly"]
+    try:
+        _cad_idx = _cadence_opts.index(_cad_default) if _cad_default in _cadence_opts else 0
+    except Exception:
+        _cad_idx = 0
+    _cad_in = st.selectbox("New cadence", _cadence_opts, index=_cad_idx, key="alerts_edit_cadence")
+
+    if st.button("Update selected"):
+        if not sel:
+            st.warning("Select at least one saved search to update.")
+        else:
+            try:
+                with conn:
+                    for sid in sel:
+                        if _name_in.strip() and _cad_in:
+                            conn.execute("UPDATE saved_searches SET name=?, cadence=? WHERE id=?;", (_name_in.strip(), _cad_in, int(sid)))
+                        elif _name_in.strip():
+                            conn.execute("UPDATE saved_searches SET name=? WHERE id=?;", (_name_in.strip(), int(sid)))
+                        elif _cad_in:
+                            conn.execute("UPDATE saved_searches SET cadence=? WHERE id=?;", (_cad_in, int(sid)))
+                st.success("Updated.")
+                try:
+                    st.rerun()
+                except Exception:
+                    pass
+            except Exception as _e:
+                st.error(f"Update failed: {_e}")
+
 
 
 # --- Helpers: session-state backed click flags ---
@@ -5460,13 +5500,15 @@ def run_sam_watch(conn) -> None:
                     conn.execute(
                         "INSERT INTO saved_searches(name, nl_query, cadence, created_at) VALUES(?, ?, ?, datetime('now'));",
                         (
-                            (st.session_state.get("sam_keywords") or st.session_state.get("sam_nl_text") or "Saved search").strip(),
+                            (st.session_state.get("sam_save_name") or (st.session_state.get("sam_keywords") or st.session_state.get("sam_nl_text") or "Saved search")).strip(),
                             st.session_state.get("sam_nl_text") or "",
+                            st.session_state.get("sam_save_cadence") or "daily",
                         ),
                     )
                 st.success("Search saved.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
+
 
 
         # Run search
