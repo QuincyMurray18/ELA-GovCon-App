@@ -52,6 +52,12 @@ def _get_flag(name: str, default: bool = False) -> bool:
         return bool(st.session_state.get(name, default))
     except Exception:
         return default
+    try:
+        with conn:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_saved_unique ON alerts(saved_search_id);")
+    except Exception:
+        pass
+
 
 def _set_flag(name: str, value: bool) -> None:
     try:
@@ -212,41 +218,60 @@ def run_alerts_center(conn):
     st.markdown("<div class='sticky-actions'>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1:
+        
         if st.button("Run now"):
             ok = 0; err = 0
             for sid in sel:
                 try:
+                    sid_int = int(sid)
                     with conn:
-                        conn.execute(
-                            "INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 1) ON CONFLICT(saved_search_id) DO NOTHING;",
-                            (int(sid),),
-                        )
-                        conn.execute(
+                        # First try update; if nothing updated, insert
+                        cur = conn.execute(
                             "UPDATE alerts SET last_run_at = datetime('now'), last_result_count = COALESCE(last_result_count, 0) WHERE saved_search_id = ?;",
-                            (int(sid),),
+                            (sid_int,),
                         )
+                        if cur.rowcount == 0:
+                            conn.execute(
+                                "INSERT INTO alerts(saved_search_id, enabled, last_run_at, last_result_count) VALUES (?, 1, datetime('now'), 0);",
+                                (sid_int,),
+                            )
                     ok += 1
                 except Exception:
                     err += 1
             notify(f"Ran {ok} search(es), errors={err}", "success")
+        
+    
     with c2:
         if st.button("Enable"):
-            with conn:
-                for sid in sel:
-                    conn.execute(
-                        "INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 1) ON CONFLICT(saved_search_id) DO UPDATE SET enabled=1;",
-                        (int(sid),),
-                    )
-            notify("Enabled", "success")
+            ok = 0; err = 0
+            for sid in sel:
+                try:
+                    sid_int = int(sid)
+                    with conn:
+                        cur = conn.execute("UPDATE alerts SET enabled=1 WHERE saved_search_id = ?;", (sid_int,))
+                        if cur.rowcount == 0:
+                            conn.execute("INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 1);", (sid_int,))
+                    ok += 1
+                except Exception:
+                    err += 1
+            notify(f"Enabled {ok} item(s), errors={err}", "success")
+        
+    
     with c3:
         if st.button("Disable"):
-            with conn:
-                for sid in sel:
-                    conn.execute(
-                        "INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 0) ON CONFLICT(saved_search_id) DO UPDATE SET enabled=0;",
-                        (int(sid),),
-                    )
-            notify("Disabled", "success")
+            ok = 0; err = 0
+            for sid in sel:
+                try:
+                    sid_int = int(sid)
+                    with conn:
+                        cur = conn.execute("UPDATE alerts SET enabled=0 WHERE saved_search_id = ?;", (sid_int,))
+                        if cur.rowcount == 0:
+                            conn.execute("INSERT INTO alerts(saved_search_id, enabled) VALUES (?, 0);", (sid_int,))
+                    ok += 1
+                except Exception:
+                    err += 1
+            notify(f"Disabled {ok} item(s), errors={err}", "success")
+        
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("### Edit selected")
