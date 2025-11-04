@@ -12864,3 +12864,36 @@ def run_alerts_center(conn):
             with conn:
                 for sid in sel: conn.execute("UPDATE alerts SET enabled=0 WHERE saved_search_id=?;", (int(sid),))
             st.success("Disabled")
+
+# === Guard: ensure parse_nl_query exists ===
+try:
+    parse_nl_query  # type: ignore
+except NameError:
+    def parse_nl_query(q: str) -> dict:
+        import re as _re
+        if not q:
+            return {}
+        s = q.lower()
+        out = {"keywords": [], "naics": [], "state": None, "set_aside": None, "due_lte_days": None}
+        for m in _re.findall(r"\b(\d{5,6})\b", s):
+            out["naics"].append(m)
+        for key, aliases in {
+            "8a": ["8a", "8(a)"],
+            "sdvosb": ["sdvosb", "service disabled", "service-disabled"],
+            "wosb": ["wosb", "women owned"],
+            "hubzone": ["hubzone"],
+            "sdb": ["sdb", "small disadvantaged"],
+            "veteran": ["veteran", "vosb"]
+        }.items():
+            if any(a in s for a in aliases):
+                out["set_aside"] = key.upper(); break
+        m = _re.search(r"\bin\s+([a-z]{2})\b", s)
+        if m:
+            out["state"] = m.group(1).upper()
+        m = _re.search(r"due\s*(?:<|<=)\s*(\d+)\s*days", s)
+        if m:
+            out["due_lte_days"] = int(m.group(1))
+        tokens = _re.findall(r"[a-zA-Z][a-zA-Z0-9\-/]+", s)
+        banned = set(["in","due","days","sdvosb","wosb","hubzone","8a","8","veteran","sdb"] + out["naics"])
+        out["keywords"] = [t for t in tokens if t not in banned]
+        return out
