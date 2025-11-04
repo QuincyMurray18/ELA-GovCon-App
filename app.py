@@ -1,14 +1,3 @@
-def _render_debug_panel():
-    import streamlit as st
-    with st.sidebar.expander("Debug (nav)", expanded=False):
-        data = {}
-        for k in ["nav_target", "rfp_selected_notice", "current_rfp_id", "__force_rfp_analyzer", "__last_push_event"]:
-            try:
-                data[k] = st.session_state.get(k)
-            except Exception:
-                data[k] = None
-        st.json(data)
-
 import re
 import streamlit as st
 
@@ -3229,6 +3218,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             pass
 
 def y4_ui_review(conn: sqlite3.Connection) -> None:
+    clicked_run_co_review = False
     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -5243,6 +5233,7 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
+    clicked_run_search = False
 
     # ---- X3 MODAL RENDERER ----
     if st.session_state.get("x3_show_modal"):
@@ -5572,17 +5563,6 @@ if _has_rows:
                             pass
                         st.session_state["rfp_selected_notice"] = notice
                         st.session_state["nav_target"] = "RFP Analyzer"
-                        try:
-                            st.toast("Opening RFP Analyzer…")
-                        except Exception:
-                            st.success("Opening RFP Analyzer…")
-                        st.session_state["__force_rfp_analyzer"] = True
-                        st.session_state["__last_push_event"] = {
-                            "ts": __import__("time").time(),
-                            "notice_id": str((notice or {}).get("Notice ID") or ""),
-                            "rfp_id": int(rid) if 'rid' in locals() and rid else None
-                        }
-                        st.session_state["nav_target"] = "RFP Analyzer"
                         st.success("Opening RFP Analyzer…")
                         try:
                             router("RFP Analyzer", conn)
@@ -5869,6 +5849,7 @@ def _p3_make_ics(summary: str, when_str: str) -> bytes:
 
 
 def _run_rfp_analyzer_phase3(conn):
+    clicked_parse_save = False
     import pandas as pd, streamlit as st, io, zipfile, mimetypes
     st.header("RFP Analyzer")
     st.caption("Build: OnePage+P3")
@@ -9693,10 +9674,6 @@ def nav() -> str:
     _tgt = st.session_state.pop("nav_target", None)
     if _tgt:
         return _tgt
-    # also honor one-shot force flag
-    _force = st.session_state.pop("__force_rfp_analyzer", None)
-    if _force:
-        return "RFP Analyzer"
 
     return st.sidebar.selectbox(
         "Go to",
