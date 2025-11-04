@@ -1,6 +1,19 @@
 import re
 import streamlit as st
 
+# --- Helpers: session-state backed click flags ---
+def _get_flag(name: str, default: bool = False) -> bool:
+    try:
+        return bool(st.session_state.get(name, default))
+    except Exception:
+        return default
+
+def _set_flag(name: str, value: bool) -> None:
+    try:
+        st.session_state[name] = bool(value)
+    except Exception:
+        pass
+
 
 # === Guard: ensure parse_nl_query exists ===
 try:
@@ -5368,11 +5381,11 @@ def run_sam_watch(conn: sqlite3.Connection) -> None:
         with g2:
             max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3)
 
-        clicked_run_search = st.button("Run Search", type="primary")
+        _set_flag("clicked_run_search", st.button("Run Search", type="primary"))
 
     results_df = st.session_state.get("sam_results_df", pd.DataFrame())
 
-    if clicked_run_search:
+    if _get_flag("clicked_run_search"):
         if not api_key:
             st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
             return
