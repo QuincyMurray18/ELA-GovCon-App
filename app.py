@@ -1,5 +1,62 @@
 import re
 import streamlit as st
+import zipfile
+
+# === Phase 3: RFP ingest schema & helpers ===
+def _ensure_phase3_schema(conn):
+    """Minimal schema for RFP records & files (idempotent)."""
+    try:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_records (
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT,
+                    title TEXT,
+                    sam_url TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rfp_files (
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER,
+                    filename TEXT,
+                    path TEXT,
+                    kind TEXT,
+                    extracted_path TEXT,
+                    bytes INTEGER,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY(rfp_id) REFERENCES rfp_records(id)
+                );
+            """)
+    except Exception as e:
+        try: st.warning(f"Phase 3 schema init failed: {e}")
+        except Exception: pass
+
+def _ensure_phase3_dirs():
+    base = "./rfp_store"
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        base = "/tmp/rfp_store"
+        os.makedirs(base, exist_ok=True)
+    return base
+
+def _get_or_create_rfp(conn, notice: dict):
+    """Return rfp_id for the selected notice (create if needed)."""
+    _ensure_phase3_schema(conn)
+    nid = (notice or {}).get("Notice ID") or (notice or {}).get("Solicitation") or ""
+    title = (notice or {}).get("Title") or ""
+    sam_url = (notice or {}).get("SAM Link") or (notice or {}).get("URL") or ""
+    with conn:
+        cur = conn.execute("SELECT id FROM rfp_records WHERE notice_id = ? AND title = ?;", (nid, title))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur = conn.execute("INSERT INTO rfp_records(notice_id, title, sam_url) VALUES(?,?,?);", (nid, title, sam_url))
+        return cur.lastrowid
+
+
 
 # --- Ask RFP Analyzer Modal (expander-based, version-safe) ---
 def _ask_rfp_analyzer_modal(notice: dict):
@@ -13168,3 +13225,113 @@ def _render_ask_rfp_autorender():
 
     if st.session_state.get("ask_rfp_open"):
         _ask_rfp_analyzer_modal(st.session_state.get("ask_rfp_notice") or {})
+
+def _safe_write(path: str, data: bytes):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+
+def _extract_text_from_pdf_bytes(b: bytes) -> str:
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(io.BytesIO(b))
+        return "\n".join([page.extract_text() or "" for page in reader.pages])
+    except Exception as e:
+        return f"[PDF extract unavailable: {e}]"
+
+def _extract_text_from_docx_bytes(b: bytes) -> str:
+    try:
+        import docx
+        d = docx.Document(io.BytesIO(b))
+        return "\n".join([p.text for p in d.paragraphs])
+    except Exception as e:
+        return f"[DOCX extract unavailable: {e}]"
+
+def _extract_text_from_xlsx_bytes(b: bytes) -> str:
+    try:
+        import pandas as pd
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp.write(b)
+            tmp.flush()
+            x = pd.ExcelFile(tmp.name)
+            parts = []
+            for name in x.sheet_names:
+                df = x.parse(name)
+                parts.append(f"--- SHEET: {name} ---\n" + df.to_csv(index=False))
+            return "\n\n".join(parts)
+    except Exception as e:
+        return f"[XLSX extract unavailable: {e}]"
+
+def _extract_text_from_zip_bytes(b: bytes) -> str:
+    out = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(b)) as z:
+            for name in z.namelist():
+                # Skip very large files
+                if name.endswith("/"):
+                    continue
+                try:
+                    data = z.read(name)
+                    if name.lower().endswith(".pdf"):
+                        out.append(f"--- {name} ---\n" + _extract_text_from_pdf_bytes(data))
+                    elif name.lower().endswith(".docx"):
+                        out.append(f"--- {name} ---\n" + _extract_text_from_docx_bytes(data))
+                    elif name.lower().endswith((".xlsx",".xls")):
+                        out.append(f"--- {name} ---\n" + _extract_text_from_xlsx_bytes(data))
+                    elif name.lower().endswith((".txt",".csv",".md")):
+                        try: out.append(f"--- {name} ---\n" + data.decode("utf-8", "ignore"))
+                        except Exception: out.append(f"--- {name} --- [text decode failed]")
+                    else:
+                        out.append(f"--- {name} --- [skipped: unsupported]")
+                except Exception as e:
+                    out.append(f"--- {name} --- [error: {e}]")
+        return "\n\n".join(out)
+    except Exception as e:
+        return f"[ZIP extract unavailable: {e}]"
+
+def _extract_text_guess(name: str, b: bytes) -> str:
+    n = (name or "").lower()
+    if n.endswith(".pdf"):
+        return _extract_text_from_pdf_bytes(b)
+    if n.endswith(".docx"):
+        return _extract_text_from_docx_bytes(b)
+    if n.endswith((".xlsx",".xls")):
+        return _extract_text_from_xlsx_bytes(b)
+    if n.endswith(".zip"):
+        return _extract_text_from_zip_bytes(b)
+    if n.endswith((".txt",".csv",".md",".rtf")):
+        try: return b.decode("utf-8", "ignore")
+        except Exception as e: return f"[text decode failed: {e}]"
+    return "[unsupported file type]"
+
+_date_pat = re.compile(r"(?:due|proposal due|closing|responses? due)\s*[:\-–]?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", re.IGNORECASE)
+
+def _detect_due_date(text: str):
+    try:
+        m = _date_pat.search(text or "")
+        if not m: return None, None
+        raw = m.group(1)
+        # Normalize
+        from datetime import datetime
+        for fmt in ("%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return raw, dt
+            except Exception:
+                continue
+        return raw, None
+    except Exception:
+        return None, None
+
+def _make_ics(title: str, dt):
+    try:
+        if not dt: return None
+        ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//RFP//Analyzer//EN\nBEGIN:VEVENT\n"
+        ics += f"SUMMARY:{title or 'Proposal Due'}\n"
+        ics += f"DTSTART:{dt.strftime('%Y%m%dT090000Z')}\n"
+        ics += "DURATION:PT1H\nEND:VEVENT\nEND:VCALENDAR\n"
+        return ics.encode("utf-8")
+    except Exception:
+        return None
+
