@@ -1,6 +1,42 @@
 import re
 import streamlit as st
 
+# --- Ask RFP Analyzer Modal (expander-based, version-safe) ---
+def _ask_rfp_analyzer_modal(notice: dict):
+    """Open the Ask RFP Analyzer 'modal' using an expander (works across Streamlit versions)."""
+    _title = (notice or {}).get("Title") or (notice or {}).get("Solicitation") or "Selected Notice"
+    _qid = (notice or {}).get("Notice ID") or (notice or {}).get("Solicitation") or ""
+    _qkey = f"ask_rfp_q_{_qid}"
+
+    # Flag so we can auto-render on rerun if needed
+    st.session_state["ask_rfp_open"] = True
+    st.session_state["ask_rfp_notice"] = notice or {}
+
+    # Anchor + expander + auto-scroll
+    st.markdown('<a id="ask-rfp-anchor"></a>', unsafe_allow_html=True)
+    with st.expander(f"Ask RFP Analyzer — {_title}", expanded=True):
+        try:
+            components.html('<script>var el=document.getElementById("ask-rfp-anchor"); if(el){el.scrollIntoView({behavior:"smooth", block:"start"});}</script>', height=0)
+        except Exception:
+            pass
+        st.write("**Title:**", _title)
+        q = st.text_area(
+            "Your question",
+            key=_qkey,
+            placeholder="e.g., Summarize key requirements and due dates…"
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Send", key=f"ask_rfp_send_{_qid}"):
+                st.session_state["rfp_selected_notice"] = notice or {}
+                st.session_state["rfp_question"] = q or ""
+                st.success("Sent to Analyzer context.")
+        with c2:
+            if st.button("Close", key=f"ask_rfp_close_{_qid}"):
+                st.session_state["ask_rfp_open"] = False
+
+
+
 # --- Phase 2 schema: saved_searches + alerts (with migration) ---
 def _ensure_phase2_schema(conn):
     """Create Phase‑2 tables and migrate missing columns safely (idempotent)."""
