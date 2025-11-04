@@ -5639,7 +5639,7 @@ def run_sam_watch(conn) -> None:
                     st.caption(meta_line)
                     st.caption(f"Posted: {row.get('Posted') or '—'} · Due: {row.get('Response Due') or '—'} · Agency: {row.get('Agency Path') or '—'}")
                     try:
-                        _render_ask_rfp_button(row.to_dict())
+                        _render_ask_rfp_button(row.to_dict())  # expected to open the modal
                     except Exception:
                         pass
                     if row.get('SAM Link'):
@@ -5712,22 +5712,14 @@ def run_sam_watch(conn) -> None:
                     with c5:
                         # Ask RFP Analyzer (restored)
                         try:
-                            _render_ask_rfp_button(row.to_dict())
+                            _render_ask_rfp_button(row.to_dict())  # expected to open the modal
                         except Exception:
                             if st.button('Ask RFP Analyzer 💬', key=f'ask_rfp_{i}'):
                                 try:
-                                    notice = row.to_dict()
-                                except Exception:
-                                    notice = {}
-                                st.session_state['rfp_selected_notice'] = notice
-                                st.session_state['nav_target'] = 'RFP Analyzer'
-                                st.success('Opening RFP Analyzer…')
-                                try:
-                                    router('RFP Analyzer', conn); st.stop()
-                                except Exception:
-                                    try: st.rerun()
-                                    except Exception: pass
-                        # Push notice to Analyzer tab
+                                    _ask_rfp_analyzer_modal(row.to_dict())
+                                except Exception as _e:
+                                    st.warning(f'Analyzer dialog unavailable: {_e}')
+# Push notice to Analyzer tab
                         if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
                             try:
                                 notice = row.to_dict()
