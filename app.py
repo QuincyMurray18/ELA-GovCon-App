@@ -3,63 +3,37 @@ import streamlit as st
 
 # === Modals ===
 
-def _ask_rfp_analyzer_modal(opportunity=None):
-    @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
-    def _dlg():
-        st.write("Use AI to analyze the selected opportunity and ask questions.")
-        q = st.text_area("Your question", key=_unique_key('rfp_q','o3'))
-        if st.button("Analyze", key=_unique_key('rfp_analyze','o3')):
-            # placeholder for analysis call; replace with your service function
-            try:
-                ans = _service_analyze_rfp_question(q, opportunity)
-            except Exception as e:
-                ans = f"Error: {e}"
-            st.markdown("**Answer**")
-            st.write(ans)
-        if st.button("Close", key=_unique_key('rfp_close','o3')):
-            st.session_state['show_rfp_analyzer'] = False
-    _dlg()
 
+# --- Ask RFP Analyzer Modal (expander-based, version-safe) ---
+def _ask_rfp_analyzer_modal(notice: dict):
+    """Open the Ask RFP Analyzer 'modal' using an expander (works across Streamlit versions)."""
+    import streamlit as st
+    _title = (notice or {}).get("Title") or (notice or {}).get("Solicitation") or "Selected Notice"
+    _qid = (notice or {}).get("Notice ID") or (notice or {}).get("Solicitation") or ""
+    _qkey = f"ask_rfp_q_{_qid}"
 
-# === Early-defined schema & Alerts Center ===
-def _ensure_phase2_schema(conn):
-    """Create Phase-2 tables and migrate missing columns safely."""
-    try:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS saved_searches (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    nl_query TEXT,
-                    cadence TEXT DEFAULT 'daily',
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id INTEGER PRIMARY KEY,
-                    saved_search_id INTEGER,
-                    enabled INTEGER DEFAULT 1,
-                    last_run_at TEXT,
-                    last_result_count INTEGER,
-                    last_error TEXT,
-                    FOREIGN KEY(saved_search_id) REFERENCES saved_searches(id)
-                );
-            """)
-        # --- migration: add columns if they are missing ---
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(saved_searches);").fetchall()]
-            if 'nl_query' not in cols:
-                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN nl_query TEXT;")
-            if 'cadence' not in cols:
-                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN cadence TEXT DEFAULT 'daily';")
-            if 'created_at' not in cols:
-                with conn: conn.execute("ALTER TABLE saved_searches ADD COLUMN created_at TEXT DEFAULT (datetime('now'));")
-        except Exception:
-            pass
-    except Exception as e:
-        try: st.warning(f"Phase 2 schema init failed: {e}")
-        except Exception: pass
+    # Use session-state flag to auto-open the expander on next rerun
+    st.session_state["ask_rfp_open"] = True
+    st.session_state["ask_rfp_notice"] = notice or {}
+
+    # Render the expander immediately as well (no need to rely on a rerun)
+    with st.expander(f"Ask RFP Analyzer — {_title}", expanded=True):
+        st.write("**Title:**", _title)
+        q = st.text_area(
+            "Your question",
+            key=_qkey,
+            placeholder="e.g., Summarize key requirements and due dates…"
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Send", key=f"ask_rfp_send_{_qid}"):
+                st.session_state["rfp_selected_notice"] = notice or {}
+                st.session_state["rfp_question"] = q or ""
+                st.success("Sent to Analyzer context.")
+        with c2:
+            if st.button("Close", key=f"ask_rfp_close_{_qid}"):
+                st.session_state["ask_rfp_open"] = False
+
 
 
 def run_alerts_center(conn):
@@ -12936,3 +12910,11 @@ def relevance_score(row: dict, profile: dict | None = None) -> float:
     return round(score, 3)
 
 # === Phase 2: Alerts Center (SAM-only) ===
+
+
+def _render_ask_rfp_autorender():
+    """If a previous click requested the Ask RFP modal, render it open on rerun."""
+    import streamlit as st
+    if st.session_state.get("ask_rfp_open"):
+        _ask_rfp_analyzer_modal(st.session_state.get("ask_rfp_notice") or {})
+
