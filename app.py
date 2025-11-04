@@ -5440,6 +5440,14 @@ def run_sam_watch(conn) -> None:
             with cbtn2:
                 clicked_save = st.button("💾 Save this search", key="sam_save_btn")
 
+        # --- Saved search metadata controls ---
+        st.session_state.setdefault('sam_save_name', (st.session_state.get('sam_keywords') or st.session_state.get('sam_nl_text') or 'Saved search').strip())
+        name_col, cad_col = st.columns([2,1])
+        with name_col:
+            st.text_input('Search name', key='sam_save_name')
+        with cad_col:
+            st.selectbox('Alert cadence', ['daily','weekly','monthly'], key='sam_save_cadence', index=0)
+
         # Save search does NOT gate the rest of the UI
 
         if clicked_save:
@@ -5450,7 +5458,7 @@ def run_sam_watch(conn) -> None:
             try:
                 with conn:
                     conn.execute(
-                        "INSERT INTO saved_searches(name, nl_query, created_at) VALUES(?,?, datetime('now'));",
+                        "INSERT INTO saved_searches(name, nl_query, cadence, created_at) VALUES(?, ?, ?, datetime('now'));",
                         (
                             (st.session_state.get("sam_keywords") or st.session_state.get("sam_nl_text") or "Saved search").strip(),
                             st.session_state.get("sam_nl_text") or "",
