@@ -3218,7 +3218,6 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             pass
 
 def y4_ui_review(conn: sqlite3.Connection) -> None:
-    clicked_run_co_review = False
     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -5233,7 +5232,6 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 # ---------- SAM Watch (Phase A) ----------
 
 def run_sam_watch(conn: sqlite3.Connection) -> None:
-    clicked_run_search = False
 
     # ---- X3 MODAL RENDERER ----
     if st.session_state.get("x3_show_modal"):
@@ -5849,7 +5847,6 @@ def _p3_make_ics(summary: str, when_str: str) -> bytes:
 
 
 def _run_rfp_analyzer_phase3(conn):
-    clicked_parse_save = False
     import pandas as pd, streamlit as st, io, zipfile, mimetypes
     st.header("RFP Analyzer")
     st.caption("Build: OnePage+P3")
