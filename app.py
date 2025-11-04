@@ -1,3 +1,14 @@
+def _render_debug_panel():
+    import streamlit as st
+    with st.sidebar.expander("Debug (nav)", expanded=False):
+        data = {}
+        for k in ["nav_target", "rfp_selected_notice", "current_rfp_id", "__force_rfp_analyzer", "__last_push_event"]:
+            try:
+                data[k] = st.session_state.get(k)
+            except Exception:
+                data[k] = None
+        st.json(data)
+
 import re
 import streamlit as st
 
@@ -5561,6 +5572,17 @@ if _has_rows:
                             pass
                         st.session_state["rfp_selected_notice"] = notice
                         st.session_state["nav_target"] = "RFP Analyzer"
+                        try:
+                            st.toast("Opening RFP Analyzer…")
+                        except Exception:
+                            st.success("Opening RFP Analyzer…")
+                        st.session_state["__force_rfp_analyzer"] = True
+                        st.session_state["__last_push_event"] = {
+                            "ts": __import__("time").time(),
+                            "notice_id": str((notice or {}).get("Notice ID") or ""),
+                            "rfp_id": int(rid) if 'rid' in locals() and rid else None
+                        }
+                        st.session_state["nav_target"] = "RFP Analyzer"
                         st.success("Opening RFP Analyzer…")
                         try:
                             router("RFP Analyzer", conn)
@@ -9671,6 +9693,10 @@ def nav() -> str:
     _tgt = st.session_state.pop("nav_target", None)
     if _tgt:
         return _tgt
+    # also honor one-shot force flag
+    _force = st.session_state.pop("__force_rfp_analyzer", None)
+    if _force:
+        return "RFP Analyzer"
 
     return st.sidebar.selectbox(
         "Go to",
