@@ -5666,7 +5666,7 @@ def run_sam_watch(conn) -> None:
 
 
     # --- Tabs ---
-    tab_search, tab_alerts = st.tabs(["🔎 Smart Search", "🔔 Alerts"])
+    tab_search, tab_alerts, tab_analyzer = st.tabs(["🔎 Smart Search", "🔔 Alerts", "🧠 Analyzer"])
 
     # Remember last search text for scoring context
     if "sam_nl_text" not in st.session_state:
@@ -5680,6 +5680,13 @@ def run_sam_watch(conn) -> None:
             st.info("Alerts Center not available in this build.")
             st.caption(str(e))
 
+    # Phase 3 Analyzer tab (renders even if Smart Search errors)
+    with tab_analyzer:
+        try:
+            run_rfp_analyzer(conn)
+        except Exception as e:
+            st.error(f"Analyzer failed to render: {e}")
+    
     with tab_search:
         api_key = get_sam_api_key()
 
