@@ -1,6 +1,26 @@
 import re
 import streamlit as st
 
+# === Modals ===
+
+def _ask_rfp_analyzer_modal(opportunity=None):
+    @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
+    def _dlg():
+        st.write("Use AI to analyze the selected opportunity and ask questions.")
+        q = st.text_area("Your question", key=_unique_key('rfp_q','o3'))
+        if st.button("Analyze", key=_unique_key('rfp_analyze','o3')):
+            # placeholder for analysis call; replace with your service function
+            try:
+                ans = _service_analyze_rfp_question(q, opportunity)
+            except Exception as e:
+                ans = f"Error: {e}"
+            st.markdown("**Answer**")
+            st.write(ans)
+        if st.button("Close", key=_unique_key('rfp_close','o3')):
+            st.session_state['show_rfp_analyzer'] = False
+    _dlg()
+
+
 # === Early-defined schema & Alerts Center ===
 def _ensure_phase2_schema(conn):
     """Create Phase-2 tables and migrate missing columns safely."""
@@ -1530,22 +1550,6 @@ def _migrate_deals_columns(conn):
     Add columns used by Deals and SAM Watch if missing. Idempotent.
 
 # ---- Phase 0: Ask RFP Analyzer modal wiring ----
-def _ask_rfp_analyzer_modal(opportunity=None):
-    @st.dialog("Ask RFP Analyzer", key="ask_rfp_analyzer_dialog")
-    def _dlg():
-        st.write("Use AI to analyze the selected opportunity and ask questions.")
-        q = st.text_area("Your question", key=_unique_key('rfp_q','o3'))
-        if st.button("Analyze", key=_unique_key('rfp_analyze','o3')):
-            # placeholder for analysis call; replace with your service function
-            try:
-                ans = _service_analyze_rfp_question(q, opportunity)
-            except Exception as e:
-                ans = f"Error: {e}"
-            st.markdown("**Answer**")
-            st.write(ans)
-        if st.button("Close", key=_unique_key('rfp_close','o3')):
-            st.session_state['show_rfp_analyzer'] = False
-    _dlg()
 
 def _service_analyze_rfp_question(q, opportunity):
     try:
