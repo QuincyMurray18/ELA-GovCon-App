@@ -13378,3 +13378,30 @@ def _make_ics(title: str, dt):
     except Exception:
         return None
 
+
+def run_router(conn):
+    import streamlit as st
+    pages = ["SAM Watch", "RFP Analyzer"]
+    choice = st.sidebar.radio("Go to", pages, index=0, key="phase3_nav")
+    if choice == "RFP Analyzer":
+        return run_rfp_analyzer(conn)
+    # If SAM Watch exists, delegate; otherwise show a note
+    if "run_sam_watch" in globals():
+        return run_sam_watch(conn)
+    st.info("SAM Watch page is not available in this build. Use RFP Analyzer above.")
+
+import sqlite3
+def _get_conn(db_path="samwatch.db"):
+    try:
+        return sqlite3.connect(db_path, check_same_thread=False)
+    except Exception:
+        return sqlite3.connect(":memory:", check_same_thread=False)
+
+if __name__ == "__main__":
+    st.set_page_config(page_title="GovCon — SAM Watch & Analyzer", layout="wide")
+    conn = _get_conn()
+    try:
+        _ensure_phase2_schema(conn)
+    except Exception:
+        pass
+    run_router(conn)
