@@ -5710,6 +5710,23 @@ def run_sam_watch(conn) -> None:
                                 except Exception:
                                     pass
                     with c5:
+                        # Ask RFP Analyzer (restored)
+                        try:
+                            _render_ask_rfp_button(row.to_dict())
+                        except Exception:
+                            if st.button('Ask RFP Analyzer 💬', key=f'ask_rfp_{i}'):
+                                try:
+                                    notice = row.to_dict()
+                                except Exception:
+                                    notice = {}
+                                st.session_state['rfp_selected_notice'] = notice
+                                st.session_state['nav_target'] = 'RFP Analyzer'
+                                st.success('Opening RFP Analyzer…')
+                                try:
+                                    router('RFP Analyzer', conn); st.stop()
+                                except Exception:
+                                    try: st.rerun()
+                                    except Exception: pass
                         # Push notice to Analyzer tab
                         if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
                             try:
