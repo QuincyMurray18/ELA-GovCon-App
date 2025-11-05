@@ -1874,6 +1874,99 @@ def _get_senders(conn):
         except Exception:
             continue
     return []
+
+# === O4 Signatures: schema + helpers ========================================
+def _o4_ensure_signature_schema(conn):
+    try:
+        with conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS email_signatures(
+                email TEXT PRIMARY KEY,
+                signature_html TEXT
+            );""")
+    except Exception:
+        pass
+
+def _o4_get_signature(conn, email: str) -> str:
+    try:
+        _o4_ensure_signature_schema(conn)
+        if not email: return ""
+        cur = conn.execute("SELECT signature_html FROM email_signatures WHERE lower(email)=lower(?) LIMIT 1;", (email,))
+        row = cur.fetchone()
+        return row[0] if row and row[0] else ""
+    except Exception:
+        return ""
+
+def _o4_set_signature(conn, email: str, html: str) -> None:
+    try:
+        _o4_ensure_signature_schema(conn)
+        if not email: return
+        with conn:
+            conn.execute("""INSERT INTO email_signatures(email, signature_html)
+                         VALUES(lower(?), ?)
+                         ON CONFLICT(email) DO UPDATE SET signature_html=excluded.signature_html;""", (email, html or ""))
+    except Exception:
+        pass
+
+def _o4_inject_signature(html: str, sig: str) -> str:
+    # Replace {{SIGNATURE}} placeholder or append before unsubscribe prompt or at end.
+    try:
+        h = html or ""
+        s = (sig or "").strip()
+        if not s:
+            return h
+        # Replace explicit tag case-insensitively
+        import re as _re
+        if _re.search(r"\{\{\s*SIGNATURE\s*\}\}", h, flags=_re.I):
+            return _re.sub(r"\{\{\s*SIGNATURE\s*\}\}", s, h, flags=_re.I)
+        # Try to place above unsubscribe hint if present
+        # common patterns: {{UNSUB_LINK}}, 'unsubscribe', 'To unsubscribe click'
+        markers = [r"\{\{\s*UNSUB_LINK\s*\}\}", r"To unsubscribe", r"unsubscribe"]
+        for pat in markers:
+            m = _re.search(pat, h, flags=_re.I)
+            if m:
+                idx = m.start()
+                return h[:idx] + ("" if h[:idx].rstrip().endswith(">") else "<br>") + s + "<br>" + h[idx:]
+        # Else append near end
+        if "</body>" in h:
+            return h.replace("</body>", f"{s}</body>")
+        return h + ("<br>" if h else "") + s
+    except Exception:
+        return html or ""
+# === End O4 Signatures helpers ==============================================
+
+# UI: per-sender signature editor
+def o4_sender_signatures_ui(conn):
+    import streamlit as st
+    try:
+        _o4_ensure_signature_schema(conn)
+        rows = _get_senders(conn)
+    except Exception:
+        rows = []
+    if not rows:
+        st.info("No sender accounts available")
+        return
+    emails = [r[0] for r in rows]
+    sel = st.selectbox("Select sender for signature", emails, key="o4_sig_sel")
+    cur = _o4_get_signature(conn, sel)
+    st.caption("Paste your HTML signature. It will render inline.")
+    new = st.text_area("Signature HTML", value=cur, height=160, key="o4_sig_html")
+    c1, c2 = st.columns([1,1])
+    with c1:
+        if st.button("Save signature", key="o4_sig_save"):
+            _o4_set_signature(conn, sel, new)
+            st.success("Signature saved")
+            try:
+                st.session_state["o4_sig_saved_for"] = sel
+            except Exception:
+                pass
+            st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
+    with c2:
+        if new:
+            st.markdown("Preview:")
+            try:
+                st.markdown(new, unsafe_allow_html=True)
+            except Exception:
+                st.code(new)
 # ==== end O4 helpers ====
 # Helper imports for RTM/Amendment
 import re as _rtm_re
@@ -11056,29 +11149,6 @@ def o1_delete_email_account(conn, user_email:str):
 
 
 # === O2: Outreach Templates ====================================================
-
-# === Outreach Signatures ================================================
-def ensure_signature_schema(conn):
-    """Create table for per-sender HTML signatures."""
-    try:
-        with conn:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS email_signatures(
-                email TEXT PRIMARY KEY,
-                signature_html TEXT NOT NULL DEFAULT ''
-            )""")
-    except Exception:
-        pass
-
-def get_signature_html(conn, email: str) -> str:
-    if not email:
-        return ""
-    try:
-        cur = conn.execute("SELECT signature_html FROM email_signatures WHERE email=?", (email.strip().lower(),))
-        row = cur.fetchone()
-        return (row[0] or "") if row else ""
-    except Exception:
-        return ""
 def ensure_email_templates(conn):
     with conn:
         conn.execute("""
@@ -11326,8 +11396,7 @@ def run_outreach(conn):
     try:
         with st.expander("Sender accounts", expanded=True):
                 o4_sender_accounts_ui(conn)
-    
-                run_outreach_signatures_ui(conn)
+                o4_sender_signatures_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
 
@@ -11584,12 +11653,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             data = {k: str(r.get(k,"") or "") for k in r.index}
             subj = _o3_merge(subject_tpl or "", data)
             html = _o3_merge(html_tpl or "", data)
-        # Inject optional signature
-        sig_html = (sender.get("signature_html","") or "").strip()
-        data["SIGNATURE"] = sig_html
-        html = _o3_merge(html_tpl or "", data)
-        if sig_html and "{{SIGNATURE}}" not in (html_tpl or ""):
-            html = html + "<br>" + sig_html
             if "unsubscribe" not in html.lower():
                 html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
             if test_only:
@@ -13604,40 +13667,43 @@ def _get_conn(db_path="samwatch.db"):
         pass
     run_router(conn)
 
-
-def run_outreach_signatures_ui(conn):
-    import streamlit as st
-    import pandas as _pd
-    ensure_signature_schema(conn)
-    st.markdown("**Per-sender signature**")
-    # Load available senders
+# Runtime wrappers to inject signatures into outgoing emails
+def _o4_wrap_send_functions():
+    g = globals()
+    # Wrap _o3_send_batch
     try:
-        rows = _get_senders(conn)
-        emails = [r[0] for r in rows] if rows else []
-    except Exception:
-        emails = []
-    # Fallback to smtp_settings username
-    fallback_email = ""
-    try:
-        row = conn.execute("SELECT username FROM smtp_settings WHERE id=1").fetchone()
-        if row and row[0]:
-            fallback_email = row[0]
+        f = g.get("_o3_send_batch")
+        if f and not getattr(f, "_o4_sig_wrapped", False):
+            orig = f
+            def _wrapped_o3(conn, sender, rows, subj, html, test_only=False, max_send=500, attachments=None, **kw):
+                try:
+                    sig = _o4_get_signature(conn, (sender or {}).get("email",""))
+                    html2 = _o4_inject_signature(html, sig)
+                except Exception:
+                    html2 = html
+                return orig(conn, sender, rows, subj, html2, test_only=test_only, max_send=max_send, attachments=attachments)
+            _wrapped_o3._o4_sig_wrapped = True
+            g["_o3_send_batch"] = _wrapped_o3
     except Exception:
         pass
-    options = emails or ([fallback_email] if fallback_email else [])
-    sel = st.selectbox("Email", options=options, key="o4_sig_email") if options else st.text_input("Email", key="o4_sig_email_txt")
-    email = sel if options else st.session_state.get("o4_sig_email_txt","")
-    current = get_signature_html(conn, email)
-    sig = st.text_area("Default signature (HTML)", value=current, height=180, key="o4_sig_html")
-    c1, c2 = st.columns([1,3])
-    with c1:
-        if st.button("Save signature", key="o4_sig_save"):
-            ensure_signature_schema(conn)
-            try:
-                with conn:
-                    conn.execute("INSERT INTO email_signatures(email, signature_html) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET signature_html=excluded.signature_html", (email.strip().lower(), sig.strip()))
-                st.success("Signature saved")
-            except Exception as e:
-                st.error(f"Save failed: {e}")
-    with c2:
-        st.caption("Use {{SIGNATURE}} in a template to place it inline. If omitted it will be appended above the unsubscribe line.")
+    # Wrap __p_smtp_send
+    try:
+        f2 = g.get("__p_smtp_send")
+        if f2 and not getattr(f2, "_o4_sig_wrapped", False):
+            orig2 = f2
+            def _wrapped_smtp(sender, to_email, subject, html, attachments=None, **kw):
+                try:
+                    # conn may not be passed here. Try best-effort using cached connection.
+                    conn = globals().get("_O4_CONN") or globals().get("conn") or None
+                    sig = _o4_get_signature(conn, (sender or {}).get("email","")) if conn else ""
+                    html2 = _o4_inject_signature(html, sig)
+                except Exception:
+                    html2 = html
+                return orig2(sender, to_email, subject, html2, attachments=attachments)
+            _wrapped_smtp._o4_sig_wrapped = True
+            g["__p_smtp_send"] = _wrapped_smtp
+    except Exception:
+        pass
+
+# Call wrapper installer at import time
+_o4_wrap_send_functions()
