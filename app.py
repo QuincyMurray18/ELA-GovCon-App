@@ -925,18 +925,17 @@ def _render_top_nav():
         ("pipeline", "Pipeline"),
         ("outreach", "Outreach"),
         ("library", "Library"),
+        ("capability", "Capability Statement"),
         ("admin", "Admin"),
     ]
-    
-    if ('capability','Capability Statement') not in pages:
-        pages.append(('capability','Capability Statement'))
-st.markdown("### Navigation")
+    st.markdown("### Navigation")
     cols = st.columns(len(pages))
     route = get_route()
     for i, (pid, label) in enumerate(pages):
         with cols[i]:
             if st.button(label, use_container_width=True):
                 route_to(pid)
+
 
 def _render_opportunity_workspace():
     import streamlit as st
@@ -12599,7 +12598,7 @@ except Exception as ex:
 import io as _io
 from typing import Dict as _Dict, Any as _Any, List as _List
 try:
-    import openai as _openai  # optional
+    import openai as _openai
 except Exception:
     _openai = None
 try:
