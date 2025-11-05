@@ -11056,6 +11056,29 @@ def o1_delete_email_account(conn, user_email:str):
 
 
 # === O2: Outreach Templates ====================================================
+
+# === Outreach Signatures ================================================
+def ensure_signature_schema(conn):
+    """Create table for per-sender HTML signatures."""
+    try:
+        with conn:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS email_signatures(
+                email TEXT PRIMARY KEY,
+                signature_html TEXT NOT NULL DEFAULT ''
+            )""")
+    except Exception:
+        pass
+
+def get_signature_html(conn, email: str) -> str:
+    if not email:
+        return ""
+    try:
+        cur = conn.execute("SELECT signature_html FROM email_signatures WHERE email=?", (email.strip().lower(),))
+        row = cur.fetchone()
+        return (row[0] or "") if row else ""
+    except Exception:
+        return ""
 def ensure_email_templates(conn):
     with conn:
         conn.execute("""
@@ -11303,6 +11326,8 @@ def run_outreach(conn):
     try:
         with st.expander("Sender accounts", expanded=True):
                 o4_sender_accounts_ui(conn)
+    
+                run_outreach_signatures_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
 
@@ -11559,6 +11584,12 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             data = {k: str(r.get(k,"") or "") for k in r.index}
             subj = _o3_merge(subject_tpl or "", data)
             html = _o3_merge(html_tpl or "", data)
+        # Inject optional signature
+        sig_html = (sender.get("signature_html","") or "").strip()
+        data["SIGNATURE"] = sig_html
+        html = _o3_merge(html_tpl or "", data)
+        if sig_html and "{{SIGNATURE}}" not in (html_tpl or ""):
+            html = html + "<br>" + sig_html
             if "unsubscribe" not in html.lower():
                 html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
             if test_only:
@@ -13572,3 +13603,41 @@ def _get_conn(db_path="samwatch.db"):
     except Exception:
         pass
     run_router(conn)
+
+
+def run_outreach_signatures_ui(conn):
+    import streamlit as st
+    import pandas as _pd
+    ensure_signature_schema(conn)
+    st.markdown("**Per-sender signature**")
+    # Load available senders
+    try:
+        rows = _get_senders(conn)
+        emails = [r[0] for r in rows] if rows else []
+    except Exception:
+        emails = []
+    # Fallback to smtp_settings username
+    fallback_email = ""
+    try:
+        row = conn.execute("SELECT username FROM smtp_settings WHERE id=1").fetchone()
+        if row and row[0]:
+            fallback_email = row[0]
+    except Exception:
+        pass
+    options = emails or ([fallback_email] if fallback_email else [])
+    sel = st.selectbox("Email", options=options, key="o4_sig_email") if options else st.text_input("Email", key="o4_sig_email_txt")
+    email = sel if options else st.session_state.get("o4_sig_email_txt","")
+    current = get_signature_html(conn, email)
+    sig = st.text_area("Default signature (HTML)", value=current, height=180, key="o4_sig_html")
+    c1, c2 = st.columns([1,3])
+    with c1:
+        if st.button("Save signature", key="o4_sig_save"):
+            ensure_signature_schema(conn)
+            try:
+                with conn:
+                    conn.execute("INSERT INTO email_signatures(email, signature_html) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET signature_html=excluded.signature_html", (email.strip().lower(), sig.strip()))
+                st.success("Signature saved")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+    with c2:
+        st.caption("Use {{SIGNATURE}} in a template to place it inline. If omitted it will be appended above the unsubscribe line.")
