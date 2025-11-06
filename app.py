@@ -11344,6 +11344,112 @@ def render_outreach_mailmerge(conn):
 
 # ===== End Outreach Safe Fallbacks =====
 
+# ===== Minimal Signature Editor Fallbacks =====
+# Define signature helpers and UI if absent so Outreach never fails.
+
+if "__p_o4_signature_ui" not in globals():
+    try:
+        import streamlit as st
+    except Exception:
+        st = None
+
+    def __p_sig_schema(conn):
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS outreach_signatures(
+                    email TEXT PRIMARY KEY,
+                    signature_html TEXT DEFAULT '',
+                    logo_blob BLOB,
+                    logo_mime TEXT,
+                    logo_name TEXT,
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+                """
+            )
+            conn.commit()
+        except Exception:
+            pass
+        return True
+
+    def __p_sig_get(conn, email: str):
+        __p_sig_schema(conn)
+        try:
+            r = conn.execute(
+                "SELECT signature_html, logo_blob, logo_mime, logo_name FROM outreach_signatures WHERE lower(email)=lower(?)",
+                (email,),
+            ).fetchone()
+        except Exception:
+            r = None
+        if not r:
+            return dict(html="", logo=None, mime=None, name=None)
+        return dict(html=r[0] or "", logo=r[1], mime=r[2] or None, name=r[3] or None)
+
+    def __p_sig_set(conn, email: str, html: str | None, logo_blob, logo_mime, logo_name):
+        __p_sig_schema(conn)
+        try:
+            row = conn.execute("SELECT 1 FROM outreach_signatures WHERE lower(email)=lower(?)", (email,)).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE outreach_signatures
+                       SET signature_html=COALESCE(?,signature_html),
+                           logo_blob=?,
+                           logo_mime=?,
+                           logo_name=?,
+                           updated_at=datetime('now')
+                     WHERE lower(email)=lower(?)
+                    """,
+                    (html, logo_blob, logo_mime, logo_name, email),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name) VALUES(?,?,?,?,?)",
+                    (email, html or "", logo_blob, logo_mime, logo_name),
+                )
+            conn.commit()
+        except Exception:
+            pass
+        return True
+
+    def __p_render_signature(conn, sender_email: str, html: str):
+        sig = __p_sig_get(conn, sender_email)
+        sig_html = sig.get("html") or ""
+        if not sig_html:
+            return html, []
+        return (html or "") + "<br><br>" + sig_html, []
+
+    def __p_o4_signature_ui(conn):
+        if st is None:
+            return
+        st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates.")
+        # Derive senders from email_accounts
+        try:
+            rows = conn.execute("SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;").fetchall()
+        except Exception:
+            rows = []
+        if not rows:
+            st.info("No senders found. Add one above, then configure a signature.")
+            return
+        labels = [f"{(r[1] or r[0])} — {r[0]}" for r in rows]
+        default = 0
+        try:
+            if "__p_sig_sender" in st.session_state and st.session_state["__p_sig_sender"] in labels:
+                default = labels.index(st.session_state["__p_sig_sender"])
+        except Exception:
+            default = 0
+        choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
+        idx = labels.index(choice)
+        sender_email = rows[idx][0]
+        state = __p_sig_get(conn, sender_email)
+        html = st.text_area("Signature HTML", value=state["html"] or "", height=180, key="__p_sig_html_fallback")
+        if st.button("Save signature", key="__p_sig_save_fallback"):
+            __p_sig_set(conn, sender_email, html, state["logo"], state["mime"], state["name"])
+            st.success("Saved")
+# ===== End Minimal Signature Editor Fallbacks =====
+
+
+
 
 
 def run_outreach(conn):
