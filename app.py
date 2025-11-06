@@ -11300,23 +11300,53 @@ def render_outreach_mailmerge(conn):
     if not rows:
         st.info("Add a sender account first.")
         return
-    labels = labels
+    labels = [f"{r[0] or r[1]} — {r[1]}" for r in rows]
+    default = 0
+    try:
+        _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
+        if _pref in labels:
+            default = labels.index(_pref)
+    except Exception:
         default = 0
-        try:
-            _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
-            if _pref in labels:
-                default = labels.index(_pref)
-        except Exception:
-            default = 0
-        choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
-        idx = labels.index(choice)
-        sender_email = rows[idx][0]
-        state = __p_sig_get(conn, sender_email)
-        html = st.text_area("Signature HTML", value=state["html"] or "", height=180, key="__p_sig_html_fallback")
-        if st.button("Save signature", key="__p_sig_save_fallback"):
-            __p_sig_set(conn, sender_email, html, state["logo"], state["mime"], state["name"])
-            st.success("Saved")
-# ===== End Minimal Signature Editor Fallbacks =====
+    choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
+    sender_email = rows[labels.index(choice)][1]
+
+    subj = st.text_input("Subject template", st.session_state.get("o4_mm_subject",""))
+    html = st.text_area("HTML body template", st.session_state.get("o4_mm_html",""), height=220)
+
+    # Persist UI state
+    st.session_state["o4_mm_subject"] = subj
+    st.session_state["o4_mm_html"] = html
+    st.session_state["__p_sig_sender_pref"] = choice
+
+    # Preview with signature
+    try:
+        html_prev, _imgs = __p_render_signature(conn, sender_email, html or "")
+    except Exception:
+        html_prev = html or ""
+    with st.expander("Preview (first row placeholders not resolved)"):
+        st.markdown(html_prev, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        test_to = st.text_input("Test recipient email")
+    with col2:
+        send_test = st.button("Send test")
+    if send_test:
+        fn = globals().get("_o3_send_batch")
+        if callable(fn):
+            # Try a single-row test send; host implementation may vary.
+            try:
+                sender = {"email": sender_email}
+                rows = [{"email": test_to}]
+                fn(conn, sender, rows, subj, html, test_only=True, max_send=1, attachments=None)
+                st.success("Test send enqueued")
+            except Exception as e:
+                st.error(f"Test send failed: {e}")
+        else:
+            st.info("Send pipeline not available in this build.")
+
+
 
 
 
@@ -13257,22 +13287,66 @@ if "_o3_render_sender_picker" not in globals():
 # Guard wrapper: ensure sender is configured before original Mail Merge UI runs
 try:
     _orig__render_outreach_mailmerge = render_outreach_mailmerge
-    def render_outreach_mailmerge(conn):
-        import streamlit as st
 
-        sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
-        if sender and "username" in sender and "email" not in sender:
-            sender["email"] = sender.get("username","")
-        if sender and "password" in sender and "app_password" not in sender:
-            sender["app_password"] = sender.get("password","")
-        if not sender.get("email") or not sender.get("app_password"):
-            st.warning("Configure a sender first in Outreach → Sender.")
-            return
-        return _orig__render_outreach_mailmerge(conn)
-except Exception:
-    pass
+def render_outreach_mailmerge(conn):
+    if st is None:
+        return
+    st.subheader("Mail merge")
+    __p__ensure_email_accounts(conn)
+    try:
+        rows = conn.execute("SELECT COALESCE(display_name,''), user_email FROM email_accounts ORDER BY id DESC").fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        st.info("Add a sender account first.")
+        return
+    labels = [f"{r[0] or r[1]} — {r[1]}" for r in rows]
+    default = 0
+    try:
+        _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
+        if _pref in labels:
+            default = labels.index(_pref)
+    except Exception:
+        default = 0
+    choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
+    sender_email = rows[labels.index(choice)][1]
 
-# === End Outreach guard =====================================================
+    subj = st.text_input("Subject template", st.session_state.get("o4_mm_subject",""))
+    html = st.text_area("HTML body template", st.session_state.get("o4_mm_html",""), height=220)
+
+    # Persist UI state
+    st.session_state["o4_mm_subject"] = subj
+    st.session_state["o4_mm_html"] = html
+    st.session_state["__p_sig_sender_pref"] = choice
+
+    # Preview with signature
+    try:
+        html_prev, _imgs = __p_render_signature(conn, sender_email, html or "")
+    except Exception:
+        html_prev = html or ""
+    with st.expander("Preview (first row placeholders not resolved)"):
+        st.markdown(html_prev, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        test_to = st.text_input("Test recipient email")
+    with col2:
+        send_test = st.button("Send test")
+    if send_test:
+        fn = globals().get("_o3_send_batch")
+        if callable(fn):
+            # Try a single-row test send; host implementation may vary.
+            try:
+                sender = {"email": sender_email}
+                rows = [{"email": test_to}]
+                fn(conn, sender, rows, subj, html, test_only=True, max_send=1, attachments=None)
+                st.success("Test send enqueued")
+            except Exception as e:
+                st.error(f"Test send failed: {e}")
+        else:
+            st.info("Send pipeline not available in this build.")
+
+
 
 
 def o1_sender_accounts_ui(conn):
@@ -13788,8 +13862,9 @@ def __p_o4_signature_ui(conn) -> None:
     # Respect any preselection placed in session_state
     default = 0
     try:
-        if "__p_sig_sender" in st.session_state and st.session_state["__p_sig_sender"] in labels:
-            default = labels.index(st.session_state["__p_sig_sender"])
+        _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
+        if _pref in labels:
+            default = labels.index(_pref)
     except Exception:
         default = 0
     choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
