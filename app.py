@@ -13782,3 +13782,169 @@ if callable(_ELA__o3_send_batch):
     globals()["_o3_send_batch"] = _o3_send_batch
 
 # ---------- End of module ----------
+
+
+# ===== Outreach Safe Fallbacks (o4 sender + mail merge) =====
+# These definitions prevent NameError when host functions are absent.
+
+try:
+    import streamlit as st  # ensure available
+except Exception:
+    st = None
+
+def __p__table_exists(conn, name: str) -> bool:
+    try:
+        r = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (name,)).fetchone()
+        return bool(r)
+    except Exception:
+        return False
+
+def __p__ensure_email_accounts(conn):
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_accounts(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                display_name TEXT,
+                user_email TEXT UNIQUE,
+                smtp_host TEXT,
+                smtp_port INTEGER,
+                username TEXT,
+                password TEXT,
+                use_tls INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+# Replace any fragile wrapper with a robust baseline implementation.
+def __p__override_o4_sender_accounts_ui():
+    try:
+        # Always override to ensure the function exists and works standalone.
+        def o4_sender_accounts_ui(conn):
+            __p__ensure_email_accounts(conn)
+            if st is None:
+                return
+            st.subheader("Outreach Senders")
+            try:
+                rows = conn.execute("SELECT id, COALESCE(display_name,''), user_email, smtp_host, smtp_port, use_tls FROM email_accounts ORDER BY id DESC").fetchall()
+            except Exception:
+                rows = []
+            if rows:
+                st.dataframe(
+                    [{"id": r[0], "name": r[1], "email": r[2], "host": r[3], "port": r[4], "TLS": bool(r[5])} for r in rows],
+                    use_container_width=True
+                )
+            with st.expander("Add or update sender"):
+                c1,c2 = st.columns(2)
+                with c1:
+                    display_name = st.text_input("Display name", key="o4_add_name")
+                    user_email   = st.text_input("Sender email", key="o4_add_email")
+                    username     = st.text_input("SMTP username", key="o4_add_user")
+                    password     = st.text_input("SMTP password", type="password", key="o4_add_pass")
+                with c2:
+                    smtp_host    = st.text_input("SMTP host", key="o4_add_host")
+                    smtp_port    = st.number_input("SMTP port", min_value=1, max_value=65535, value=587, step=1, key="o4_add_port")
+                    use_tls      = st.checkbox("Use TLS", value=True, key="o4_add_tls")
+                if st.button("Save sender", key="o4_add_save"):
+                    try:
+                        conn.execute(
+                            """
+                            INSERT INTO email_accounts(display_name,user_email,smtp_host,smtp_port,username,password,use_tls)
+                            VALUES(?,?,?,?,?,?,?)
+                            ON CONFLICT(user_email) DO UPDATE SET
+                                display_name=excluded.display_name,
+                                smtp_host=excluded.smtp_host,
+                                smtp_port=excluded.smtp_port,
+                                username=excluded.username,
+                                password=excluded.password,
+                                use_tls=excluded.use_tls
+                            """,
+                            (display_name, user_email, smtp_host, int(smtp_port), username, password, 1 if use_tls else 0)
+                        )
+                        conn.commit()
+                        st.success("Sender saved")
+                    except Exception as e:
+                        st.error(f"Failed to save sender: {e}")
+            try:
+                st.subheader("Signature for selected sender")
+            except Exception:
+                pass
+            try:
+                __p_o4_signature_ui(conn)
+            except Exception as e:
+                st.info(f"Signature editor unavailable: {e}")
+
+        globals()["o4_sender_accounts_ui"] = o4_sender_accounts_ui
+    except Exception:
+        pass
+
+def __p__override_render_outreach_mailmerge():
+    try:
+        def render_outreach_mailmerge(conn):
+            if st is None:
+                return
+            st.subheader("Mail merge")
+            __p__ensure_email_accounts(conn)
+            try:
+                rows = conn.execute("SELECT COALESCE(display_name,''), user_email FROM email_accounts ORDER BY id DESC").fetchall()
+            except Exception:
+                rows = []
+            if not rows:
+                st.info("Add a sender account first.")
+                return
+            labels = [f"{r[0] or r[1]} — {r[1]}" for r in rows]
+            idx = 0
+            if "__p_sig_sender" in st.session_state and st.session_state["__p_sig_sender"] in labels:
+                idx = labels.index(st.session_state["__p_sig_sender"])
+            choice = st.selectbox("Sender", labels, index=idx, key="o4_mm_sender")
+            sender_email = rows[labels.index(choice)][1]
+
+            subj = st.text_input("Subject template", st.session_state.get("o4_mm_subject",""))
+            html = st.text_area("HTML body template", st.session_state.get("o4_mm_html",""), height=220)
+
+            # Persist UI state
+            st.session_state["o4_mm_subject"] = subj
+            st.session_state["o4_mm_html"] = html
+            st.session_state["__p_sig_sender"] = choice
+
+            # Preview with signature
+            try:
+                html_prev, _imgs = __p_render_signature(conn, sender_email, html or "")
+            except Exception:
+                html_prev = html or ""
+            with st.expander("Preview (first row placeholders not resolved)"):
+                st.markdown(html_prev, unsafe_allow_html=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                test_to = st.text_input("Test recipient email")
+            with col2:
+                send_test = st.button("Send test")
+            if send_test:
+                fn = globals().get("_o3_send_batch")
+                if callable(fn):
+                    # Try a single-row test send; host implementation may vary.
+                    try:
+                        sender = {"email": sender_email}
+                        rows = [{"email": test_to}]
+                        fn(conn, sender, rows, subj, html, test_only=True, max_send=1, attachments=None)
+                        st.success("Test send enqueued")
+                    except Exception as e:
+                        st.error(f"Test send failed: {e}")
+                else:
+                    st.info("Send pipeline not available in this build.")
+
+        globals()["render_outreach_mailmerge"] = render_outreach_mailmerge
+    except Exception:
+        pass
+
+# Apply overrides unconditionally to guarantee availability
+__p__override_o4_sender_accounts_ui()
+__p__override_render_outreach_mailmerge()
+
+# ===== End Outreach Safe Fallbacks =====
+
