@@ -11064,7 +11064,21 @@ def ensure_outreach_o1_schema(conn):
             smtp_host TEXT DEFAULT 'smtp.gmail.com',
             smtp_port INTEGER DEFAULT 465,
             use_ssl INTEGER DEFAULT 1
-        )""")
+        )
+
+    # --- schema migrations for legacy DBs ---
+    __p_ensure_column(conn, "email_accounts", "app_password", "TEXT DEFAULT ''")
+    __p_ensure_column(conn, "email_accounts", "display_name", "TEXT DEFAULT ''")
+    __p_ensure_column(conn, "email_accounts", "smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
+    __p_ensure_column(conn, "email_accounts", "smtp_port", "INTEGER DEFAULT 465")
+    __p_ensure_column(conn, "email_accounts", "use_ssl", "INTEGER DEFAULT 1")
+    __p_ensure_column(conn, "outreach_sender_accounts", "app_password", "TEXT DEFAULT ''")
+    __p_ensure_column(conn, "outreach_sender_accounts", "smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
+    __p_ensure_column(conn, "outreach_sender_accounts", "smtp_port", "INTEGER DEFAULT 587")
+    __p_ensure_column(conn, "outreach_sender_accounts", "use_tls", "INTEGER DEFAULT 1")
+    __p_ensure_column(conn, "outreach_sender_accounts", "is_active", "INTEGER DEFAULT 1")
+    # --- end migrations ---
+""")
 
 
 def o1_delete_email_account(conn, user_email:str):
@@ -13541,6 +13555,22 @@ _date_time_pat = re.compile(
     re.IGNORECASE
 )
 
+
+def __p_ensure_column(conn, table: str, col: str, col_def: str):
+    try:
+        cur = conn.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+    except Exception as e:
+        try:
+            import streamlit as st
+            st.warning(f"Schema check failed for {table}.{col}: {e}")
+        except Exception:
+            pass
+
+
+
 def _parse_dt_guess(s: str):
     try:
         from dateutil import parser as _dp
@@ -13631,24 +13661,25 @@ def _get_conn(db_path="samwatch.db"):
 
 # === BEGIN SIG+LOGO PATCH ===
 
+
 # --- Safe dispatcher to avoid NameError when signature UI is not yet defined ---
 def __p_call_sig_ui(conn):
     try:
-        import streamlit as st
+        import streamlit as _st
     except Exception:
-        # Streamlit not available; nothing to render
         return
     try:
         fn = globals().get("__p_o4_signature_ui")
         if callable(fn):
             return fn(conn)
-        st.info("Signature editor unavailable in this build.")
+        _st.info("Signature editor unavailable in this build.")
     except Exception as _e_sig:
         try:
-            st.warning(f"Signature editor unavailable: {_e_sig}")
+            _st.warning(f"Signature editor unavailable: {_e_sig}")
         except Exception:
             pass
 # --- End safe dispatcher ---
+
 
 # === Outreach Signatures: schema, helpers, UI, and rendering ===
 import hashlib as _p_hashlib
