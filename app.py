@@ -11197,6 +11197,28 @@ def seed_default_templates(conn):
 
 
 def run_outreach(conn):
+
+# -- inline fallbacks to avoid NameError if build omitted these --
+try:
+    o4_sender_accounts_ui  # noqa: F401
+except NameError:
+    def o4_sender_accounts_ui(conn):
+        try:
+            import streamlit as st
+            st.info("Sender accounts UI not available in this build.")
+        except Exception:
+            pass
+try:
+    render_outreach_mailmerge  # noqa: F401
+except NameError:
+    def render_outreach_mailmerge(conn):
+        try:
+            import streamlit as st
+            st.info("Mail merge panel not available in this build.")
+        except Exception:
+            pass
+# -- end inline fallbacks --
+
     import streamlit as st
 
 
