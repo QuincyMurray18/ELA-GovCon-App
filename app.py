@@ -12699,6 +12699,15 @@ def __p_o4_ui(conn):
         for lbl,em,host,port,tls,act in rows:
             _st.write(f"• **{lbl}** — {em} — {host}:{port} — TLS {bool(tls)} — {'Active' if act else 'Disabled'}")
 
+    _st.divider()
+    _st.subheader("Per-sender signature")
+    _st.caption("Edit HTML and upload a logo. Use {{SIGNATURE}} in templates and {{SIGNATURE_LOGO}} inside the signature.")
+    try:
+        __p_o4_signature_ui(conn)
+    except Exception as e:
+        _st.warning(f"Signature editor unavailable: {e}")
+
+
 def __p_o2_ui(conn):
     _st.caption("Save reusable templates. Supports {{name}}, {{company}}, {{UNSUB_LINK}}, {{SIGNATURE}} and optional {{SIGNATURE_LOGO}} inside the signature.")
     with _st.form("__p_o2_new", clear_on_submit=True):
