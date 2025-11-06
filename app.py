@@ -1,6 +1,27 @@
 import re
 import streamlit as st
 
+# --- Early guard to ensure dispatcher exists before any UI calls ---
+if "__p_call_sig_ui" not in globals():
+    def __p_call_sig_ui(conn):
+        try:
+            import streamlit as _st
+        except Exception:
+            return
+        try:
+            fn = globals().get("__p_o4_signature_ui")
+            if callable(fn):
+                return fn(conn)
+            _st.info("Signature editor unavailable in this build.")
+        except Exception as _e_sig:
+            try:
+                _st.warning(f"Signature editor unavailable: {_e_sig}")
+            except Exception:
+                pass
+# --- End early guard ---
+
+
+
 # --- SQL cleaner to strip '#' comments not supported by SQLite ---
 def __p_strip_sql_hash_comments(sql: str) -> str:
     out_lines = []
