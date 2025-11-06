@@ -10327,6 +10327,24 @@ def run_rfp_analyzer(conn) -> None:
     st.session_state["current_rfp_id"] = int(rid)
 
     # Controls
+
+    # --- Signature editor inline ---
+    try:
+        st.subheader("Signature for selected sender")
+        # Preselect the current sender for the signature UI if available
+        try:
+            if sender and sender.get("email"):
+                _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
+                _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
+                st.session_state["__p_sig_sender"] = _label
+        except Exception:
+            pass
+        __p_o4_signature_ui(conn)
+    except Exception as _e_sig:
+        try:
+            st.warning(f"Signature editor unavailable: {_e_sig}")
+        except Exception:
+            pass
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         if st.button("Check for SAM updates ▶", key="p3_check_sam"):
@@ -11257,6 +11275,24 @@ def render_outreach_mailmerge(conn):
         sender["email"] = sender.get("username","")
     if sender and "password" in sender and "app_password" not in sender:
         sender["app_password"] = sender.get("password","")
+
+    # --- Signature editor inline ---
+    try:
+        st.subheader("Signature for selected sender")
+        # Preselect the current sender for the signature UI if available
+        try:
+            if sender and sender.get("email"):
+                _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
+                _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
+                st.session_state["__p_sig_sender"] = _label
+        except Exception:
+            pass
+        __p_o4_signature_ui(conn)
+    except Exception as _e_sig:
+        try:
+            st.warning(f"Signature editor unavailable: {_e_sig}")
+        except Exception:
+            pass
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         test = st.button("Test run (no send)", key="o3_test")
@@ -12367,6 +12403,24 @@ def render_subfinder_s1d(conn):
         with col2: lng = st.number_input("Longitude", value=-77.0364)
         radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
     radius_m = int(radius_mi * 1609.34)
+
+    # --- Signature editor inline ---
+    try:
+        st.subheader("Signature for selected sender")
+        # Preselect the current sender for the signature UI if available
+        try:
+            if sender and sender.get("email"):
+                _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
+                _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
+                st.session_state["__p_sig_sender"] = _label
+        except Exception:
+            pass
+        __p_o4_signature_ui(conn)
+    except Exception as _e_sig:
+        try:
+            st.warning(f"Signature editor unavailable: {_e_sig}")
+        except Exception:
+            pass
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         go = st.button("Search", key="s1d_go")
