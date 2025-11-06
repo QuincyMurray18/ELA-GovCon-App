@@ -10336,10 +10336,10 @@ def run_rfp_analyzer(conn) -> None:
             if sender and sender.get("email"):
                 _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
                 _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
-                st.session_state["__p_sig_sender_pref"] = _label
+                st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        __p_o4_signature_ui(conn)
+        __p_call_sig_ui(conn)
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -11194,168 +11194,132 @@ def seed_default_templates(conn):
 
 
 # --- O4 wrapper: delegates to __p_o4_ui if present, else shows fallback UI ---
-
-# ===== Outreach Safe Fallbacks (o4 sender + mail merge) =====
-# These definitions prevent NameError when host functions are absent and also provide working UI.
-
-try:
-    import streamlit as st  # ensure available
-except Exception:
-    st = None
-
-def __p__table_exists(conn, name: str) -> bool:
-    try:
-        r = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (name,)).fetchone()
-        return bool(r)
-    except Exception:
-        return False
-
-def __p__ensure_email_accounts(conn):
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS email_accounts(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                display_name TEXT,
-                user_email TEXT UNIQUE,
-                smtp_host TEXT,
-                smtp_port INTEGER,
-                username TEXT,
-                password TEXT,
-                use_tls INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-        )
-        conn.commit()
-    except Exception:
-        pass
-
 def o4_sender_accounts_ui(conn):
-    __p__ensure_email_accounts(conn)
-    if st is None:
-        return
-    st.subheader("Outreach Senders")
     try:
-        rows = conn.execute("SELECT id, COALESCE(display_name,''), user_email, smtp_host, smtp_port, use_tls FROM email_accounts ORDER BY id DESC").fetchall()
+        return __p_o4_ui(conn)  # provided by O4 module when available
     except Exception:
-        rows = []
-    if rows:
+        import streamlit as _st
+        from contextlib import closing
+        _st.info("O4 sender accounts fallback UI loaded.")
+        # Load existing if any
+        host, port, username, password, use_tls = "smtp.gmail.com", 587, "", "", True
         try:
-            st.dataframe(
-                [{"id": r[0], "name": r[1], "email": r[2], "host": r[3], "port": r[4], "TLS": bool(r[5])} for r in rows],
-                use_container_width=True
-            )
+            with closing(conn.cursor()) as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                row = cur.execute("SELECT label, host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
+                if row:
+                    label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
         except Exception:
             pass
-    with st.expander("Add or update sender"):
-        c1,c2 = st.columns(2)
-        with c1:
-            display_name = st.text_input("Display name", key="o4_add_name")
-            user_email   = st.text_input("Sender email", key="o4_add_email")
-            username     = st.text_input("SMTP username", key="o4_add_user")
-            password     = st.text_input("SMTP password", type="password", key="o4_add_pass")
-        with c2:
-            smtp_host    = st.text_input("SMTP host", key="o4_add_host")
-            smtp_port    = st.number_input("SMTP port", min_value=1, max_value=65535, value=587, step=1, key="o4_add_port")
-            use_tls      = st.checkbox("Use TLS", value=True, key="o4_add_tls")
-        if st.button("Save sender", key="o4_add_save"):
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO email_accounts(display_name,user_email,smtp_host,smtp_port,username,password,use_tls)
-                    VALUES(?,?,?,?,?,?,?)
-                    ON CONFLICT(user_email) DO UPDATE SET
-                        display_name=excluded.display_name,
-                        smtp_host=excluded.smtp_host,
-                        smtp_port=excluded.smtp_port,
-                        username=excluded.username,
-                        password=excluded.password,
-                        use_tls=excluded.use_tls
-                    """,
-                    (display_name, user_email, smtp_host, int(smtp_port), username, password, 1 if use_tls else 0)
-                )
-                conn.commit()
-                st.success("Sender saved")
-            except Exception as e:
-                st.error(f"Failed to save sender: {e}")
-    try:
-        st.subheader("Signature for selected sender")
-        __p_o4_signature_ui(conn)
-    except Exception as e:
+        with _st.form("o4_fallback_sender_mm", clear_on_submit=False):
+            label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
+            username = _st.text_input("Gmail address", value=username)
+            password = _st.text_input("App password", type="password", value=password)
+            c1,c2 = _st.columns(2)
+            with c1: host = _st.text_input("SMTP host", value=host)
+            with c2: port = _st.number_input("SMTP port", 1, 65535, value=int(port))
+            use_tls = _st.checkbox("Use STARTTLS", value=bool(use_tls))
+            saved = _st.form_submit_button("Save sender")
+            if saved:
+                try:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
+                        cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
+                                    (label.strip() or "Default", host.strip(), int(port), username.strip(), password.strip(), 1 if use_tls else 0))
+                        conn.commit()
+                    _st.success("Sender saved")
+                except Exception as e:
+                    _st.error(f"Save failed: {e}")
+        # Show current
         try:
-            st.info(f"Signature editor unavailable: {e}")
+            with closing(conn.cursor()) as cur:
+                row = cur.execute("SELECT label, username, host, port, use_tls FROM smtp_settings WHERE id=1").fetchone()
+            if row:
+                _st.caption(f"Active: {row[0]} — {row[1]} via {row[2]}:{row[3]} TLS={'on' if row[4] else 'off'}")
         except Exception:
             pass
+
 
 def render_outreach_mailmerge(conn):
-    if st is None:
-        return
-    st.subheader("Mail merge")
-    __p__ensure_email_accounts(conn)
-    try:
-        rows = conn.execute("SELECT COALESCE(display_name,''), user_email FROM email_accounts ORDER BY id DESC").fetchall()
-    except Exception:
-        rows = []
-    if not rows:
-        st.info("Add a sender account first.")
-        return
-    labels = [f"{r[0] or r[1]} — {r[1]}" for r in rows]
-    default = 0
-    try:
-        _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
-        if _pref in labels:
-            default = labels.index(_pref)
-    except Exception:
-        default = 0
-    choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
-    sender_email = rows[labels.index(choice)][1]
+    globals()['_O4_CONN'] = conn
+    import streamlit as st
 
-    subj = st.text_input("Subject template", st.session_state.get("o4_mm_subject",""))
-    html = st.text_area("HTML body template", st.session_state.get("o4_mm_html",""), height=220)
+    import pandas as _pd
+    # 1) Recipients
+    rows = _o3_collect_recipients_ui(conn) if "_o3_collect_recipients_ui" in globals() else None
+    st.subheader("Mail Merge & Send")
+    # 2) Template inputs
+    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
+    body = st.text_area("HTML Body", value=st.session_state.get("outreach_body",""), height=260, key="o3_body")
 
-    # Persist UI state
-    st.session_state["o4_mm_subject"] = subj
-    st.session_state["o4_mm_html"] = html
-    st.session_state["__p_sig_sender_pref"] = choice
-
-    # Preview with signature
-    try:
-        html_prev, _imgs = __p_render_signature(conn, sender_email, html or "")
-    except Exception:
-        html_prev = html or ""
-    with st.expander("Preview (first row placeholders not resolved)"):
-        st.markdown(html_prev, unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        test_to = st.text_input("Test recipient email")
-    with col2:
-        send_test = st.button("Send test")
-    if send_test:
-        fn = globals().get("_o3_send_batch")
-        if callable(fn):
-            # Try a single-row test send; host implementation may vary.
+    # Attachments for this blast
+    ups = st.file_uploader("Attachments (optional)", type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"], accept_multiple_files=True, key="o3_attachments")
+    attach_paths = st.session_state.get("o3_attach_paths", [])
+    if ups:
+        attach_paths = []
+        for up in ups:
             try:
-                sender = {"email": sender_email}
-                rows = [{"email": test_to}]
-                fn(conn, sender, rows, subj, html, test_only=True, max_send=1, attachments=None)
-                st.success("Test send enqueued")
-            except Exception as e:
-                st.error(f"Test send failed: {e}")
-        else:
-            st.info("Send pipeline not available in this build.")
+                p = save_uploaded_file(up, subdir="outreach")
+                if p:
+                    attach_paths.append(p)
+            except Exception:
+                pass
+        st.session_state["o3_attach_paths"] = attach_paths
+    if attach_paths:
+        st.caption("Attachments to include: " + ", ".join([os.path.basename(p) for p in attach_paths]))
+    # 3) Sender
+    st.subheader("Sender")
+    sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
+    # normalize keys
+    if sender and "username" in sender and "email" not in sender:
+        sender["email"] = sender.get("username","")
+    if sender and "password" in sender and "app_password" not in sender:
+        sender["app_password"] = sender.get("password","")
 
-
-
-
-
+    # --- Signature editor inline ---
+    try:
+        st.subheader("Signature for selected sender")
+        # Preselect the current sender for the signature UI if available
+        try:
+            if sender and sender.get("email"):
+                _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
+                _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
+                st.session_state["__p_sig_sender"] = _label
+        except Exception:
+            pass
+        __p_call_sig_ui(conn)
+    except Exception as _e_sig:
+        try:
+            st.warning(f"Signature editor unavailable: {_e_sig}")
+        except Exception:
+            pass
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        test = st.button("Test run (no send)", key="o3_test")
+    with c2:
+        do = st.button("Send batch", type="primary", key="o3_send")
+    with c3:
+        maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+    if (test or do) and rows is not None and hasattr(rows, "empty") and not rows.empty:
+        try:
+            if "_o3_send_batch" in globals():
+                if test:
+                    st.info("Test run: rendering only, no SMTP.")
+                    # call with test_only=True
+                    out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn), attachments=attach_paths)
+                else:
+                    out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn), attachments=attach_paths)
+                st.success("Send function executed")
+            else:
+                st.warning("Send function not available in this build.")
+        except Exception as e:
+            st.error(f"Send failed: {e}")
 
 
 def run_outreach(conn):
-
-
     import streamlit as st
+
+
     # O4 badge if present
     try:
         _o4_render_badge()
@@ -12448,10 +12412,10 @@ def render_subfinder_s1d(conn):
             if sender and sender.get("email"):
                 _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
                 _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
-                st.session_state["__p_sig_sender_pref"] = _label
+                st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        __p_o4_signature_ui(conn)
+        __p_call_sig_ui(conn)
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -12885,16 +12849,8 @@ def __p_run_outreach(conn):
     except Exception:
         pass
     with _st.expander("O4 • Sender accounts", expanded=True):
-                # Auto-injected: O4 signature editor
-        try:
-            __p_o4_signature_ui()
-        except Exception:
-            pass
-
-        try:
-            __p_o4_ui(conn)
-        except Exception as e:
-            _st.warning(f"O4 unavailable: {e}")
+        try: __p_o4_ui(conn)
+        except Exception as e: _st.warning(f"O4 unavailable: {e}")
     with _st.expander("O2 • Templates", expanded=True):
         try: __p_o2_ui(conn)
         except Exception as e: _st.warning(f"O2 unavailable: {e}")
@@ -13292,8 +13248,25 @@ if "_o3_render_sender_picker" not in globals():
         st.caption(f"Using {username} via {host}:{int(port)} TLS={'on' if use_tls else 'off'}")
         return {"host": host, "port": int(port), "email": username, "app_password": password, "use_tls": bool(use_tls)}
 
+# Guard wrapper: ensure sender is configured before original Mail Merge UI runs
+try:
+    _orig__render_outreach_mailmerge = render_outreach_mailmerge
+    def render_outreach_mailmerge(conn):
+        import streamlit as st
 
+        sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
+        if sender and "username" in sender and "email" not in sender:
+            sender["email"] = sender.get("username","")
+        if sender and "password" in sender and "app_password" not in sender:
+            sender["app_password"] = sender.get("password","")
+        if not sender.get("email") or not sender.get("app_password"):
+            st.warning("Configure a sender first in Outreach → Sender.")
+            return
+        return _orig__render_outreach_mailmerge(conn)
+except Exception:
+    pass
 
+# === End Outreach guard =====================================================
 
 
 def o1_sender_accounts_ui(conn):
@@ -13658,56 +13631,50 @@ def _get_conn(db_path="samwatch.db"):
 
 # === BEGIN SIG+LOGO PATCH ===
 
+# --- Safe dispatcher to avoid NameError when signature UI is not yet defined ---
+def __p_call_sig_ui(conn):
+    try:
+        import streamlit as st
+    except Exception:
+        # Streamlit not available; nothing to render
+        return
+    try:
+        fn = globals().get("__p_o4_signature_ui")
+        if callable(fn):
+            return fn(conn)
+        st.info("Signature editor unavailable in this build.")
+    except Exception as _e_sig:
+        try:
+            st.warning(f"Signature editor unavailable: {_e_sig}")
+        except Exception:
+            pass
+# --- End safe dispatcher ---
+
 # === Outreach Signatures: schema, helpers, UI, and rendering ===
 import hashlib as _p_hashlib
 
-# ===== ELA Outreach Signatures Patch (merged) =====
-
-# app_outreach_signatures_fixed.py
-# Clean, self-contained Outreach Signatures patch for ELA GovCon App
-# - Per-sender signature storage (HTML + optional logo)
-# - Streamlit UI to edit signatures
-# - Email send pipeline injection (SIGNATURE + inline logo via CID)
-#
-# Drop-in: import this file OR paste into your app.py once.
-# Safe: all hooks are guarded and only attach if the host functions exist.
-# Order-safe: __p_o4_signature_ui is defined before any wrapper calls.
-import hashlib as _p_hashlib
-from contextlib import closing as _closing
-
-# Optional imports guarded
-try:
-    import streamlit as st
-except Exception:  # pragma: no cover
-    st = None  # allows module import in non-Streamlit contexts
-
-# ---------- Signature storage schema ----------
-def __p_sig_schema(conn) -> bool:
+def __p_sig_schema(conn):
     try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS outreach_signatures(
-                email TEXT PRIMARY KEY,
-                signature_html TEXT DEFAULT '',
-                logo_blob BLOB,
-                logo_mime TEXT,
-                logo_name TEXT,
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-            """
-        )
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS outreach_signatures(
+            email TEXT PRIMARY KEY,
+            signature_html TEXT DEFAULT '',
+            logo_blob BLOB,
+            logo_mime TEXT,
+            logo_name TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );""")
         conn.commit()
     except Exception:
         pass
     return True
 
-def __p_sig_get(conn, email: str) -> dict:
+def __p_sig_get(conn, email: str):
     __p_sig_schema(conn)
     try:
         r = conn.execute(
-            "SELECT signature_html, logo_blob, logo_mime, logo_name "
-            "FROM outreach_signatures WHERE lower(email)=lower(?)",
-            (email,),
+            "SELECT signature_html, logo_blob, logo_mime, logo_name FROM outreach_signatures WHERE lower(email)=lower(?)",
+            (email,)
         ).fetchone()
     except Exception:
         r = None
@@ -13715,126 +13682,84 @@ def __p_sig_get(conn, email: str) -> dict:
         return dict(html="", logo=None, mime=None, name=None)
     return dict(html=r[0] or "", logo=r[1], mime=r[2] or None, name=r[3] or None)
 
-def __p_sig_set(conn, email: str, html: str | None, logo_blob: bytes | None,
-                logo_mime: str | None, logo_name: str | None) -> bool:
+def __p_sig_set(conn, email: str, html: str | None, logo_blob: bytes | None, logo_mime: str | None, logo_name: str | None):
     __p_sig_schema(conn)
     try:
-        row = conn.execute(
-            "SELECT 1 FROM outreach_signatures WHERE lower(email)=lower(?)",
-            (email,),
-        ).fetchone()
+        row = conn.execute("SELECT 1 FROM outreach_signatures WHERE lower(email)=lower(?)", (email,)).fetchone()
         if row:
-            conn.execute(
-                """
-                UPDATE outreach_signatures
-                   SET signature_html=COALESCE(?,signature_html),
-                       logo_blob=?,
-                       logo_mime=?,
-                       logo_name=?,
-                       updated_at=datetime('now')
-                 WHERE lower(email)=lower(?)
-                """,
-                (html, logo_blob, logo_mime, logo_name, email),
-            )
+            conn.execute("""UPDATE outreach_signatures
+                            SET signature_html=COALESCE(?,signature_html),
+                                logo_blob=?,
+                                logo_mime=?,
+                                logo_name=?,
+                                updated_at=datetime('now')
+                            WHERE lower(email)=lower(?)""",
+                         (html, logo_blob, logo_mime, logo_name, email))
         else:
-            conn.execute(
-                """
-                INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
-                VALUES(?,?,?,?,?)
-                """,
-                (email, html or "", logo_blob, logo_mime, logo_name),
-            )
+            conn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
+                            VALUES(?,?,?,?,?)""",
+                         (email, html or "", logo_blob, logo_mime, logo_name))
         conn.commit()
     except Exception:
         pass
     return True
 
-# ---------- Signature render + inline images ----------
-def __p_render_signature(conn, sender_email: str, html: str) -> tuple[str, list[dict]]:
+def __p_render_signature(conn, sender_email: str, html: str):
     """
     Returns (html_with_signature, inline_images)
-
-    - Replaces {{SIGNATURE}} if present, else appends block at bottom.
+    - Replaces {{SIGNATURE}} if present.
+    - Otherwise appends signature block at bottom.
     - If signature HTML contains {{SIGNATURE_LOGO}} and a logo is stored,
       injects <img src="cid:..."> and returns inline image payload.
     """
     sig = __p_sig_get(conn, sender_email)
-    sig_html = sig.get("html") or ""
-    inline_images: list[dict] = []
-    if not sig_html:
-        return html, inline_images
+    sig_html = sig["html"] or ""
+    inline_images = []
+    if sig_html:
+        # Handle logo via CID
+        if "{{SIGNATURE_LOGO}}" in sig_html and sig.get("logo"):
+            raw = sig["logo"]
+            cid = "siglogo-" + _p_hashlib.sha1(raw).hexdigest()[:16]
+            sig_html_final = sig_html.replace("{{SIGNATURE_LOGO}}", f'<img src="cid:{cid}" alt="" style="max-width:240px;height:auto;">')
+            inline_images.append(dict(cid=cid, data=raw, mime=sig.get("mime") or "image/png", name=sig.get("name") or "logo"))
+        else:
+            sig_html_final = sig_html
+        if "{{SIGNATURE}}" in (html or ""):
+            html_out = (html or "").replace("{{SIGNATURE}}", sig_html_final)
+        else:
+            html_out = (html or "") + "<br><br>" + sig_html_final
+        return html_out, inline_images
+    return html, inline_images
 
-    # Handle logo via CID
-    if "{{SIGNATURE_LOGO}}" in sig_html and sig.get("logo"):
-        raw = sig["logo"]
-        cid = "siglogo-" + _p_hashlib.sha1(raw).hexdigest()[:16]
-        sig_html_final = sig_html.replace(
-            "{{SIGNATURE_LOGO}}",
-            f'<img src="cid:{cid}" alt="" style="max-width:240px;height:auto;">',
-        )
-        inline_images.append(
-            dict(
-                cid=cid,
-                data=raw,
-                mime=(sig.get("mime") or "image/png"),
-                name=(sig.get("name") or "logo"),
-            )
-        )
-    else:
-        sig_html_final = sig_html
-
-    if "{{SIGNATURE}}" in (html or ""):
-        html_out = (html or "").replace("{{SIGNATURE}}", sig_html_final)
-    else:
-        html_out = (html or "") + "<br><br>" + sig_html_final
-    return html_out, inline_images
-
-# ---------- Streamlit signature editor UI ----------
-def __p_o4_signature_ui(conn) -> None:
-    if st is None:
-        return
+def __p_o4_signature_ui(conn):
+    import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
-    # Prefer email_accounts if present
+    # Prefer email_accounts table used by this build
     rows = []
     try:
-        rows = conn.execute(
-            "SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;"
-        ).fetchall()
+        rows = conn.execute("SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;").fetchall()
     except Exception:
-        rows = []
+        pass
     if not rows:
         st.info("No senders found. Add one above, then configure a signature.")
         return
     labels = [f"{(r[1] or r[0])} — {r[0]}" for r in rows]
-    # Respect any preselection placed in session_state
-    default = 0
-    try:
-        _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
-        if _pref in labels:
-            default = labels.index(_pref)
-    except Exception:
-        default = 0
-    choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
+    choice = st.selectbox("Sender", labels, index=0, key="__p_sig_sender")
     idx = labels.index(choice)
     sender_email = rows[idx][0]
-
     state = __p_sig_get(conn, sender_email)
     html = st.text_area("Signature HTML", value=state["html"] or "", height=180, key="__p_sig_html")
-    file = st.file_uploader("Logo image (PNG/JPG/GIF)", type=["png", "jpg", "jpeg", "gif"], key="__p_sig_logo")
-
+    file = st.file_uploader("Logo image (PNG/JPG/GIF)", type=["png","jpg","jpeg","gif"], key="__p_sig_logo")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Save signature", key="__p_sig_save"):
             blob = state["logo"]; mime = state["mime"]; name = state["name"]
             if file is not None:
-                try:
-                    blob = file.read(); mime = file.type or "image/png"; name = file.name
-                except Exception:
-                    blob = None; mime = None; name = None
+                blob = file.read(); mime = file.type or "image/png"; name = file.name
             __p_sig_set(conn, sender_email, html, blob, mime, name)
             try:
                 conn.execute("CREATE TABLE IF NOT EXISTS outreach_audit(actor TEXT, action TEXT, meta TEXT, ts TEXT DEFAULT CURRENT_TIMESTAMP);")
-                conn.execute("INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system", "O4B_SAVE_SIGNATURE", sender_email))
+                conn.execute("INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system","O4B_SAVE_SIGNATURE", sender_email))
                 conn.commit()
             except Exception:
                 pass
@@ -13843,190 +13768,205 @@ def __p_o4_signature_ui(conn) -> None:
         if st.button("Remove logo", key="__p_sig_rm"):
             __p_sig_set(conn, sender_email, None, None, None, None)
             try:
-                conn.execute("CREATE TABLE IF NOT EXISTS outreach_audit(actor TEXT, action TEXT, meta TEXT, ts TEXT DEFAULT CURRENT_TIMESTAMP);")
-                conn.execute("INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system", "O4B_REMOVE_LOGO", sender_email))
+                conn.execute("INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system","O4B_REMOVE_LOGO", sender_email))
                 conn.commit()
             except Exception:
                 pass
             st.success("Logo removed")
     st.info("Tip: Put {{SIGNATURE_LOGO}} inside your signature HTML to place the uploaded image.")
 
-# ---------- UI wiring: extend existing Outreach screens if present ----------
-# 1) Extend sender accounts panel to show signature editor after accounts table
+
+
+# --- Extend O4 sender accounts UI with Signature editor ---
 try:
-    if "o4_sender_accounts_ui" in globals() and callable(globals()["o4_sender_accounts_ui"]):
-        _ELA_o4_sender_accounts_ui = globals()["o4_sender_accounts_ui"]
+    if "_orig_o4_sender_accounts_ui" not in globals() and "o4_sender_accounts_ui" in globals():
+        _orig_o4_sender_accounts_ui = o4_sender_accounts_ui
         def o4_sender_accounts_ui(conn):
-            _ELA_o4_sender_accounts_ui(conn)
+            import streamlit as st
+            _orig_o4_sender_accounts_ui(conn)
             try:
-                st.subheader("Signature for selected sender")
+                st.divider()
+                st.subheader("Per-sender signature")
             except Exception:
                 pass
-            __p_o4_signature_ui(conn)  # defined above
+            try:
+                __p_call_sig_ui(conn)
+            except Exception as e:
+                try: st.warning(f"Signature editor unavailable: {e}")
+                except Exception: pass
 except Exception:
     pass
 
-# 2) If a consolidated O4 UI exists, extend it similarly
-try:
-    if "__p_o4_ui" in globals() and callable(globals()["__p_o4_ui"]):
-        _ELA__p_o4_ui = globals()["__p_o4_ui"]
-        def __p_o4_ui(conn):
-            _ELA__p_o4_ui(conn)
-            try:
-                st.subheader("Signature for selected sender")
-            except Exception:
-                pass
-            __p_o4_signature_ui(conn)
-except Exception:
-    pass
 
-# 3) If the O3 mail-merge UI renders the sender, render signature editor inline
+
+# --- Override _o3_send_batch to inject signature and inline images ---
 try:
-    if "__p_o3_ui" in globals() and callable(globals()["__p_o3_ui"]):
-        _ELA__p_o3_ui = globals()["__p_o3_ui"]
-        def __p_o3_ui(conn):
-            _ELA__p_o3_ui(conn)
+    _orig__o3_send_batch = _o3_send_batch
+except Exception:
+    _orig__o3_send_batch = None
+
+def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500, attachments: list[str] | None = None):
+    # Imports
+    try:
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email.mime.image import MIMEImage
+        from email.encoders import encode_base64
+        import smtplib as _o3smtp
+        import ssl as _o3ssl
+    except Exception:
+        pass
+    import pandas as _pd
+    import streamlit as st
+
+    _o3_ensure_schema(conn)
+    if rows is None or rows.empty:
+        st.error("No recipients"); return 0, []
+    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
+    if not blast_title:
+        blast_title = "Outreach"
+    with _o3c(conn.cursor()) as cur:
+        cur.execute("INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
+                    (blast_title, st.session_state.get("tpl_sel",""), sender.get("email","")))
+        conn.commit()
+        blast_id = cur.lastrowid
+    try:
+        opt = _pd.read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        blocked = set(e.lower().strip() for e in opt['email'].tolist())
+    except Exception:
+        blocked = set()
+
+    smtp = None
+    if not test_only:
+        # SMTP from sender
+        host = sender.get("smtp_host") or sender.get("host") or "smtp.gmail.com"
+        port = int(sender.get("smtp_port") or sender.get("port") or 465)
+        use_tls = bool(sender.get("use_tls") or (port == 587) or (not sender.get("use_ssl")))
+        try:
+            if use_tls or port == 587:
+                smtp = _o3smtp.SMTP(host, port, timeout=20)
+                smtp.ehlo()
+                try: smtp.starttls(context=_o3ssl.create_default_context())
+                except Exception: pass
+                smtp.login(sender["email"], sender["app_password"])
+            else:
+                smtp = _o3smtp.SMTP_SSL(host, port, timeout=20, context=_o3ssl.create_default_context())
+                smtp.login(sender["email"], sender["app_password"])
+        except Exception as e:
+            st.error(f"SMTP login failed: {e}")
+            return 0, []
+
+    sent = 0
+    logs = []
+    maxn = int(max_send or 0) or 500
+
+    for _, r in rows.head(maxn).iterrows():
+        to_email = str(r.get("email","")).strip()
+        if not to_email or "@" not in to_email:
+            continue
+        if to_email.lower() in blocked:
+            status = "Skipped: opt-out"; err = ""; subj = ""
+        else:
+            data = {k: str(r.get(k,"") or "") for k in r.index}
+            subj = _o3_merge(subject_tpl or "", data)
+            html = _o3_merge(html_tpl or "", data)
+            if "unsubscribe" not in (html or "").lower():
+                html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
+            # Inject signature and collect inline images
             try:
-                st.subheader("Signature for selected sender")
-                # Try to preselect the current sender if the host stored it in session
-                sender = st.session_state.get("o3_sender") or {}
+                html, inline_imgs = __p_render_signature(conn, sender.get("email",""), html)
+            except Exception:
+                inline_imgs = []
+            if test_only:
+                status = "Preview"; err = ""
+            else:
                 try:
-                    if sender and sender.get("email"):
-                        _disp = sender.get("display") or sender.get("display_name") or sender.get("name") or ""
-                        _label = f"{_disp} — {sender['email']}" if _disp else f"{sender['email']} — {sender['email']}"
-                        st.session_state["__p_sig_sender_pref"] = _label
+                    # Build a related container so inline images work
+                    msg_root = MIMEMultipart("related")
+                    msg_root["From"] = f"{sender.get('display_name') or sender.get('name') or sender['email']} <{sender['email']}>"
+                    msg_root["To"] = to_email
+                    msg_root["Subject"] = subj
+
+                    # Alternative part inside
+                    alt = MIMEMultipart("alternative")
+                    html_wrapped = _o3_wrap_email_html(html)
+                    alt.attach(MIMEText(html_wrapped, "html", "utf-8"))
+                    msg_root.attach(alt)
+
+                    # Attach inline images
+                    for img in inline_imgs or []:
+                        try:
+                            part = MIMEImage(img["data"], _subtype=(img.get("mime","image/png").split("/")[-1] or "png"))
+                            part.add_header("Content-ID", f"<{img['cid']}>")
+                            part.add_header("Content-Disposition", f'inline; filename="{img.get("name","logo")}"')
+                            msg_root.attach(part)
+                        except Exception:
+                            continue
+
+                    # Attach regular files
+                    if attachments:
+                        for ap in attachments:
+                            try:
+                                b = Path(ap).read_bytes()
+                                base = MIMEBase("application", "octet-stream")
+                                base.set_payload(b)
+                                encode_base64(base)
+                                base.add_header('Content-Disposition', f'attachment; filename="{Path(ap).name}"')
+                                msg_root.attach(base)
+                            except Exception:
+                                continue
+
+                    smtp.sendmail(sender["email"], [to_email], msg_root.as_string())
+                    status = "Sent"; err = ""
+                    sent += 1
+                except Exception as e:
+                    status = "Failed"; err = str(e)
+
+        # Log outcome
+        try:
+            with _o3c(conn.cursor()) as cur:
+                cur.execute("""INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error)
+                               VALUES(?,?,?,?,?,?);""",
+                            (blast_id, to_email, str(r.get("name","") or ""), subj, status, err))
+                conn.commit()
+        except Exception:
+            pass
+        logs.append(dict(to=to_email, subject=subj, status=status, error=err))
+
+    try:
+        if smtp: smtp.quit()
+    except Exception:
+        pass
+    st.info(f"Sent {sent}. Skipped {len([l for l in logs if l['status'].startswith('Skipped')])}. Failed {len([l for l in logs if l['status']=='Failed'])}.")
+    return sent, logs
+
+# === END SIG+LOGO PATCH ===
+
+# === ELA O4 wrapper to render signature editor after sender accounts ===
+try:
+    if "_ela_wrap_o4" not in globals():
+        _ela_wrap_o4 = True
+        if "o4_sender_accounts_ui" in globals():
+            _orig_o4_sender_accounts_ui = o4_sender_accounts_ui
+            def o4_sender_accounts_ui(conn):
+                import streamlit as st
+                _orig_o4_sender_accounts_ui(conn)
+                try:
+                    st.subheader("Signature for selected sender")
+                    __p_call_sig_ui(conn)
                 except Exception:
                     pass
-            except Exception:
-                pass
-            __p_o4_signature_ui(conn)
+        if "__p_o4_ui" in globals():
+            _orig___p_o4_ui = __p_o4_ui
+            def __p_o4_ui(conn):
+                import streamlit as st
+                _orig___p_o4_ui(conn)
+                try:
+                    st.subheader("Signature for selected sender")
+                    __p_call_sig_ui(conn)
+                except Exception:
+                    pass
 except Exception:
     pass
-
-# ---------- Send pipeline: inject signature and inline images ----------
-# If _o3_send_batch exists, wrap it to add the signature render and inline images.
-try:
-    _ELA__o3_send_batch = globals().get("_o3_send_batch")
-except Exception:
-    _ELA__o3_send_batch = None
-
-if callable(_ELA__o3_send_batch):
-    def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500, attachments: list[str] | None = None):
-        # Call the original to build and send, but first insert signature
-        # Some host builds assemble the MIME parts themselves. In those cases,
-        # we keep compatibility by only modifying the HTML before handoff.
-        html_tpl2 = html_tpl
-        try:
-            # Only pre-merge the signature placeholder here; the original function
-            # will still perform {{...}} variable merges per row as usual.
-            html_tpl2, _ = __p_render_signature(conn, sender.get("email",""), html_tpl or "")
-        except Exception:
-            html_tpl2 = html_tpl or ""
-
-        # Delegate to original implementation
-        return _ELA__o3_send_batch(conn, sender, rows, subject_tpl, html_tpl2, test_only=test_only, max_send=max_send, attachments=attachments)
-
-    # Make the new function visible to the host app
-    globals()["_o3_send_batch"] = _o3_send_batch
-
-# ---------- End of module ----------
-
-
-
-
-# ==== O4 Signature Utilities (auto-merged) ==== 
-try:
-    import streamlit as st
-except Exception:
-    st = None
-
-def _o4_get_sender_key():
-    """Return current O4 sender email key from session state or 'default'."""
-    key = None
-    if st is not None:
-        key = st.session_state.get('o4_sender_email') or st.session_state.get('sender_email') or st.session_state.get('o4_sender') or st.session_state.get('email_sender')
-    return key or 'default'
-
-def o4_get_signatures_store():
-    """Ensure signatures store exists in session_state."""
-    if st is not None:
-        if 'o4_signatures' not in st.session_state:
-            st.session_state['o4_signatures'] = {}
-        return st.session_state['o4_signatures']
-    return {}
-
-def o4_get_signature_html(sender=None):
-    sender = sender or _o4_get_sender_key()
-    store = o4_get_signatures_store()
-    item = store.get(sender) or {}
-    return item.get('html') or ''
-
-def o4_apply_signature_to_body(body_html, sender=None):
-    """Append the saved signature HTML to outgoing body if not already present."""
-    sig = o4_get_signature_html(sender)
-    if not sig:
-        return body_html
-    if sig.strip() and sig.strip() in (body_html or ''):
-        return body_html
-    if isinstance(body_html, str) and ('</html>' in body_html.lower() or '</body>' in body_html.lower() or '<div' in body_html.lower() or '<p' in body_html.lower()):
-        return (body_html or '') + '<br><br>' + sig
-    else:
-        safe = (body_html or '').replace('\n', '<br>')
-        return f"<div>{safe}</div><br><br>{sig}"
-
-def __p_o4_signature_ui():
-    """Render the O4 signature editor tied to the selected sender account."""
-    if st is None:
-        return
-    store = o4_get_signatures_store()
-    sender = _o4_get_sender_key()
-    with st.container(border=True):
-        st.subheader('Email Signature')
-        if sender == 'default':
-            st.info('Select a sender account to save a per-sender signature.')
-        existing = store.get(sender) or {}
-        col1, col2 = st.columns([2,1])
-        with col1:
-            name = st.text_input('Name', value=existing.get('name',''))
-            title = st.text_input('Title', value=existing.get('title',''))
-            phone = st.text_input('Phone', value=existing.get('phone',''))
-            website = st.text_input('Website', value=existing.get('website',''))
-            addr = st.text_area('Address', value=existing.get('addr',''), height=70)
-            custom_html = st.text_area('Custom HTML (optional)', value=existing.get('custom_html',''), height=120, help='If provided, this overrides the auto-generated block below.')
-        with col2:
-            logo_url = st.text_input('Logo URL (optional)', value=existing.get('logo_url',''))
-            align = st.selectbox('Logo Align', ['left','right'], index=0 if existing.get('align','left')=='left' else 1)
-        if custom_html.strip():
-            html_sig = custom_html.strip()
-        else:
-            logo_img = f"<td style='vertical-align:top;padding-right:12px;'><img src='{logo_url}' alt='logo' style='max-width:120px;height:auto;border:0;'></td>" if logo_url else ''
-            name_html = f"<div style='font-weight:600;font-size:14px;'>{name}</div>" if name else ''
-            title_html = f"<div style='font-size:12px;color:#555;'>{title}</div>" if title else ''
-            phone_html = f"<div style='font-size:12px;color:#555;'>{phone}</div>" if phone else ''
-            web_html = f"<div style='font-size:12px;'><a href='{website}' target='_blank' rel='noopener noreferrer'>{website}</a></div>" if website else ''
-            addr_html = f"<div style='font-size:12px;color:#555;white-space:pre-wrap;'>{addr}</div>" if addr else ''
-            right_block = f"<td style='vertical-align:top;'>{name_html}{title_html}{phone_html}{web_html}{addr_html}</td>"
-            if align == 'right':
-                row = right_block + (logo_img or '')
-            else:
-                row = (logo_img or '') + right_block
-            html_sig = f"<table cellspacing='0' cellpadding='0' style='font-family:Arial,Helvetica,sans-serif;'><tr>{row}</tr></table>"
-        st.markdown('**Preview**')
-        try:
-            st.html(html_sig)
-        except Exception:
-            st.markdown(html_sig, unsafe_allow_html=True)
-        c1, c2 = st.columns([1,1])
-        with c1:
-            if st.button('Save Signature', key='o4_sig_save'):
-                store[sender] = {
-                    'name': name, 'title': title, 'phone': phone, 'website': website, 'addr': addr,
-                    'logo_url': logo_url, 'align': align, 'html': html_sig, 'custom_html': custom_html,
-                }
-                st.success(f'Saved signature for {sender}.')
-        with c2:
-            if st.button('Clear Signature', key='o4_sig_clear'):
-                if sender in store:
-                    del store[sender]
-                st.warning(f'Cleared signature for {sender}.')
-        st.caption('Signatures are stored per sender account in session state during the session.')
+# === End wrapper ===
