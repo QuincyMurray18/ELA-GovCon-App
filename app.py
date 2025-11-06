@@ -2392,6 +2392,7 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 import pandas as pd
 import docx  # for DOCX reading in _read_file
 import re
@@ -11504,6 +11505,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     try:
         from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
         from email.mime.text import MIMEText as _O3MIMEText
+        from email.mime.image import MIMEImage
         import smtplib as _o3smtp
     except Exception:
         pass
@@ -11793,6 +11795,7 @@ def _o4_audit_ui(conn):
 # === O5: Follow-ups & SLA ==================================================
 import sqlite3, pandas as _pd, smtplib, ssl, time
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 
 def _o5_now_iso():
@@ -12486,6 +12489,7 @@ import sqlite3 as _sqlite3
 import pandas as _pandas
 import re as _re2, time as _time2, ssl as _ssl2, smtplib as _smtp2
 from email.mime.text import MIMEText as _MText
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart as _MMulti
 
 def __p_db(conn, q, args=()):
@@ -12786,6 +12790,159 @@ def __p_s1d_ui(conn):
         n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
         _st.success(f"Saved {n} new vendors")
 
+
+
+# === Outreach Signatures: schema, helpers, UI, and rendering ===
+def __p_sig_schema(conn):
+    __p_db(conn, """
+    CREATE TABLE IF NOT EXISTS outreach_signatures(
+        email TEXT PRIMARY KEY,
+        signature_html TEXT DEFAULT '',
+        logo_blob BLOB,
+        logo_mime TEXT,
+        logo_name TEXT,
+        updated_at TEXT DEFAULT (datetime('now'))
+    )""")
+    return True
+
+
+def __p_sig_get(conn, email: str):
+    __p_sig_schema(conn)
+    r = __p_db(conn, "SELECT signature_html, logo_blob, logo_mime, logo_name FROM outreach_signatures WHERE lower(email)=lower(?)", (email,)).fetchone()
+    if not r:
+        return dict(html="", logo=None, mime=None, name=None)
+    return dict(html=r[0] or "", logo=r[1], mime=r[2] or None, name=r[3] or None)
+
+
+def __p_sig_set(conn, email: str, html: str | None, logo_blob: bytes | None, logo_mime: str | None, logo_name: str | None):
+    __p_sig_schema(conn)
+    row = __p_db(conn, "SELECT 1 FROM outreach_signatures WHERE lower(email)=lower(?)", (email,)).fetchone()
+    if row:
+        __p_db(conn, "UPDATE outreach_signatures SET signature_html=COALESCE(?,signature_html), logo_blob=?, logo_mime=?, logo_name=?, updated_at=datetime('now') WHERE lower(email)=lower(?)",
+               (html, logo_blob, logo_mime, logo_name, email))
+    else:
+        __p_db(conn, "INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name) VALUES(?,?,?,?,?)",
+               (email, html or "", logo_blob, logo_mime, logo_name))
+    return True
+
+
+def __p_render_signature(conn, sender_email: str, html: str):
+    """
+    Returns (html_with_signature, inline_images)
+    - Replaces {{SIGNATURE}} if present.
+    - Otherwise appends signature block at bottom.
+    - If signature HTML contains {{SIGNATURE_LOGO}} and a logo is stored, injects <img src="cid:..."> and returns inline image payload.
+    """
+    sig = __p_sig_get(conn, sender_email)
+    sig_html = sig["html"] or ""
+    inline_images = []
+    if sig_html:
+        # Handle logo
+        if "{{SIGNATURE_LOGO}}" in sig_html and sig.get("logo"):
+            raw = sig["logo"]
+            cid = "siglogo-" + hashlib.sha1(raw).hexdigest()[:16]
+            # Replace placeholder with CID img tag
+            sig_html_final = sig_html.replace("{{SIGNATURE_LOGO}}", f"<img src=\"cid:{cid}\" alt=\"\" style=\"max-width:240px; height:auto;\">")
+            inline_images.append(dict(cid=cid, data=raw, mime=sig.get("mime") or "image/png", name=sig.get("name") or "logo"))
+        else:
+            sig_html_final = sig_html
+        # Merge into body
+        if "{{SIGNATURE}}" in html:
+            html_out = html.replace("{{SIGNATURE}}", sig_html_final)
+        else:
+            # Append with a simple separator
+            html_out = (html or "") + "<br><br>" + sig_html_final
+        return html_out, inline_images
+    # No signature configured
+    return html, inline_images
+
+
+def __p_o4_signature_ui(conn):
+    import streamlit as _st
+    _st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates to place the block. Optional {{SIGNATURE_LOGO}} to show the uploaded image.")
+    # List available senders
+    rows = __p_db(conn, "SELECT email, label FROM outreach_sender_accounts ORDER BY id DESC").fetchall()
+    if not rows:
+        _st.info("No senders found. Add one in O4 first.")
+        return
+    labels = [f"{r[1] or r[0]} — {r[0]}" for r in rows]
+    choice = _st.selectbox("Sender", labels, index=0, key="__p_sig_sender")
+    idx = labels.index(choice)
+    sender_email = rows[idx][0]
+
+    state = __p_sig_get(conn, sender_email)
+    html = _st.text_area("Signature HTML", value=state["html"] or "", height=180, key="__p_sig_html")
+    file = _st.file_uploader("Logo image (PNG/JPG/GIF)", type=["png","jpg","jpeg","gif"], key="__p_sig_logo")
+    col1,col2 = _st.columns(2)
+    with col1:
+        if _st.button("Save signature", key="__p_sig_save"):
+            blob = state["logo"]
+            mime = state["mime"]
+            name = state["name"]
+            if file is not None:
+                blob = file.read()
+                mime = file.type or "image/png"
+                name = file.name
+            __p_sig_set(conn, sender_email, html, blob, mime, name)
+            __p_db(conn, "INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system","O4B_SAVE_SIGNATURE", sender_email))
+            _st.success("Saved")
+    with col2:
+        if _st.button("Remove logo", key="__p_sig_rm"):
+            __p_sig_set(conn, sender_email, None, None, None, None)
+            __p_db(conn, "INSERT INTO outreach_audit(actor,action,meta) VALUES(?,?,?)", ("system","O4B_REMOVE_LOGO", sender_email))
+            _st.success("Logo removed")
+    if state.get("logo"):
+        _st.image(state["logo"], caption=state.get("name") or "logo", use_container_width=False)
+
+
+def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None, inline_images: list[dict] | None = None):
+    # Build multipart/related for inline images + alternative for HTML
+    msg_root = _MMulti("related"); msg_root["Subject"]=subject or ""; msg_root["From"]=sender["email"]; msg_root["To"]=to_email
+    alt = _MMulti("alternative"); alt.attach(_MText(html or "", "html")); msg_root.attach(alt)
+    # Inline images by CID
+    try:
+        if inline_images:
+            from email.mime.image import MIMEImage as _MImg
+            for it in inline_images:
+                try:
+                    data = it.get("data")
+                    mime = it.get("mime") or "image/png"
+                    name = it.get("name") or "image"
+                    cid = it.get("cid") or ("img-" + str(abs(hash(data))) )
+                    maintype, subtype = mime.split("/", 1) if "/" in mime else ("image","png")
+                    if maintype != "image": continue
+                    part = _MImg(data, _subtype=subtype)
+                    part.add_header('Content-ID', f"<{cid}>")
+                    part.add_header('Content-Disposition', 'inline', filename=name)
+                    msg_root.attach(part)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    # File attachments
+    try:
+        if attachments:
+            from email.mime.base import MIMEBase as _MBase
+            from email import encoders as _enc
+            for _ap in attachments:
+                try:
+                    with open(_ap, 'rb') as _f:
+                        _part = _MBase('application','octet-stream'); _part.set_payload(_f.read())
+                    _enc.encode_base64(_part)
+                    import os as _os
+                    _part.add_header('Content-Disposition', f'attachment; filename="{_os.path.basename(_ap)}"')
+                    msg_root.attach(_part)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if sender.get("tls", True):
+        s = _smtp2.SMTP(sender["host"], int(sender.get("port",587))); s.starttls(context=_ssl2.create_default_context()); s.login(sender["email"], sender["app_password"])
+    else:
+        s = _smtp2.SMTP_SSL(sender["host"], int(sender.get("port",465)), context=_ssl2.create_default_context()); s.login(sender["email"], sender["app_password"])
+    s.sendmail(sender["email"], [to_email], msg_root.as_string()); s.quit()
+
+
 def __p_run_outreach(conn):
     __p_ensure_core(conn)
     _st.header("Outreach")
@@ -12794,8 +12951,6 @@ def __p_run_outreach(conn):
         _st.sidebar.success("O4 Active" if n else "O4 Not Configured")
     except Exception:
         pass
-    _st.info("Signatures module loaded v2025-11-06")
-
     with _st.expander("O4 • Sender accounts", expanded=True):
         try: __p_o4_ui(conn)
         except Exception as e: _st.warning(f"O4 unavailable: {e}")
@@ -12805,6 +12960,10 @@ def __p_run_outreach(conn):
     with _st.expander("O5 • Follow-ups & SLA", expanded=False):
         try: __p_o5_ui(conn)
         except Exception as e: _st.warning(f"O5 unavailable: {e}")
+    with _st.expander("O4b • Signatures", expanded=False):
+        try: __p_o4_signature_ui(conn)
+        except Exception as e: _st.warning(f"O4b unavailable: {e}")
+
     with _st.expander("O3 • Mail merge & Send", expanded=True):
         try: __p_o3_ui(conn)
         except Exception as e: _st.error(f"O3 error: {e}")
