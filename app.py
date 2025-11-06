@@ -12885,7 +12885,13 @@ def __p_run_outreach(conn):
     except Exception:
         pass
     with _st.expander("O4 • Sender accounts", expanded=True):
-        try: __p_o4_ui(conn)
+        
+        # Auto-injected: O4 signature editor
+        try:
+            __p_o4_signature_ui()
+        except Exception:
+            pass
+try: __p_o4_ui(conn)
         except Exception as e: _st.warning(f"O4 unavailable: {e}")
     with _st.expander("O2 • Templates", expanded=True):
         try: __p_o2_ui(conn)
@@ -13924,3 +13930,101 @@ if callable(_ELA__o3_send_batch):
 # ---------- End of module ----------
 
 
+
+
+# ==== O4 Signature Utilities (auto-merged) ==== 
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+def _o4_get_sender_key():
+    """Return current O4 sender email key from session state or 'default'."""
+    key = None
+    if st is not None:
+        key = st.session_state.get('o4_sender_email') or st.session_state.get('sender_email') or st.session_state.get('o4_sender') or st.session_state.get('email_sender')
+    return key or 'default'
+
+def o4_get_signatures_store():
+    """Ensure signatures store exists in session_state."""
+    if st is not None:
+        if 'o4_signatures' not in st.session_state:
+            st.session_state['o4_signatures'] = {}
+        return st.session_state['o4_signatures']
+    return {}
+
+def o4_get_signature_html(sender=None):
+    sender = sender or _o4_get_sender_key()
+    store = o4_get_signatures_store()
+    item = store.get(sender) or {}
+    return item.get('html') or ''
+
+def o4_apply_signature_to_body(body_html, sender=None):
+    """Append the saved signature HTML to outgoing body if not already present."""
+    sig = o4_get_signature_html(sender)
+    if not sig:
+        return body_html
+    if sig.strip() and sig.strip() in (body_html or ''):
+        return body_html
+    if isinstance(body_html, str) and ('</html>' in body_html.lower() or '</body>' in body_html.lower() or '<div' in body_html.lower() or '<p' in body_html.lower()):
+        return (body_html or '') + '<br><br>' + sig
+    else:
+        safe = (body_html or '').replace('\n', '<br>')
+        return f"<div>{safe}</div><br><br>{sig}"
+
+def __p_o4_signature_ui():
+    """Render the O4 signature editor tied to the selected sender account."""
+    if st is None:
+        return
+    store = o4_get_signatures_store()
+    sender = _o4_get_sender_key()
+    with st.container(border=True):
+        st.subheader('Email Signature')
+        if sender == 'default':
+            st.info('Select a sender account to save a per-sender signature.')
+        existing = store.get(sender) or {}
+        col1, col2 = st.columns([2,1])
+        with col1:
+            name = st.text_input('Name', value=existing.get('name',''))
+            title = st.text_input('Title', value=existing.get('title',''))
+            phone = st.text_input('Phone', value=existing.get('phone',''))
+            website = st.text_input('Website', value=existing.get('website',''))
+            addr = st.text_area('Address', value=existing.get('addr',''), height=70)
+            custom_html = st.text_area('Custom HTML (optional)', value=existing.get('custom_html',''), height=120, help='If provided, this overrides the auto-generated block below.')
+        with col2:
+            logo_url = st.text_input('Logo URL (optional)', value=existing.get('logo_url',''))
+            align = st.selectbox('Logo Align', ['left','right'], index=0 if existing.get('align','left')=='left' else 1)
+        if custom_html.strip():
+            html_sig = custom_html.strip()
+        else:
+            logo_img = f"<td style='vertical-align:top;padding-right:12px;'><img src='{logo_url}' alt='logo' style='max-width:120px;height:auto;border:0;'></td>" if logo_url else ''
+            name_html = f"<div style='font-weight:600;font-size:14px;'>{name}</div>" if name else ''
+            title_html = f"<div style='font-size:12px;color:#555;'>{title}</div>" if title else ''
+            phone_html = f"<div style='font-size:12px;color:#555;'>{phone}</div>" if phone else ''
+            web_html = f"<div style='font-size:12px;'><a href='{website}' target='_blank' rel='noopener noreferrer'>{website}</a></div>" if website else ''
+            addr_html = f"<div style='font-size:12px;color:#555;white-space:pre-wrap;'>{addr}</div>" if addr else ''
+            right_block = f"<td style='vertical-align:top;'>{name_html}{title_html}{phone_html}{web_html}{addr_html}</td>"
+            if align == 'right':
+                row = right_block + (logo_img or '')
+            else:
+                row = (logo_img or '') + right_block
+            html_sig = f"<table cellspacing='0' cellpadding='0' style='font-family:Arial,Helvetica,sans-serif;'><tr>{row}</tr></table>"
+        st.markdown('**Preview**')
+        try:
+            st.html(html_sig)
+        except Exception:
+            st.markdown(html_sig, unsafe_allow_html=True)
+        c1, c2 = st.columns([1,1])
+        with c1:
+            if st.button('Save Signature', key='o4_sig_save'):
+                store[sender] = {
+                    'name': name, 'title': title, 'phone': phone, 'website': website, 'addr': addr,
+                    'logo_url': logo_url, 'align': align, 'html': html_sig, 'custom_html': custom_html,
+                }
+                st.success(f'Saved signature for {sender}.')
+        with c2:
+            if st.button('Clear Signature', key='o4_sig_clear'):
+                if sender in store:
+                    del store[sender]
+                st.warning(f'Cleared signature for {sender}.')
+        st.caption('Signatures are stored per sender account in session state during the session.')
