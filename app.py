@@ -11100,8 +11100,6 @@ def o1_list_accounts(conn):
     """).fetchall()
     return rows
 
-def ensure_outreach_o1_schema(conn):
-
 
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
@@ -11109,23 +11107,47 @@ def __p_ensure_column(conn, table: str, col: str, col_def: str):
         cols = [r[1] for r in cur.fetchall()]
         if col not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
-    except Exception as e:
-        try:
-            import streamlit as st
-            st.warning(f"Schema check failed for {table}.{col}: {e}")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
+def ensure_outreach_o1_schema(conn):
+    """Create or migrate Outreach sender accounts table used by O4.
+    Ensures required columns exist: user_email, display_name, app_password, smtp_host, smtp_port, use_ssl, use_tls, username.
+    """
+    # Create base table if missing
     with conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS email_accounts(
-            user_email TEXT PRIMARY KEY,
-            display_name TEXT DEFAULT '',
-            app_password TEXT DEFAULT '',
-            smtp_host TEXT DEFAULT 'smtp.gmail.com',
-            smtp_port INTEGER DEFAULT 465,
-            use_ssl INTEGER DEFAULT 1
-        )""")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS email_accounts(
+                user_email TEXT PRIMARY KEY,
+                display_name TEXT DEFAULT '',
+                app_password TEXT DEFAULT '',
+                smtp_host   TEXT DEFAULT 'smtp.gmail.com',
+                smtp_port   INTEGER DEFAULT 465,
+                use_ssl     INTEGER DEFAULT 1,
+                use_tls     INTEGER DEFAULT 0,
+                username    TEXT DEFAULT ''
+            )"""
+        )
+    # Migrate add columns if an older schema exists
+    try:
+        cur = conn.execute("PRAGMA table_info(email_accounts)")
+        cols = {r[1] for r in cur.fetchall()}
+    except Exception:
+        cols = set()
+    def _ensure(col, col_def):
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE email_accounts ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass
+    _ensure("display_name", "TEXT DEFAULT ''")
+    _ensure("app_password", "TEXT DEFAULT ''")
+    _ensure("smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
+    _ensure("smtp_port", "INTEGER DEFAULT 465")
+    _ensure("use_ssl", "INTEGER DEFAULT 1")
+    _ensure("use_tls", "INTEGER DEFAULT 0")
+    _ensure("username", "TEXT DEFAULT ''")
+    return True
 
 
 def o1_delete_email_account(conn, user_email:str):
