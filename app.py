@@ -13284,67 +13284,6 @@ if "_o3_render_sender_picker" not in globals():
         st.caption(f"Using {username} via {host}:{int(port)} TLS={'on' if use_tls else 'off'}")
         return {"host": host, "port": int(port), "email": username, "app_password": password, "use_tls": bool(use_tls)}
 
-# Guard wrapper: ensure sender is configured before original Mail Merge UI runs
-try:
-    _orig__render_outreach_mailmerge = render_outreach_mailmerge
-
-def render_outreach_mailmerge(conn):
-    if st is None:
-        return
-    st.subheader("Mail merge")
-    __p__ensure_email_accounts(conn)
-    try:
-        rows = conn.execute("SELECT COALESCE(display_name,''), user_email FROM email_accounts ORDER BY id DESC").fetchall()
-    except Exception:
-        rows = []
-    if not rows:
-        st.info("Add a sender account first.")
-        return
-    labels = [f"{r[0] or r[1]} — {r[1]}" for r in rows]
-    default = 0
-    try:
-        _pref = st.session_state.get("__p_sig_sender_pref") or st.session_state.get("__p_sig_sender")
-        if _pref in labels:
-            default = labels.index(_pref)
-    except Exception:
-        default = 0
-    choice = st.selectbox("Sender", labels, index=default, key="__p_sig_sender")
-    sender_email = rows[labels.index(choice)][1]
-
-    subj = st.text_input("Subject template", st.session_state.get("o4_mm_subject",""))
-    html = st.text_area("HTML body template", st.session_state.get("o4_mm_html",""), height=220)
-
-    # Persist UI state
-    st.session_state["o4_mm_subject"] = subj
-    st.session_state["o4_mm_html"] = html
-    st.session_state["__p_sig_sender_pref"] = choice
-
-    # Preview with signature
-    try:
-        html_prev, _imgs = __p_render_signature(conn, sender_email, html or "")
-    except Exception:
-        html_prev = html or ""
-    with st.expander("Preview (first row placeholders not resolved)"):
-        st.markdown(html_prev, unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        test_to = st.text_input("Test recipient email")
-    with col2:
-        send_test = st.button("Send test")
-    if send_test:
-        fn = globals().get("_o3_send_batch")
-        if callable(fn):
-            # Try a single-row test send; host implementation may vary.
-            try:
-                sender = {"email": sender_email}
-                rows = [{"email": test_to}]
-                fn(conn, sender, rows, subj, html, test_only=True, max_send=1, attachments=None)
-                st.success("Test send enqueued")
-            except Exception as e:
-                st.error(f"Test send failed: {e}")
-        else:
-            st.info("Send pipeline not available in this build.")
 
 
 
