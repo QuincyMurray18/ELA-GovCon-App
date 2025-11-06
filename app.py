@@ -13525,9 +13525,6 @@ import hashlib as _p_hashlib
 # Drop-in: import this file OR paste into your app.py once.
 # Safe: all hooks are guarded and only attach if the host functions exist.
 # Order-safe: __p_o4_signature_ui is defined before any wrapper calls.
-
-from __future__ import annotations
-
 import hashlib as _p_hashlib
 from contextlib import closing as _closing
 
