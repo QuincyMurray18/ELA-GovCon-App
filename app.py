@@ -1,6 +1,44 @@
 import re
 import streamlit as st
 
+# --- SQL cleaner to strip '#' comments not supported by SQLite ---
+def __p_strip_sql_hash_comments(sql: str) -> str:
+    out_lines = []
+    for line in sql.splitlines():
+        s = line
+        in_single = False
+        in_double = False
+        esc = False
+        cut = None
+        for i, ch in enumerate(s):
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == "'" and not in_double:
+                in_single = not in_single
+                continue
+            if ch == '"' and not in_single:
+                in_double = not in_double
+                continue
+            if ch == "#" and not in_single and not in_double:
+                cut = i
+                break
+        if cut is not None:
+            s = s[:cut]
+        out_lines.append(s)
+    return "\n".join(out_lines)
+
+def __p_read_sql_query(q, conn, params=()):
+    import pandas as _pd
+    q2 = __p_strip_sql_hash_comments(q) if isinstance(q, str) else q
+    return _pd.read_sql_query(q2, conn, params=params)
+# --- end SQL cleaner ---
+
+
+
 
 # --- SQL cleaner to strip '#' comments not supported by SQLite ---
 def __p_strip_sql_hash_comments(sql: str) -> str:
@@ -36,7 +74,7 @@ def __p___p_read_sql_query(q, conn, params=()):
     try:
         import pandas as _pd
         q2 = __p_strip_sql_hash_comments(q)
-        return _pd.__p_read_sql_query(q2, conn, params=params)
+        return __p_read_sql_query(q2, conn, params=params)
     except Exception as e:
         try:
             import streamlit as _st
@@ -478,7 +516,7 @@ def run_alerts_center(conn):
         st.warning(f"Schema init failed in Alerts Center: {e}")
 
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             """
             SELECT s.id, s.name, s.nl_query, s.cadence,
                    COALESCE(a.enabled, 0) AS enabled,
@@ -820,7 +858,7 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
         _sam_url = (sam_url or "")
         if not _sam_url:
             try:
-                _sam_url = pd.__p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(int(rfp_id),)).iloc[0].get("sam_url") or ""
+                _sam_url = __p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(int(rfp_id),)).iloc[0].get("sam_url") or ""
             except Exception:
                 _sam_url = ""
         try:
@@ -846,7 +884,7 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
             # collect full text from rfp_files (reuse existing util if present)
             txt = ""
             try:
-                df = pd.__p_read_sql_query("SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+                df = __p_read_sql_query("SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=?;", conn, params=(int(rfp_id),))
                 if not df.empty:
                     txt = "\n\n".join([str(x or "") for x in df["t"].tolist()])
             except Exception:
@@ -922,7 +960,7 @@ if "x6_requirements_df" not in globals():
     def x6_requirements_df(conn, rfp_id):
         import pandas as pd
         try:
-            return pd.__p_read_sql_query(
+            return __p_read_sql_query(
                 "SELECT id, must_flag, file, page, text FROM compliance_requirements "
                 "WHERE rfp_id=? ORDER BY must_flag DESC, id ASC;",
                 conn, params=(int(rfp_id),)
@@ -1753,7 +1791,7 @@ def _x3_render_modal(conn, notice: dict):
             if st.button(f"Summarize: {fname}", key=_uniq_key("sumdoc", int(fid))):
                 try:
                     import pandas as pd
-                    blob = pd.__p_read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(int(fid),)).iloc[0]
+                    blob = __p_read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(int(fid),)).iloc[0]
                     _text = "\n\n".join(extract_text_pages(blob['bytes'], blob.get('mime') or (fmime or '')) or [])
                 except Exception:
                     _text = ""
@@ -1947,7 +1985,7 @@ def require_LM_minimum(conn, rfp_id):
     """
     missing = []
     try:
-        df_due = pd.__p_read_sql_query(
+        df_due = __p_read_sql_query(
             "SELECT value FROM rfp_meta WHERE rfp_id=? AND key IN ('offers_due','due_offer') LIMIT 1;",
             conn, params=(int(rfp_id),)
         )
@@ -1956,7 +1994,7 @@ def require_LM_minimum(conn, rfp_id):
     except Exception:
         missing.append("Offers Due date (Section L)")
     try:
-        df_m = pd.__p_read_sql_query(
+        df_m = __p_read_sql_query(
             "SELECT 1 FROM rfp_sections WHERE rfp_id=? AND (section='M' OR section LIKE 'Section M%') LIMIT 1;",
             conn, params=(int(rfp_id),)
         )
@@ -1965,7 +2003,7 @@ def require_LM_minimum(conn, rfp_id):
     except Exception:
         missing.append("Section M present")
     try:
-        df_lm = pd.__p_read_sql_query(
+        df_lm = __p_read_sql_query(
             "SELECT COUNT(1) AS c FROM lm_items WHERE rfp_id=?;",
             conn, params=(int(rfp_id),)
         )
@@ -2028,7 +2066,7 @@ def _render_ask_rfp_button(opportunity=None):
     try:
         import pandas as _pd
         from contextlib import closing
-        cur_cols = _pd.__p_read_sql_query("PRAGMA table_info(deals);", conn)
+        cur_cols = __p_read_sql_query("PRAGMA table_info(deals);", conn)
         have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
     except Exception:
         have = set()
@@ -2092,7 +2130,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
     now = _now_iso()
     # 1) From L/M
     try:
-        df_lm = pd.__p_read_sql_query("SELECT id, item_text, is_must FROM lm_items WHERE rfp_id=?", conn, params=(int(rfp_id),))
+        df_lm = __p_read_sql_query("SELECT id, item_text, is_must FROM lm_items WHERE rfp_id=?", conn, params=(int(rfp_id),))
     except Exception:
         df_lm = pd.DataFrame(columns=["id","item_text","is_must"])
     for i, row in df_lm.head(max_rows).iterrows():
@@ -2111,7 +2149,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
             inserted += 1
     # 2) From SOW chunks, simple heuristic
     try:
-        df_chunks = pd.__p_read_sql_query("""
+        df_chunks = __p_read_sql_query("""
             SELECT id, file_name, page, text FROM rfp_chunks
             WHERE rfp_id=? ORDER BY file_name, page, id
         """, conn, params=(int(rfp_id),))
@@ -2144,7 +2182,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
     return inserted
 
 def rtm_metrics(conn: "sqlite3.Connection", rfp_id: int) -> dict:
-    q = pd.__p_read_sql_query("""
+    q = __p_read_sql_query("""
         SELECT r.id, r.source_type, r.status, COUNT(l.id) AS links
         FROM rtm_requirements r
         LEFT JOIN rtm_links l ON l.rtm_id = r.id
@@ -2164,7 +2202,7 @@ def rtm_metrics(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     return {"total": total, "covered": covered, "coverage": (covered/total if total else 0.0), "by_type": by_type}
 
 def rtm_export_csv(conn: "sqlite3.Connection", rfp_id: int) -> str:
-    q = pd.__p_read_sql_query("""
+    q = __p_read_sql_query("""
         SELECT r.id, r.req_key, r.source_type, r.source_file, r.page, r.text, r.status,
                COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '; '), '') AS evidence
         FROM rtm_requirements r
@@ -2232,7 +2270,7 @@ def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
     st.caption(f"Coverage: {m['covered']}/{m['total']} = {m['coverage']:.0%}")
 
     # Editor
-    df = pd.__p_read_sql_query("""
+    df = __p_read_sql_query("""
         SELECT r.id as rtm_id, r.req_key, r.source_type, r.page, r.text, r.status,
                COALESCE(GROUP_CONCAT(l.link_type || ':' || l.target, '
 '), '') AS evidence
@@ -2343,7 +2381,7 @@ def render_amendment_sidebar(conn: "sqlite3.Connection", rfp_id: int, url: str, 
             st.success(f"Snapshot stored. Cached={snap.get('cached')}")
         # Last two snapshots
         try:
-            dfv = pd.__p_read_sql_query("SELECT id, created_at, sha256, extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 2;", conn, params=(int(rfp_id),))
+            dfv = __p_read_sql_query("SELECT id, created_at, sha256, extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 2;", conn, params=(int(rfp_id),))
         except Exception:
             dfv = None
         if dfv is not None and not dfv.empty:
@@ -3227,7 +3265,7 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
 def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     _ensure_y1_schema(conn)
     try:
-        df = pd.__p_read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df = __p_read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if df is None or df.empty:
@@ -3237,7 +3275,7 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
     for _, row in df.iterrows():
         fid = int(row["id"]); name = row.get('filename') or f"file_{fid}"
         try:
-            blob = pd.__p_read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
+            blob = __p_read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
             b = blob["bytes"]; mime = blob.get("mime") or (row.get('mime') or "application/octet-stream")
         except Exception:
             continue
@@ -3252,7 +3290,7 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
             for ci, ch in enumerate(parts):
                 try:
                     if not rebuild:
-                        q = pd.__p_read_sql_query("SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;", conn, params=(fid, pi, ci))
+                        q = __p_read_sql_query("SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;", conn, params=(fid, pi, ci))
                         if q is not None and not q.empty:
                             skipped += 1
                             continue
@@ -3272,7 +3310,7 @@ def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: 
     if not (query or "").strip():
         return []
     try:
-        df = pd.__p_read_sql_query("SELECT id, rfp_file_id, file_name, page, chunk_idx, text, emb FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        df = __p_read_sql_query("SELECT id, rfp_file_id, file_name, page, chunk_idx, text, emb FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
     except Exception:
         return []
     if df is None or df.empty:
@@ -3424,7 +3462,7 @@ def _ensure_y2_schema(conn: "sqlite3.Connection") -> None:
 def y2_list_threads(conn: "sqlite3.Connection", rfp_id: int):
     _ensure_y2_schema(conn)
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT id, title, created_at FROM y2_threads WHERE rfp_id=? ORDER BY id DESC;",
             conn, params=(int(rfp_id),)
         )
@@ -3455,7 +3493,7 @@ def y2_create_thread(conn: "sqlite3.Connection", rfp_id: int, title: str = "CO g
 def y2_get_messages(conn: "sqlite3.Connection", thread_id: int):
     _ensure_y2_schema(conn)
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT role, content FROM y2_messages WHERE thread_id=? ORDER BY id;",
             conn, params=(int(thread_id),)
         )
@@ -3493,7 +3531,7 @@ def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
 
 def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     st.caption("CO Chat with memory. Threads are stored per RFP.")
-    df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    df_rf = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
         st.info("No RFPs yet. Parse & save first.")
         return
@@ -3645,17 +3683,17 @@ def research_extract_excerpt(text: str, query: str, window: int = 380) -> str:
 def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20) -> dict:
     ctx: dict = {}
     try:
-        df_items = pd.__p_read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_items = __p_read_sql_query("SELECT item_text FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         df_items = pd.DataFrame(columns=["item_text"])
     ctx["lm"] = df_items["item_text"].tolist()[:max_items] if isinstance(df_items, pd.DataFrame) and not df_items.empty else []
     try:
-        df_clins = pd.__p_read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_clins = __p_read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         df_clins = pd.DataFrame(columns=["clin","description"])
     ctx["clins"] = [{"clin": str(r.get("clin","")), "desc": str(r.get("description",""))[:160]} for _, r in df_clins.head(max_items).iterrows()] if isinstance(df_clins, pd.DataFrame) and not df_clins.empty else []
     try:
-        df_meta = pd.__p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        df_meta = __p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
     except Exception:
         df_meta = pd.DataFrame(columns=["key","value"])
     if isinstance(df_meta, pd.DataFrame) and not df_meta.empty:
@@ -3663,7 +3701,7 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
     else:
         ctx["meta"] = {}
     try:
-        df_rfp = pd.__p_read_sql_query("SELECT title, solnum FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+        df_rfp = __p_read_sql_query("SELECT title, solnum FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
         ctx["title"] = df_rfp.iloc[0]["title"] if not df_rfp.empty else ""
         ctx["solnum"] = df_rfp.iloc[0]["solnum"] if not df_rfp.empty else ""
     except Exception:
@@ -3833,7 +3871,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
 
 def y4_ui_review(conn: "sqlite3.Connection") -> None:
     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
-    df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    df_rf = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
         st.info("No RFPs yet. Parse & save first."); return
     rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist(),
@@ -3987,7 +4025,7 @@ def y5_extract_from_uploads(files) -> str:
 def y5_extract_from_rfp(conn: "sqlite3.Connection", rfp_id: int) -> str:
     # Expect rfp_files(filename TEXT, mime TEXT, bytes BLOB, rfp_id INT)
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
             conn, params=(int(rfp_id),)
         )
@@ -4033,7 +4071,7 @@ def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text:
 # === Phase 2: Dedicated finders and status chips ===
 def _collect_full_text(conn: "sqlite3.Connection", rfp_id: int) -> str:
     try:
-        df = pd.__p_read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df = __p_read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         df = pd.DataFrame()
     parts = []
@@ -4056,7 +4094,7 @@ def _upsert_meta(conn, rfp_id: int, key: str, value: str):
 def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
     # Check SAM facts first
     try:
-        row = pd.__p_read_sql_query("SELECT extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)).iloc[0]
+        row = __p_read_sql_query("SELECT extracted_json FROM sam_versions WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),)).iloc[0]
         facts = json.loads(row["extracted_json"] or "{}")
         if isinstance(facts, dict) and facts.get("offers_due"):
             dd = str(facts["offers_due"]).strip()
@@ -4066,7 +4104,7 @@ def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
         pass
     # Search chunks
     try:
-        dfc = pd.__p_read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        dfc = __p_read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=?;", conn, params=(int(rfp_id),))
     except Exception:
         dfc = pd.DataFrame()
     t = " ".join((dfc["text"].tolist() if not dfc.empty else []))[:500000]
@@ -4111,7 +4149,7 @@ def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
     full = _collect_full_text(conn, int(rfp_id))
     rows = extract_clins(full)
     try:
-        df = pd.__p_read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        df = __p_read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rfp_id),))
         existing = set((str(r.get("clin","")), str(r.get("description",""))) for _, r in df.iterrows())
     except Exception:
         existing = set()
@@ -4136,7 +4174,7 @@ def _parse_money(x):
 
 def clin_totals_df(conn: "sqlite3.Connection", rfp_id: int):
     try:
-        df = pd.__p_read_sql_query("SELECT clin, description, qty, unit_price, extended_price FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df = __p_read_sql_query("SELECT clin, description, qty, unit_price, extended_price FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         return pd.DataFrame()
     if df is None or df.empty:
@@ -4160,7 +4198,7 @@ def clin_totals_df(conn: "sqlite3.Connection", rfp_id: int):
 def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
     st.subheader("Status & Gaps")
     try:
-        df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rf = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
         st.info("No RFPs yet."); return
     if df_rf is None or df_rf.empty:
@@ -4181,7 +4219,7 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
             st.rerun()
     # Chips
     try:
-        dfm = pd.__p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+        dfm = __p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
         meta = {r["key"]: r["value"] for _, r in dfm.iterrows()} if dfm is not None and not dfm.empty else {}
     except Exception:
         meta = {}
@@ -4198,11 +4236,11 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
     chips.append(("Set-Aside", bool(sa)))
     chips.append(("POP", bool(pop)))
     try:
-        has_M = pd.__p_read_sql_query("SELECT 1 FROM rfp_sections WHERE rfp_id=? AND section='M' LIMIT 1;", conn, params=(int(rid),)).shape[0] > 0
+        has_M = __p_read_sql_query("SELECT 1 FROM rfp_sections WHERE rfp_id=? AND section='M' LIMIT 1;", conn, params=(int(rid),)).shape[0] > 0
     except Exception:
         has_M = False
     try:
-        has_CLIN = pd.__p_read_sql_query("SELECT 1 FROM clin_lines WHERE rfp_id=? LIMIT 1;", conn, params=(int(rid),)).shape[0] > 0
+        has_CLIN = __p_read_sql_query("SELECT 1 FROM clin_lines WHERE rfp_id=? LIMIT 1;", conn, params=(int(rid),)).shape[0] > 0
     except Exception:
         has_CLIN = False
     chips.append(("Section M", has_M))
@@ -4643,7 +4681,7 @@ def get_db() -> sqlite3.Connection:
 
         def _add_tenant_id(table: str):
             try:
-                cols = pd.__p_read_sql_query(f"PRAGMA table_info({table});", conn)
+                cols = __p_read_sql_query(f"PRAGMA table_info({table});", conn)
                 if "tenant_id" not in cols["name"].tolist():
                     cur.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER;")
                     conn.commit()
@@ -5674,7 +5712,7 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             st.error(f"Error saving contact {e}")
 
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT name, email, org FROM contacts_t ORDER BY name;", conn
         )
         st.subheader("Contact List")
@@ -5715,7 +5753,7 @@ def run_deals(conn: "sqlite3.Connection") -> None:
             st.error(f"Error saving deal {e}")
 
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
             conn,
         )
@@ -6292,7 +6330,7 @@ def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime:
 def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
     try:
         import pandas as _pd
-        df = _pd.__p_read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))
+        df = __p_read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))
         if not df.empty:
             return str(df.iloc[0]["value"] or "")
     except Exception:
@@ -6326,7 +6364,7 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
         import pandas as _pd
         nid = _p3_rfp_meta_get(conn, rfp_id, "notice_id", "")
         if not nid:
-            df = _pd.__p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
+            df = __p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
             if not df.empty:
                 nid = _p3_parse_notice_id(str(df.iloc[0]["sam_url"] or ""))
     except Exception as e:
@@ -6367,7 +6405,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     import pandas as _pd
     # Deal
     try:
-        df = _pd.__p_read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
+        df = __p_read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
         title = (df.iloc[0]["title"] if not df.empty else f"RFP #{rfp_id}")
     except Exception:
         title = f"RFP #{rfp_id}"
@@ -6383,7 +6421,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
         pass
     # Contacts
     try:
-        dfp = _pd.__p_read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
+        dfp = __p_read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
     except Exception:
         dfp = None
     if dfp is not None and not dfp.empty:
@@ -6407,7 +6445,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
 def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
     try:
         import pandas as _pd
-        df = _pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR '%Close%') "
             "ORDER BY id DESC LIMIT 1;",
             conn, params=(int(rfp_id),)
@@ -6443,7 +6481,7 @@ def _run_rfp_analyzer_phase3(conn):
 
     # RFP picker
     try:
-        df_rfps = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rfps = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
         df_rfps = None
     if df_rfps is None or df_rfps.empty:
@@ -6508,7 +6546,7 @@ def _run_rfp_analyzer_phase3(conn):
         )
         _prefill_url = ""
         try:
-            _df_url = pd.__p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(selected_rfp_id),))
+            _df_url = __p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(selected_rfp_id),))
             if not _df_url.empty:
                 _prefill_url = str(_df_url.iloc[0]["sam_url"] or "")
         except Exception:
@@ -6574,7 +6612,7 @@ def _run_rfp_analyzer_phase3(conn):
 
     # Build pages for One-Page Analyzer
     try:
-        df_files = pd.__p_read_sql_query(
+        df_files = __p_read_sql_query(
             "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
             conn, params=(int(selected_rfp_id),)
         )
@@ -6696,7 +6734,7 @@ def _run_rfp_analyzer_phase3(conn):
             with st.expander("X1 Ingest: File Library + Health", expanded=False):
                 st.caption("Accepts PDF, DOCX, XLSX, TXT. Deduplicates by SHA-256. Attempts OCR on image-only PDFs if pytesseract is available. — X7 applied")
                 try:
-                    df_rf_list = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+                    df_rf_list = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
                     opt_rf = [None] + df_rf_list["id"].tolist() if df_rf_list is not None else [None]
                 except Exception:
                     df_rf_list = pd.DataFrame()
@@ -6992,7 +7030,7 @@ def _run_rfp_analyzer_phase3(conn):
     # ---------------- Y1: Ask with citations ----------------
     with tab_y1:
         st.caption("Build a local search index once, then ask CO-style questions with bracketed citations.")
-        df_rf_y1 = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rf_y1 = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf_y1.empty:
             st.info("No RFPs yet. Parse & save first.")
         else:
@@ -7045,12 +7083,12 @@ def _run_rfp_analyzer_phase3(conn):
         y4_ui_review(conn)
 # ---------------- CHECKLIST ----------------
     with tab_checklist:
-        df_rf = pd.__p_read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rf = __p_read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet. Parse one on the first tab.")
         else:
             rid = st.selectbox("Select an RFP", options=df_rf['id'].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="rfp_sel")
-            df_lm = pd.__p_read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+            df_lm = __p_read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
 
         with st.expander("Q&A Memory (X7)", expanded=False):
             st.caption("Ask questions about this RFP. Answers are pulled from saved checklists, CLINs, dates, POCs, and linked file text. History is saved.")
@@ -7098,7 +7136,7 @@ def _run_rfp_analyzer_phase3(conn):
                 except Exception as e:
                     st.error(f"Q&A failed: {e}")
             try:
-                df_hist = pd.__p_read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
+                df_hist = __p_read_sql_query("SELECT ts, q, a FROM rfp_chat WHERE rfp_id=? ORDER BY id DESC LIMIT 50;", conn, params=(int(locals().get("rid")),))
                 if df_hist is not None and not df_hist.empty:
                     _styled_dataframe(df_hist, use_container_width=True, hide_index=True)
                     c1, c2 = st.columns([1,1])
@@ -7126,7 +7164,7 @@ def _run_rfp_analyzer_phase3(conn):
                 st.caption("Checklist viewer: select an RFP above to load items.")
             else:
                 try:
-                    df_lm = pd.__p_read_sql_query(
+                    df_lm = __p_read_sql_query(
                         "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;",
                         conn, params=(int(_rid),)
                     )
@@ -7164,7 +7202,7 @@ def _run_rfp_analyzer_phase3(conn):
         # X2: Files for this RFP
         with st.expander("Files for this RFP (X2)", expanded=False):
             try:
-                df_files = pd.__p_read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+                df_files = __p_read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
             except Exception as e:
                 df_files = pd.DataFrame()
             st.caption("Linked files")
@@ -7181,7 +7219,7 @@ def _run_rfp_analyzer_phase3(conn):
                         key=f"file_pick_{rid}"
                     )
                     if pick:
-                        row = pd.__p_read_sql_query(
+                        row = __p_read_sql_query(
                             "SELECT filename, mime, bytes FROM rfp_files WHERE id=?;",
                             conn, params=(int(pick),)
                         ).iloc[0]
@@ -7206,7 +7244,7 @@ def _run_rfp_analyzer_phase3(conn):
                     if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
                         try:
                             # Fetch bytes for all linked files
-                            df_bytes = pd.__p_read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
+                            df_bytes = __p_read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
                             if df_bytes is None or df_bytes.empty:
                                 st.warning("No files to package.")
                             else:
@@ -7242,7 +7280,7 @@ def _run_rfp_analyzer_phase3(conn):
                     if q:
                         try:
                             hits = []
-                            pool = pd.__p_read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+                            pool = __p_read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
                             for _, r in pool.iterrows():
                                 b = r.get("bytes"); mime = r.get("mime") or ""
                                 pages = extract_text_pages(b, mime)
@@ -7272,7 +7310,7 @@ def _run_rfp_analyzer_phase3(conn):
                         st.error(f"Unlink failed: {e}")
             st.caption("Attach from library")
             try:
-                df_pool = pd.__p_read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
+                df_pool = __p_read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
             except Exception:
                 df_pool = pd.DataFrame()
             if df_pool is None or df_pool.empty:
@@ -7291,7 +7329,7 @@ def _run_rfp_analyzer_phase3(conn):
                         st.error(f"Link failed: {e}")
         st.markdown("### Attachments status")
         try:
-            df_status = pd.__p_read_sql_query("""
+            df_status = __p_read_sql_query("""
                 SELECT id, filename, COALESCE(mime,'') AS mime, 
                        length(bytes) AS size_bytes,
                        COALESCE(sha256,'') AS sha256,
@@ -7324,7 +7362,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success(f"Retried {len(sel_retry)}. OK={ok} Fail={fail}")
                     st.rerun()
 
-        df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rf = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
             st.info("No RFPs yet.")
             return
@@ -7338,7 +7376,7 @@ def _run_rfp_analyzer_phase3(conn):
 
         with st.expander("Acquisition Meta (X4)", expanded=False):
             try:
-                df_meta_all = pd.__p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+                df_meta_all = __p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
                 df_meta_all = pd.DataFrame(columns=['key','value'])
             if df_meta_all is None or df_meta_all.empty:
@@ -7354,7 +7392,7 @@ def _run_rfp_analyzer_phase3(conn):
 
         with st.expander("Ordering / POP (X3)", expanded=False):
             try:
-                df_meta = pd.__p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+                df_meta = __p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
                 df_meta = pd.DataFrame(columns=['key','value'])
             if df_meta is None or df_meta.empty:
@@ -7374,7 +7412,7 @@ def _run_rfp_analyzer_phase3(conn):
             tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
             with tab_lm:
                 try:
-                    df_lm_e = _pd.__p_read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
+                    df_lm_e = __p_read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
                 except Exception:
                     df_lm_e = _pd.DataFrame(columns=['item_text','is_must','status'])
                 df_lm_e = df_lm_e.fillna('')
@@ -7390,7 +7428,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('L/M saved.')
             with tab_clin:
                 try:
-                    df_c_e = _pd.__p_read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_c_e = __p_read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_c_e = _pd.DataFrame(columns=['clin','description','qty','unit','unit_price','extended_price'])
                 df_c_e = df_c_e.fillna('')
@@ -7406,7 +7444,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('CLINs saved.')
             with tab_dates:
                 try:
-                    df_d_e = _pd.__p_read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_d_e = __p_read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_d_e = _pd.DataFrame(columns=['label','date_text','date_iso'])
                 df_d_e = df_d_e.fillna('')
@@ -7422,7 +7460,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('Dates saved.')
             with tab_pocs:
                 try:
-                    df_p_e = _pd.__p_read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_p_e = __p_read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_p_e = _pd.DataFrame(columns=['name','role','email','phone'])
                 df_p_e = df_p_e.fillna('')
@@ -7438,7 +7476,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('POCs saved.')
             with tab_meta:
                 try:
-                    df_m_e = _pd.__p_read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_m_e = __p_read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_m_e = _pd.DataFrame(columns=['key','value'])
                 df_m_e = df_m_e.fillna('')
@@ -7455,16 +7493,16 @@ def _run_rfp_analyzer_phase3(conn):
         # === End Phase S ===
         col1, col2, col3 = st.columns(3)
         with col1:
-            df_c = pd.__p_read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
+            df_c = __p_read_sql_query("SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;", conn, params=(int(rid),))
             st.subheader("CLINs"); _styled_dataframe(df_c, use_container_width=True, hide_index=True)
         with col2:
-            df_d = pd.__p_read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(rid),))
+            df_d = __p_read_sql_query("SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;", conn, params=(int(rid),))
             st.subheader("Key Dates"); _styled_dataframe(df_d, use_container_width=True, hide_index=True)
         with col3:
-            df_p = pd.__p_read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),))
+            df_p = __p_read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(int(rid),))
             st.subheader("POCs"); _styled_dataframe(df_p, use_container_width=True, hide_index=True)
         st.subheader("Attributes")
-        df_meta = pd.__p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
+        df_meta = __p_read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
         _styled_dataframe(df_meta, use_container_width=True, hide_index=True)
         # --- RTM Coverage section ---
         try:
@@ -7476,7 +7514,7 @@ def _run_rfp_analyzer_phase3(conn):
 
         # --- Amendment awareness sidebar ---
         try:
-            sam_url = str(pd.__p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(rid_int,)).iloc[0]["sam_url"])
+            sam_url = str(__p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?;", conn, params=(rid_int,)).iloc[0]["sam_url"])
         except Exception:
             sam_url = ""
         ttl = int(st.session_state.get("cache_ttl_hours", 72)) if "cache_ttl_hours" in st.session_state else 72
@@ -7522,7 +7560,7 @@ def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataF
     def _has(name: str) -> bool:
         try:
             q = "SELECT name FROM sqlite_master WHERE name=?;"
-            return pd.__p_read_sql_query(q, conn, params=(name,)).shape[0] > 0
+            return __p_read_sql_query(q, conn, params=(name,)).shape[0] > 0
         except Exception:
             return False
 
@@ -7544,7 +7582,7 @@ def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataF
             ORDER BY i.id;
         """
         try:
-            return pd.__p_read_sql_query(q, conn, params=(rfp_id,))
+            return __p_read_sql_query(q, conn, params=(rfp_id,))
         except Exception:
             pass  # fall through
 
@@ -7574,7 +7612,7 @@ def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataF
                 ORDER BY i.id;
             """
         try:
-            return pd.__p_read_sql_query(q, conn, params=(rfp_id,))
+            return __p_read_sql_query(q, conn, params=(rfp_id,))
         except Exception:
             pass
 
@@ -7619,11 +7657,11 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
 
 def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     try:
-        rf = pd.__p_read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
+        rf = __p_read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
     except Exception:
         rf = pd.DataFrame()
     try:
-        df_items = pd.__p_read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_items = __p_read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         df_items = pd.DataFrame(columns=["id","item_text","is_must","status"])
     joined = "\n".join(df_items["item_text"].astype(str).tolist()) if not df_items.empty else ""
@@ -7638,7 +7676,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
     rfp_id = st.session_state.get('current_rfp_id')
     if not rfp_id:
         try:
-            df_rf = pd.__p_read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn, params=())
+            df_rf = __p_read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn, params=())
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
             return
@@ -7652,7 +7690,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
 
     st.caption(f"Working RFP ID: {rfp_id}")
     try:
-        df_items = pd.__p_read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+        df_items = __p_read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
         return
@@ -7854,7 +7892,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
-    df_rf = pd.__p_read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df_rf = __p_read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
@@ -7953,7 +7991,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
         with st.expander("Snippets Inbox (from Y1/Y2/Y4/Y5)", expanded=True):
             try:
-                df_snip = pd.__p_read_sql_query("SELECT id, section, source, text, created_at FROM draft_snippets WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
+                df_snip = __p_read_sql_query("SELECT id, section, source, text, created_at FROM draft_snippets WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
             except Exception:
                 df_snip = pd.DataFrame()
             if df_snip is None or df_snip.empty:
@@ -8105,7 +8143,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
         params.extend([f"%{f_kw}%", f"%{f_kw}%"])
 
     try:
-        df_v = pd.__p_read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
+        df_v = __p_read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
     except Exception as e:
         st.error(f"Query failed: {e}")
         df_v = pd.DataFrame()
@@ -8218,7 +8256,7 @@ def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optiona
 
 def run_quote_comparison(conn: "sqlite3.Connection") -> None:
     st.header("Quote Comparison")
-    df = pd.__p_read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df = __p_read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
         st.info("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
         return
@@ -8273,7 +8311,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                 st.success(f"Created quote for {vendor}. Now add lines below (Quote ID {qid}).")
                 st.session_state["current_quote_id"] = qid
 
-    df_q = pd.__p_read_sql_query("SELECT id, vendor, received_date, notes FROM quotes WHERE rfp_id=? ORDER BY vendor;", conn, params=(rfp_id,))
+    df_q = __p_read_sql_query("SELECT id, vendor, received_date, notes FROM quotes WHERE rfp_id=? ORDER BY vendor;", conn, params=(rfp_id,))
     if not df_q.empty:
         st.subheader("Quotes")
         _styled_dataframe(df_q, use_container_width=True, hide_index=True)
@@ -8299,8 +8337,8 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
             st.success("Line added.")
 
     st.subheader("Comparison")
-    df_target = pd.__p_read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? GROUP BY clin, description ORDER BY clin;", conn, params=(rfp_id,))
-    df_lines = pd.__p_read_sql_query("""
+    df_target = __p_read_sql_query("SELECT clin, description FROM clin_lines WHERE rfp_id=? GROUP BY clin, description ORDER BY clin;", conn, params=(rfp_id,))
+    df_lines = __p_read_sql_query("""
         SELECT q.vendor, l.clin, l.qty, l.unit_price, l.extended_price
         FROM quote_lines l
         JOIN quotes q ON q.id = l.quote_id
@@ -8338,9 +8376,9 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
 
 # ---------- Pricing Calculator (Phase E) ----------
 def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str, float]:
-    dl = pd.__p_read_sql_query("SELECT hours, rate, fringe_pct FROM pricing_labor WHERE scenario_id=?;", conn, params=(scenario_id,))
-    other = pd.__p_read_sql_query("SELECT cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
-    base = pd.__p_read_sql_query("SELECT overhead_pct, gna_pct, fee_pct, contingency_pct FROM pricing_scenarios WHERE id=?;", conn, params=(scenario_id,))
+    dl = __p_read_sql_query("SELECT hours, rate, fringe_pct FROM pricing_labor WHERE scenario_id=?;", conn, params=(scenario_id,))
+    other = __p_read_sql_query("SELECT cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
+    base = __p_read_sql_query("SELECT overhead_pct, gna_pct, fee_pct, contingency_pct FROM pricing_scenarios WHERE id=?;", conn, params=(scenario_id,))
     if base.empty:
         return {}
     overhead_pct, gna_pct, fee_pct, contingency_pct = base.iloc[0]
@@ -8367,14 +8405,14 @@ def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str,
 
 def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     st.header("Pricing Calculator")
-    df = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer (parse & save) first.")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0]}")
 
     st.subheader("Scenario")
-    df_sc = pd.__p_read_sql_query("SELECT id, name FROM pricing_scenarios WHERE rfp_id=? ORDER BY id DESC;", conn, params=(rfp_id,))
+    df_sc = __p_read_sql_query("SELECT id, name FROM pricing_scenarios WHERE rfp_id=? ORDER BY id DESC;", conn, params=(rfp_id,))
     mode = st.radio("Mode", ["Create new", "Edit existing"], horizontal=True)
     if mode == "Create new":
         name = st.text_input("Scenario name", value="Base")
@@ -8423,7 +8461,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
             conn.commit()
         st.success("Added.")
 
-    df_lab = pd.__p_read_sql_query("""
+    df_lab = __p_read_sql_query("""
         SELECT id, labor_cat, hours, rate, fringe_pct, (hours*rate) AS direct, (hours*rate*fringe_pct/100.0) AS fringe
         FROM pricing_labor WHERE scenario_id=?;
     """, conn, params=(scenario_id,))
@@ -8443,7 +8481,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
             conn.commit()
         st.success("Added ODC.")
 
-    df_odc = pd.__p_read_sql_query("SELECT id, label, cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
+    df_odc = __p_read_sql_query("SELECT id, label, cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
     _styled_dataframe(df_odc, use_container_width=True, hide_index=True)
 
     st.subheader("Summary")
@@ -8463,7 +8501,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
 
 # ---------- Win Probability (Phase E) ----------
 def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
-    df = pd.__p_read_sql_query("""
+    df = __p_read_sql_query("""
         SELECT q.vendor, SUM(l.extended_price) AS total
         FROM quotes q JOIN quote_lines l ON q.id = l.quote_id
         WHERE q.rfp_id=?
@@ -8487,13 +8525,13 @@ def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: O
 
 def run_win_probability(conn: "sqlite3.Connection") -> None:
     st.header("Win Probability")
-    df = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer first.")
         return
     rfp_id = st.selectbox("RFP context", options=df["id"].tolist(), format_func=lambda rid: f"#{rid} — {df.loc[df['id']==rid, 'title'].values[0]}")
 
-    df_items = pd.__p_read_sql_query("SELECT status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+    df_items = __p_read_sql_query("SELECT status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     if df_items.empty:
         compliance = st.slider("Compliance (est.)", 0, 100, 70)
     else:
@@ -8506,7 +8544,7 @@ def run_win_probability(conn: "sqlite3.Connection") -> None:
     team = st.slider("Team strength / subs readiness", 0, 100, 70)
     smallbiz = st.slider("Set-aside / socio-economic alignment", 0, 100, 80)
 
-    df_sc = pd.__p_read_sql_query("SELECT id, name FROM pricing_scenarios WHERE rfp_id=? ORDER BY id DESC;", conn, params=(rfp_id,))
+    df_sc = __p_read_sql_query("SELECT id, name FROM pricing_scenarios WHERE rfp_id=? ORDER BY id DESC;", conn, params=(rfp_id,))
     price_score = None
     our_total = None
     if not df_sc.empty:
@@ -8568,52 +8606,52 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     res: Dict[str, Any] = {}
     # RFP sections
     if rfp_id:
-        dfL = pd.__p_read_sql_query("SELECT section, content FROM rfp_sections WHERE rfp_id=?;", conn, params=(rfp_id,))
+        dfL = __p_read_sql_query("SELECT section, content FROM rfp_sections WHERE rfp_id=?;", conn, params=(rfp_id,))
     else:
-        dfL = pd.__p_read_sql_query("SELECT section, content FROM rfp_sections;", conn, params=())
+        dfL = __p_read_sql_query("SELECT section, content FROM rfp_sections;", conn, params=())
     if not dfL.empty:
         dfL["score"] = dfL["content"].str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
         res["sections"] = dfL.sort_values("score", ascending=False).head(5)
 
     # Checklist
     if rfp_id:
-        dfCk = pd.__p_read_sql_query("SELECT item_text, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+        dfCk = __p_read_sql_query("SELECT item_text, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
     else:
-        dfCk = pd.__p_read_sql_query("SELECT item_text, status FROM lm_items;", conn, params=())
+        dfCk = __p_read_sql_query("SELECT item_text, status FROM lm_items;", conn, params=())
     if not dfCk.empty:
         dfCk["score"] = dfCk["item_text"].str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
         res["checklist"] = dfCk.sort_values("score", ascending=False).head(10)
 
     # CLINs
     if rfp_id:
-        dfCL = pd.__p_read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
+        dfCL = __p_read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
     else:
-        dfCL = pd.__p_read_sql_query("SELECT clin, description, qty, unit FROM clin_lines;", conn, params=())
+        dfCL = __p_read_sql_query("SELECT clin, description, qty, unit FROM clin_lines;", conn, params=())
     if not dfCL.empty:
         dfCL["score"] = (dfCL["clin"].astype(str) + " " + dfCL["description"].astype(str)).str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
         res["clins"] = dfCL.sort_values("score", ascending=False).head(10)
 
     # Dates
     if rfp_id:
-        dfDt = pd.__p_read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=?;", conn, params=(rfp_id,))
+        dfDt = __p_read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=?;", conn, params=(rfp_id,))
     else:
-        dfDt = pd.__p_read_sql_query("SELECT label, date_text FROM key_dates;", conn, params=())
+        dfDt = __p_read_sql_query("SELECT label, date_text FROM key_dates;", conn, params=())
     if not dfDt.empty:
         dfDt["score"] = (dfDt["label"].astype(str) + " " + dfDt["date_text"].astype(str)).str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
         res["dates"] = dfDt.sort_values("score", ascending=False).head(10)
 
     # POCs
     if rfp_id:
-        dfP = pd.__p_read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(rfp_id,))
+        dfP = __p_read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;", conn, params=(rfp_id,))
     else:
-        dfP = pd.__p_read_sql_query("SELECT name, role, email, phone FROM pocs;", conn, params=())
+        dfP = __p_read_sql_query("SELECT name, role, email, phone FROM pocs;", conn, params=())
     if not dfP.empty:
         dfP["score"] = (dfP["name"].astype(str) + " " + dfP["role"].astype(str) + " " + dfP["email"].astype(str)).str.lower().apply(lambda t: sum(1 for w in q.split() if w in (t or "")))
         res["pocs"] = dfP.sort_values("score", ascending=False).head(10)
 
     # Quotes summary by vendor
     if rfp_id:
-        dfQ = pd.__p_read_sql_query("""
+        dfQ = __p_read_sql_query("""
             SELECT q.vendor, SUM(l.extended_price) AS total, COUNT(DISTINCT l.clin) AS clins_quoted
             FROM quotes q JOIN quote_lines l ON q.id=l.quote_id
             WHERE q.rfp_id=?
@@ -8624,9 +8662,9 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
     # Coverage & compliance
     if rfp_id:
-        df_target = pd.__p_read_sql_query("SELECT DISTINCT clin FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
+        df_target = __p_read_sql_query("SELECT DISTINCT clin FROM clin_lines WHERE rfp_id=?;", conn, params=(rfp_id,))
         total_clins = int(df_target["clin"].nunique()) if not df_target.empty else 0
-        df_items = pd.__p_read_sql_query("SELECT status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+        df_items = __p_read_sql_query("SELECT status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
         compl = 0
         if not df_items.empty:
             compl = int(round(((df_items["status"]=="Complete").sum() / max(1, len(df_items))) * 100))
@@ -8639,7 +8677,7 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     st.header("Chat Assistant (DB-aware)")
     st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
-    df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df_rf = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     rfp_opt = None
     if not df_rf.empty:
         rfp_opt = st.selectbox("Context (optional)", options=[None] + df_rf["id"].tolist(),
@@ -8753,7 +8791,7 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
     st.caption("Store your company profile and export a polished 1-page DOCX capability statement.")
 
     # Load existing (id=1)
-    df = pd.__p_read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
+    df = __p_read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
     vals = df.iloc[0].to_dict() if not df.empty else {}
 
     with st.form("org_profile_form"):
@@ -8794,7 +8832,7 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
 
     # Export
     if st.button("Export Capability Statement DOCX"):
-        prof = pd.__p_read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
+        prof = __p_read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
         if prof.empty:
             st.error("Save your profile first.")
         else:
@@ -8973,7 +9011,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
     if f_role:
         q += " AND role LIKE ?"
         params.append(f"%{f_role}%")
-    df = pd.__p_read_sql_query(q + " ORDER BY id DESC;", conn, params=params)
+    df = __p_read_sql_query(q + " ORDER BY id DESC;", conn, params=params)
     if df.empty:
         st.info("No projects found.")
         return
@@ -8983,7 +9021,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
     selected_ids = st.multiselect("Select projects for writeup", options=df["id"].tolist(), format_func=lambda i: f"#{i} — {df.loc[df['id']==i, 'project_title'].values[0]}")
 
     # Relevance scoring vs RFP
-    df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df_rf = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     rfp_id = None
     if not df_rf.empty:
         rfp_id = st.selectbox("RFP context for relevance scoring (optional)", options=[None] + df_rf["id"].tolist(),
@@ -9042,7 +9080,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
         _export_past_perf_docx(out_path, past_perf)
 def _wp_load_paper(conn: "sqlite3.Connection", paper_id: int) -> pd.DataFrame:
-    return pd.__p_read_sql_query(
+    return __p_read_sql_query(
         "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
         conn, params=(paper_id,)
     )
@@ -9090,7 +9128,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
 
     # --- Templates ---
     with st.expander("Templates", expanded=False):
-        df_t = pd.__p_read_sql_query("SELECT id, name, description, created_at FROM white_templates ORDER BY id DESC;", conn, params=())
+        df_t = __p_read_sql_query("SELECT id, name, description, created_at FROM white_templates ORDER BY id DESC;", conn, params=())
         t_col1, t_col2 = st.columns([2,2])
         with t_col1:
             st.subheader("Create Template")
@@ -9146,11 +9184,11 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
 
     # --- Drafts ---
     st.subheader("Drafts")
-    df_p = pd.__p_read_sql_query("SELECT id, title, subtitle, created_at, updated_at FROM white_papers ORDER BY id DESC;", conn, params=())
+    df_p = __p_read_sql_query("SELECT id, title, subtitle, created_at, updated_at FROM white_papers ORDER BY id DESC;", conn, params=())
     c1, c2 = st.columns([2,2])
     with c1:
         st.markdown("**Create draft from template**")
-        df_t = pd.__p_read_sql_query("SELECT id, name FROM white_templates ORDER BY id DESC;", conn, params=())
+        df_t = __p_read_sql_query("SELECT id, name FROM white_templates ORDER BY id DESC;", conn, params=())
         d_title = st.text_input("Draft title", key="wp_d_title")
         d_sub = st.text_input("Subtitle (optional)", key="wp_d_sub")
         if df_t.empty:
@@ -9290,8 +9328,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     # --- Activities
     with tabs[0]:
         st.subheader("Log Activity")
-        df_deals = pd.__p_read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
-        df_contacts = pd.__p_read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
+        df_deals = __p_read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
+        df_contacts = __p_read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
@@ -9335,7 +9373,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         if f_contact:
             q += " AND contact_id=?"; params.append(f_contact)
         q += " ORDER BY ts DESC"
-        df_a = pd.__p_read_sql_query(q, conn, params=params)
+        df_a = __p_read_sql_query(q, conn, params=params)
         if df_a.empty:
             st.write("No activities")
         else:
@@ -9348,8 +9386,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     # --- Tasks
     with tabs[1]:
         st.subheader("New Task")
-        df_deals = pd.__p_read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
-        df_contacts = pd.__p_read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
+        df_deals = __p_read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
+        df_contacts = __p_read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
         t1, t2, t3 = st.columns([2,2,2])
         with t1:
             t_title = st.text_input("Task title", key="task_title")
@@ -9386,7 +9424,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         if tf_priority:
             q += " AND priority IN (%s)" % ",".join(["?"]*len(tf_priority)); params.extend(tf_priority)
         q += " ORDER BY COALESCE(due_date,'9999-12-31') ASC"
-        df_t = pd.__p_read_sql_query(q, conn, params=params)
+        df_t = __p_read_sql_query(q, conn, params=params)
         if df_t.empty:
             st.write("No tasks")
         else:
@@ -9418,14 +9456,14 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     # --- Pipeline
     with tabs[2]:
         st.subheader("Weighted Pipeline")
-        df = pd.__p_read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+        df = __p_read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
             st.info("No deals")
         else:
             df["prob_%"] = df["status"].apply(_stage_probability)
             df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
             # Stage age: days since last stage change
-            df_log = pd.__p_read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;", conn, params=())
+            df_log = __p_read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;", conn, params=())
             def stage_age(row):
                 try:
                     last = df_log[(df_log["deal_id"]==row["id"]) & (df_log["stage"]==row["status"])]["last_change"]
@@ -9500,19 +9538,19 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
             owner_type = st.selectbox("Attach to", ["RFP", "Deal", "Vendor", "Other"], key="fm_owner_type")
             owner_id = None
             if owner_type == "RFP":
-                df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+                df_rf = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
                 if not df_rf.empty:
                     owner_id = st.selectbox("RFP", options=df_rf["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
                                             key="fm_owner_rfp")
             elif owner_type == "Deal":
-                df_deal = pd.__p_read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
+                df_deal = __p_read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
                 if not df_deal.empty:
                     owner_id = st.selectbox("Deal", options=df_deal["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_deal.loc[df_deal['id']==i, 'title'].values[0]}",
                                             key="fm_owner_deal")
             elif owner_type == "Vendor":
-                df_v = pd.__p_read_sql_query("SELECT id, name FROM vendors_t ORDER BY name;", conn, params=())
+                df_v = __p_read_sql_query("SELECT id, name FROM vendors_t ORDER BY name;", conn, params=())
                 if not df_v.empty:
                     owner_id = st.selectbox("Vendor", options=df_v["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_v.loc[df_v['id']==i, 'name'].values[0]}",
@@ -9567,11 +9605,11 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
             q += " AND filename LIKE ?"; params.append(f"%{f_kw}%")
         q += " ORDER BY uploaded_at DESC"
         try:
-            df_files = pd.__p_read_sql_query(q, conn, params=params)
+            df_files = __p_read_sql_query(q, conn, params=params)
         except Exception as e:
             _ensure_files_table(conn)
             try:
-                df_files = pd.__p_read_sql_query(q, conn, params=params)
+                df_files = __p_read_sql_query(q, conn, params=params)
             except Exception as e2:
                 st.error(f"Failed to load files: {e2}")
                 df_files = pd.DataFrame()
@@ -9610,7 +9648,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
 
     # --- Submission Kit (ZIP) ---
     st.subheader("Submission Kit (ZIP)")
-    df_rf_all = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df_rf_all = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf_all.empty:
         st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
         return
@@ -9621,7 +9659,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
 
     # Load files for this RFP
     try:
-        df_kit = pd.__p_read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(kit_rfp),))
+        df_kit = __p_read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(kit_rfp),))
     except Exception:
         _ensure_files_table(conn)
         df_kit = pd.DataFrame(columns=["id","filename","path","tags"])
@@ -9662,7 +9700,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
             rows = []
             if selected:
                 ph = ",".join(["?"]*len(selected))
-                df_sel = pd.__p_read_sql_query(f"SELECT filename, path FROM files_t WHERE id IN ({ph});", conn, params=selected)
+                df_sel = __p_read_sql_query(f"SELECT filename, path FROM files_t WHERE id IN ({ph});", conn, params=selected)
                 for _, r in df_sel.iterrows():
                     rows.append((r["filename"], r["path"]))
             for p in gen_paths:
@@ -9693,11 +9731,11 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
 
 # ---------- Phase L: RFQ Pack ----------
 def _rfq_pack_by_id(conn: "sqlite3.Connection", pid: int) -> dict | None:
-    df = pd.__p_read_sql_query("SELECT * FROM rfq_packs_t WHERE id=?;", conn, params=(pid,))
+    df = __p_read_sql_query("SELECT * FROM rfq_packs_t WHERE id=?;", conn, params=(pid,))
     return None if df.empty else df.iloc[0].to_dict()
 
 def _rfq_lines(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
-    return pd.__p_read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+    return __p_read_sql_query("SELECT id, clin_code, description, qty, unit, naics, psc FROM rfq_lines_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_vendors(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
     q = """
@@ -9708,12 +9746,12 @@ def _rfq_vendors(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
         ORDER BY v.name;
     """
     try:
-        return pd.__p_read_sql_query(q, conn, params=(pid,))
+        return __p_read_sql_query(q, conn, params=(pid,))
     except Exception:
         return pd.DataFrame(columns=["id","vendor_id","name","email","phone"])
 
 def _rfq_attachments(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
-    return pd.__p_read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+    return __p_read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
     pack = _rfq_pack_by_id(conn, pack_id)
@@ -9729,7 +9767,7 @@ def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
         elif r.get("file_id"):
             # fallback to files table
             try:
-                df = pd.__p_read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(r["file_id"]),))
+                df = __p_read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(r["file_id"]),))
                 if not df.empty:
                     files.append((df.iloc[0]["filename"], df.iloc[0]["path"]))
             except Exception:
@@ -9783,7 +9821,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     left, right = st.columns([2,2])
     with left:
         st.subheader("Create")
-        df_rf = pd.__p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+        df_rf = __p_read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
         rf_opt = st.selectbox("RFP (optional)", options=[None] + df_rf["id"].tolist(),
                               format_func=lambda x: "None" if x is None else f"#{x} — {df_rf.loc[df_rf['id']==x,'title'].values[0]}",
                               key="rfq_rfp_sel")
@@ -9803,7 +9841,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 st.success("Created"); st.rerun()
     with right:
         st.subheader("Open")
-        df_pk = pd.__p_read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs_t ORDER BY id DESC;", conn, params=())
+        df_pk = __p_read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs_t ORDER BY id DESC;", conn, params=())
         if df_pk.empty:
             st.info("No RFQ packs yet")
             return
@@ -9865,7 +9903,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     pack = _rfq_pack_by_id(conn, int(pk_sel))
     rfp_id = pack.get("rfp_id")
     if rfp_id:
-        df_rfp_files = pd.__p_read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(rfp_id),))
+        df_rfp_files = __p_read_sql_query("SELECT id, filename, path, tags FROM files_t WHERE owner_type='RFP' AND owner_id=? ORDER BY uploaded_at DESC;", conn, params=(int(rfp_id),))
     else:
         df_rfp_files = pd.DataFrame(columns=["id","filename","path","tags"])
     df_att = _rfq_attachments(conn, int(pk_sel))
@@ -9873,7 +9911,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
 
     st.markdown("**Add from File Manager**")
     # allow selecting from all files
-    df_all_files = pd.__p_read_sql_query("SELECT id, filename FROM files_t ORDER BY uploaded_at DESC;", conn, params=())
+    df_all_files = __p_read_sql_query("SELECT id, filename FROM files_t ORDER BY uploaded_at DESC;", conn, params=())
     add_file = st.selectbox("File", options=[None] + df_all_files["id"].astype(int).tolist(),
                             format_func=lambda i: "Choose…" if i is None else f"#{i} — {df_all_files.loc[df_all_files['id']==i,'filename'].values[0]}",
                             key="rfq_att_file")
@@ -9881,7 +9919,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
         if add_file is None:
             st.warning("Pick a file")
         else:
-            df_one = pd.__p_read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(add_file),))
+            df_one = __p_read_sql_query("SELECT filename, path FROM files_t WHERE id=?;", conn, params=(int(add_file),))
             if df_one.empty:
                 st.error("File not found")
             else:
@@ -9908,7 +9946,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     # ---- Vendors ----
     st.markdown("### Vendors")
     try:
-        df_vendors = pd.__p_read_sql_query("SELECT id, name, email FROM vendors_t ORDER BY name;", conn, params=())
+        df_vendors = __p_read_sql_query("SELECT id, name, email FROM vendors_t ORDER BY name;", conn, params=())
     except Exception as e:
         st.info("No vendors table yet. Use Subcontractor Finder to add vendors.")
         df_vendors = pd.DataFrame(columns=["id","name","email"])
@@ -9977,7 +10015,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
 
 def _db_path_from_conn(conn: "sqlite3.Connection") -> str:
     try:
-        df = pd.__p_read_sql_query("PRAGMA database_list;", conn, params=())
+        df = __p_read_sql_query("PRAGMA database_list;", conn, params=())
         p = df[df["name"]=="main"]["file"].values[0]
         return p or str(Path(DATA_DIR) / "app.db")
     except Exception:
@@ -9988,7 +10026,7 @@ def migrate(conn: "sqlite3.Connection") -> None:
     with closing(conn.cursor()) as cur:
         # read current version
         try:
-            ver = int(pd.__p_read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn, params=()).iloc[0]["ver"])
+            ver = int(__p_read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn, params=()).iloc[0]["ver"])
         except Exception:
             ver = 0
 
@@ -10028,7 +10066,7 @@ def migrate(conn: "sqlite3.Connection") -> None:
 # ---------- Phase N: Backup & Data ----------
 def _current_tenant(conn: "sqlite3.Connection") -> int:
     try:
-        return int(pd.__p_read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn, params=()).iloc[0]["ctid"])
+        return int(__p_read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn, params=()).iloc[0]["ctid"])
     except Exception:
         return 1
 
@@ -10084,12 +10122,12 @@ def _export_table_csv(conn: "sqlite3.Connection", table_or_view: str, scoped: bo
         # if a view exists, prefer it
         name_t = name + "_t"
         try:
-            pd.__p_read_sql_query(f"SELECT 1 FROM {name_t} LIMIT 1;", conn)
+            __p_read_sql_query(f"SELECT 1 FROM {name_t} LIMIT 1;", conn)
             name = name_t
         except Exception:
             pass
     try:
-        df = pd.__p_read_sql_query(f"SELECT * FROM {name};", conn)
+        df = __p_read_sql_query(f"SELECT * FROM {name};", conn)
         if df.empty:
             st.info("No rows to export.")
         path = Path(DATA_DIR) / f"export_{name}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -10110,7 +10148,7 @@ def _import_csv_into_table(conn: "sqlite3.Connection", csv_file, table: str, sco
         df["tenant_id"] = _current_tenant(conn)
     # Align columns with destination
     try:
-        cols = pd.__p_read_sql_query(f"PRAGMA table_info({table});", conn)["name"].tolist()
+        cols = __p_read_sql_query(f"PRAGMA table_info({table});", conn)["name"].tolist()
     except Exception as e:
         st.error(f"Table info failed: {e}")
         return 0
@@ -10143,7 +10181,7 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
     dbp = _db_path_from_conn(conn)
     st.write(f"Path: `{dbp}`")
     try:
-        ver = pd.__p_read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn, params=()).iloc[0]["ver"]
+        ver = __p_read_sql_query("SELECT ver FROM schema_version WHERE id=1;", conn, params=()).iloc[0]["ver"]
     except Exception:
         ver = "n/a"
     st.write(f"Schema version: **{ver}**")
@@ -10300,7 +10338,7 @@ def run_rfp_analyzer(conn) -> None:
 
     # Load RFP list
     try:
-        df_rfps = _pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rfps = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
         df_rfps = _pd.DataFrame()
 
@@ -10441,7 +10479,7 @@ def run_rfp_analyzer(conn) -> None:
 
     # Build pages and render One-Page
     try:
-        df_files = _pd.__p_read_sql_query("SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+        df_files = __p_read_sql_query("SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
     except Exception:
         df_files = None
     pages = []
@@ -10468,11 +10506,11 @@ def run_rfp_analyzer(conn) -> None:
 def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
     with st.sidebar.expander("Workspace", expanded=True):
         try:
-            df_tenants = pd.__p_read_sql_query("SELECT id, name FROM tenants ORDER BY id;", conn, params=())
+            df_tenants = __p_read_sql_query("SELECT id, name FROM tenants ORDER BY id;", conn, params=())
         except Exception:
             df_tenants = pd.DataFrame(columns=["id","name"])
         try:
-            cur_tid = int(pd.__p_read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn, params=()).iloc[0]["ctid"])
+            cur_tid = int(__p_read_sql_query("SELECT ctid FROM current_tenant WHERE id=1;", conn, params=()).iloc[0]["ctid"])
         except Exception:
             cur_tid = 1
         opt = st.selectbox("Organization", options=(df_tenants["id"].astype(int).tolist() if not df_tenants.empty else [1]),
@@ -10604,14 +10642,14 @@ if "_o3_collect_recipients_ui" not in globals():
             q += " AND IFNULL(city,'') LIKE ?"
             params.append(f"%{f_city}%")
         try:
-            df = _pd.__p_read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+            df = __p_read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
         except Exception:
             df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
         if df is None or df.empty:
             # fallback to vendors table
             q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
             try:
-                df = _pd.__p_read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+                df = __p_read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
             except Exception:
                 df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
         st.caption(f"{len(df)} vendors match filters")
@@ -10696,7 +10734,7 @@ def y_auto_k(text: str) -> int:
 # Memoize y1_search by (rfp_id, query) and a snapshot of the chunks table to keep cache fresh.
 def _y1_snapshot(conn, rfp_id: int) -> str:
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT COUNT(1) AS c, COALESCE(MAX(id),0) AS m FROM rfp_chunks WHERE rfp_id=?;",
             conn, params=(int(rfp_id),)
         )
@@ -10853,7 +10891,7 @@ def run_capability_statement(conn):
             st.caption("Draft tagline, core competencies, and differentiators using your org profile and recent RFP context.")
             # Load org profile
             try:
-                dfp = pd.__p_read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
+                dfp = __p_read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
             except Exception:
                 dfp = None
             profile = (dfp.iloc[0].to_dict() if isinstance(dfp, pd.DataFrame) and not dfp.empty else {})
@@ -10867,7 +10905,7 @@ def run_capability_statement(conn):
             include_past_perf = st.checkbox("Incorporate past performance bullets if available", value=True, key="x161_pp")
             # Optional RFP context
             try:
-                dfr = pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
+                dfr = __p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
                 rfp_sel = st.selectbox("Optional RFP context", options=[None] + dfr["id"].tolist(),
                                        format_func=lambda i: "None" if i is None else f"#{i} — {dfr.loc[dfr['id']==i,'title'].values[0]}",
                                        key="x161_rfp")
@@ -10877,7 +10915,7 @@ def run_capability_statement(conn):
             if rfp_sel:
                 try:
                     # Pull a compact context from chunks
-                    hits = pd.__p_read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=? LIMIT 40;", conn, params=(int(rfp_sel),))
+                    hits = __p_read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=? LIMIT 40;", conn, params=(int(rfp_sel),))
                     ctx = "\n".join((hits["text"].fillna("").tolist() if hits is not None else []))[:12000]
                 except Exception:
                     ctx = ""
@@ -11495,14 +11533,14 @@ def _o3_merge(text, data: dict) -> str:
 def _o3_load_vendors_df(conn):
     import pandas as _pd
     try:
-        df_v = _pd.__p_read_sql_query(
+        df_v = __p_read_sql_query(
             "SELECT v.id as vendor_id, v.name as company, v.city, v.state, v.naics, v.phone, v.email, v.website FROM vendors v ORDER BY v.name;",
             conn, params=()
         )
     except Exception:
         df_v = _pd.DataFrame()
     try:
-        df_c = _pd.__p_read_sql_query(
+        df_c = __p_read_sql_query(
             "SELECT vc.vendor_id, vc.name as contact_name, vc.email as contact_email, vc.phone as contact_phone, vc.role FROM vendor_contacts vc ORDER BY vc.id DESC;",
             conn, params=()
         )
@@ -11640,7 +11678,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         conn.commit()
         blast_id = cur.lastrowid
     try:
-        opt = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        opt = __p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
         blocked = set(e.lower().strip() for e in opt['email'].tolist())
     except Exception:
         blocked = set()
@@ -11887,7 +11925,7 @@ def _o4_optout_ui(conn):
         except Exception as e:
             st.error(f"CSV error: {e}")
     try:
-        df2 = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
+        df2 = __p_read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
         _styled_dataframe(df2, use_container_width=True, hide_index=True)
     except Exception:
         pass
@@ -11896,13 +11934,13 @@ def _o4_audit_ui(conn):
     import streamlit as st
 
     try:
-        blasts = _pd.__p_read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
+        blasts = __p_read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
         st.markdown("**Recent blasts**")
         _styled_dataframe(blasts, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No blasts yet")
     try:
-        logs = _pd.__p_read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
+        logs = __p_read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
         st.markdown("**Recent sends**")
         _styled_dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
@@ -11940,13 +11978,13 @@ def ensure_o5_schema(conn: "sqlite3.Connection") -> None:
 
 def _o5_list_sequences(conn):
     try:
-        return _pd.__p_read_sql_query("SELECT id, name FROM outreach_sequences ORDER BY name;", conn)
+        return __p_read_sql_query("SELECT id, name FROM outreach_sequences ORDER BY name;", conn)
     except Exception:
         return _pd.DataFrame(columns=["id","name"])
 
 def _o5_list_steps(conn, seq_id: int):
     try:
-        return _pd.__p_read_sql_query("SELECT id, step_no, delay_hours, subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
+        return __p_read_sql_query("SELECT id, step_no, delay_hours, subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
     except Exception:
         return _pd.DataFrame(columns=["id","step_no","delay_hours","subject"])
 
@@ -11962,7 +12000,7 @@ def _o5_add_step(conn, seq_id: int, step_no: int, delay_hours: int, subject: str
 def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str | None = None):
     if not start_at_iso:
         start_at_iso = _o5_now_iso()
-    steps = _pd.__p_read_sql_query("SELECT step_no, delay_hours, subject, body_html FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
+    steps = __p_read_sql_query("SELECT step_no, delay_hours, subject, body_html FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
     if steps is None or steps.empty:
         return 0
     count = 0
@@ -11999,7 +12037,7 @@ def _o5_smtp_send(sender: dict, to_email: str, subject: str, html: str):
 
 def _o5_send_due(conn, limit: int = 200):
     now = _o5_now_iso()
-    df = _pd.__p_read_sql_query("SELECT id, to_email, subject, body_html FROM outreach_schedules WHERE status='queued' AND send_at<=? ORDER BY send_at LIMIT ?;", conn, params=(now, int(limit)))
+    df = __p_read_sql_query("SELECT id, to_email, subject, body_html FROM outreach_schedules WHERE status='queued' AND send_at<=? ORDER BY send_at LIMIT ?;", conn, params=(now, int(limit)))
     if df is None or df.empty: return 0, 0
     ok = 0; fail = 0; sender = _o5_pick_sender_from_session()
     for _, r in df.iterrows():
@@ -12149,7 +12187,7 @@ def render_outreach_o6_compliance(conn):
         st.success("Saved")
     st.caption("Use {{UNSUB_LINK}} macro in templates. If absent, a default unsubscribe footer will be appended.")
     # Show list
-    df = _pd.__p_read_sql_query("SELECT email, reason, created_at FROM outreach_optouts ORDER BY created_at DESC LIMIT 500;", conn)
+    df = __p_read_sql_query("SELECT email, reason, created_at FROM outreach_optouts ORDER BY created_at DESC LIMIT 500;", conn)
     _styled_dataframe(df, use_container_width=True, hide_index=True)
 
 # Wrap _o3_send_batch to enforce suppression and inject unsubscribe link
@@ -13052,7 +13090,7 @@ for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_
 def x6_requirements_df(conn: "sqlite3.Connection", rfp_id: int):
     import pandas as pd
     try:
-        df = pd.__p_read_sql_query(
+        df = __p_read_sql_query(
             "SELECT id, must_flag, file, page, text FROM compliance_requirements WHERE rfp_id=? ORDER BY must_flag DESC, id ASC;",
             conn, params=(int(rfp_id),)
         )
@@ -13138,7 +13176,7 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
 def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
     import pandas as pd
     try:
-        return pd.__p_read_sql_query("SELECT id, title, status, created_at FROM proposals WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
+        return __p_read_sql_query("SELECT id, title, status, created_at FROM proposals WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
     except Exception:
         import pandas as pd
         return pd.DataFrame(columns=["id","title","status","created_at"])
@@ -13146,7 +13184,7 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
 def x7_get_sections(conn: "sqlite3.Connection", proposal_id: int):
     import pandas as pd
     try:
-        return pd.__p_read_sql_query("SELECT id, ord, title, content, settings_json FROM proposal_sections WHERE proposal_id=? ORDER BY ord ASC;", conn, params=(int(proposal_id),))
+        return __p_read_sql_query("SELECT id, ord, title, content, settings_json FROM proposal_sections WHERE proposal_id=? ORDER BY ord ASC;", conn, params=(int(proposal_id),))
     except Exception:
         import pandas as pd
         return pd.DataFrame(columns=["id","ord","title","content","settings_json"])
@@ -13390,7 +13428,7 @@ def o1_sender_accounts_ui(conn):
         pass
 
     try:
-        df = _pd.__p_read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
+        df = __p_read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         _styled_dataframe(df, use_container_width=True)
     except Exception:
         pass
@@ -13916,7 +13954,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         conn.commit()
         blast_id = cur.lastrowid
     try:
-        opt = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        opt = __p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
         blocked = set(e.lower().strip() for e in opt['email'].tolist())
     except Exception:
         blocked = set()
