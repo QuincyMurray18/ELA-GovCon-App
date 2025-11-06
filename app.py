@@ -12674,7 +12674,6 @@ def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None
         s = _smtp2.SMTP_SSL(sender["host"], int(sender.get("port",465)), context=_ssl2.create_default_context()); s.login(sender["email"], sender["app_password"])
     s.sendmail(sender["email"], [to_email], msg_root.as_string()); s.quit()
 
-def 
 def __p_o4_ui(conn):
     _st.caption("Multiple Gmail senders via App Passwords.")
     with _st.form("__p_o4_add_sender", clear_on_submit=True):
