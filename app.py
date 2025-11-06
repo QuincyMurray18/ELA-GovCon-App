@@ -13923,3 +13923,31 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     return sent, logs
 
 # === END SIG+LOGO PATCH ===
+
+# === ELA O4 wrapper to render signature editor after sender accounts ===
+try:
+    if "_ela_wrap_o4" not in globals():
+        _ela_wrap_o4 = True
+        if "o4_sender_accounts_ui" in globals():
+            _orig_o4_sender_accounts_ui = o4_sender_accounts_ui
+            def o4_sender_accounts_ui(conn):
+                import streamlit as st
+                _orig_o4_sender_accounts_ui(conn)
+                try:
+                    st.subheader("Signature for selected sender")
+                    __p_o4_signature_ui(conn)
+                except Exception:
+                    pass
+        if "__p_o4_ui" in globals():
+            _orig___p_o4_ui = __p_o4_ui
+            def __p_o4_ui(conn):
+                import streamlit as st
+                _orig___p_o4_ui(conn)
+                try:
+                    st.subheader("Signature for selected sender")
+                    __p_o4_signature_ui(conn)
+                except Exception:
+                    pass
+except Exception:
+    pass
+# === End wrapper ===
