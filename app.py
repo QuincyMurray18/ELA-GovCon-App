@@ -11382,6 +11382,28 @@ def o4_sender_accounts_ui(conn):
             pass
 
 
+
+
+def __p_table_exists(conn, table: str) -> bool:
+    try:
+        cur = conn.execute(f"PRAGMA table_info({table})")
+        return bool(cur.fetchall())
+    except Exception:
+        return False
+
+def ensure_outreach_signatures(conn):
+    with conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS outreach_signatures(
+                email TEXT PRIMARY KEY,
+                signature_html TEXT DEFAULT '',
+                logo_blob BLOB,
+                logo_mime TEXT,
+                logo_name TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
 def render_outreach_mailmerge(conn):
     globals()['_O4_CONN'] = conn
     import streamlit as st
