@@ -12885,14 +12885,16 @@ def __p_run_outreach(conn):
     except Exception:
         pass
     with _st.expander("O4 • Sender accounts", expanded=True):
-        
-        # Auto-injected: O4 signature editor
+                # Auto-injected: O4 signature editor
         try:
             __p_o4_signature_ui()
         except Exception:
             pass
-try: __p_o4_ui(conn)
-        except Exception as e: _st.warning(f"O4 unavailable: {e}")
+
+        try:
+            __p_o4_ui(conn)
+        except Exception as e:
+            _st.warning(f"O4 unavailable: {e}")
     with _st.expander("O2 • Templates", expanded=True):
         try: __p_o2_ui(conn)
         except Exception as e: _st.warning(f"O2 unavailable: {e}")
