@@ -1,3 +1,125 @@
+# --- early stub: ensures __p_call_sig_ui exists before any imports call it ---
+try:
+    __p_call_sig_ui  # noqa
+except NameError:
+    def __p_call_sig_ui(conn):
+        """
+        Early Signature Editor stub.
+        Dispatches to a later full implementation if present.
+        Otherwise provides a minimal, working editor.
+        """
+        import streamlit as st
+        # If a later, full implementation is available, delegate.
+        for name in ("__p_o4_signature_ui", "__p_signature_ui", "__p_call_sig_ui_full"):
+            fn = globals().get(name)
+            if callable(fn):
+                return fn(conn)
+
+        # Use Outreach connection if provided by app
+        sconn = (get_o4_conn() if "get_o4_conn" in globals() else None) or conn
+
+        # Sender discovery: prefer app helper
+        senders = []
+        try:
+            _gs = globals().get("_get_senders")
+            if callable(_gs):
+                rows = _gs(sconn) or []
+                for r in rows:
+                    if isinstance(r, (list, tuple)) and r:
+                        email = r[0]
+                        name = (r[1] if len(r) > 1 else "") or ""
+                    elif isinstance(r, dict):
+                        email = r.get("email") or r.get("username") or ""
+                        name = r.get("name") or r.get("display_name") or r.get("label") or ""
+                    else:
+                        continue
+                    if email:
+                        senders.append((email, name or email))
+        except Exception:
+            pass
+        # Fallback table scans
+        try:
+            cur = sconn.cursor()
+            for q in (
+                "SELECT user_email, COALESCE(display_name, name, '') FROM email_accounts",
+                "SELECT email, COALESCE(name, display_name, label, '') FROM o4_senders",
+                "SELECT email, COALESCE(display_name, '') FROM senders",
+                "SELECT username, COALESCE(label, '') FROM smtp_settings",
+                "SELECT email, COALESCE(label, display, name, '') FROM outreach_sender_accounts",
+            ):
+                try:
+                    for email, disp in cur.execute(q).fetchall() or []:
+                        if email:
+                            senders.append((email, disp or email))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # De-dup by email
+        dd = {}
+        for email, name in senders:
+            if email not in dd or (name and name != email):
+                dd[email] = name or email
+        senders = [(e, dd[e]) for e in sorted(dd.keys())]
+
+        # Minimal UI
+        if not senders:
+            st.info("No senders found. Add one under Outreach → Sender Accounts, then set a signature.")
+            return
+
+        labels = [f"{(name or email)} — {email}" for (email, name) in senders]
+        choice = st.selectbox("Sender", labels, key="__p_sig_sender_stub")
+        email = senders[labels.index(choice)][0]
+
+        # Ensure schema and load
+        cur = sconn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS outreach_signatures(
+                email TEXT PRIMARY KEY,
+                signature_html TEXT DEFAULT '',
+                logo_blob BLOB,
+                logo_mime TEXT,
+                logo_name TEXT
+            )
+        """)
+        row = cur.execute(
+            "SELECT signature_html FROM outreach_signatures WHERE lower(email)=lower(?)",
+            (email,)
+        ).fetchone()
+        html_default = (row[0] if row else "") or ""
+
+        html = st.text_area("Signature HTML", html_default, height=180, key=f"__p_sig_html_{email}")
+        logo = st.file_uploader("Logo image (optional)", type=["png","jpg","jpeg","gif"], key=f"__p_sig_logo_{email}")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Save signature", key=f"__p_sig_save_{email}"):
+                data = logo.getvalue() if logo is not None else None
+                name = getattr(logo, "name", None) if logo is not None else None
+                ext = (name or "").lower().rsplit(".", 1)[-1] if name and "." in name else ""
+                mime = {"png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","gif":"image/gif"}.get(ext, "application/octet-stream")
+                try:
+                    sconn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
+                                     VALUES(?,?,?,?,?)""", (email, html, data, mime, name))
+                except Exception:
+                    sconn.execute("""UPDATE outreach_signatures
+                                     SET signature_html=?,
+                                         logo_blob=COALESCE(?,logo_blob),
+                                         logo_mime=COALESCE(?,logo_mime),
+                                         logo_name=COALESCE(?,logo_name)
+                                     WHERE lower(email)=lower(?)""", (html, data, mime, name, email))
+                sconn.commit()
+                st.success("Saved")
+        with col2:
+            if st.button("Remove logo", key=f"__p_sig_remove_{email}"):
+                sconn.execute("UPDATE outreach_signatures SET logo_blob=NULL, logo_mime=NULL, logo_name=NULL WHERE lower(email)=lower(?)", (email,))
+                sconn.commit()
+                st.success("Logo removed")
+
+        st.caption("Preview")
+        st.markdown(html or "", unsafe_allow_html=True)
+# --- end early stub ---
 
 # === BEGIN READSQL SHIM ===
 try:
