@@ -8313,17 +8313,6 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
     cfg = _smtp_settings()
     if not all([cfg.get("host"), cfg.get("port"), cfg.get("username"), cfg.get("password"), cfg.get("from_email")]):
         return False, "Missing SMTP settings in secrets"
-        # Inject signature if available for the configured sender
-        try:
-            _conn = (get_o4_conn() if "get_o4_conn" in globals() else None) or globals().get("_O4_CONN")
-        except Exception:
-            _conn = None
-        if _conn and "from_email" in cfg:
-            try:
-                html_body, _inline = __p_render_signature(_conn, cfg.get("from_email",""), html_body)
-            except Exception:
-                pass
-    
 
     msg = MIMEMultipart()
     msg["From"] = f"{cfg.get('from_name') or ''} <{cfg['from_email']}>"
@@ -11801,11 +11790,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             html = _o3_merge(html_tpl or "", data)
             if "unsubscribe" not in html.lower():
                 html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
-        # Inject per-sender signature
-        try:
-            html, _inline = __p_render_signature(conn, sender.get('email',''), html)
-        except Exception:
-            pass
             if test_only:
                 status = "Preview"; err = ""
             else:
@@ -11814,6 +11798,10 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
                     msg["To"] = to_email
                     msg["Subject"] = subj
+                    try:
+                        html, _inline_imgs = __p_render_signature(conn, (sender.get('email') or sender.get('username') or '').strip(), html)
+                    except Exception:
+                        pass
                     html = _o3_wrap_email_html(html)
                     msg.attach(_O3MIMEText(html, "html", "utf-8"))
                     # Attach files if provided
