@@ -1975,7 +1975,7 @@ def _x3_render_modal(conn, notice: dict):
         except Exception:
             pass
     with st.expander("AI Summary", expanded=True):
-        st.markdown(_rfp_ai_summary(full_text or "", notice))
+                        _rfp_render_summary(_rfp_ai_summary(full_text or "", notice))
 
     # Per-document summarize chips
     try:
@@ -3041,6 +3041,12 @@ def _render_highlights_panel(conn, rid):
             st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
         else:
             st.caption("None found.")
+def _rfp_render_summary(txt: str):
+    """Render a highlighted summary safely as HTML."""
+    import streamlit as _st
+    _rfp_highlight_css()
+    _st.markdown(_rfp_highlight_html(txt or ""), unsafe_allow_html=True)
+
 def _rfp_highlight_html(txt: str) -> str:
     """Return HTML with selective highlights and clean spacing (paragraphs and lists)."""
     import re
