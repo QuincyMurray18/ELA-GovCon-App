@@ -204,6 +204,17 @@ def ensure_unified_schemas(conn):
         except Exception as e: _debug_log(conn, "quotes", e)
     conn.commit()
 
+def safe_read_sql(conn, sql: str, params: tuple = ()):
+    """Bypass pandas for simple SELECT to avoid recursion from monkey-patching."""
+    try:
+        cur = conn.execute(sql, params or ())
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description] if cur.description else []
+        import pandas as _pd
+        return _pd.DataFrame(rows, columns=cols)
+    except Exception as e:
+        raise e
+
 def _recompute_quote_totals(conn, rfp_id:int):
     try:
         with _closing(conn.cursor()) as cur:
@@ -7864,7 +7875,7 @@ def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     except Exception:
         rf = pd.DataFrame()
     try:
-        df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_items = safe_read_sql(conn, "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;", (int(rfp_id),))
     except Exception:
         df_items = pd.DataFrame(columns=["id","item_text","is_must","status"])
     joined = "\n".join(df_items["item_text"].astype(str).tolist()) if not df_items.empty else ""
@@ -7879,7 +7890,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
     rfp_id = st.session_state.get('current_rfp_id')
     if not rfp_id:
         try:
-            df_rf = pd.read_sql_query("SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", conn, params=())
+            df_rf = safe_read_sql(conn, "SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;", ())
         except Exception as e:
             st.error(f"Failed to load RFPs: {e}")
             return
@@ -7893,7 +7904,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
 
     st.caption(f"Working RFP ID: {rfp_id}")
     try:
-        df_items = pd.read_sql_query("SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", conn, params=(rfp_id,))
+        df_items = safe_read_sql(conn, "SELECT id, item_text, is_must, status FROM lm_items WHERE rfp_id=?;", (rfp_id,))
     except Exception as e:
         st.error(f"Failed to load items: {e}")
         return
