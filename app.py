@@ -175,8 +175,13 @@ def ensure_unified_schemas(conn):
         try:
             cur.execute("""CREATE TABLE IF NOT EXISTS rfps(
                 id INTEGER PRIMARY KEY, title TEXT, solnum TEXT, notice_id TEXT, sam_url TEXT, file_path TEXT, created_at TEXT)""" )
-            cur.execute("CREATE VIEW IF NOT EXISTS rfps_t AS SELECT id,title,solnum,notice_id,sam_url,file_path,created_at FROM rfps;")
+            cur.execute("DROP VIEW IF EXISTS rfps_t;");
+            cur.execute("CREATE VIEW IF NOT EXISTS rfps_t AS SELECT id,title,solnum,notice_id,sam_url,file_path,created_at,tenant_id FROM rfps WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) OR tenant_id IS NULL;")
         except Exception as e: _debug_log(conn, "rfps", e)
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_rfps_tenant ON rfps(tenant_id)")
+        except Exception as e:
+            _debug_log(conn, "rfps_tenant_index", e)
         # vendors table and view alias + indexes
         try:
             cur.execute("""CREATE TABLE IF NOT EXISTS vendors(
@@ -239,6 +244,21 @@ def _s1d_get_details_cached(conn, pid: str, key: str):
         return {"formatted_phone_number": phone, "website": website, "url": gurl}
     except Exception as e:
         _debug_log(conn, f"_s1d_get_details_cached({pid})", e); return {}
+
+def _force_safe_pd_read():
+    try:
+        import pandas as _pd
+        def _safe_reader(sql, conn=None, params=None, **kwargs):
+            if conn is None:
+                raise ValueError("conn required")
+            _params = params or ()
+            cur = conn.execute(sql, _params)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description] if cur.description else []
+            return _pd.DataFrame(rows, columns=cols)
+        _pd.read_sql_query = _safe_reader
+    except Exception:
+        pass
 # === End helpers ===
 
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
@@ -4565,7 +4585,8 @@ def get_db() -> sqlite3.Connection:
                 notice_id TEXT,
                 sam_url TEXT,
                 file_path TEXT,
-                created_at TEXT
+                created_at TEXT,
+                tenant_id INTEGER
             );
         """)
         cur.execute("""
@@ -10777,6 +10798,8 @@ def main() -> None:
 
     conn = get_db()
     
+    
+    _force_safe_pd_read()
     try:
         ensure_unified_schemas(conn)
     except Exception as e:
