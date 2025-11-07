@@ -1,4 +1,26 @@
 
+# === EARLY SIGNATURE UI STUB (prevents NameError) ===
+# This is defined at the very top so any early calls to __p_call_sig_ui succeed.
+# Later definitions can override it with the full UI without issues.
+if "__p_call_sig_ui" not in globals():
+    def __p_call_sig_ui(conn):
+        # Try to dispatch to a full implementation if loaded later under another name
+        try:
+            fn = globals().get("__p_o4_signature_ui") or globals().get("__p_signature_ui") or globals().get("__p_call_sig_ui_full")
+            if callable(fn) and getattr(fn, "__name__", "") != "__p_call_sig_ui":
+                return fn(conn)
+        except Exception:
+            pass
+        # Fallback: show a non-blocking placeholder to avoid breaking the page
+        try:
+            import streamlit as st
+            st.caption("Signature editor will be available once Outreach finishes loading.")
+        except Exception:
+            pass
+        return None
+# === END EARLY SIGNATURE UI STUB ===
+
+
 # === BEGIN READSQL SHIM ===
 try:
     import pandas as _pd
@@ -13832,7 +13854,7 @@ def __p_render_signature(conn, sender_email: str, html: str):
         return html_out, inline_images
     return html, inline_images
 
-def __p_o4_signature_ui(conn):
+def __p_call_sig_ui(conn):
     import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
     # Prefer email_accounts table used by this build
