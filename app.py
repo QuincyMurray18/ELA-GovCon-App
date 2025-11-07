@@ -11794,28 +11794,18 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                 status = "Preview"; err = ""
             else:
                 try:
-                    # Build a related container so inline images render
-                    from email.mime.image import MIMEImage as _O3MIMEImage
-                    msg_root = _O3MIMEMultipart("related")
-                    msg_root["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
-                    msg_root["To"] = to_email
-                    msg_root["Subject"] = subj
-
-                    # Alternative part inside
-                    alt = _O3MIMEMultipart("alternative")
-                    alt.attach(_O3MIMEText(html, "html", "utf-8"))
-                    msg_root.attach(alt)
-
-                    # Attach inline images returned by __p_render_signature
-                    for _img in inline_imgs or []:
-                        try:
-                            _part = _O3MIMEImage(_img["data"], _subtype=(_img.get("mime","image/png").split("/")[-1] or "png"))
-                            _part.add_header("Content-ID", f"<{_img['cid']}>")
-                            _part.add_header("Content-Disposition", f'inline; filename="{_img.get("name","logo")}"')
-                            msg_root.attach(_part)
-                        except Exception:
-                            pass
-
+                    msg = _O3MIMEMultipart("alternative")
+                    msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
+                    msg["To"] = to_email
+                    msg["Subject"] = subj
+                    # Apply saved signature for the active sender
+                    try:
+                        _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None) or conn
+                        html, _inline_imgs = __p_render_signature(_sig_conn, (sender.get('email') or sender.get('username') or '').strip(), html)
+                    except Exception:
+                        pass
+                    html = _o3_wrap_email_html(html)
+                    msg.attach(_O3MIMEText(html, "html", "utf-8"))
                     # Attach files if provided
                     try:
                         if attachments:
@@ -11828,12 +11818,12 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                                     _enc.encode_base64(_part)
                                     import os as _os
                                     _part.add_header('Content-Disposition', f'attachment; filename="{_os.path.basename(_ap)}"')
-                                    msg_root.attach(_part)
+                                    msg.attach(_part)
                                 except Exception:
                                     pass
                     except Exception:
                         pass
-                    smtp.sendmail(sender["email"], [to_email], msg_root.as_string())
+                    smtp.sendmail(sender["email"], [to_email], msg.as_string())
                     status = "Sent"; err = ""
                 except Exception as e:
                     status = "Error"; err = str(e)
@@ -12116,6 +12106,13 @@ def _o5_pick_sender_from_session():
 
 def _o5_smtp_send(sender: dict, to_email: str, subject: str, html: str):
     msg = MIMEMultipart("alternative"); msg["Subject"] = subject or ""; msg["From"] = sender["username"]; msg["To"] = to_email
+# Inject signature HTML
+try:
+    _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
+    html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
+except Exception:
+    pass
+
     msg.attach(MIMEText(html or "", "html"))
     if sender["tls"]:
         server = smtplib.SMTP(sender["host"], sender["port"]); server.ehlo(); server.starttls(context=ssl.create_default_context()); server.login(sender["username"], sender["password"])
@@ -12771,6 +12768,13 @@ def __p_is_supp(conn, email):
 
 def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
+# Inject signature HTML
+try:
+    _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
+    html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
+except Exception:
+    pass
+
     msg.attach(_MText(html or "", "html"))
     # Attachments
     try:
