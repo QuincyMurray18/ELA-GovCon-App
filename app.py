@@ -3062,12 +3062,12 @@ def _rfp_render_summary(txt: str):
     _st.markdown(_rfp_highlight_html(txt or ""), unsafe_allow_html=True)
 
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with selective highlights and clean, ChatGPT-like typography."""
+    """Return HTML wrapping ORIGINAL Markdown with selective highlights. No escaping. GPT-like typography."""
     import re
     _rfp_highlight_css()  # ensure styles are present
     if not txt:
         return "<div class='rfp-typo'>(empty)</div>"
-    src = _esc(txt or "")
+    src = txt or ""  # do NOT escape; we want Markdown to render
 
     # Priority: due > price > poc/email/phone > clin > req > task
     patterns = [
@@ -3081,15 +3081,22 @@ def _rfp_highlight_html(txt: str) -> str:
         ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
     ]
 
-    # Step 1: highlight at most one cue per line
-    hl_lines = []
-    for line in src.split("\n"):
+    out_lines = []
+    for line in src.splitlines(True):  # keep newline chars
+        # Leave blank lines untouched
         if not line.strip():
-            hl_lines.append(line)
+            out_lines.append(line)
             continue
+
+        # Respect leading indentation/bullets so Markdown renders correctly
+        stripped = line.lstrip()
+        prefix = line[:len(line)-len(stripped)]
+        content = stripped
+
+        # One highlight max per visual line
         best = None
         for cls, pat in patterns:
-            m = pat.search(line)
+            m = pat.search(content)
             if not m:
                 continue
             st = m.start()
@@ -3097,44 +3104,16 @@ def _rfp_highlight_html(txt: str) -> str:
                 best = (st, m.end(), cls)
             if best and best[0] == 0:
                 break
+
         if best is None:
-            hl_lines.append(line)
+            out_lines.append(line)
         else:
             a, b, cls = best
-            hl_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
+            highlighted = content[:a] + f"<span class='hl-{cls}'>" + content[a:b] + "</span>" + content[b:]
+            out_lines.append(prefix + highlighted)
 
-    # Step 2: group into paragraphs and lists; join soft-wrapped lines with spaces
-    html_parts = []
-    block = []
-
-    def flush_block(lines_block):
-        if not lines_block:
-            return
-        bullets = [re.match(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', ln) for ln in lines_block]
-        if bullets and all(bullets):
-            first = bullets[0].group(0)
-            is_ordered = bool(re.match(r'^\s*\d+[.)]\s+', first))
-            tag = "ol" if is_ordered else "ul"
-            html_parts.append(f"<{tag}>")
-            for ln in lines_block:
-                content = re.sub(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', '', ln).strip()
-                html_parts.append(f"<li>{content}</li>")
-            html_parts.append(f"</{tag}>")
-        else:
-            paragraph = " ".join(ln.strip() for ln in lines_block)
-            # collapse multiple spaces
-            paragraph = re.sub(r'\s{2,}', ' ', paragraph)
-            html_parts.append(f"<p>{paragraph}</p>")
-
-    for ln in hl_lines:
-        if ln.strip() == "":
-            flush_block(block)
-            block = []
-        else:
-            block.append(ln)
-    flush_block(block)
-
-    return "<div class='rfp-typo'>" + "".join(html_parts) + "</div>"
+    result = "".join(out_lines)
+    return "<div class='rfp-typo'>\n" + result + "\n</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
@@ -3510,12 +3489,12 @@ def _rfp_highlight_css():
 
 
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with selective highlights and clean, ChatGPT-like typography."""
+    """Return HTML wrapping ORIGINAL Markdown with selective highlights. No escaping. GPT-like typography."""
     import re
     _rfp_highlight_css()  # ensure styles are present
     if not txt:
         return "<div class='rfp-typo'>(empty)</div>"
-    src = _esc(txt or "")
+    src = txt or ""  # do NOT escape; we want Markdown to render
 
     # Priority: due > price > poc/email/phone > clin > req > task
     patterns = [
@@ -3529,15 +3508,22 @@ def _rfp_highlight_html(txt: str) -> str:
         ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
     ]
 
-    # Step 1: highlight at most one cue per line
-    hl_lines = []
-    for line in src.split("\n"):
+    out_lines = []
+    for line in src.splitlines(True):  # keep newline chars
+        # Leave blank lines untouched
         if not line.strip():
-            hl_lines.append(line)
+            out_lines.append(line)
             continue
+
+        # Respect leading indentation/bullets so Markdown renders correctly
+        stripped = line.lstrip()
+        prefix = line[:len(line)-len(stripped)]
+        content = stripped
+
+        # One highlight max per visual line
         best = None
         for cls, pat in patterns:
-            m = pat.search(line)
+            m = pat.search(content)
             if not m:
                 continue
             st = m.start()
@@ -3545,44 +3531,16 @@ def _rfp_highlight_html(txt: str) -> str:
                 best = (st, m.end(), cls)
             if best and best[0] == 0:
                 break
+
         if best is None:
-            hl_lines.append(line)
+            out_lines.append(line)
         else:
             a, b, cls = best
-            hl_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
+            highlighted = content[:a] + f"<span class='hl-{cls}'>" + content[a:b] + "</span>" + content[b:]
+            out_lines.append(prefix + highlighted)
 
-    # Step 2: group into paragraphs and lists; join soft-wrapped lines with spaces
-    html_parts = []
-    block = []
-
-    def flush_block(lines_block):
-        if not lines_block:
-            return
-        bullets = [re.match(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', ln) for ln in lines_block]
-        if bullets and all(bullets):
-            first = bullets[0].group(0)
-            is_ordered = bool(re.match(r'^\s*\d+[.)]\s+', first))
-            tag = "ol" if is_ordered else "ul"
-            html_parts.append(f"<{tag}>")
-            for ln in lines_block:
-                content = re.sub(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', '', ln).strip()
-                html_parts.append(f"<li>{content}</li>")
-            html_parts.append(f"</{tag}>")
-        else:
-            paragraph = " ".join(ln.strip() for ln in lines_block)
-            # collapse multiple spaces
-            paragraph = re.sub(r'\s{2,}', ' ', paragraph)
-            html_parts.append(f"<p>{paragraph}</p>")
-
-    for ln in hl_lines:
-        if ln.strip() == "":
-            flush_block(block)
-            block = []
-        else:
-            block.append(ln)
-    flush_block(block)
-
-    return "<div class='rfp-typo'>" + "".join(html_parts) + "</div>"
+    result = "".join(out_lines)
+    return "<div class='rfp-typo'>\n" + result + "\n</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
