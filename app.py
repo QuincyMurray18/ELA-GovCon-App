@@ -2940,8 +2940,9 @@ def _resolve_model():
     except Exception:
         return 'gpt-4o-mini'
 
+
 def _rfp_highlight_css():
-    """Inject CSS once for highlighted previews with human-friendly fonts."""
+    """Inject CSS once for highlighted previews with human-friendly fonts and spacing."""
     try:
         import streamlit as _st
         if not _st.session_state.get("_rfp_hl_css", False):
@@ -2953,9 +2954,10 @@ def _rfp_highlight_css():
                 .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 3px; }
                 .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 3px; }
                 .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 3px; }
+                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 3px; }
                 .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 3px; }
                 .rfp-pre {
-                    white-space: pre-wrap;
+                    white-space: normal;
                     word-break: break-word;
                     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
                     font-size: 1rem;
@@ -2964,7 +2966,9 @@ def _rfp_highlight_css():
                     -webkit-font-smoothing: antialiased;
                     text-rendering: optimizeLegibility;
                 }
-                .rfp-pre p { margin: 0 0 .6rem; }
+                .rfp-pre p { margin: 0 0 .8rem; }
+                .rfp-pre ul, .rfp-pre ol { margin: 0 0 .9rem 1.25rem; padding: 0; }
+                .rfp-pre li { margin: .25rem 0; }
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -3038,13 +3042,13 @@ def _render_highlights_panel(conn, rid):
         else:
             st.caption("None found.")
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with selective highlights: at most ONE highlight per line in priority order."""
+    """Return HTML with selective highlights and clean spacing (paragraphs and lists)."""
     import re
     if not txt:
         return "<div class='rfp-pre'>(empty)</div>"
-    s = _esc(txt or "")
+    src = _esc(txt or "")
 
-    # Priority order: due > price > poc > clin > req > task
+    # Priority: due > price > poc/email/phone > clin > req > task
     patterns = [
         ("due",   re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")),
         ("price", re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")),
@@ -3056,15 +3060,13 @@ def _rfp_highlight_html(txt: str) -> str:
         ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
     ]
 
-    out_lines = []
-    for line in s.split("\n"):
-        # Skip empty lines
+    # Step 1: highlight at most one cue per line
+    hl_lines = []
+    for line in src.split("\n"):
         if not line.strip():
-            out_lines.append(line)
+            hl_lines.append(line)
             continue
-
-        # Find earliest match across patterns by index position, break ties by list order
-        best = None  # (start, end, cls)
+        best = None
         for cls, pat in patterns:
             m = pat.search(line)
             if not m:
@@ -3072,17 +3074,47 @@ def _rfp_highlight_html(txt: str) -> str:
             st = m.start()
             if best is None or st < best[0]:
                 best = (st, m.end(), cls)
-            # Early break if we matched at pos 0 which is the strongest signal
             if best and best[0] == 0:
                 break
-
         if best is None:
-            out_lines.append(line)
+            hl_lines.append(line)
         else:
             a, b, cls = best
-            out_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
+            hl_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
 
-    return "<div class='rfp-pre'>" + "\n".join(out_lines) + "</div>"
+    # Step 2: group lines into paragraphs or lists on blank lines
+    html_parts = []
+    block = []
+
+    def flush_block(lines_block):
+        if not lines_block:
+            return
+        # Detect list type
+        bullets = [re.match(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', ln) for ln in lines_block]
+        if all(bullets):
+            # Decide ordered vs unordered by first token
+            first = bullets[0].group(0)
+            is_ordered = bool(re.match(r'^\s*\d+[.)]\s+', first))
+            tag = "ol" if is_ordered else "ul"
+            html_parts.append(f"<{tag}>")
+            for ln in lines_block:
+                content = re.sub(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', '', ln).strip()
+                html_parts.append(f"<li>{content}</li>")
+            html_parts.append(f"</{tag}>")
+        else:
+            # Regular paragraph. Preserve intentional single line breaks inside the block.
+            paragraph = "<br>".join(ln.strip() for ln in lines_block)
+            html_parts.append(f"<p>{paragraph}</p>")
+
+    for ln in hl_lines:
+        if ln.strip() == "":
+            flush_block(block)
+            block = []
+        else:
+            block.append(ln)
+    flush_block(block)
+
+    return "<div class='rfp-pre'>" + "".join(html_parts) + "</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
@@ -3405,8 +3437,9 @@ def _resolve_model():
     except Exception:
         return 'gpt-4o-mini'
 
+
 def _rfp_highlight_css():
-    """Inject CSS once for highlighted previews with human-friendly fonts."""
+    """Inject CSS once for highlighted previews with human-friendly fonts and spacing."""
     try:
         import streamlit as _st
         if not _st.session_state.get("_rfp_hl_css", False):
@@ -3418,9 +3451,10 @@ def _rfp_highlight_css():
                 .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 3px; }
                 .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 3px; }
                 .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 3px; }
+                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 3px; }
                 .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 3px; }
                 .rfp-pre {
-                    white-space: pre-wrap;
+                    white-space: normal;
                     word-break: break-word;
                     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
                     font-size: 1rem;
@@ -3429,7 +3463,9 @@ def _rfp_highlight_css():
                     -webkit-font-smoothing: antialiased;
                     text-rendering: optimizeLegibility;
                 }
-                .rfp-pre p { margin: 0 0 .6rem; }
+                .rfp-pre p { margin: 0 0 .8rem; }
+                .rfp-pre ul, .rfp-pre ol { margin: 0 0 .9rem 1.25rem; padding: 0; }
+                .rfp-pre li { margin: .25rem 0; }
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -3440,13 +3476,13 @@ def _rfp_highlight_css():
 
 
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with selective highlights: at most ONE highlight per line in priority order."""
+    """Return HTML with selective highlights and clean spacing (paragraphs and lists)."""
     import re
     if not txt:
         return "<div class='rfp-pre'>(empty)</div>"
-    s = _esc(txt or "")
+    src = _esc(txt or "")
 
-    # Priority order: due > price > poc > clin > req > task
+    # Priority: due > price > poc/email/phone > clin > req > task
     patterns = [
         ("due",   re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")),
         ("price", re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")),
@@ -3458,15 +3494,13 @@ def _rfp_highlight_html(txt: str) -> str:
         ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
     ]
 
-    out_lines = []
-    for line in s.split("\n"):
-        # Skip empty lines
+    # Step 1: highlight at most one cue per line
+    hl_lines = []
+    for line in src.split("\n"):
         if not line.strip():
-            out_lines.append(line)
+            hl_lines.append(line)
             continue
-
-        # Find earliest match across patterns by index position, break ties by list order
-        best = None  # (start, end, cls)
+        best = None
         for cls, pat in patterns:
             m = pat.search(line)
             if not m:
@@ -3474,17 +3508,47 @@ def _rfp_highlight_html(txt: str) -> str:
             st = m.start()
             if best is None or st < best[0]:
                 best = (st, m.end(), cls)
-            # Early break if we matched at pos 0 which is the strongest signal
             if best and best[0] == 0:
                 break
-
         if best is None:
-            out_lines.append(line)
+            hl_lines.append(line)
         else:
             a, b, cls = best
-            out_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
+            hl_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
 
-    return "<div class='rfp-pre'>" + "\n".join(out_lines) + "</div>"
+    # Step 2: group lines into paragraphs or lists on blank lines
+    html_parts = []
+    block = []
+
+    def flush_block(lines_block):
+        if not lines_block:
+            return
+        # Detect list type
+        bullets = [re.match(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', ln) for ln in lines_block]
+        if all(bullets):
+            # Decide ordered vs unordered by first token
+            first = bullets[0].group(0)
+            is_ordered = bool(re.match(r'^\s*\d+[.)]\s+', first))
+            tag = "ol" if is_ordered else "ul"
+            html_parts.append(f"<{tag}>")
+            for ln in lines_block:
+                content = re.sub(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', '', ln).strip()
+                html_parts.append(f"<li>{content}</li>")
+            html_parts.append(f"</{tag}>")
+        else:
+            # Regular paragraph. Preserve intentional single line breaks inside the block.
+            paragraph = "<br>".join(ln.strip() for ln in lines_block)
+            html_parts.append(f"<p>{paragraph}</p>")
+
+    for ln in hl_lines:
+        if ln.strip() == "":
+            flush_block(block)
+            block = []
+        else:
+            block.append(ln)
+    flush_block(block)
+
+    return "<div class='rfp-pre'>" + "".join(html_parts) + "</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
