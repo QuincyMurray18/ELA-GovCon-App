@@ -12105,21 +12105,19 @@ def _o5_pick_sender_from_session():
     return {"host": host or "smtp.gmail.com", "port": int(port or 587), "tls": tls, "username": username, "password": password}
 
 def _o5_smtp_send(sender: dict, to_email: str, subject: str, html: str):
-    msg = MIMEMultipart("alternative"); msg["Subject"] = subject or ""; msg["From"] = sender["username"]; msg["To"] = to_email
-# Inject signature HTML
-try:
-    _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
-    html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
-except Exception:
-    pass
-
+    # Apply signature HTML inside the function scope
+    try:
+        _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
+        html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
+    except Exception:
+        pass
+    msg = MIMEMultipart("alternative"); msg["Subject"] = subject or ""; msg["From"] = sender.get("username") or sender.get("email"); msg["To"] = to_email
     msg.attach(MIMEText(html or "", "html"))
-    if sender["tls"]:
-        server = smtplib.SMTP(sender["host"], sender["port"]); server.ehlo(); server.starttls(context=ssl.create_default_context()); server.login(sender["username"], sender["password"])
+    if sender.get('tls'):
+        server = smtplib.SMTP(sender["host"], sender["port"]); server.starttls(); server.login(sender.get("username") or sender.get("email"), sender.get("password") or sender.get("app_password",""))
     else:
-        server = smtplib.SMTP_SSL(sender["host"], sender["port"], context=ssl.create_default_context()); server.login(sender["username"], sender["password"])
-    server.sendmail(sender["username"], [to_email], msg.as_string()); server.quit()
-
+        server = smtplib.SMTP_SSL(sender["host"], sender["port"], context=ssl.create_default_context()); server.login(sender.get("username") or sender.get("email"), sender.get("password") or sender.get("app_password",""))
+    server.sendmail(sender.get("username") or sender.get("email"), [to_email], msg.as_string()); server.quit()
 def _o5_send_due(conn, limit: int = 200):
     now = _o5_now_iso()
     df = _pd.__p_read_sql_query("SELECT id, to_email, subject, body_html FROM outreach_schedules WHERE status='queued' AND send_at<=? ORDER BY send_at LIMIT ?;", conn, params=(now, int(limit)))
@@ -12769,12 +12767,12 @@ def __p_is_supp(conn, email):
 def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
 # Inject signature HTML
-try:
-    _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
-    html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
-except Exception:
-    pass
-
+    # Inject signature HTML
+    try:
+        _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
+        html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
+    except Exception:
+        pass
     msg.attach(_MText(html or "", "html"))
     # Attachments
     try:
