@@ -23,24 +23,6 @@ except Exception:
 import re
 import streamlit as st
 
-# --- Pandas read_sql shim ---
-try:
-    import pandas as _pd
-    if "__p_read_sql_query" not in globals():
-        def __p_read_sql_query(q, conn, params=()):
-            try:
-                q2 = __p_strip_sql_hash_comments(q) if isinstance(q, str) else q
-            except Exception:
-                q2 = q
-            return _pd.read_sql_query(q2, conn, params=params)
-    if not hasattr(_pd, "__p_read_sql_query"):
-        _pd.__p_read_sql_query = lambda q, conn, params=(): __p_read_sql_query(q, conn, params=params)
-except Exception:
-    pass
-# --- End shim ---
-
-
-
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
         cur = conn.execute(f"PRAGMA table_info({table})")
