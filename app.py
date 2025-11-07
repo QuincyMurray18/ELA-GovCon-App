@@ -3028,19 +3028,20 @@ def _render_highlights_panel(conn, rid):
             st.caption("None found.")
 def _rfp_highlight_html(txt: str) -> str:
     """Return HTML with important items highlighted."""
+    import re
     if not txt:
         return "<div class='rfp-pre'>(empty)</div>"
     s = _esc(txt)
 
     # Patterns
-    req_pat   = re.compile(r"(?i)\\b(shall|must|required|mandatory|shall not|no later than|will)\\b")
-    due_pat   = re.compile(r"(?i)\\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\\b")
-    date_pat  = re.compile(r"(?i)\\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{3,4}\\s?(?:hrs|hours|et|ct|mt|pt)\\b|\\b\\d{1,2}:\\d{2}\\s?(?:am|pm|a\\.m\\.|p\\.m\\.)?)")
-    poc_pat   = re.compile(r"(?i)\\b(point of contact|poc|contracting officer|co|contract specialist)\\b")
-    email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})")
-    phone_pat = re.compile(r"(?i)(\\+?1?\\s*\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4})")
-    price_pat = re.compile(r"(?i)\\b(price(?:\\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\\b")
-    task_pat  = re.compile(r"(?i)\\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\\b")
+    req_pat   = re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")
+    due_pat   = re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")
+    date_pat  = re.compile(r"(?i)\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\.? [0-3]?\d,? \d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}\s?(?:am|pm|a\.m\.|p\.m\.))\b")
+    poc_pat   = re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")
+    email_pat = re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")
+    phone_pat = re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
+    price_pat = re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")
+    task_pat  = re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")
 
     # Apply wrappers
     s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
@@ -3400,19 +3401,20 @@ def _rfp_highlight_css() -> None:
 
 def _rfp_highlight_html(txt: str) -> str:
     """Return HTML with important items highlighted."""
+    import re
     if not txt:
         return "<div class='rfp-pre'>(empty)</div>"
     s = _esc(txt)
 
     # Patterns
-    req_pat   = re.compile(r"(?i)\\b(shall|must|required|mandatory|shall not|no later than|will)\\b")
-    due_pat   = re.compile(r"(?i)\\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\\b")
-    date_pat  = re.compile(r"(?i)\\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{3,4}\\s?(?:hrs|hours|et|ct|mt|pt)\\b|\\b\\d{1,2}:\\d{2}\\s?(?:am|pm|a\\.m\\.|p\\.m\\.)?)")
-    poc_pat   = re.compile(r"(?i)\\b(point of contact|poc|contracting officer|co|contract specialist)\\b")
-    email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})")
-    phone_pat = re.compile(r"(?i)(\\+?1?\\s*\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4})")
-    price_pat = re.compile(r"(?i)\\b(price(?:\\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\\b")
-    task_pat  = re.compile(r"(?i)\\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\\b")
+    req_pat   = re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")
+    due_pat   = re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")
+    date_pat  = re.compile(r"(?i)\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\.? [0-3]?\d,? \d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}\s?(?:am|pm|a\.m\.|p\.m\.))\b")
+    poc_pat   = re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")
+    email_pat = re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")
+    phone_pat = re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
+    price_pat = re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")
+    task_pat  = re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")
 
     # Apply wrappers
     s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
