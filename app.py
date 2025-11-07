@@ -319,6 +319,7 @@ def __p___p_read_sql_query(q, conn, params=()):
 # --- end SQL cleaner ---
 
 import zipfile
+import re, html
 
 # --- Phase 3 inline Analyzer (fallback if run_rfp_analyzer is missing) ---
 def _phase3_analyzer_inline(conn):
@@ -2981,6 +2982,99 @@ def _resolve_openai_client():
         return None
 
 def _resolve_model():
+
+def _rfp_highlight_css() -> None:
+    """Inject CSS once for highlighted previews."""
+    try:
+        import streamlit as _st
+        if not _st.session_state.get("_rfp_hl_css", False):
+            _st.markdown(
+                """
+                <style>
+                .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
+                .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
+                .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
+                .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
+                .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 2px; border-radius: 2px; }
+                .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            _st.session_state["_rfp_hl_css"] = True
+    except Exception:
+        pass
+
+def _rfp_highlight_html(txt: str) -> str:
+    """Return HTML with important items highlighted."""
+    if not txt:
+        return "<div class='rfp-pre'>(empty)</div>"
+    s = html.escape(txt)
+
+    # Patterns
+    req_pat   = re.compile(r"(?i)\\b(shall|must|required|mandatory|shall not|no later than|will)\\b")
+    due_pat   = re.compile(r"(?i)\\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\\b")
+    date_pat  = re.compile(r"(?i)\\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{3,4}\\s?(?:hrs|hours|et|ct|mt|pt)\\b|\\b\\d{1,2}:\\d{2}\\s?(?:am|pm|a\\.m\\.|p\\.m\\.)?)")
+    poc_pat   = re.compile(r"(?i)\\b(point of contact|poc|contracting officer|co|contract specialist)\\b")
+    email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})")
+    phone_pat = re.compile(r"(?i)(\\+?1?\\s*\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4})")
+    price_pat = re.compile(r"(?i)\\b(price(?:\\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\\b")
+    task_pat  = re.compile(r"(?i)\\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\\b")
+
+    # Apply wrappers
+    s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
+    s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
+    s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
+
+    return "<div class='rfp-pre'>" + s + "</div>"
+
+def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    keys = re.compile(r"(?i)\\b(price realism|price reasonableness|best value|tradeoff|lpta|basis of award|evaluation factors? for award|most advantageous|lowest price)\\b")
+    for ln in lines:
+        if keys.search(ln):
+            hits.append(ln)
+            if len(hits) >= max_hits:
+                break
+    return hits
+
+def _extract_task_lines(text: str, max_hits: int = 30) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines()]
+    section = None
+    for ln in lines:
+        low = ln.lower()
+        if any(h in low for h in ["scope of work", "statement of work", "performance work statement", "pws", "sow", "tasks", "deliverables"]):
+            section = "task"
+        if section == "task":
+            # Collect bullets or numbered lines as tasks
+            if re.match(r"^\\s*(?:[-*•\\u2022]|\\(?[a-z0-9]\\)|\\d+\\.)\\s+", ln, re.IGNORECASE):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+            # Stop if a new all-caps section header appears
+            if re.match(r"^[A-Z][A-Z \\-/]{6,}$", ln.strip()):
+                section = None
+    # Fallback: catch "shall" sentences
+    if not hits:
+        for ln in lines:
+            if re.search(r"(?i)\\b(shall|must)\\b", ln):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+    return hits
+
     return st.secrets.get("openai_model") or st.secrets.get("OPENAI_MODEL") or "gpt-4o-mini"
 
 def _ai_chat(prompt: str) -> str:
@@ -3260,6 +3354,99 @@ import os
 import tempfile
 
 def _resolve_model():
+
+def _rfp_highlight_css() -> None:
+    """Inject CSS once for highlighted previews."""
+    try:
+        import streamlit as _st
+        if not _st.session_state.get("_rfp_hl_css", False):
+            _st.markdown(
+                """
+                <style>
+                .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
+                .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
+                .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
+                .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
+                .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 2px; border-radius: 2px; }
+                .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            _st.session_state["_rfp_hl_css"] = True
+    except Exception:
+        pass
+
+def _rfp_highlight_html(txt: str) -> str:
+    """Return HTML with important items highlighted."""
+    if not txt:
+        return "<div class='rfp-pre'>(empty)</div>"
+    s = html.escape(txt)
+
+    # Patterns
+    req_pat   = re.compile(r"(?i)\\b(shall|must|required|mandatory|shall not|no later than|will)\\b")
+    due_pat   = re.compile(r"(?i)\\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\\b")
+    date_pat  = re.compile(r"(?i)\\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{3,4}\\s?(?:hrs|hours|et|ct|mt|pt)\\b|\\b\\d{1,2}:\\d{2}\\s?(?:am|pm|a\\.m\\.|p\\.m\\.)?)")
+    poc_pat   = re.compile(r"(?i)\\b(point of contact|poc|contracting officer|co|contract specialist)\\b")
+    email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})")
+    phone_pat = re.compile(r"(?i)(\\+?1?\\s*\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4})")
+    price_pat = re.compile(r"(?i)\\b(price(?:\\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\\b")
+    task_pat  = re.compile(r"(?i)\\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\\b")
+
+    # Apply wrappers
+    s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
+    s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
+    s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
+
+    return "<div class='rfp-pre'>" + s + "</div>"
+
+def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    keys = re.compile(r"(?i)\\b(price realism|price reasonableness|best value|tradeoff|lpta|basis of award|evaluation factors? for award|most advantageous|lowest price)\\b")
+    for ln in lines:
+        if keys.search(ln):
+            hits.append(ln)
+            if len(hits) >= max_hits:
+                break
+    return hits
+
+def _extract_task_lines(text: str, max_hits: int = 30) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines()]
+    section = None
+    for ln in lines:
+        low = ln.lower()
+        if any(h in low for h in ["scope of work", "statement of work", "performance work statement", "pws", "sow", "tasks", "deliverables"]):
+            section = "task"
+        if section == "task":
+            # Collect bullets or numbered lines as tasks
+            if re.match(r"^\\s*(?:[-*•\\u2022]|\\(?[a-z0-9]\\)|\\d+\\.)\\s+", ln, re.IGNORECASE):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+            # Stop if a new all-caps section header appears
+            if re.match(r"^[A-Z][A-Z \\-/]{6,}$", ln.strip()):
+                section = None
+    # Fallback: catch "shall" sentences
+    if not hits:
+        for ln in lines:
+            if re.search(r"(?i)\\b(shall|must)\\b", ln):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+    return hits
+
     # Priority: Streamlit secrets -> env var -> safe default
     try:
         import streamlit as st
@@ -7466,7 +7653,13 @@ def _run_rfp_analyzer_phase3(conn):
                             pages = extract_text_pages(b, mime)
                             preview = ("\n\n".join(pages) if pages else "").strip()[:20000]
                             if preview:
-                                st.text_area("Preview (first 20k chars)", value=preview, height=300)
+                                _rfp_highlight_css()
+t1, t2 = st.tabs(["Highlighted", "Raw"])
+with t1:
+    st.markdown(_rfp_highlight_html(preview), unsafe_allow_html=True)
+with t2:
+    st.text_area("Preview (first 20k chars)", value=preview, height=300)
+
                         except Exception as e:
                             st.info(f"Preview unavailable: {e}")
                 except Exception as e:
@@ -7610,6 +7803,73 @@ def _run_rfp_analyzer_phase3(conn):
 
 
         with st.expander("Acquisition Meta (X4)", expanded=False):
+        st.divider()
+        with st.expander("Highlights (auto)", expanded=True):
+            try:
+                # Requirements (from L/M)
+                df_lm = pd.read_sql_query("SELECT item_text AS requirement, is_must FROM lm_items WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+            except Exception:
+                df_lm = pd.DataFrame(columns=["requirement","is_must"])
+            try:
+                # CLINs
+                df_clin = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+            except Exception:
+                df_clin = pd.DataFrame(columns=["clin","description","qty","unit"])
+            try:
+                # Due dates
+                df_dates = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+            except Exception:
+                df_dates = pd.DataFrame(columns=["label","date_text"])
+            try:
+                # POCs
+                df_poc = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+            except Exception:
+                df_poc = pd.DataFrame(columns=["name","role","email","phone"])
+
+            # Pricing factors and task lines from combined text
+            try:
+                full_txt = y5_extract_from_rfp(conn, int(rid))
+            except Exception:
+                full_txt = ""
+            pricing_hits = _extract_pricing_factors_text(full_txt, max_hits=20)
+            task_hits = _extract_task_lines(full_txt, max_hits=30)
+
+            c1, c2 = st.columns([1,1])
+            with c1:
+                st.markdown("**Requirements (L/M)**")
+                if df_lm is None or df_lm.empty:
+                    st.caption("None detected yet.")
+                else:
+                    _styled_dataframe(df_lm.rename(columns={"is_must":"Must?"}), use_container_width=True, hide_index=True)
+                st.markdown("**Due Dates**")
+                if df_dates is None or df_dates.empty:
+                    st.caption("None detected.")
+                else:
+                    _styled_dataframe(df_dates, use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("**POCs**")
+                if df_poc is None or df_poc.empty:
+                    st.caption("None detected.")
+                else:
+                    _styled_dataframe(df_poc, use_container_width=True, hide_index=True)
+                st.markdown("**CLINs / Pricing Inputs**")
+                if df_clin is None or df_clin.empty:
+                    st.caption("None detected.")
+                else:
+                    _styled_dataframe(df_clin, use_container_width=True, hide_index=True)
+
+            st.markdown("**Pricing Evaluation Mentions**")
+            if pricing_hits:
+                st.write("\\n".join([f"• {h}" for h in pricing_hits[:20]]))
+            else:
+                st.caption("None found.")
+
+            st.markdown("**Task / SOW Lines**")
+            if task_hits:
+                st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
+            else:
+                st.caption("None found.")
+    
             try:
                 df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
