@@ -1,125 +1,3 @@
-# --- early stub: ensures __p_call_sig_ui exists before any imports call it ---
-try:
-    __p_call_sig_ui  # noqa
-except NameError:
-    def __p_call_sig_ui(conn):
-        """
-        Early Signature Editor stub.
-        Dispatches to a later full implementation if present.
-        Otherwise provides a minimal, working editor.
-        """
-        import streamlit as st
-        # If a later, full implementation is available, delegate.
-        for name in ("__p_o4_signature_ui", "__p_signature_ui", "__p_call_sig_ui_full"):
-            fn = globals().get(name)
-            if callable(fn):
-                return fn(conn)
-
-        # Use Outreach connection if provided by app
-        sconn = (get_o4_conn() if "get_o4_conn" in globals() else None) or conn
-
-        # Sender discovery: prefer app helper
-        senders = []
-        try:
-            _gs = globals().get("_get_senders")
-            if callable(_gs):
-                rows = _gs(sconn) or []
-                for r in rows:
-                    if isinstance(r, (list, tuple)) and r:
-                        email = r[0]
-                        name = (r[1] if len(r) > 1 else "") or ""
-                    elif isinstance(r, dict):
-                        email = r.get("email") or r.get("username") or ""
-                        name = r.get("name") or r.get("display_name") or r.get("label") or ""
-                    else:
-                        continue
-                    if email:
-                        senders.append((email, name or email))
-        except Exception:
-            pass
-        # Fallback table scans
-        try:
-            cur = sconn.cursor()
-            for q in (
-                "SELECT user_email, COALESCE(display_name, name, '') FROM email_accounts",
-                "SELECT email, COALESCE(name, display_name, label, '') FROM o4_senders",
-                "SELECT email, COALESCE(display_name, '') FROM senders",
-                "SELECT username, COALESCE(label, '') FROM smtp_settings",
-                "SELECT email, COALESCE(label, display, name, '') FROM outreach_sender_accounts",
-            ):
-                try:
-                    for email, disp in cur.execute(q).fetchall() or []:
-                        if email:
-                            senders.append((email, disp or email))
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        # De-dup by email
-        dd = {}
-        for email, name in senders:
-            if email not in dd or (name and name != email):
-                dd[email] = name or email
-        senders = [(e, dd[e]) for e in sorted(dd.keys())]
-
-        # Minimal UI
-        if not senders:
-            st.info("No senders found. Add one under Outreach → Sender Accounts, then set a signature.")
-            return
-
-        labels = [f"{(name or email)} — {email}" for (email, name) in senders]
-        choice = st.selectbox("Sender", labels, key="__p_sig_sender_stub")
-        email = senders[labels.index(choice)][0]
-
-        # Ensure schema and load
-        cur = sconn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS outreach_signatures(
-                email TEXT PRIMARY KEY,
-                signature_html TEXT DEFAULT '',
-                logo_blob BLOB,
-                logo_mime TEXT,
-                logo_name TEXT
-            )
-        """)
-        row = cur.execute(
-            "SELECT signature_html FROM outreach_signatures WHERE lower(email)=lower(?)",
-            (email,)
-        ).fetchone()
-        html_default = (row[0] if row else "") or ""
-
-        html = st.text_area("Signature HTML", html_default, height=180, key=f"__p_sig_html_{email}")
-        logo = st.file_uploader("Logo image (optional)", type=["png","jpg","jpeg","gif"], key=f"__p_sig_logo_{email}")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Save signature", key=f"__p_sig_save_{email}"):
-                data = logo.getvalue() if logo is not None else None
-                name = getattr(logo, "name", None) if logo is not None else None
-                ext = (name or "").lower().rsplit(".", 1)[-1] if name and "." in name else ""
-                mime = {"png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","gif":"image/gif"}.get(ext, "application/octet-stream")
-                try:
-                    sconn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
-                                     VALUES(?,?,?,?,?)""", (email, html, data, mime, name))
-                except Exception:
-                    sconn.execute("""UPDATE outreach_signatures
-                                     SET signature_html=?,
-                                         logo_blob=COALESCE(?,logo_blob),
-                                         logo_mime=COALESCE(?,logo_mime),
-                                         logo_name=COALESCE(?,logo_name)
-                                     WHERE lower(email)=lower(?)""", (html, data, mime, name, email))
-                sconn.commit()
-                st.success("Saved")
-        with col2:
-            if st.button("Remove logo", key=f"__p_sig_remove_{email}"):
-                sconn.execute("UPDATE outreach_signatures SET logo_blob=NULL, logo_mime=NULL, logo_name=NULL WHERE lower(email)=lower(?)", (email,))
-                sconn.commit()
-                st.success("Logo removed")
-
-        st.caption("Preview")
-        st.markdown(html or "", unsafe_allow_html=True)
-# --- end early stub ---
 
 # === BEGIN READSQL SHIM ===
 try:
@@ -10541,7 +10419,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        __p_call_sig_ui(conn)
+        
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -11463,6 +11341,13 @@ def o4_sender_accounts_ui(conn):
 
 
 def render_outreach_mailmerge(conn):
+
+    try:
+        import streamlit as st
+        st.subheader("Signature for selected sender")
+        __p_call_sig_ui(conn)
+    except Exception:
+        pass
     globals()['_O4_CONN'] = conn
     import streamlit as st
 
@@ -11509,7 +11394,7 @@ def render_outreach_mailmerge(conn):
                 st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        __p_call_sig_ui(conn)
+        
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -12637,7 +12522,7 @@ def render_subfinder_s1d(conn):
                 st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        __p_call_sig_ui(conn)
+        
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -12828,6 +12713,13 @@ def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None
 
 def __p_o4_ui(conn):
     _st.caption("Multiple Gmail senders via App Passwords.")
+
+    try:
+        import streamlit as st
+        st.subheader("Signature for selected sender")
+        __p_call_sig_ui(conn)
+    except Exception:
+        pass
     with _st.form("__p_o4_add_sender", clear_on_submit=True):
         col1,col2 = _st.columns(2)
         with col1:
@@ -13855,139 +13747,26 @@ def _get_conn(db_path="samwatch.db"):
 
 
 # --- Safe dispatcher to avoid NameError when signature UI is not yet defined ---
-def __p_call_sig_ui(conn):
-    """
-    Signature Editor. Uses the app's canonical sender sources and stores signatures
-    in outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name).
-    """
-    import streamlit as st
-
-    # Resolve outreach connection if the app provides one
-    sconn = (get_o4_conn() if "get_o4_conn" in globals() else None) or conn
-
-    # Get senders using the app's helper when available
-    senders = []
+def :
     try:
-        _gs = globals().get("_get_senders")
-        if callable(_gs):
-            rows = _gs(sconn) or []
-            for row in rows:
-                if isinstance(row, (list, tuple)) and row:
-                    email = row[0]
-                    name = (row[1] if len(row) > 1 else "") or ""
-                elif isinstance(row, dict):
-                    email = row.get("email") or row.get("username") or ""
-                    name = row.get("name") or row.get("display_name") or row.get("label") or ""
-                else:
-                    continue
-                if email:
-                    senders.append((email, name or email))
+        import streamlit as _st
     except Exception:
-        pass
-
-    # Fallback scans if helper not present or returned none
-    if not senders:
+        return
+    try:
+        fn = globals().get("__p_o4_signature_ui")
+        if callable(fn):
+            return fn(conn)
+        _st.info("Signature editor unavailable in this build.")
+    except Exception as _e_sig:
         try:
-            with sconn as _c:
-                cur = _c.cursor()
-                try:
-                    for email, disp in cur.execute("SELECT user_email, COALESCE(display_name, name, '') FROM email_accounts").fetchall() or []:
-                        if email: senders.append((email, disp or email))
-                except Exception:
-                    pass
-                try:
-                    for email, disp in cur.execute("SELECT email, COALESCE(name, display_name, label, '') FROM o4_senders").fetchall() or []:
-                        if email: senders.append((email, disp or email))
-                except Exception:
-                    pass
-                try:
-                    for email, disp in cur.execute("SELECT email, COALESCE(display_name, '') FROM senders").fetchall() or []:
-                        if email: senders.append((email, disp or email))
-                except Exception:
-                    pass
-                try:
-                    for email, disp in cur.execute("SELECT username, COALESCE(label, '') FROM smtp_settings").fetchall() or []:
-                        if email: senders.append((email, disp or email))
-                except Exception:
-                    pass
-                try:
-                    for email, disp in cur.execute("SELECT email, COALESCE(label, display, name, '') FROM outreach_sender_accounts").fetchall() or []:
-                        if email: senders.append((email, disp or email))
-                except Exception:
-                    pass
+            _st.warning(f"Signature editor unavailable: {_e_sig}")
         except Exception:
             pass
+# --- End safe dispatcher ---
 
-    # De-dup by email
-    dedup = {}
-    for email, name in senders:
-        if email not in dedup or (name and name != email):
-            dedup[email] = name or email
-    senders = [(e, dedup[e]) for e in sorted(dedup.keys())]
 
-    st.subheader("Signature for selected sender")
-    if not senders:
-        st.info("No senders found. Add a sender in Outreach → Sender Accounts, then set a signature.")
-        return
-
-    labels = [f"{(name or email)} — {email}" for (email, name) in senders]
-    default_label = st.session_state.get("__p_sig_sender", labels[0])
-    idx = labels.index(default_label) if default_label in labels else 0
-    choice = st.selectbox("Sender", labels, index=idx, key="__p_sig_sender")
-    email = senders[labels.index(choice)][0]
-
-    # Ensure schema
-    with sconn as _c:
-        cur = _c.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS outreach_signatures(
-                email TEXT PRIMARY KEY,
-                signature_html TEXT DEFAULT '',
-                logo_blob BLOB,
-                logo_mime TEXT,
-                logo_name TEXT
-            )
-        """)
-        # Read existing html
-        row = cur.execute("SELECT signature_html FROM outreach_signatures WHERE lower(email)=lower(?)", (email,)).fetchone()
-        html_default = (row[0] if row else "") or ""
-
-    html = st.text_area("Signature HTML", html_default, height=200, key=f"sig_html_{email}")
-    logo = st.file_uploader("Logo image (optional)", type=["png","jpg","jpeg","gif"], key=f"sig_logo_{email}")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Save signature", key=f"sig_save_{email}"):
-            _sig_save_signature(sconn, email, html, logo)
-            st.success("Saved")
-    with c2:
-        if st.button("Remove logo", key=f"sig_remove_{email}"):
-            with sconn as _c:
-                _c.execute("UPDATE outreach_signatures SET logo_blob=NULL, logo_mime=NULL, logo_name=NULL WHERE lower(email)=lower(?)", (email,))
-            st.success("Logo removed")
-
-    st.caption("Preview")
-    st.markdown(html or "", unsafe_allow_html=True)
-
-def _sig_save_signature(conn, email: str, html: str, logo_widget):
-    mime = name = data = None
-    if logo_widget is not None:
-        data = logo_widget.getvalue()
-        name = getattr(logo_widget, "name", None)
-        ext = (name or "").lower().rsplit(".", 1)[-1] if name and "." in name else ""
-        mime = {"png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","gif":"image/gif"}.get(ext, "application/octet-stream")
-    try:
-        conn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
-                        VALUES(?,?,?,?,?)""", (email, html, data, mime, name))
-    except Exception:
-        conn.execute("""UPDATE outreach_signatures
-                        SET signature_html=?,
-                            logo_blob=COALESCE(?,logo_blob),
-                            logo_mime=COALESCE(?,logo_mime),
-                            logo_name=COALESCE(?,logo_name)
-                        WHERE lower(email)=lower(?)""", (html, data, mime, name, email))
-    conn.commit()
-
+# === Outreach Signatures: schema, helpers, UI, and rendering ===
+import hashlib as _p_hashlib
 
 def __p_sig_schema(conn):
     try:
@@ -14067,7 +13846,7 @@ def __p_render_signature(conn, sender_email: str, html: str):
         return html_out, inline_images
     return html, inline_images
 
-def __p_call_sig_ui(conn):
+def :
     import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
     # Prefer email_accounts table used by this build
@@ -14126,7 +13905,7 @@ try:
             except Exception:
                 pass
             try:
-                __p_call_sig_ui(conn)
+                
             except Exception as e:
                 try: st.warning(f"Signature editor unavailable: {e}")
                 except Exception: pass
@@ -14290,7 +14069,7 @@ try:
                 _orig_o4_sender_accounts_ui(conn)
                 try:
                     st.subheader("Signature for selected sender")
-                    __p_call_sig_ui(conn)
+                    
                 except Exception:
                     pass
         if "__p_o4_ui" in globals():
@@ -14300,7 +14079,7 @@ try:
                 _orig___p_o4_ui(conn)
                 try:
                     st.subheader("Signature for selected sender")
-                    __p_call_sig_ui(conn)
+                    
                 except Exception:
                     pass
 except Exception:
