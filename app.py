@@ -1997,8 +1997,9 @@ def _x3_render_modal(conn, notice: dict):
                     _text = ""
                 st.session_state["x3_docsum"] = _rfp_ai_summary(_text, notice)
         if st.session_state.get("x3_docsum"):
-            with st.expander("Document Summary", expanded=True):    _rfp_highlight_css()
-    st.markdown(_rfp_highlight_html(st.session_state.get("x3_docsum") or ""), unsafe_allow_html=True)
+            with st.expander("Document Summary", expanded=True):
+                _rfp_highlight_css()
+                st.markdown(_rfp_highlight_html(st.session_state.get("x3_docsum") or ""), unsafe_allow_html=True)
 
     # Chat
     st.divider()
@@ -3212,7 +3213,8 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     if sums:
         for fname, ss in sums.items():
             with st.expander(f"Summary — {fname}", expanded=False):
-                st.write(ss or "_No summary available._")
+                _rfp_highlight_css()
+                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
 
     # Compliance (auto-extracted)
     st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
