@@ -13832,7 +13832,7 @@ def __p_render_signature(conn, sender_email: str, html: str):
         return html_out, inline_images
     return html, inline_images
 
-def __p_call_sig_ui(conn):
+def __p_o4_signature_ui(conn):
     import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
     # Prefer email_accounts table used by this build
