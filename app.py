@@ -89,7 +89,7 @@ except NameError:
             (email,)
         ).fetchone()
         html_default = (row[0] if row else "") or ""
-sig_html = st.text_area("Signature HTML", html_default, height=180, key=f"__p_sig_html_{email}")
+        sig_html = st.text_area("Signature HTML", html_default, height=180, key=f"__p_sig_html_{email}")
         logo = st.file_uploader("Logo image (optional)", type=["png","jpg","jpeg","gif"], key=f"__p_sig_logo_{email}")
 
         col1, col2 = st.columns(2)
@@ -11741,13 +11741,13 @@ def render_outreach_templates(conn):
         tid = None
         name = st.text_input("Name", key="tpl_name")
         subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
-sig_html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
+        sig_html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
     else:
         row = next(r for r in rows if r[1] == sel)
         tid = row[0]
         name = st.text_input("Name", value=row[1], key="tpl_name__2")
         subject = st.text_input("Subject", value=row[2], key="tpl_subject")
-sig_html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
+        sig_html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
     missing = template_missing_tags((subject or "") + " " + (sig_html or ""))
     if missing:
         st.info("Missing merge tags: " + ", ".join(sorted(missing)))
