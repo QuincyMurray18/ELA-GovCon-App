@@ -13747,13 +13747,15 @@ def _get_conn(db_path="samwatch.db"):
 
 
 # --- Safe dispatcher to avoid NameError when signature UI is not yet defined ---
-def :
+def __p_call_sig_ui(conn):
     try:
         import streamlit as _st
     except Exception:
         return
     try:
-        fn = globals().get("__p_o4_signature_ui")
+        fn = (globals().get("__p_o4_signature_ui")
+              or globals().get("__p_signature_ui")
+              or globals().get("__p_call_sig_ui_full"))
         if callable(fn):
             return fn(conn)
         _st.info("Signature editor unavailable in this build.")
@@ -13846,7 +13848,7 @@ def __p_render_signature(conn, sender_email: str, html: str):
         return html_out, inline_images
     return html, inline_images
 
-def :
+def __p_call_sig_ui_placeholder(conn):
     import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
     # Prefer email_accounts table used by this build
@@ -13902,15 +13904,12 @@ try:
             try:
                 st.divider()
                 st.subheader("Per-sender signature")
+                __p_call_sig_ui(conn)
             except Exception:
                 pass
-            try:
-                
-            except Exception as e:
-                try: st.warning(f"Signature editor unavailable: {e}")
-                except Exception: pass
 except Exception:
     pass
+
 
 
 
