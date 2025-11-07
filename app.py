@@ -9,162 +9,6 @@ except NameError:
         Otherwise provides a minimal, working editor.
         """
         import streamlit as st
-# === QA+Perf Helpers injected ===
-import traceback as _traceback
-from contextlib import closing as _closing
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor, as_completed as _as_completed
-
-def _ensure_debug_schema(conn):
-    with conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS debug_log(
-                id INTEGER PRIMARY KEY,
-                context TEXT,
-                level TEXT,
-                message TEXT,
-                traceback TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-def _debug_log(conn, context, exc):
-    try:
-        tb = _traceback.format_exc()
-        with conn:
-            conn.execute("INSERT INTO debug_log(context, level, message, traceback) VALUES(?,?,?,?);",
-                         (str(context)[:200], "ERROR", str(exc)[:500], tb[:4000]))
-    except Exception:
-        pass
-
-def ensure_unified_schemas(conn):
-    _ensure_debug_schema(conn)
-    with _closing(conn.cursor()) as cur:
-        # --- Unify RFPS ---
-        try:
-            cur.execute("""CREATE TABLE IF NOT EXISTS rfps(
-                id INTEGER PRIMARY KEY,
-                title TEXT,
-                solnum TEXT,
-                notice_id TEXT,
-                sam_url TEXT,
-                file_path TEXT,
-                created_at TEXT
-            );""")
-            cur.execute("CREATE VIEW IF NOT EXISTS rfps_t AS SELECT id, title, solnum, notice_id, sam_url, file_path, created_at FROM rfps;")
-        except Exception as e:
-            _debug_log(conn, "ensure_unified_schemas.rfps", e)
-
-        # --- Unify Vendors & back-compat view ---
-        try:
-            cur.execute("""CREATE TABLE IF NOT EXISTS vendors(
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                display_name TEXT,
-                website TEXT,
-                cage TEXT,
-                uei TEXT,
-                naics TEXT,
-                city TEXT,
-                state TEXT,
-                phone TEXT,
-                email TEXT,
-                notes TEXT,
-                place_id TEXT,
-                normalized_name TEXT,
-                fit_score REAL,
-                tags TEXT
-            );""")
-            cur.execute("CREATE VIEW IF NOT EXISTS vendors_t AS SELECT id, name, phone, city, state, naics, cage, uei, website, notes FROM vendors;")
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_norm_phone ON vendors(normalized_name, phone);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_naics_state ON vendors(naics, state);")
-        except Exception as e:
-            _debug_log(conn, "ensure_unified_schemas.vendors", e)
-
-        # --- Sub Finder cache table ---
-        try:
-            cur.execute("""CREATE TABLE IF NOT EXISTS subfinder_cache(
-                place_id TEXT PRIMARY KEY,
-                normalized_name TEXT,
-                phone TEXT,
-                website TEXT,
-                google_url TEXT,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );""")
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_s1_cache_norm_phone ON subfinder_cache(normalized_name, phone);")
-        except Exception as e:
-            _debug_log(conn, "ensure_unified_schemas.subfinder_cache", e)
-
-        # --- Quotes indexes and totals ---
-        try:
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_quotes_rfp ON quotes(rfp_id);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_quote_lines ON quote_lines(quote_id, clin);")
-            cur.execute("""CREATE TABLE IF NOT EXISTS quote_totals(
-                rfp_id INTEGER NOT NULL,
-                vendor TEXT NOT NULL,
-                total REAL NOT NULL,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (rfp_id, vendor)
-            );""")
-        except Exception as e:
-            _debug_log(conn, "ensure_unified_schemas.quotes", e)
-    conn.commit()
-
-def _recompute_quote_totals(conn, rfp_id: int):
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("DELETE FROM quote_totals WHERE rfp_id=?", (int(rfp_id),))
-            cur.execute("""
-                INSERT INTO quote_totals(rfp_id, vendor, total)
-                SELECT q.rfp_id, q.vendor, COALESCE(SUM(l.extended_price),0.0) AS total
-                FROM quotes q LEFT JOIN quote_lines l ON q.id=l.quote_id
-                WHERE q.rfp_id=?
-                GROUP BY q.rfp_id, q.vendor;
-            """, (int(rfp_id),))
-        conn.commit()
-    except Exception as e:
-        _debug_log(conn, f"recompute_quote_totals(rfp_id={rfp_id})", e)
-
-def _s1d_norm_name(name: str) -> str:
-    try:
-        import re as _re
-        return _re.sub(r"[^a-z0-9]+", "", (name or "").lower())
-    except Exception:
-        return (name or "").lower().strip()
-
-def _s1d_get_details_cached(conn, pid: str, key: str):
-    try:
-        if not pid:
-            return {}
-        row = conn.execute("SELECT phone, website, google_url FROM subfinder_cache WHERE place_id=?", (pid,)).fetchone()
-        if row:
-            return {"formatted_phone_number": row[0] or "", "website": row[1] or "", "url": row[2] or ""}
-        det = _s1d_place_details(pid, key)
-        phone = _s1d_norm_phone(det.get("formatted_phone_number",""))
-        website = det.get("website") or ""
-        gurl = det.get("url") or ""
-        with conn:
-            conn.execute("INSERT OR REPLACE INTO subfinder_cache(place_id, normalized_name, phone, website, google_url) VALUES(?,?,?,?,?)",
-                         (pid, "", phone, website, gurl))
-        return {"formatted_phone_number": phone, "website": website, "url": gurl}
-    except Exception as e:
-        _debug_log(conn, f"_s1d_get_details_cached(pid={pid})", e)
-        return {}
-
-
-def _backfill_vendor_normalized_names(conn):
-    try:
-        rows = conn.execute("SELECT id, name FROM vendors WHERE normalized_name IS NULL OR normalized_name=''").fetchall()
-        for vid, name in rows:
-            nn = _s1d_norm_name(name or '')
-            conn.execute("UPDATE vendors SET normalized_name=? WHERE id=?", (nn, vid))
-        conn.commit()
-    except Exception as e:
-        _debug_log(conn, "_backfill_vendor_normalized_names", e)
-
-# === End QA+Perf Helpers ===
-
-
         # If a later, full implementation is available, delegate.
         for name in ("__p_o4_signature_ui", "__p_signature_ui", "__p_call_sig_ui_full"):
             fn = globals().get(name)
@@ -293,13 +137,98 @@ try:
     if not hasattr(_pd, "__p_read_sql_query"):
         def __pandas_read_sql_shim(q, conn, params=()):
             return __p_read_sql_query(q, conn, params=params)
-        _pd.read_sql_query = __pandas_read_sql_shim
+        _pd.__p_read_sql_query = __pandas_read_sql_shim
 except Exception:
     pass
 # === END READSQL SHIM ===
 
 import re
 import streamlit as st
+
+# === Perf+QA helpers ===
+import traceback as _traceback
+from contextlib import closing as _closing
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor, as_completed as _as_completed
+
+def _ensure_debug_schema(conn):
+    try:
+        with conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS debug_log(
+                id INTEGER PRIMARY KEY, context TEXT, level TEXT, message TEXT, traceback TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP)""" )
+    except Exception:
+        pass
+
+def _debug_log(conn, context, exc):
+    try:
+        tb = _traceback.format_exc()
+        with conn:
+            conn.execute("INSERT INTO debug_log(context, level, message, traceback) VALUES(?,?,?,?)",
+                         (str(context)[:200], "ERROR", str(exc)[:500], tb[:4000]))
+    except Exception:
+        pass
+
+def ensure_unified_schemas(conn):
+    _ensure_debug_schema(conn)
+    with _closing(conn.cursor()) as cur:
+        # rfps table and view alias
+        try:
+            cur.execute("""CREATE TABLE IF NOT EXISTS rfps(
+                id INTEGER PRIMARY KEY, title TEXT, solnum TEXT, notice_id TEXT, sam_url TEXT, file_path TEXT, created_at TEXT)""" )
+            cur.execute("CREATE VIEW IF NOT EXISTS rfps_t AS SELECT id,title,solnum,notice_id,sam_url,file_path,created_at FROM rfps;")
+        except Exception as e: _debug_log(conn, "rfps", e)
+        # vendors table and view alias + indexes
+        try:
+            cur.execute("""CREATE TABLE IF NOT EXISTS vendors(
+                id INTEGER PRIMARY KEY, name TEXT, display_name TEXT, website TEXT, cage TEXT, uei TEXT, naics TEXT,
+                city TEXT, state TEXT, phone TEXT, email TEXT, notes TEXT, place_id TEXT, normalized_name TEXT, fit_score REAL, tags TEXT)""" )
+            cur.execute("CREATE VIEW IF NOT EXISTS vendors_t AS SELECT id,name,phone,city,state,naics,cage,uei,website,notes FROM vendors;")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_norm_phone ON vendors(normalized_name, phone);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_naics_state ON vendors(naics, state);")
+        except Exception as e: _debug_log(conn, "vendors", e)
+        # subfinder cache
+        try:
+            cur.execute("""CREATE TABLE IF NOT EXISTS subfinder_cache(
+                place_id TEXT PRIMARY KEY, normalized_name TEXT, phone TEXT, website TEXT, google_url TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""" )
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_s1_cache_norm_phone ON subfinder_cache(normalized_name, phone);")
+        except Exception as e: _debug_log(conn, "subfinder_cache", e)
+        # quote totals + indexes
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_quotes_rfp ON quotes(rfp_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_quote_lines ON quote_lines(quote_id, clin);")
+            cur.execute("""CREATE TABLE IF NOT EXISTS quote_totals(
+                rfp_id INTEGER NOT NULL, vendor TEXT NOT NULL, total REAL NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(rfp_id, vendor))""" )
+        except Exception as e: _debug_log(conn, "quotes", e)
+    conn.commit()
+
+def _recompute_quote_totals(conn, rfp_id:int):
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("DELETE FROM quote_totals WHERE rfp_id=?", (int(rfp_id),))
+            cur.execute("""INSERT INTO quote_totals(rfp_id, vendor, total)
+                           SELECT q.rfp_id, q.vendor, COALESCE(SUM(l.extended_price),0.0)
+                           FROM quotes q LEFT JOIN quote_lines l ON q.id=l.quote_id
+                           WHERE q.rfp_id=? GROUP BY q.rfp_id, q.vendor""", (int(rfp_id),))
+        conn.commit()
+    except Exception as e:
+        _debug_log(conn, f"recompute_totals({rfp_id})", e)
+
+def _s1d_get_details_cached(conn, pid: str, key: str):
+    try:
+        if not pid: return {}
+        row = conn.execute("SELECT phone, website, google_url FROM subfinder_cache WHERE place_id=?", (pid,)).fetchone()
+        if row: return {"formatted_phone_number": row[0] or "", "website": row[1] or "", "url": row[2] or ""}
+        det = _s1d_place_details(pid, key)
+        phone = _s1d_norm_phone(det.get("formatted_phone_number","")); website = det.get("website") or ""; gurl = det.get("url") or ""
+        with conn: conn.execute("INSERT OR REPLACE INTO subfinder_cache(place_id, normalized_name, phone, website, google_url) VALUES(?,?,?,?,?)",
+                                (pid, "", phone, website, gurl))
+        return {"formatted_phone_number": phone, "website": website, "url": gurl}
+    except Exception as e:
+        _debug_log(conn, f"_s1d_get_details_cached({pid})", e); return {}
+# === End helpers ===
 
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
@@ -348,7 +277,7 @@ def __p___p_read_sql_query(q, conn, params=()):
     try:
         import pandas as _pd
         q2 = __p_strip_sql_hash_comments(q)
-        return _pd.read_sql_query(q2, conn, params=params)
+        return _pd.__p_read_sql_query(q2, conn, params=params)
     except Exception as e:
         try:
             import streamlit as _st
@@ -2340,7 +2269,7 @@ def _render_ask_rfp_button(opportunity=None):
     try:
         import pandas as _pd
         from contextlib import closing
-        cur_cols = _pd.read_sql_query("PRAGMA table_info(deals);", conn)
+        cur_cols = _pd.__p_read_sql_query("PRAGMA table_info(deals);", conn)
         have = set(cur_cols["name"].astype(str).tolist()) if cur_cols is not None else set()
     except Exception:
         have = set()
@@ -6604,7 +6533,7 @@ def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime:
 def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
     try:
         import pandas as _pd
-        df = _pd.read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))
+        df = _pd.__p_read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))
         if not df.empty:
             return str(df.iloc[0]["value"] or "")
     except Exception:
@@ -6638,7 +6567,7 @@ def _p3_check_sam_updates(conn, rfp_id: int) -> dict:
         import pandas as _pd
         nid = _p3_rfp_meta_get(conn, rfp_id, "notice_id", "")
         if not nid:
-            df = _pd.read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
+            df = _pd.__p_read_sql_query("SELECT sam_url FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
             if not df.empty:
                 nid = _p3_parse_notice_id(str(df.iloc[0]["sam_url"] or ""))
     except Exception as e:
@@ -6679,7 +6608,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
     import pandas as _pd
     # Deal
     try:
-        df = _pd.read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
+        df = _pd.__p_read_sql_query("SELECT title FROM rfps WHERE id=?", conn, params=(int(rfp_id),))
         title = (df.iloc[0]["title"] if not df.empty else f"RFP #{rfp_id}")
     except Exception:
         title = f"RFP #{rfp_id}"
@@ -6695,7 +6624,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
         pass
     # Contacts
     try:
-        dfp = _pd.read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
+        dfp = _pd.__p_read_sql_query("SELECT name, email, phone, title AS job_title, agency FROM pocs WHERE rfp_id=?", conn, params=(int(rfp_id),))
     except Exception:
         dfp = None
     if dfp is not None and not dfp.empty:
@@ -6719,7 +6648,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
 def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
     try:
         import pandas as _pd
-        df = _pd.read_sql_query(
+        df = _pd.__p_read_sql_query(
             "SELECT value FROM key_dates WHERE rfp_id=? AND (label LIKE '%Due%' OR '%Close%') "
             "ORDER BY id DESC LIMIT 1;",
             conn, params=(int(rfp_id),)
@@ -7686,7 +7615,7 @@ def _run_rfp_analyzer_phase3(conn):
             tab_lm, tab_clin, tab_dates, tab_pocs, tab_meta = st.tabs(['L/M Items','CLINs','Key Dates','POCs','Meta'])
             with tab_lm:
                 try:
-                    df_lm_e = _pd.read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
+                    df_lm_e = _pd.__p_read_sql_query('SELECT item_text, is_must, status FROM lm_items WHERE rfp_id=? ORDER BY id;', conn, params=(int(rid),))
                 except Exception:
                     df_lm_e = _pd.DataFrame(columns=['item_text','is_must','status'])
                 df_lm_e = df_lm_e.fillna('')
@@ -7702,7 +7631,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('L/M saved.')
             with tab_clin:
                 try:
-                    df_c_e = _pd.read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_c_e = _pd.__p_read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_c_e = _pd.DataFrame(columns=['clin','description','qty','unit','unit_price','extended_price'])
                 df_c_e = df_c_e.fillna('')
@@ -7718,7 +7647,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('CLINs saved.')
             with tab_dates:
                 try:
-                    df_d_e = _pd.read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_d_e = _pd.__p_read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_d_e = _pd.DataFrame(columns=['label','date_text','date_iso'])
                 df_d_e = df_d_e.fillna('')
@@ -7734,7 +7663,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('Dates saved.')
             with tab_pocs:
                 try:
-                    df_p_e = _pd.read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_p_e = _pd.__p_read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_p_e = _pd.DataFrame(columns=['name','role','email','phone'])
                 df_p_e = df_p_e.fillna('')
@@ -7750,7 +7679,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success('POCs saved.')
             with tab_meta:
                 try:
-                    df_m_e = _pd.read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
+                    df_m_e = _pd.__p_read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(rid),))
                 except Exception:
                     df_m_e = _pd.DataFrame(columns=['key','value'])
                 df_m_e = df_m_e.fillna('')
@@ -8777,9 +8706,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
 
 # ---------- Win Probability (Phase E) ----------
 def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
-    df = pd.read_sql_query("""
-        SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC;
-    """, conn, params=(rfp_id,))
+    df = pd.read_sql_query(""" SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC; """, conn, params=(rfp_id,))
     if df.empty or our_total is None:
         return None
     comp_min = float(df["total"].min())
@@ -10610,7 +10537,7 @@ def run_rfp_analyzer(conn) -> None:
 
     # Load RFP list
     try:
-        df_rfps = _pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        df_rfps = _pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
         df_rfps = _pd.DataFrame()
 
@@ -10733,7 +10660,7 @@ def run_rfp_analyzer(conn) -> None:
 
     # Build pages and render One-Page
     try:
-        df_files = _pd.read_sql_query("SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
+        df_files = _pd.__p_read_sql_query("SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rid),))
     except Exception:
         df_files = None
     pages = []
@@ -10841,7 +10768,6 @@ def main() -> None:
     
     try:
         ensure_unified_schemas(conn)
-        _backfill_vendor_normalized_names(conn)
     except Exception as e:
         _debug_log(conn, 'main.ensure_unified_schemas', e)
     global _O4_CONN
@@ -10902,14 +10828,14 @@ if "_o3_collect_recipients_ui" not in globals():
             q += " AND IFNULL(city,'') LIKE ?"
             params.append(f"%{f_city}%")
         try:
-            df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+            df = _pd.__p_read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
         except Exception:
             df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
         if df is None or df.empty:
             # fallback to vendors table
             q = "SELECT id, name, email, phone, city, state, naics FROM vendors WHERE 1=1"
             try:
-                df = _pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
+                df = _pd.__p_read_sql_query(q + " ORDER BY name ASC;", conn, params=tuple(params))
             except Exception:
                 df = _pd.DataFrame(columns=["id","name","email","phone","city","state","naics"])
         st.caption(f"{len(df)} vendors match filters")
@@ -11254,9 +11180,6 @@ def ensure_subfinder_s1_schema(conn):
             try: conn.execute("ALTER TABLE vendors ADD COLUMN tags TEXT")
             except Exception: pass
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_norm_phone ON vendors(normalized_name, phone)")
-        conn.execute("CREATE TABLE IF NOT EXISTS subfinder_cache(place_id TEXT PRIMARY KEY, normalized_name TEXT, phone TEXT, website TEXT, google_url TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_s1_cache_norm_phone ON subfinder_cache(normalized_name, phone)")
 
 def s1_normalize_phone(s:str)->str:
     s = (s or "").strip()
@@ -11768,14 +11691,14 @@ def _o3_merge(text, data: dict) -> str:
 def _o3_load_vendors_df(conn):
     import pandas as _pd
     try:
-        df_v = _pd.read_sql_query(
+        df_v = _pd.__p_read_sql_query(
             "SELECT v.id as vendor_id, v.name as company, v.city, v.state, v.naics, v.phone, v.email, v.website FROM vendors v ORDER BY v.name;",
             conn, params=()
         )
     except Exception:
         df_v = _pd.DataFrame()
     try:
-        df_c = _pd.read_sql_query(
+        df_c = _pd.__p_read_sql_query(
             "SELECT vc.vendor_id, vc.name as contact_name, vc.email as contact_email, vc.phone as contact_phone, vc.role FROM vendor_contacts vc ORDER BY vc.id DESC;",
             conn, params=()
         )
@@ -11913,7 +11836,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         conn.commit()
         blast_id = cur.lastrowid
     try:
-        opt = _pd.read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        opt = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
         blocked = set(e.lower().strip() for e in opt['email'].tolist())
     except Exception:
         blocked = set()
@@ -11992,7 +11915,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     status = "Error"; err = str(e)
         with _closing(conn.cursor()) as cur:
             cur.executemany("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES(?,?,?,?,?,?);", logs)
-
             conn.commit()
         logs.append({"email":to_email,"status":status,"error":err})
         if status=="Sent":
@@ -12166,7 +12088,7 @@ def _o4_optout_ui(conn):
         except Exception as e:
             st.error(f"CSV error: {e}")
     try:
-        df2 = _pd.read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
+        df2 = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts ORDER BY email LIMIT 500", conn)
         _styled_dataframe(df2, use_container_width=True, hide_index=True)
     except Exception:
         pass
@@ -12175,13 +12097,13 @@ def _o4_audit_ui(conn):
     import streamlit as st
 
     try:
-        blasts = _pd.read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
+        blasts = _pd.__p_read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
         st.markdown("**Recent blasts**")
         _styled_dataframe(blasts, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No blasts yet")
     try:
-        logs = _pd.read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
+        logs = _pd.__p_read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
         st.markdown("**Recent sends**")
         _styled_dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
@@ -12219,13 +12141,13 @@ def ensure_o5_schema(conn: "sqlite3.Connection") -> None:
 
 def _o5_list_sequences(conn):
     try:
-        return _pd.read_sql_query("SELECT id, name FROM outreach_sequences ORDER BY name;", conn)
+        return _pd.__p_read_sql_query("SELECT id, name FROM outreach_sequences ORDER BY name;", conn)
     except Exception:
         return _pd.DataFrame(columns=["id","name"])
 
 def _o5_list_steps(conn, seq_id: int):
     try:
-        return _pd.read_sql_query("SELECT id, step_no, delay_hours, subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
+        return _pd.__p_read_sql_query("SELECT id, step_no, delay_hours, subject FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
     except Exception:
         return _pd.DataFrame(columns=["id","step_no","delay_hours","subject"])
 
@@ -12241,7 +12163,7 @@ def _o5_add_step(conn, seq_id: int, step_no: int, delay_hours: int, subject: str
 def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str | None = None):
     if not start_at_iso:
         start_at_iso = _o5_now_iso()
-    steps = _pd.read_sql_query("SELECT step_no, delay_hours, subject, body_html FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
+    steps = _pd.__p_read_sql_query("SELECT step_no, delay_hours, subject, body_html FROM outreach_steps WHERE seq_id=? ORDER BY step_no;", conn, params=(seq_id,))
     if steps is None or steps.empty:
         return 0
     count = 0
@@ -12283,7 +12205,7 @@ def _o5_smtp_send(sender: dict, to_email: str, subject: str, html: str):
     server.sendmail(sender.get("username") or sender.get("email"), [to_email], msg.as_string()); server.quit()
 def _o5_send_due(conn, limit: int = 200):
     now = _o5_now_iso()
-    df = _pd.read_sql_query("SELECT id, to_email, subject, body_html FROM outreach_schedules WHERE status='queued' AND send_at<=? ORDER BY send_at LIMIT ?;", conn, params=(now, int(limit)))
+    df = _pd.__p_read_sql_query("SELECT id, to_email, subject, body_html FROM outreach_schedules WHERE status='queued' AND send_at<=? ORDER BY send_at LIMIT ?;", conn, params=(now, int(limit)))
     if df is None or df.empty: return 0, 0
     ok = 0; fail = 0; sender = _o5_pick_sender_from_session()
     for _, r in df.iterrows():
@@ -12433,7 +12355,7 @@ def render_outreach_o6_compliance(conn):
         st.success("Saved")
     st.caption("Use {{UNSUB_LINK}} macro in templates. If absent, a default unsubscribe footer will be appended.")
     # Show list
-    df = _pd.read_sql_query("SELECT email, reason, created_at FROM outreach_optouts ORDER BY created_at DESC LIMIT 500;", conn)
+    df = _pd.__p_read_sql_query("SELECT email, reason, created_at FROM outreach_optouts ORDER BY created_at DESC LIMIT 500;", conn)
     _styled_dataframe(df, use_container_width=True, hide_index=True)
 
 # Wrap _o3_send_batch to enforce suppression and inject unsubscribe link
@@ -12633,22 +12555,6 @@ def _s1d_render_from_cache(conn, df):
         if not url: return text
         return f"<a href='{url}' target='_blank'>{text}</a>"
     show = df.copy()
-    
-    st.caption("Details are fetched on demand. Expand below to fetch and cache.")
-    try:
-        key = _s1d_get_api_key()
-    except Exception:
-        key = None
-    if key:
-        try:
-            for _i, _r in show.head(20).iterrows():
-                with st.expander(f"Details: {str(_r.get('name',''))} ({_r.get('place_id','')})", expanded=False):
-                    pid = str(_r.get('place_id') or '')
-                    if pid:
-                        det = _s1d_get_details_cached(conn, pid, key)
-                        st.write({"phone": det.get("formatted_phone_number",""), "website": det.get("website",""), "url": det.get("url","")})
-        except Exception as e:
-            _debug_log(conn, "_s1d_render_from_cache.expanders", e)
     if "google_url" in show.columns:
         show["name"] = show.apply(lambda r: _mk_link(r.get("google_url",""), r.get("name","")), axis=1)
     if "website" in show.columns:
@@ -13621,7 +13527,8 @@ if "_o3_render_sender_picker" not in globals():
         return {"host": host, "port": int(port), "email": username, "app_password": password, "use_tls": bool(use_tls)}
 
 # Guard wrapper: ensure sender is configured before original Mail Merge UI runs
-try:
+if '_wrapped_o4_mailmerge' not in globals():
+    _wrapped_o4_mailmerge = True
     _orig__render_outreach_mailmerge = render_outreach_mailmerge
     def render_outreach_mailmerge(conn):
         import streamlit as st
@@ -13635,9 +13542,6 @@ try:
             st.warning("Configure a sender first in Outreach → Sender.")
             return
         return _orig__render_outreach_mailmerge(conn)
-except Exception:
-    pass
-
 # === End Outreach guard =====================================================
 
 
@@ -13679,7 +13583,7 @@ def o1_sender_accounts_ui(conn):
         pass
 
     try:
-        df = _pd.read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
+        df = _pd.__p_read_sql_query("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email", conn)
         _styled_dataframe(df, use_container_width=True)
     except Exception:
         pass
@@ -14001,12 +13905,6 @@ def _get_conn(db_path="samwatch.db"):
 
 
 
-# === SIG+LOGO PATCH removed by optimization pass ===
+# SIG+LOGO patch removed
 
-# === ELA O4 wrapper to render signature editor after sender accounts ===
-try:
-    if "_ela_wrap_o4" not in globals():
-        _ela_wrap_o4 = True
-except Exception:
-    pass
-# === End wrapper ===
+# O4 wrapper disabled
