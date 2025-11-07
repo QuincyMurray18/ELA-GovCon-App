@@ -271,9 +271,6 @@ def __p_ensure_column(conn, table: str, col: str, col_def: str):
         # best-effort migration only
         pass
 
-
-
-
 # --- SQL cleaner to strip '#' comments not supported by SQLite ---
 def __p_strip_sql_hash_comments(sql: str) -> str:
     out_lines = []
@@ -319,8 +316,7 @@ def __p___p_read_sql_query(q, conn, params=()):
 # --- end SQL cleaner ---
 
 import zipfile
-import re, sig_html
-
+import re
 # --- Phase 3 inline Analyzer (fallback if run_rfp_analyzer is missing) ---
 def _phase3_analyzer_inline(conn):
     import os, io, zipfile, tempfile, re
@@ -475,8 +471,6 @@ def _phase3_analyzer_inline(conn):
                 else:
                     st.caption("No extracted text yet. Click One-Click Analyze.")
 
-
-
 # === Phase 3: RFP ingest schema & helpers ===
 def _ensure_phase3_schema(conn):
     """Minimal schema for RFP records & files (idempotent)."""
@@ -531,8 +525,6 @@ def _get_or_create_rfp(conn, notice: dict):
         cur = conn.execute("INSERT INTO rfp_records(notice_id, title, sam_url) VALUES(?,?,?);", (nid, title, sam_url))
         return cur.lastrowid
 
-
-
 # --- Ask RFP Analyzer Modal (expander-based, version-safe) ---
 def _ask_rfp_analyzer_modal(notice: dict):
     """Open the Ask RFP Analyzer 'modal' using an expander (works across Streamlit versions)."""
@@ -566,8 +558,6 @@ def _ask_rfp_analyzer_modal(notice: dict):
         with c2:
             if st.button("Close", key=f"ask_rfp_close_{_qid}"):
                 st.session_state["ask_rfp_open"] = False
-
-
 
 # --- Phase 2 schema: saved_searches + alerts (with migration) ---
 def _ensure_phase2_schema(conn):
@@ -612,8 +602,6 @@ def _ensure_phase2_schema(conn):
         except Exception:
             pass
 
-
-
 # --- Session flag helpers ---
 def _get_flag(name: str, default: bool = False) -> bool:
     try:
@@ -626,13 +614,11 @@ def _get_flag(name: str, default: bool = False) -> bool:
     except Exception:
         pass
 
-
 def _set_flag(name: str, value: bool) -> None:
     try:
         st.session_state[name] = bool(value)
     except Exception:
         pass
-
 
 # === Phase 2.5 helpers (canonical) ===
 def notify(msg: str, level: str = "info"):
@@ -728,15 +714,6 @@ def _inject_phase25_css():
 import streamlit.components.v1 as components
 
 # === Phase 2.5 helpers ===
-
-
-
-
-
-
-
-
-
 
 def run_alerts_center(conn):
     import pandas as pd
@@ -881,14 +858,11 @@ def run_alerts_center(conn):
             except Exception as _e:
                 st.error(f"Update failed: {_e}")
 
-
-
 def _set_flag(name: str, value: bool) -> None:
     try:
         st.session_state[name] = bool(value)
     except Exception:
         pass
-
 
 # === Guard: ensure parse_nl_query exists ===
 try:
@@ -1552,8 +1526,6 @@ if "apply_theme" not in globals():
         ''', unsafe_allow_html=True)
         st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
 
-
-
 # ===== Phase 1 Theme (auto-injected) =====
 def _apply_theme_old():
     import streamlit as st
@@ -1616,7 +1588,6 @@ def _uniq_key(base: str, rfp_id: int) -> str:
         return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
 # ===== end injected early helpers =====
 
-
 def y3_get_rfp_files(_conn, rfp_id: int):
     """Return [(id, file_name, bytes)] for files saved in rfp_files for this RFP."""
     try:
@@ -1628,7 +1599,6 @@ def y3_get_rfp_files(_conn, rfp_id: int):
         return []
 
 import requests
-
 
 # ===== X3 MODAL HELPERS =====
 def _x3_open_modal(row_dict: dict):
@@ -1729,8 +1699,6 @@ def x6_extract_requirements(conn: "sqlite3.Connection", rfp_id: int, limit_per_f
             if found >= limit_per_file:
                 break
     return int(added)
-
-
 
 def x5_render_transcript_viewer(conn: "sqlite3.Connection", rfp_id: int) -> None:
     """View chat history with color-coded roles, filters, and export."""
@@ -1833,7 +1801,6 @@ def x5_render_transcript_viewer(conn: "sqlite3.Connection", rfp_id: int) -> None
         key=_uniq_key("x5_tv_md", int(rfp_id))
     )
 
-
 def x6_coverage(conn: "sqlite3.Connection", rfp_id: int) -> tuple[int, int]:
     from contextlib import closing as _closing
     total = 0
@@ -1845,7 +1812,6 @@ def x6_coverage(conn: "sqlite3.Connection", rfp_id: int) -> tuple[int, int]:
         covered = int(cur.fetchone()[0] or 0)
     return covered, total
 
-
 def _x3_render_modal(conn, notice: dict):
     try:
         rfp_id = _ensure_rfp_for_notice(conn, notice)
@@ -1853,7 +1819,6 @@ def _x3_render_modal(conn, notice: dict):
         st.error(f"Could not open RFP Analyzer: {e}")
         return
     st.caption(f"RFP #{rfp_id} · {notice.get('Title','')}")
-
 
     # X.6 Compliance Matrix v1
     try:
@@ -2250,7 +2215,6 @@ def require_LM_minimum(conn, rfp_id):
     return (len(missing) == 0, missing)
 # === end PHASE 5 ===
 
-
 # --- Router helper to avoid 'Unknown page' blank rendering ---
 def _safe_route_call(fn, *a, **kw):
     try:
@@ -2325,8 +2289,6 @@ def _render_ask_rfp_button(opportunity=None):
     _add("rfp_deadline", "rfp_deadline TEXT")
     _add("naics", "naics TEXT")
     _add("psc", "psc TEXT")
-
-
 
 # Bridge names
 sqlite3 = _rtm_sqlite3
@@ -2551,7 +2513,6 @@ def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
                             (rid, lt, tg, "", now, now))
     conn.commit()
 
-
 def _parse_sam_text_to_facts(txt: str) -> dict:
     d = {}
     # Dates
@@ -2650,7 +2611,6 @@ def render_amendment_sidebar(conn: "sqlite3.Connection", rfp_id: int, url: str, 
         else:
             st.info("No snapshots yet.")
 
-
 def feature_flag(name: str, default: bool=False) -> bool:
     """
     Read a feature flag from environment or Streamlit secrets.
@@ -2678,7 +2638,6 @@ def feature_flag(name: str, default: bool=False) -> bool:
     if isinstance(val, bool):
         return val
     return bool(val) if val is not None else bool(default)
-
 
 def _guess_solnum(text: str) -> str:
     if not text:
@@ -2721,7 +2680,6 @@ except Exception:
 import smtplib
 import streamlit as st
 
-
 # --- DB helpers: ensure column exists ---
 def _ensure_column(conn, table, col, type_sql):
     cur = conn.cursor()
@@ -2762,7 +2720,6 @@ def _parse_sam_notice_id(s):
         return m.group(2)
     return None
 
-
 # --- Context helpers ---
 _CTX_DEFAULTS = {
     "rfp": None,
@@ -2780,7 +2737,6 @@ def _ctxd(ctx, key):
         return ctx.get(key, _CTX_DEFAULTS.get(key))
     except Exception:
         return _CTX_DEFAULTS.get(key)
-
 
 # --- Safe DataFrame helpers ---
 def _is_df(obj):
@@ -2801,10 +2757,7 @@ def _first_row_value(df, col, default=None):
         pass
     return default
 
-
 # --- Capability Statement Page (full implementation) ---
-
-
 
 # === Y6 helper ===
 def _y6_resolve_openai_client():
@@ -2941,7 +2894,6 @@ def _extract_set_aside(text: str) -> str:
     return ""
 # === End global extractors ===
 
-
 # === BEGIN: inlined One-Page Analyzer (rfp_onepage.py) ===
 
 import re
@@ -2949,7 +2901,6 @@ import textwrap
 from typing import List, Dict, Any
 
 import streamlit as st
-
 
 # ---- Minimal AI helpers (mirror app helpers; safe fallbacks) ----
 def _resolve_openai_client():
@@ -3010,7 +2961,6 @@ def _rfp_highlight_css() -> None:
             _st.session_state["_rfp_hl_css"] = True
     except Exception:
         pass
-
 
 def _render_highlights_panel(conn, rid):
     import pandas as pd
@@ -3326,9 +3276,6 @@ except Exception:
     except Exception:
         _pypdf = None
 
-
-
-
 # --- hashing helper ---
 def compute_sha256(b: bytes) -> str:
     try:
@@ -3374,7 +3321,6 @@ def flag(name: str, default: bool=False) -> bool:
 
 # External
 
-
 APP_TITLE = "ELA GovCon Suite"
 BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
 
@@ -3406,7 +3352,6 @@ def apply_theme_phase1():
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 apply_theme_phase1()
 
-
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
 try:
     from openai import OpenAI as _Y0OpenAI
@@ -3417,7 +3362,6 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
              "Flag non-compliance. Be concise. If evidence is missing, say so.")
 
 # === helper: auto-select number of sources to cite (Y1–Y3) ===
-
 
 import os
 import tempfile
@@ -3594,14 +3538,11 @@ def y0_ai_panel():
                 ph.markdown("".join(acc))
 # === end Y0 ===
 
-
-
 # --- key namespacing helper (Phase U) ---
 DATA_DIR = "data"
 DB_PATH = os.path.join(DATA_DIR, "govcon.db")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 SAM_ENDPOINT = "https://api.sam.gov/opportunities/v2/search"
-
 
 # -------------------- setup --------------------
 def ensure_dirs() -> None:
@@ -3628,7 +3569,6 @@ def _ensure_y1_schema(conn: "sqlite3.Connection") -> None:
             conn.commit()
     except Exception:
         pass
-
 
 def _resolve_embed_model() -> str:
     try:
@@ -3877,11 +3817,6 @@ if 'y1_search' not in globals():
                 return _y1_search_uncached(conn, int(rfp_id), query or "", int(k))
             except Exception:
                 return []
-
-
-
-
-
 
 def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
@@ -4172,8 +4107,6 @@ def research_extract_excerpt(text: str, query: str, window: int = 380) -> str:
     end = min(len(t), idx + window//2)
     return t[start:end]
 
-
-
 # === Y3: Proposal drafting from evidence (per-RFP) ===
 def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20) -> dict:
     ctx: dict = {}
@@ -4300,8 +4233,6 @@ def _y4_build_messages(conn: "sqlite3.Connection", rfp_id: int, draft_text: str,
 
     user = f"DRAFT TO REVIEW:\\n{draft_text or '(empty)'}\\n\\nEVIDENCE:\\n{evidence or '(no evidence found)'}"
     return [{"role":"system","content": system}, {"role":"user","content": user}]
-
-
 
 def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5) -> str:
     """Enforce ≤5 bullets for key sections and a global word cap."""
@@ -4435,7 +4366,6 @@ def y4_ui_review(conn: "sqlite3.Connection") -> None:
                 y5_save_snippet(conn, int(rfp_id), section, final or draft_text, source="Y4 Review")
                 st.success("Saved to drafts")
 
-
 # === Y5: Upload Review + Drafts plumbing ===
 from contextlib import closing
 import io
@@ -4559,9 +4489,6 @@ def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text:
     except Exception:
         pass
 # === end Y5 ===
-
-
-
 
 # === Phase 2: Dedicated finders and status chips ===
 def _collect_full_text(conn: "sqlite3.Connection", rfp_id: int) -> str:
@@ -4772,9 +4699,6 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
         else:
             st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
-
-
-
 def get_db() -> sqlite3.Connection:
     ensure_dirs()
     conn = _db_connect(DB_PATH, check_same_thread=False)
@@ -4858,7 +4782,6 @@ def get_db() -> sqlite3.Connection:
                 content TEXT
             );
         """)
-
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfp_files(
@@ -5230,7 +5153,6 @@ def get_db() -> sqlite3.Connection:
         except Exception:
             pass
 
-
         # RTM (Requirements Traceability Matrix)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rtm_requirements(
@@ -5298,8 +5220,6 @@ def get_db() -> sqlite3.Connection:
         pass
     return conn
 
-
-
 # Compatibility shim for vendors_t
 try:
     with conn:
@@ -5316,7 +5236,6 @@ def _file_hash() -> str:
     except Exception:
         return "unknown"
 
-
 def save_uploaded_file(uploaded_file, subdir: str = "") -> Optional[str]:
     if not uploaded_file:
         return None
@@ -5326,7 +5245,6 @@ def save_uploaded_file(uploaded_file, subdir: str = "") -> Optional[str]:
     with open(path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     return path
-
 
 # -------------------- SAM Watch helpers (Phase A) --------------------
 def get_sam_api_key() -> Optional[str]:
@@ -5346,7 +5264,6 @@ def get_sam_api_key() -> Optional[str]:
     except Exception:
         pass
     return os.getenv("SAM_API_KEY")
-
 
 @st.cache_data(show_spinner=False, ttl=300)
 def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -5389,7 +5306,6 @@ def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
 
     return {"totalRecords": len(all_records), "records": all_records, "error": None}
 
-
 def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
     rows = []
     for r in records:
@@ -5428,9 +5344,6 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         "Agency Path", "Notice ID", "SAM Link",
     ]
     return df[wanted] if not df.empty else df
-
-
-
 
 def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
     """Best-effort attempt to fetch attachments for a SAM notice.
@@ -5498,7 +5411,6 @@ def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
 
     return files
 
-
 # ---------------------- Phase B: RFP parsing helpers ----------------------
 def _safe_import_pdf_extractors():
     if _pypdf is not None:
@@ -5506,8 +5418,6 @@ def _safe_import_pdf_extractors():
     if _pdfplumber is not None:
         return ('pdfplumber', _pdfplumber)
     return None
-
-
 
 def extract_text_from_file(path: str) -> str:
     """Unified extractor. Uses Phase X1 backends. Safe on environments missing PDF libs."""
@@ -5529,8 +5439,6 @@ def extract_text_from_file(path: str) -> str:
                 return ''
     return "\n\n".join(pages)
 
-
-
 def _detect_mime_light(name: str) -> str:
     n = (name or "").lower()
     if n.endswith(".pdf"): return "application/pdf"
@@ -5545,7 +5453,6 @@ def _tesseract_ok() -> bool:
         return True
     except Exception:
         return False
-
 
 def extract_text_pages(file_bytes: bytes, mime: str) -> list:
     """Return a list of page texts. Best-effort. Up to 100 pages to keep fast."""
@@ -5685,7 +5592,6 @@ def extract_sections_L_M(text: str) -> dict:
         out['M'] = mM.group(1)
     return out
 
-
 def derive_lm_items(section_text: str) -> list:
     if not section_text:
         return []
@@ -5703,7 +5609,6 @@ def derive_lm_items(section_text: str) -> list:
             uniq.append(it)
             seen.add(it)
     return uniq[:500]
-
 
 def extract_clins(text: str) -> list:
     if not text:
@@ -5735,7 +5640,6 @@ def extract_clins(text: str) -> list:
             seen.add(r['clin'])
     return uniq[:500]
 
-
 def extract_dates(text: str) -> list:
     if not text:
         return []
@@ -5750,7 +5654,6 @@ def extract_dates(text: str) -> list:
         for m in re.finditer(pat, text, re.IGNORECASE):
             out.append({'label': m.group(1).strip(), 'date_text': m.group(2).strip(), 'date_iso': ''})
     return out[:200]
-
 
 def extract_pocs(text: str) -> list:
     if not text:
@@ -5824,7 +5727,6 @@ def extract_pop_structure(text: str) -> dict:
     if base_months:
         out['base_months'] = base_months
     return out
-
 
 # === Y5.5: AI-assisted Parse & Save (safe indent) ===
 
@@ -5962,7 +5864,6 @@ def _y55_validate(d: dict) -> dict:
                 if r.get("date_iso"):
                     out["meta"]["due_questions"] = r["date_iso"]; break
     return out
-
 
 def y55_ai_parse(text: str) -> dict:
     out = {"title":"", "solnum":"", "meta":{}, "l_items":[], "clins":[], "dates":[], "pocs":[]}
@@ -6181,8 +6082,6 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
         seen.add(key); uniq.append(r)
     return uniq[:2000]
 
-
-
 # -------------------- Modules --------------------
 def run_contacts(conn: "sqlite3.Connection") -> None:
     st.header("Contacts")
@@ -6218,7 +6117,6 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             _styled_dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
-
 
 def run_deals(conn: "sqlite3.Connection") -> None:
     st.header("Deals")
@@ -6260,8 +6158,6 @@ def run_deals(conn: "sqlite3.Connection") -> None:
             _styled_dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load deals {e}")
-
-
 
 # ---- Phase 3 helpers: ensure RFP record, modal renderer ----
 def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
@@ -6379,7 +6275,6 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 
 # ---------- SAM Watch (Phase A) ----------
 
-
 def run_sam_watch(conn) -> None:
     """
     Phase 2 cleanup:
@@ -6399,7 +6294,6 @@ def run_sam_watch(conn) -> None:
     except Exception as _e:
         try: st.warning(f"Schema check failed: {_e}")
         except Exception: pass
-
 
     # --- Tabs ---
     tab_search, tab_alerts, tab_analyzer = st.tabs(["🔎 Smart Search", "🔔 Alerts", "🧠 Analyzer"])
@@ -6524,8 +6418,6 @@ def run_sam_watch(conn) -> None:
                 st.success("Search saved.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
-
-
 
         # Run search
         results_df = st.session_state.get("sam_results_df")
@@ -6808,7 +6700,6 @@ def run_research_tab(conn: "sqlite3.Connection") -> None:
                 st.markdown(f"[Open cached text]({rec['path']})")
     st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
 
-
 # === Phase 3 helpers (injected) ===
 import datetime as _dt, hashlib, re as _re
 
@@ -6967,7 +6858,6 @@ def _p3_make_ics(summary: str, when_str: str) -> bytes:
     uid = f"ela-{int(_dt.datetime.utcnow().timestamp())}@local"
     ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ELA//RFP Due Date//EN\nBEGIN:VEVENT\nUID:" + uid +           "\nDTSTAMP:" + dt_utc + "\nDTSTART:" + dt_utc + "\nSUMMARY:" + summary + "\nEND:VEVENT\nEND:VCALENDAR\n"
     return ics.encode("utf-8")
-
 
 def _run_rfp_analyzer_phase3(conn):
     clicked_parse_save = False
@@ -7393,7 +7283,6 @@ def _run_rfp_analyzer_phase3(conn):
                             'place_of_performance': _extract_place(full_text),
                         }
 
-
                         l_items, clins, dates, pocs, meta, title, solnum = y55_apply_enhancement(full_text if 'full_text' in locals() else (text if 'text' in locals() else ''), l_items, clins, dates, pocs, meta, title if 'title' in locals() else '', solnum if 'solnum' in locals() else '')
 # X4: persist meta to rfp_meta for combined RFP
                         try:
@@ -7480,7 +7369,6 @@ def _run_rfp_analyzer_phase3(conn):
                             'place_of_performance': _extract_place(text),
                         }
 
-
                         l_items, clins, dates, pocs, meta, title, solnum = y55_apply_enhancement(full_text if 'full_text' in locals() else (text if 'text' in locals() else ''), l_items, clins, dates, pocs, meta, title if 'title' in locals() else '', solnum if 'solnum' in locals() else '')
 # X4: persist meta to rfp_meta per-file
                         try:
@@ -7566,9 +7454,6 @@ def _run_rfp_analyzer_phase3(conn):
                         dfh = _pd.DataFrame([{"Tag": f"[C{i+1}]", "File": h["file"], "Page": h["page"], "Score": h["score"]} for i,h in enumerate(hits)])
                         st.subheader("Sources used")
                         _styled_dataframe(dfh, use_container_width=True, hide_index=True)
-
-
-
 
     # ---------------- Y2: CO Chat with memory ----------------
     with tab_y2:
@@ -7887,7 +7772,6 @@ def _run_rfp_analyzer_phase3(conn):
             key="rfp_data_sel"
         )
 
-
         with st.expander("Acquisition Meta (X4)", expanded=False):
             _render_highlights_panel(conn, rid)
     
@@ -8037,7 +7921,6 @@ def _run_rfp_analyzer_phase3(conn):
         if sam_url:
             render_amendment_sidebar(conn, rid_int, sam_url, ttl)
 
-
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
         y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_rfp_analyzer_y6", title="Ask the CO about this RFP")
@@ -8050,8 +7933,6 @@ def _compliance_progress(df_items: pd.DataFrame) -> int:
     done = int((df_items["status"]=="Complete").sum())
     total = int(len(df_items))
     return int(round(done / max(1, total) * 100))
-
-
 
 def _load_compliance_matrix(conn: "sqlite3.Connection", rfp_id: int) -> pd.DataFrame:
     """
@@ -8170,7 +8051,6 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
-
 def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     try:
         rf = pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
@@ -8184,7 +8064,6 @@ def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     sections = pd.DataFrame([{"name":"Checklist Items","content": joined}])
     meta = rf.iloc[0].to_dict() if not rf.empty else {}
     return {"rfp": meta, "sections": sections, "items": df_items}
-
 
 def run_lm_checklist(conn: "sqlite3.Connection") -> None:
 
@@ -8325,9 +8204,6 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
     else:
         _styled_dataframe(flags, use_container_width=True, hide_index=True)
 
-
-
-
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
         y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_lm_checklist_y6", title="Ask the CO about L&M")
@@ -8351,7 +8227,6 @@ def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Opt
     else:
         wpp = max(50, int(words_per_page))
     return round((total_words or 0) / float(wpp), 2)
-
 
 def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optional[pd.DataFrame] = None, checklist: Optional[pd.DataFrame] = None, metadata: Optional[dict] = None,
                  font_name: str = "Times New Roman",
@@ -8524,14 +8399,12 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     st.session_state[f"pb_section_{sec_choice}"] = st.session_state[key]
                     st.success("Inserted into section")
 
-
 # ---------- Subcontractor Finder (Phase D) ----------
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
         y6_render_co_box(conn if 'conn' in locals() else None, _rid, key_prefix="run_proposal_builder_y6", title="Ask the CO while drafting")
     except Exception:
         pass
-
 
 def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     import math
@@ -8681,7 +8554,6 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
         with c2:
             st.caption("Selections are stored in session and available in Outreach tab")
 
-
 # ---------- Outreach (Phase D) ----------
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
@@ -8705,7 +8577,6 @@ def _smtp_settings() -> Dict[str, Any]:
             except Exception:
                 pass
     return out
-
 
 def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: List[str]) -> Tuple[bool, str]:
     cfg = _smtp_settings()
@@ -8740,7 +8611,6 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
     except Exception as e:
         return False, str(e)
 
-
 def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
     repl = {
         "company": vendor.get("name", ""),
@@ -8759,8 +8629,6 @@ def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
         out = out.replace(f"{{{{{k}}}}}", str(v))
     return out
 
-
-
 def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optional[float]:
     try:
         if qty is None or unit_price is None:
@@ -8768,7 +8636,6 @@ def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optiona
         return float(qty) * float(unit_price)
     except Exception:
         return None
-
 
 def run_quote_comparison(conn: "sqlite3.Connection") -> None:
     st.header("Quote Comparison")
@@ -8891,7 +8758,6 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
         st.success("Exported.")
         st.markdown(f"[Download comparison CSV]({path})")
 
-
 # ---------- Pricing Calculator (Phase E) ----------
 def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str, float]:
     dl = pd.read_sql_query("SELECT hours, rate, fringe_pct FROM pricing_labor WHERE scenario_id=?;", conn, params=(scenario_id,))
@@ -8919,7 +8785,6 @@ def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str,
         "Fee/Profit": round(fee, 2),
         "Total": round(total, 2),
     }
-
 
 def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     st.header("Pricing Calculator")
@@ -9016,7 +8881,6 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
         st.success("Exported.")
         st.markdown(f"[Download pricing CSV]({path})")
 
-
 # ---------- Win Probability (Phase E) ----------
 def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
     df = pd.read_sql_query(""" SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC; """, conn, params=(rfp_id,))
@@ -9033,7 +8897,6 @@ def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: O
     if ratio <= 0.25:
         return 70 * (0.25 - ratio) / 0.15
     return 0.0
-
 
 def run_win_probability(conn: "sqlite3.Connection") -> None:
     st.header("Win Probability")
@@ -9111,7 +8974,6 @@ def run_win_probability(conn: "sqlite3.Connection") -> None:
         st.success("Exported.")
         st.markdown(f"[Download assessment CSV]({path})")
 
-
 # ---------- Phase F: Chat Assistant (rules-based over DB) ----------
 def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) -> Dict[str, Any]:
     q = query.lower()
@@ -9184,7 +9046,6 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
     return res
 
-
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     st.header("Chat Assistant (DB-aware)")
     st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
@@ -9242,7 +9103,6 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         sh["snippet"] = sh["content"].str.slice(0, 400)
         _styled_dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
 
-
 # ---------- Phase F: Capability Statement ----------
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
@@ -9296,7 +9156,6 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
 
     doc.save(path)
     return path
-
 
 def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
     st.header("Capability Statement")
@@ -9355,9 +9214,6 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
                 st.success("Exported.")
                 st.markdown(f"[Download DOCX]({out})")
 
-
-
-
 # ---------- Phase G: Past Performance Library + Generator ----------
 def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
     title = (rfp_title or "").lower()
@@ -9393,7 +9249,6 @@ def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
         pass
     return min(score, 100)
 
-
 def _pp_writeup_block(rec: dict) -> str:
     parts = []
     title = rec.get("project_title") or "Project"
@@ -9415,8 +9270,6 @@ def _pp_writeup_block(rec: dict) -> str:
     if any([rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")]):
         parts.append("**POC:** " + ", ".join([x for x in [rec.get("contact_name"), rec.get("contact_email"), rec.get("contact_phone")] if x]))
     return "\n\n".join(parts)
-
-
 
 def run_past_performance(conn: "sqlite3.Connection") -> None:
     st.header("Past Performance Library")
@@ -9824,8 +9677,6 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                     st.session_state["pb_section_White Paper"] = md
                     st.success("Pushed to Proposal Builder → 'White Paper' section")
 
-
-
 # ---------- Phase I: CRM (Activities • Tasks • Pipeline) ----------
 def _stage_probability(stage: str) -> int:
     mapping = {
@@ -9999,9 +9850,6 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 df.to_csv(path, index=False)
                 st.markdown(f"[Download CSV]({path})")
 
-
-
-
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
     try:
         with closing(conn.cursor()) as cur:
@@ -10036,7 +9884,6 @@ def _detect_mime(name: str) -> str:
     if name.endswith(".jpg") or name.endswith(".jpeg"): return "image/jpeg"
     if name.endswith(".txt"): return "text/plain"
     return "application/octet-stream"
-
 
 def run_file_manager(conn: "sqlite3.Connection") -> None:
     _ensure_files_table(conn)
@@ -10238,8 +10085,6 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                 st.markdown(f"[Download ZIP]({zip_path})")
             except Exception as e:
                 st.error(f"ZIP failed: {e}")
-
-
 
 # ---------- Phase L: RFQ Pack ----------
 def _rfq_pack_by_id(conn: "sqlite3.Connection", pid: int) -> dict | None:
@@ -10524,7 +10369,6 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 df.to_csv(path, index=False)
                 st.success("Exported"); st.markdown(f"[Download CSV]({path})")
 
-
 def _db_path_from_conn(conn: "sqlite3.Connection") -> str:
     try:
         df = pd.read_sql_query("PRAGMA database_list;", conn, params=())
@@ -10572,8 +10416,6 @@ def migrate(conn: "sqlite3.Connection") -> None:
                 pass
             cur.execute("UPDATE schema_version SET ver=3 WHERE id=1;")
             conn.commit()
-
-
 
 # ---------- Phase N: Backup & Data ----------
 def _current_tenant(conn: "sqlite3.Connection") -> int:
@@ -10758,8 +10600,6 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
             st.success(f"Imported {n} row(s) into {tsel}")
             st.rerun()
 
-
-
 # ---------- Phase O: Global Theme & Layout ----------
 def _apply_theme_old() -> None:
     css = """
@@ -10797,7 +10637,6 @@ def page_header(title: str, subtitle: str | None = None) -> None:
 def init_session() -> None:
     if "initialized" not in st.session_state:
         st.session_state.initialized = True
-
 
 def nav() -> str:
     if st.session_state.pop('_force_rfp_analyzer', False):
@@ -10837,10 +10676,6 @@ def nav() -> str:
             "Deals",
         ],
     )
-
-
-
-
 
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
@@ -10996,7 +10831,6 @@ def run_rfp_analyzer(conn) -> None:
     else:
         st.info("One-Page Analyzer module is unavailable.")
 
-
 def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
     with st.sidebar.expander("Workspace", expanded=True):
         try:
@@ -11028,8 +10862,6 @@ def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
             else:
                 st.warning("Enter a name")
 
-
-
 # --- Phase U helper: namespaced keys for Streamlit ---
 def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
@@ -11042,7 +10874,6 @@ def run_subcontractor_finder_s1_hook(conn):
         s1_render_places_panel(conn)
     except Exception:
         pass
-
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
@@ -11118,7 +10949,6 @@ if "_o3_ensure_schema" not in globals():
             conn.commit()
         except Exception:
             pass
-
 
 # --- Outreach recipients UI: fallback stub used if the full implementation is defined later ---
 if "_o3_collect_recipients_ui" not in globals():
@@ -11230,7 +11060,6 @@ def y_auto_k(text: str) -> int:
         base += 1
     return max(3, min(8, base))
 
-
 # === PHASE 8: Latency and UX ===
 # Memoize y1_search by (rfp_id, query) and a snapshot of the chunks table to keep cache fresh.
 def _y1_snapshot(conn, rfp_id: int) -> str:
@@ -11275,7 +11104,6 @@ def y1_search(conn, rfp_id: int, query: str, k: int = 6):
         # very conservative fallback
         db_path = "data/govcon.db"
     return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
-
 
 # Enable chunk-level streaming in Y2 and Y4
 def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
@@ -11322,8 +11150,6 @@ def y4_stream_review(conn, rfp_id: int, draft_text: str, k: int = 6, temperature
         except Exception:
             pass
 # === end PHASE 8 ===
-
-
 
 def _y1_cache_bust():
     try:
@@ -11477,7 +11303,6 @@ RFP Context (optional, may be empty):
         st.error(f"X16.1 panel error: {e}")
 # === end X16.1 ===
 
-
 # === S1 Subcontractor Finder: Google Places ====================================
 def ensure_subfinder_s1_schema(conn):
     try:
@@ -11630,7 +11455,6 @@ def s1_render_places_panel(conn, default_addr:str|None=None):
         st.caption("Another page is available. Click Next page to load more.")
     st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
 
-
 def o1_list_accounts(conn):
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("""
@@ -11676,7 +11500,6 @@ def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
         conn.execute("DELETE FROM email_accounts WHERE user_email=?", (user_email.strip(),))
-
 
 # === O2: Outreach Templates ====================================================
 def ensure_email_templates(conn):
@@ -11794,10 +11617,6 @@ def seed_default_templates(conn):
     for n,s,h in defaults:
         email_template_upsert(conn, n, s, h, None)
 
-
-
-
-
 # --- O4 wrapper: delegates to __p_o4_ui if present, else shows fallback UI ---
 def o4_sender_accounts_ui(conn):
     try:
@@ -11843,7 +11662,6 @@ def o4_sender_accounts_ui(conn):
                 _st.caption(f"Active: {row[0]} — {row[1]} via {row[2]}:{row[3]} TLS={'on' if row[4] else 'off'}")
         except Exception:
             pass
-
 
 def render_outreach_mailmerge(conn):
     globals()['_O4_CONN'] = conn
@@ -11909,10 +11727,8 @@ def render_outreach_mailmerge(conn):
         except Exception as e:
             st.error(f"Send failed: {e}")
 
-
 def run_outreach(conn):
     import streamlit as st
-
 
     # O4 badge if present
     try:
@@ -11951,7 +11767,6 @@ def run_outreach(conn):
     except Exception as e:
         st.error(f"Mail merge panel error: {e}")
 
-
 def _o3_ensure_schema(conn):
     with _o3c(conn.cursor()) as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS outreach_optouts(
@@ -11978,7 +11793,6 @@ def _o3_ensure_schema(conn):
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );""")
         conn.commit()
-
 
 def _o3_wrap_email_html(sig_html: str) -> str:
     # Basic, client-safe wrapper to ensure readable default font size.
@@ -12117,8 +11931,6 @@ def _o3_sender_accounts_from_secrets():
         return accs
     except Exception:
         return []
-
-
 
 # --- O3 SMTP shim (fallback) ---
 try:
@@ -12280,7 +12092,6 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         st.error(f"Past Performance export failed: {e}")
         return None
 
-
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
 def _o4_accounts_ui(conn):
     import streamlit as st
@@ -12424,7 +12235,6 @@ def _o4_audit_ui(conn):
     except Exception:
         st.caption("No logs yet")
 
-
 # === O5: Follow-ups & SLA ==================================================
 import sqlite3, pandas as _pd, smtplib, ssl, time
 from email.mime.text import MIMEText
@@ -12567,7 +12377,6 @@ def render_outreach_o5_followups(conn):
     if st.button("Send due follow-ups", key="o5_send_due"):
         ok, fail = _o5_send_due(conn, limit=200); st.success(f"Sent {ok}, failed {fail}")
 # === End O5 ================================================================
-
 
 # === O6: Compliance — Unsubscribe & Suppression =============================
 import uuid, urllib.parse
@@ -12749,7 +12558,6 @@ def _o6_wrap_o3_send_batch():
 _o6_wrap_o3_send_batch()
 # === End O6 ================================================================
 
-
 # === S1D: Subcontractor Finder — dedupe + Google Places pagination ===========
 import json as _json, time as _time
 from typing import Any, List, Dict
@@ -12855,7 +12663,6 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
             saved += 1
     return saved
 
-
 def _s1d_render_from_cache(conn, df):
     import streamlit as st
 
@@ -12916,7 +12723,6 @@ def _s1d_render_from_cache(conn, df):
                 st.session_state.pop("s1d_df", None)
                 st.session_state.pop("s1d_selected_ids", None)
         # rerun suppressed to keep table visible
-
 
 def _s1d_vendor_write_table(conn):
     row = conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name='vendors_t'").fetchone()
@@ -13072,7 +12878,6 @@ def render_subfinder_s1d(conn):
     st.markdown("**Results**")
     st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-
     # Selection and save
     keep = df[~df["_dup"]].copy()
     if keep.empty:
@@ -13095,7 +12900,6 @@ def render_subfinder_s1d(conn):
             st.success(f"Saved {n} vendors")
 # === End S1D ================================================================
 
-
 def _wrap_run_subfinder():
     g = globals()
     base = g.get("run_subcontractor_finder")
@@ -13114,8 +12918,6 @@ def _wrap_run_subfinder():
     g["run_subcontractor_finder"] = wrapped
 
 _wrap_run_subfinder()
-
-
 
 # =========================
 # APPEND-ONLY PATCH • O2/O3/O4/O5/O6 + S1D
@@ -13458,7 +13260,6 @@ def __p_run_outreach(conn):
 
 # =========================
 
-
 if __name__ == '__main__':
     try:
         main()
@@ -13472,7 +13273,6 @@ def run_subcontractor_finder_s1_hook(conn):
         s1_render_places_panel(conn)
     except Exception:
         pass
-
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
@@ -13500,8 +13300,6 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 
-
-
 # =========================
 # APPEND-ONLY PATCH • E1 (Google Places enrichment: phone + website hyperlinks)
 # =========================
@@ -13509,11 +13307,6 @@ import streamlit as _st
 import pandas as _pd
 import re as _re
 import time as _time
-
-
-
-
-
 
 # ---- Streamlit write guard: suppress rendering of None ----
 try:
@@ -13529,7 +13322,6 @@ try:
         st._write_wrapped = True  # marker
 except Exception:
     pass
-
 
 # ---- Phase 1 bootstrap (guarded) ----
 try:
@@ -13557,7 +13349,6 @@ for _fn in ("apply_theme_phase0", "_init_phase0_ui", "_sidebar_brand_phase0", "_
     except Exception:
         pass
 
-
 # ==== X.6 Compliance Matrix v1 ====
 def x6_requirements_df(conn: "sqlite3.Connection", rfp_id: int):
     import pandas as pd
@@ -13570,7 +13361,6 @@ def x6_requirements_df(conn: "sqlite3.Connection", rfp_id: int):
         import pandas as pd
         df = pd.DataFrame(columns=["id","must_flag","file","page","text"])
     return df
-
 
 def x6_save_links(conn: "sqlite3.Connection", rfp_id: int, mapping: list[tuple[int, str]]) -> int:
     from contextlib import closing as _closing
@@ -13586,8 +13376,6 @@ def x6_save_links(conn: "sqlite3.Connection", rfp_id: int, mapping: list[tuple[i
             saved += 1
     conn.commit()
     return int(saved)
-
-
 
 # ==== X.7 Proposal Builder v1 ====
 def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
@@ -13718,18 +13506,10 @@ def x7_export_docx(conn: "sqlite3.Connection", proposal_id: int) -> bytes | None
     return buf.getvalue()
 # ==== end X.7 helpers ====
 
-
 # ==== end X.6 helpers ====
-
-
-
-
 
 # ==== X.5 Transcript Viewer ====
 # ==== end X.5 Transcript Viewer ====
-
-
-
 
 def _safe_int(v, default: int = 0) -> int:
     try:
@@ -13743,7 +13523,6 @@ def _safe_int(v, default: int = 0) -> int:
         return int(m.group()) if m else default
     except Exception:
         return default
-
 
 def __e1_google_api_key():
     try: return _st.secrets["google"]["api_key"]
@@ -13806,12 +13585,9 @@ def __e1_enrich_and_render(conn, lat=None, lng=None, radius_m=80467, query=""):
 def run_l_and_m_checklist(conn):
     return run_lm_checklist(conn)
 
-
 # --- Tab name alias ---
 def run_backup_data(conn):
     return run_backup_and_data(conn)
-
-
 
 # === Outreach: fallback sender picker and guard wrapper =====================
 # Robust fallback picker that reads smtp_settings, only if not provided earlier.
@@ -13858,7 +13634,6 @@ if '_wrapped_o4_mailmerge' not in globals():
             return
         return _orig__render_outreach_mailmerge(conn)
 # === End Outreach guard =====================================================
-
 
 def o1_sender_accounts_ui(conn):
     globals()['_O4_CONN'] = conn
@@ -13915,13 +13690,11 @@ def _pager_update(key: str, delta: int, max_pages: int | None = None):
         st.session_state[key] = min(st.session_state[key], max_pages - 1)
     return st.session_state[key]
 
-
 # ---- helper: write guard (Phase 0) ----
 def _write_guard(conn, fn, *args, **kwargs):
     # call DB write functions inside a transaction
     with conn:
         return fn(*args, **kwargs)
-
 
 # ---- Phase 1: Global UI setup (theme, CSS, helpers) ----
 def _init_phase1_ui():
@@ -13976,7 +13749,6 @@ def _chip(text: str, kind: str = 'neutral'):
     elif kind == 'bad': cls += ' ela-bad'
     st.markdown(f"<span class='{cls}'>{text}</span>", unsafe_allow_html=True)
 
-
 # === Phase 2: NL Query Parsing & Relevance Score (SAM-only) ===
 import math, datetime, re, json
 from datetime import datetime as _dt, timedelta as _td
@@ -14028,7 +13800,6 @@ def relevance_score(row: dict, profile: dict | None = None) -> float:
     return round(score, 3)
 
 # === Phase 2: Alerts Center (SAM-only) ===
-
 
 def _render_ask_rfp_autorender():
     """If a previous click requested the Ask RFP modal, render it open on rerun."""
@@ -14189,7 +13960,6 @@ def _make_ics(title: str, dt):
     except Exception:
         return None
 
-
 def run_router(conn):
     import streamlit as st
     pages = ["SAM Watch", "RFP Analyzer"]
@@ -14217,8 +13987,6 @@ def _get_conn(db_path="samwatch.db"):
     except Exception:
         pass
     run_router(conn)
-
-
 
 # SIG+LOGO patch removed
 
