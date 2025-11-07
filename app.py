@@ -23,6 +23,18 @@ except Exception:
 import re
 import streamlit as st
 
+def __p_ensure_column(conn, table: str, col: str, col_def: str):
+    try:
+        cur = conn.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+    except Exception:
+        # best-effort migration only
+        pass
+
+
+
 
 # --- SQL cleaner to strip '#' comments not supported by SQLite ---
 def __p_strip_sql_hash_comments(sql: str) -> str:
@@ -11121,35 +11133,40 @@ def o1_list_accounts(conn):
       FROM email_accounts ORDER BY user_email
     """).fetchall()
     return rows
-
 def ensure_outreach_o1_schema(conn):
-
-
-def __p_ensure_column(conn, table: str, col: str, col_def: str):
-    try:
-        cur = conn.execute(f"PRAGMA table_info({table})")
-        cols = [r[1] for r in cur.fetchall()]
-        if col not in cols:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
-    except Exception as e:
-        try:
-            import streamlit as st
-            st.warning(f"Schema check failed for {table}.{col}: {e}")
-        except Exception:
-            pass
-
+    """Create or migrate email_accounts table for Outreach."""
     with conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS email_accounts(
-            user_email TEXT PRIMARY KEY,
-            display_name TEXT DEFAULT '',
-            app_password TEXT DEFAULT '',
-            smtp_host TEXT DEFAULT 'smtp.gmail.com',
-            smtp_port INTEGER DEFAULT 465,
-            use_ssl INTEGER DEFAULT 1
-        )""")
-
-
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_accounts(
+                user_email TEXT PRIMARY KEY,
+                display_name TEXT DEFAULT '',
+                app_password TEXT DEFAULT '',
+                smtp_host   TEXT DEFAULT 'smtp.gmail.com',
+                smtp_port   INTEGER DEFAULT 465,
+                use_ssl     INTEGER DEFAULT 1,
+                use_tls     INTEGER DEFAULT 0,
+                username    TEXT DEFAULT ''
+            )
+            """
+        )
+    __p_ensure_column(conn, "email_accounts", "display_name", "TEXT DEFAULT ''")
+    __p_ensure_column(conn, "email_accounts", "app_password", "TEXT DEFAULT ''")
+    __p_ensure_column(conn, "email_accounts", "smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
+    __p_ensure_column(conn, "email_accounts", "smtp_port", "INTEGER DEFAULT 465")
+    __p_ensure_column(conn, "email_accounts", "use_ssl", "INTEGER DEFAULT 1")
+    __p_ensure_column(conn, "email_accounts", "use_tls", "INTEGER DEFAULT 0")
+    __p_ensure_column(conn, "email_accounts", "username", "TEXT DEFAULT ''")
+    # Optional: legacy outreach_sender_accounts
+    try:
+        __p_ensure_column(conn, "outreach_sender_accounts", "app_password", "TEXT DEFAULT ''")
+        __p_ensure_column(conn, "outreach_sender_accounts", "smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
+        __p_ensure_column(conn, "outreach_sender_accounts", "smtp_port", "INTEGER DEFAULT 587")
+        __p_ensure_column(conn, "outreach_sender_accounts", "use_tls", "INTEGER DEFAULT 1")
+        __p_ensure_column(conn, "outreach_sender_accounts", "is_active", "INTEGER DEFAULT 1")
+    except Exception:
+        pass
+    return True
 def o1_delete_email_account(conn, user_email:str):
     ensure_outreach_o1_schema(conn)
     with conn:
