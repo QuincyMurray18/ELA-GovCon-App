@@ -2982,6 +2982,11 @@ def _resolve_openai_client():
         return None
 
 def _resolve_model():
+    try:
+        import streamlit as st
+        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
+    except Exception:
+        return 'gpt-4o-mini'
 
 def _rfp_highlight_css() -> None:
     """Inject CSS once for highlighted previews."""
@@ -3006,6 +3011,70 @@ def _rfp_highlight_css() -> None:
     except Exception:
         pass
 
+
+def _render_highlights_panel(conn, rid):
+    import pandas as pd
+    import streamlit as st
+    st.divider()
+    with st.expander("Highlights (auto)", expanded=True):
+        try:
+            df_lm = pd.read_sql_query("SELECT item_text AS requirement, is_must FROM lm_items WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+        except Exception:
+            df_lm = pd.DataFrame(columns=["requirement","is_must"])
+        try:
+            df_clin = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+        except Exception:
+            df_clin = pd.DataFrame(columns=["clin","description","qty","unit"])
+        try:
+            df_dates = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+        except Exception:
+            df_dates = pd.DataFrame(columns=["label","date_text"])
+        try:
+            df_poc = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+        except Exception:
+            df_poc = pd.DataFrame(columns=["name","role","email","phone"])
+        try:
+            full_txt = y5_extract_from_rfp(conn, int(rid))
+        except Exception:
+            full_txt = ""
+        pricing_hits = _extract_pricing_factors_text(full_txt, max_hits=20)
+        task_hits = _extract_task_lines(full_txt, max_hits=30)
+
+        c1, c2 = st.columns([1,1])
+        with c1:
+            st.markdown("**Requirements (L/M)**")
+            if df_lm is None or df_lm.empty:
+                st.caption("None detected yet.")
+            else:
+                _styled_dataframe(df_lm.rename(columns={"is_must":"Must?"}), use_container_width=True, hide_index=True)
+            st.markdown("**Due Dates**")
+            if df_dates is None or df_dates.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_dates, use_container_width=True, hide_index=True)
+        with c2:
+            st.markdown("**POCs**")
+            if df_poc is None or df_poc.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_poc, use_container_width=True, hide_index=True)
+            st.markdown("**CLINs / Pricing Inputs**")
+            if df_clin is None or df_clin.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_clin, use_container_width=True, hide_index=True)
+
+        st.markdown("**Pricing Evaluation Mentions**")
+        if pricing_hits:
+            st.write("\\n".join([f"• {h}" for h in pricing_hits[:20]]))
+        else:
+            st.caption("None found.")
+
+        st.markdown("**Task / SOW Lines**")
+        if task_hits:
+            st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
+        else:
+            st.caption("None found.")
 def _rfp_highlight_html(txt: str) -> str:
     """Return HTML with important items highlighted."""
     if not txt:
@@ -3354,6 +3423,11 @@ import os
 import tempfile
 
 def _resolve_model():
+    try:
+        import streamlit as st
+        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
+    except Exception:
+        return 'gpt-4o-mini'
 
 def _rfp_highlight_css() -> None:
     """Inject CSS once for highlighted previews."""
@@ -3686,7 +3760,7 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
 def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     _ensure_y1_schema(conn)
     try:
-        df = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if df is None or df.empty:
@@ -4492,7 +4566,7 @@ def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text:
 # === Phase 2: Dedicated finders and status chips ===
 def _collect_full_text(conn: "sqlite3.Connection", rfp_id: int) -> str:
     try:
-        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
     except Exception:
         df = pd.DataFrame()
     parts = []
@@ -7624,7 +7698,7 @@ def _run_rfp_analyzer_phase3(conn):
         # X2: Files for this RFP
         with st.expander("Files for this RFP (X2)", expanded=False):
             try:
-                df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+                df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception as e:
                 df_files = pd.DataFrame()
             st.caption("Linked files")
@@ -7654,11 +7728,11 @@ def _run_rfp_analyzer_phase3(conn):
                             preview = ("\n\n".join(pages) if pages else "").strip()[:20000]
                             if preview:
                                 _rfp_highlight_css()
-t1, t2 = st.tabs(["Highlighted", "Raw"])
-with t1:
-    st.markdown(_rfp_highlight_html(preview), unsafe_allow_html=True)
-with t2:
-    st.text_area("Preview (first 20k chars)", value=preview, height=300)
+                                t1, t2 = st.tabs(["Highlighted", "Raw"])
+                                with t1:
+                                    st.markdown(_rfp_highlight_html(preview), unsafe_allow_html=True)
+                                with t2:
+                                    st.text_area("Preview (first 20k chars)", value=preview, height=300)
 
                         except Exception as e:
                             st.info(f"Preview unavailable: {e}")
@@ -7672,7 +7746,7 @@ with t2:
                     if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
                         try:
                             # Fetch bytes for all linked files
-                            df_bytes = pd.read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
+                            df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
                             if df_bytes is None or df_bytes.empty:
                                 st.warning("No files to package.")
                             else:
@@ -7738,12 +7812,24 @@ with t2:
                         st.error(f"Unlink failed: {e}")
             st.caption("Attach from library")
             try:
-                df_pool = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
+                df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
                 df_pool = pd.DataFrame()
             if df_pool is None or df_pool.empty:
                 st.write("No unlinked files in library.")
             else:
+                bio = _io.BytesIO()
+                with _zipfile.ZipFile(bio, 'w', _zipfile.ZIP_DEFLATED) as zf:
+                    for _, r in df_bytes.iterrows():
+                        fn = r.get('filename') or f"rfp_file_{int(r.get('id', 0))}"
+                        zf.writestr(fn, r.get('bytes'))
+                st.download_button(
+                    label='Download ZIP',
+                    data=bio.getvalue(),
+                    file_name=f'rfp_{rid}_files.zip',
+                    mime='application/zip',
+                    key=f'zip_{rid}'
+                )
                 _styled_dataframe(df_pool, use_container_width=True, hide_index=True)
                 to_link = st.multiselect("Attach file IDs", options=df_pool["id"].tolist(), key=f"link_{rid}")
                 if st.button("Attach selected to this RFP", key=f"link_btn_{rid}") and to_link:
@@ -7803,72 +7889,7 @@ with t2:
 
 
         with st.expander("Acquisition Meta (X4)", expanded=False):
-        st.divider()
-        with st.expander("Highlights (auto)", expanded=True):
-            try:
-                # Requirements (from L/M)
-                df_lm = pd.read_sql_query("SELECT item_text AS requirement, is_must FROM lm_items WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
-            except Exception:
-                df_lm = pd.DataFrame(columns=["requirement","is_must"])
-            try:
-                # CLINs
-                df_clin = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
-            except Exception:
-                df_clin = pd.DataFrame(columns=["clin","description","qty","unit"])
-            try:
-                # Due dates
-                df_dates = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
-            except Exception:
-                df_dates = pd.DataFrame(columns=["label","date_text"])
-            try:
-                # POCs
-                df_poc = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
-            except Exception:
-                df_poc = pd.DataFrame(columns=["name","role","email","phone"])
-
-            # Pricing factors and task lines from combined text
-            try:
-                full_txt = y5_extract_from_rfp(conn, int(rid))
-            except Exception:
-                full_txt = ""
-            pricing_hits = _extract_pricing_factors_text(full_txt, max_hits=20)
-            task_hits = _extract_task_lines(full_txt, max_hits=30)
-
-            c1, c2 = st.columns([1,1])
-            with c1:
-                st.markdown("**Requirements (L/M)**")
-                if df_lm is None or df_lm.empty:
-                    st.caption("None detected yet.")
-                else:
-                    _styled_dataframe(df_lm.rename(columns={"is_must":"Must?"}), use_container_width=True, hide_index=True)
-                st.markdown("**Due Dates**")
-                if df_dates is None or df_dates.empty:
-                    st.caption("None detected.")
-                else:
-                    _styled_dataframe(df_dates, use_container_width=True, hide_index=True)
-            with c2:
-                st.markdown("**POCs**")
-                if df_poc is None or df_poc.empty:
-                    st.caption("None detected.")
-                else:
-                    _styled_dataframe(df_poc, use_container_width=True, hide_index=True)
-                st.markdown("**CLINs / Pricing Inputs**")
-                if df_clin is None or df_clin.empty:
-                    st.caption("None detected.")
-                else:
-                    _styled_dataframe(df_clin, use_container_width=True, hide_index=True)
-
-            st.markdown("**Pricing Evaluation Mentions**")
-            if pricing_hits:
-                st.write("\\n".join([f"• {h}" for h in pricing_hits[:20]]))
-            else:
-                st.caption("None found.")
-
-            st.markdown("**Task / SOW Lines**")
-            if task_hits:
-                st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
-            else:
-                st.caption("None found.")
+            _render_highlights_panel(conn, rid)
     
             try:
                 df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
