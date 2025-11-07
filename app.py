@@ -1,15 +1,3 @@
-# === BEGIN EARLY SIG UI STUB ===
-def __p_call_sig_ui(conn):
-    try:
-        import streamlit as _st
-        fn = globals().get("__p_o4_signature_ui") or globals().get("_o4_signature_ui")
-        if callable(fn):
-            return fn(conn)
-        _st.info("Signature editor unavailable in this build.")
-    except Exception:
-        pass
-# === END EARLY SIG UI STUB ===
-
 
 # === BEGIN READSQL SHIM ===
 try:
@@ -34,6 +22,24 @@ except Exception:
 
 import re
 import streamlit as st
+
+# --- Pandas read_sql shim ---
+try:
+    import pandas as _pd
+    if "__p_read_sql_query" not in globals():
+        def __p_read_sql_query(q, conn, params=()):
+            try:
+                q2 = __p_strip_sql_hash_comments(q) if isinstance(q, str) else q
+            except Exception:
+                q2 = q
+            return _pd.read_sql_query(q2, conn, params=params)
+    if not hasattr(_pd, "__p_read_sql_query"):
+        _pd.__p_read_sql_query = lambda q, conn, params=(): __p_read_sql_query(q, conn, params=params)
+except Exception:
+    pass
+# --- End shim ---
+
+
 
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
@@ -13844,7 +13850,7 @@ def __p_render_signature(conn, sender_email: str, html: str):
         return html_out, inline_images
     return html, inline_images
 
-def __p_o4_signature_ui(conn):
+def __p_call_sig_ui(conn):
     import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
     # Prefer email_accounts table used by this build
