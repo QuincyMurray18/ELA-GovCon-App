@@ -1,3 +1,25 @@
+
+# === BEGIN READSQL SHIM ===
+try:
+    import pandas as _pd
+    # local wrapper if not defined
+    if "__p_read_sql_query" not in globals():
+        def __p_read_sql_query(q, conn, params=()):
+            try:
+                # try to strip '#' comments if helper exists
+                q2 = __p_strip_sql_hash_comments(q) if isinstance(q, str) else q
+            except Exception:
+                q2 = q
+            return _pd.read_sql_query(q2, conn, params=params)
+    # attach shim to pandas in case any call uses pandas.__p_read_sql_query
+    if not hasattr(_pd, "__p_read_sql_query"):
+        def __pandas_read_sql_shim(q, conn, params=()):
+            return __p_read_sql_query(q, conn, params=params)
+        _pd.__p_read_sql_query = __pandas_read_sql_shim
+except Exception:
+    pass
+# === END READSQL SHIM ===
+
 import re
 import streamlit as st
 
@@ -11099,41 +11121,10 @@ def o1_list_accounts(conn):
       FROM email_accounts ORDER BY user_email
     """).fetchall()
     return rows
+
 def ensure_outreach_o1_schema(conn):
-    """Create or migrate email_accounts table for Outreach O4."""
-    with conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS email_accounts(
-                user_email TEXT PRIMARY KEY,
-                display_name TEXT DEFAULT '',
-                app_password TEXT DEFAULT '',
-                smtp_host   TEXT DEFAULT 'smtp.gmail.com',
-                smtp_port   INTEGER DEFAULT 465,
-                use_ssl     INTEGER DEFAULT 1,
-                use_tls     INTEGER DEFAULT 0,
-                username    TEXT DEFAULT ''
-            )
-            """
-        )
-    # Migrations for legacy DBs
-    __p_ensure_column(conn, "email_accounts", "display_name", "TEXT DEFAULT ''")
-    __p_ensure_column(conn, "email_accounts", "app_password", "TEXT DEFAULT ''")
-    __p_ensure_column(conn, "email_accounts", "smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
-    __p_ensure_column(conn, "email_accounts", "smtp_port", "INTEGER DEFAULT 465")
-    __p_ensure_column(conn, "email_accounts", "use_ssl", "INTEGER DEFAULT 1")
-    __p_ensure_column(conn, "email_accounts", "use_tls", "INTEGER DEFAULT 0")
-    __p_ensure_column(conn, "email_accounts", "username", "TEXT DEFAULT ''")
-    # Also ensure O4 core table if app uses outreach_sender_accounts
-    try:
-        __p_ensure_column(conn, "outreach_sender_accounts", "app_password", "TEXT DEFAULT ''")
-        __p_ensure_column(conn, "outreach_sender_accounts", "smtp_host", "TEXT DEFAULT 'smtp.gmail.com'")
-        __p_ensure_column(conn, "outreach_sender_accounts", "smtp_port", "INTEGER DEFAULT 587")
-        __p_ensure_column(conn, "outreach_sender_accounts", "use_tls", "INTEGER DEFAULT 1")
-        __p_ensure_column(conn, "outreach_sender_accounts", "is_active", "INTEGER DEFAULT 1")
-    except Exception:
-        pass
-    return True
+
+
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
         cur = conn.execute(f"PRAGMA table_info({table})")
