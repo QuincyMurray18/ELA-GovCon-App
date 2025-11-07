@@ -1,4 +1,4 @@
-from sig_html import escape as _esc
+from html import escape as _esc
 # --- early stub: ensures __p_call_sig_ui exists before any imports call it ---
 try:
     __p_call_sig_ui  # noqa
