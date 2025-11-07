@@ -2942,33 +2942,47 @@ def _resolve_model():
 
 
 def _rfp_highlight_css():
-    """Inject CSS once for highlighted previews with human-friendly fonts and spacing."""
+    """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
     try:
         import streamlit as _st
         if not _st.session_state.get("_rfp_hl_css", False):
             _st.markdown(
                 """
                 <style>
-                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 3px; }
-                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 3px; }
-                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 3px; }
-                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 3px; }
-                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 3px; }
-                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 3px; }
-                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 3px; }
-                .rfp-pre {
-                    white-space: normal;
-                    word-break: break-word;
-                    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-                    font-size: 1rem;
-                    line-height: 1.6;
-                    letter-spacing: .01em;
-                    -webkit-font-smoothing: antialiased;
-                    text-rendering: optimizeLegibility;
+                :root {
+                  --rfp-font-size: 0.98rem;
+                  --rfp-line: 1.7;
+                  --rfp-max: 72ch;
                 }
-                .rfp-pre p { margin: 0 0 .8rem; }
-                .rfp-pre ul, .rfp-pre ol { margin: 0 0 .9rem 1.25rem; padding: 0; }
-                .rfp-pre li { margin: .25rem 0; }
+                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 4px; }
+                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 4px; }
+                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 4px; }
+                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 4px; }
+                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 4px; }
+                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 4px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 4px; }
+
+                .rfp-typo {
+                  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+                  font-size: var(--rfp-font-size);
+                  line-height: var(--rfp-line);
+                  letter-spacing: .005em;
+                  -webkit-font-smoothing: antialiased;
+                  text-rendering: optimizeLegibility;
+                  color: inherit;
+                  word-break: normal;
+                  hyphens: auto;
+                  max-width: var(--rfp-max);
+                }
+                .rfp-typo p { margin: 0 0 1rem; }
+                .rfp-typo p + p { margin-top: 0; }
+                .rfp-typo ul, .rfp-typo ol { margin: 0 0 1rem 1.25rem; padding: 0; }
+                .rfp-typo li { margin: .25rem 0; }
+                .rfp-typo a { color: inherit; text-decoration: underline; }
+                .rfp-typo code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .92em; }
+                @media (max-width: 640px) {
+                  .rfp-typo { font-size: 1rem; line-height: 1.8; max-width: 100%; }
+                }
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -3048,10 +3062,11 @@ def _rfp_render_summary(txt: str):
     _st.markdown(_rfp_highlight_html(txt or ""), unsafe_allow_html=True)
 
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with selective highlights and clean spacing (paragraphs and lists)."""
+    """Return HTML with selective highlights and clean, ChatGPT-like typography."""
     import re
+    _rfp_highlight_css()  # ensure styles are present
     if not txt:
-        return "<div class='rfp-pre'>(empty)</div>"
+        return "<div class='rfp-typo'>(empty)</div>"
     src = _esc(txt or "")
 
     # Priority: due > price > poc/email/phone > clin > req > task
@@ -3088,17 +3103,15 @@ def _rfp_highlight_html(txt: str) -> str:
             a, b, cls = best
             hl_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
 
-    # Step 2: group lines into paragraphs or lists on blank lines
+    # Step 2: group into paragraphs and lists; join soft-wrapped lines with spaces
     html_parts = []
     block = []
 
     def flush_block(lines_block):
         if not lines_block:
             return
-        # Detect list type
         bullets = [re.match(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', ln) for ln in lines_block]
-        if all(bullets):
-            # Decide ordered vs unordered by first token
+        if bullets and all(bullets):
             first = bullets[0].group(0)
             is_ordered = bool(re.match(r'^\s*\d+[.)]\s+', first))
             tag = "ol" if is_ordered else "ul"
@@ -3108,8 +3121,9 @@ def _rfp_highlight_html(txt: str) -> str:
                 html_parts.append(f"<li>{content}</li>")
             html_parts.append(f"</{tag}>")
         else:
-            # Regular paragraph. Preserve intentional single line breaks inside the block.
-            paragraph = "<br>".join(ln.strip() for ln in lines_block)
+            paragraph = " ".join(ln.strip() for ln in lines_block)
+            # collapse multiple spaces
+            paragraph = re.sub(r'\s{2,}', ' ', paragraph)
             html_parts.append(f"<p>{paragraph}</p>")
 
     for ln in hl_lines:
@@ -3120,7 +3134,7 @@ def _rfp_highlight_html(txt: str) -> str:
             block.append(ln)
     flush_block(block)
 
-    return "<div class='rfp-pre'>" + "".join(html_parts) + "</div>"
+    return "<div class='rfp-typo'>" + "".join(html_parts) + "</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
@@ -3445,33 +3459,47 @@ def _resolve_model():
 
 
 def _rfp_highlight_css():
-    """Inject CSS once for highlighted previews with human-friendly fonts and spacing."""
+    """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
     try:
         import streamlit as _st
         if not _st.session_state.get("_rfp_hl_css", False):
             _st.markdown(
                 """
                 <style>
-                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 3px; }
-                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 3px; }
-                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 3px; }
-                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 3px; }
-                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 3px; }
-                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 3px; }
-                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 3px; }
-                .rfp-pre {
-                    white-space: normal;
-                    word-break: break-word;
-                    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-                    font-size: 1rem;
-                    line-height: 1.6;
-                    letter-spacing: .01em;
-                    -webkit-font-smoothing: antialiased;
-                    text-rendering: optimizeLegibility;
+                :root {
+                  --rfp-font-size: 0.98rem;
+                  --rfp-line: 1.7;
+                  --rfp-max: 72ch;
                 }
-                .rfp-pre p { margin: 0 0 .8rem; }
-                .rfp-pre ul, .rfp-pre ol { margin: 0 0 .9rem 1.25rem; padding: 0; }
-                .rfp-pre li { margin: .25rem 0; }
+                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 4px; }
+                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 4px; }
+                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 4px; }
+                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 4px; }
+                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 4px; }
+                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 4px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 4px; }
+
+                .rfp-typo {
+                  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+                  font-size: var(--rfp-font-size);
+                  line-height: var(--rfp-line);
+                  letter-spacing: .005em;
+                  -webkit-font-smoothing: antialiased;
+                  text-rendering: optimizeLegibility;
+                  color: inherit;
+                  word-break: normal;
+                  hyphens: auto;
+                  max-width: var(--rfp-max);
+                }
+                .rfp-typo p { margin: 0 0 1rem; }
+                .rfp-typo p + p { margin-top: 0; }
+                .rfp-typo ul, .rfp-typo ol { margin: 0 0 1rem 1.25rem; padding: 0; }
+                .rfp-typo li { margin: .25rem 0; }
+                .rfp-typo a { color: inherit; text-decoration: underline; }
+                .rfp-typo code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .92em; }
+                @media (max-width: 640px) {
+                  .rfp-typo { font-size: 1rem; line-height: 1.8; max-width: 100%; }
+                }
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -3482,10 +3510,11 @@ def _rfp_highlight_css():
 
 
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with selective highlights and clean spacing (paragraphs and lists)."""
+    """Return HTML with selective highlights and clean, ChatGPT-like typography."""
     import re
+    _rfp_highlight_css()  # ensure styles are present
     if not txt:
-        return "<div class='rfp-pre'>(empty)</div>"
+        return "<div class='rfp-typo'>(empty)</div>"
     src = _esc(txt or "")
 
     # Priority: due > price > poc/email/phone > clin > req > task
@@ -3522,17 +3551,15 @@ def _rfp_highlight_html(txt: str) -> str:
             a, b, cls = best
             hl_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
 
-    # Step 2: group lines into paragraphs or lists on blank lines
+    # Step 2: group into paragraphs and lists; join soft-wrapped lines with spaces
     html_parts = []
     block = []
 
     def flush_block(lines_block):
         if not lines_block:
             return
-        # Detect list type
         bullets = [re.match(r'^\s*(?:[-*•]\s+|\d+[.)]\s+)', ln) for ln in lines_block]
-        if all(bullets):
-            # Decide ordered vs unordered by first token
+        if bullets and all(bullets):
             first = bullets[0].group(0)
             is_ordered = bool(re.match(r'^\s*\d+[.)]\s+', first))
             tag = "ol" if is_ordered else "ul"
@@ -3542,8 +3569,9 @@ def _rfp_highlight_html(txt: str) -> str:
                 html_parts.append(f"<li>{content}</li>")
             html_parts.append(f"</{tag}>")
         else:
-            # Regular paragraph. Preserve intentional single line breaks inside the block.
-            paragraph = "<br>".join(ln.strip() for ln in lines_block)
+            paragraph = " ".join(ln.strip() for ln in lines_block)
+            # collapse multiple spaces
+            paragraph = re.sub(r'\s{2,}', ' ', paragraph)
             html_parts.append(f"<p>{paragraph}</p>")
 
     for ln in hl_lines:
@@ -3554,7 +3582,7 @@ def _rfp_highlight_html(txt: str) -> str:
             block.append(ln)
     flush_block(block)
 
-    return "<div class='rfp-pre'>" + "".join(html_parts) + "</div>"
+    return "<div class='rfp-typo'>" + "".join(html_parts) + "</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
