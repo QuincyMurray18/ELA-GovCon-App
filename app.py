@@ -3038,33 +3038,51 @@ def _render_highlights_panel(conn, rid):
         else:
             st.caption("None found.")
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with important items highlighted."""
+    """Return HTML with selective highlights: at most ONE highlight per line in priority order."""
     import re
     if not txt:
         return "<div class='rfp-pre'>(empty)</div>"
-    s = _esc(txt)
+    s = _esc(txt or "")
 
-    # Patterns
-    req_pat   = re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")
-    due_pat   = re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")
-    date_pat  = re.compile(r"(?i)\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\.? [0-3]?\d,? \d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}\s?(?:am|pm|a\.m\.|p\.m\.))\b")
-    poc_pat   = re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")
-    email_pat = re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")
-    phone_pat = re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
-    price_pat = re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")
-    task_pat  = re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")
+    # Priority order: due > price > poc > clin > req > task
+    patterns = [
+        ("due",   re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")),
+        ("price", re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")),
+        ("poc",   re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")),
+        ("poc",   re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")),
+        ("poc",   re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")),
+        ("clin",  re.compile(r"(?i)\bCLIN\s*[:#-]?\s*[0-9A-Z.-]+\b")),
+        ("req",   re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")),
+        ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
+    ]
 
-    # Apply wrappers
-    s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
-    s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
-    s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
-    s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-    s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-    s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-    s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
-    s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
+    out_lines = []
+    for line in s.split("\n"):
+        # Skip empty lines
+        if not line.strip():
+            out_lines.append(line)
+            continue
 
-    return "<div class='rfp-pre'>" + s + "</div>"
+        # Find earliest match across patterns by index position, break ties by list order
+        best = None  # (start, end, cls)
+        for cls, pat in patterns:
+            m = pat.search(line)
+            if not m:
+                continue
+            st = m.start()
+            if best is None or st < best[0]:
+                best = (st, m.end(), cls)
+            # Early break if we matched at pos 0 which is the strongest signal
+            if best and best[0] == 0:
+                break
+
+        if best is None:
+            out_lines.append(line)
+        else:
+            a, b, cls = best
+            out_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
+
+    return "<div class='rfp-pre'>" + "\n".join(out_lines) + "</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
@@ -3422,33 +3440,51 @@ def _rfp_highlight_css():
 
 
 def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML with important items highlighted."""
+    """Return HTML with selective highlights: at most ONE highlight per line in priority order."""
     import re
     if not txt:
         return "<div class='rfp-pre'>(empty)</div>"
-    s = _esc(txt)
+    s = _esc(txt or "")
 
-    # Patterns
-    req_pat   = re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")
-    due_pat   = re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")
-    date_pat  = re.compile(r"(?i)\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\.? [0-3]?\d,? \d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}\s?(?:am|pm|a\.m\.|p\.m\.))\b")
-    poc_pat   = re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")
-    email_pat = re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")
-    phone_pat = re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
-    price_pat = re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")
-    task_pat  = re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")
+    # Priority order: due > price > poc > clin > req > task
+    patterns = [
+        ("due",   re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")),
+        ("price", re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")),
+        ("poc",   re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")),
+        ("poc",   re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")),
+        ("poc",   re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")),
+        ("clin",  re.compile(r"(?i)\bCLIN\s*[:#-]?\s*[0-9A-Z.-]+\b")),
+        ("req",   re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")),
+        ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
+    ]
 
-    # Apply wrappers
-    s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
-    s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
-    s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
-    s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-    s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-    s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-    s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
-    s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
+    out_lines = []
+    for line in s.split("\n"):
+        # Skip empty lines
+        if not line.strip():
+            out_lines.append(line)
+            continue
 
-    return "<div class='rfp-pre'>" + s + "</div>"
+        # Find earliest match across patterns by index position, break ties by list order
+        best = None  # (start, end, cls)
+        for cls, pat in patterns:
+            m = pat.search(line)
+            if not m:
+                continue
+            st = m.start()
+            if best is None or st < best[0]:
+                best = (st, m.end(), cls)
+            # Early break if we matched at pos 0 which is the strongest signal
+            if best and best[0] == 0:
+                break
+
+        if best is None:
+            out_lines.append(line)
+        else:
+            a, b, cls = best
+            out_lines.append(line[:a] + f"<span class='hl-{cls}'>" + line[a:b] + "</span>" + line[b:])
+
+    return "<div class='rfp-pre'>" + "\n".join(out_lines) + "</div>"
 
 def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
     if not text:
