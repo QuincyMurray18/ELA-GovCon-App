@@ -1,3 +1,15 @@
+# === BEGIN EARLY SIG UI STUB ===
+def __p_call_sig_ui(conn):
+    try:
+        import streamlit as _st
+        fn = globals().get("__p_o4_signature_ui") or globals().get("_o4_signature_ui")
+        if callable(fn):
+            return fn(conn)
+        _st.info("Signature editor unavailable in this build.")
+    except Exception:
+        pass
+# === END EARLY SIG UI STUB ===
+
 
 # === BEGIN READSQL SHIM ===
 try:
