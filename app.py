@@ -1,3 +1,4 @@
+from sig_html import escape as _esc
 # --- early stub: ensures __p_call_sig_ui exists before any imports call it ---
 try:
     __p_call_sig_ui  # noqa
@@ -9,7 +10,6 @@ except NameError:
         Otherwise provides a minimal, working editor.
         """
         import streamlit as st
-import re, html
         # If a later, full implementation is available, delegate.
         for name in ("__p_o4_signature_ui", "__p_signature_ui", "__p_call_sig_ui_full"):
             fn = globals().get(name)
@@ -89,8 +89,7 @@ import re, html
             (email,)
         ).fetchone()
         html_default = (row[0] if row else "") or ""
-
-        html = st.text_area("Signature HTML", html_default, height=180, key=f"__p_sig_html_{email}")
+sig_html = st.text_area("Signature HTML", html_default, height=180, key=f"__p_sig_html_{email}")
         logo = st.file_uploader("Logo image (optional)", type=["png","jpg","jpeg","gif"], key=f"__p_sig_logo_{email}")
 
         col1, col2 = st.columns(2)
@@ -102,14 +101,14 @@ import re, html
                 mime = {"png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","gif":"image/gif"}.get(ext, "application/octet-stream")
                 try:
                     sconn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
-                                     VALUES(?,?,?,?,?)""", (email, html, data, mime, name))
+                                     VALUES(?,?,?,?,?)""", (email, sig_html, data, mime, name))
                 except Exception:
                     sconn.execute("""UPDATE outreach_signatures
                                      SET signature_html=?,
                                          logo_blob=COALESCE(?,logo_blob),
                                          logo_mime=COALESCE(?,logo_mime),
                                          logo_name=COALESCE(?,logo_name)
-                                     WHERE lower(email)=lower(?)""", (html, data, mime, name, email))
+                                     WHERE lower(email)=lower(?)""", (sig_html, data, mime, name, email))
                 sconn.commit()
                 st.success("Saved")
         with col2:
@@ -119,7 +118,7 @@ import re, html
                 st.success("Logo removed")
 
         st.caption("Preview")
-        st.markdown(html or "", unsafe_allow_html=True)
+        st.markdown(sig_html or "", unsafe_allow_html=True)
 # --- end early stub ---
 
 # === BEGIN READSQL SHIM ===
@@ -145,7 +144,6 @@ except Exception:
 
 import re
 import streamlit as st
-import re, html
 
 # === Perf+QA helpers ===
 import traceback as _traceback
@@ -321,12 +319,12 @@ def __p___p_read_sql_query(q, conn, params=()):
 # --- end SQL cleaner ---
 
 import zipfile
+import re, sig_html
 
 # --- Phase 3 inline Analyzer (fallback if run_rfp_analyzer is missing) ---
 def _phase3_analyzer_inline(conn):
     import os, io, zipfile, tempfile, re
     import streamlit as st
-import re, html
     from datetime import datetime
 
     # Safety: ensure required helpers exist
@@ -550,7 +548,7 @@ def _ask_rfp_analyzer_modal(notice: dict):
     st.markdown('<a id="ask-rfp-anchor"></a>', unsafe_allow_html=True)
     with st.expander(f"Ask RFP Analyzer — {_title}", expanded=True):
         try:
-            components.html('<script>var el=document.getElementById("ask-rfp-anchor"); if(el){el.scrollIntoView({behavior:"smooth", block:"start"});}</script>', height=0)
+            components.sig_html('<script>var el=document.getElementById("ask-rfp-anchor"); if(el){el.scrollIntoView({behavior:"smooth", block:"start"});}</script>', height=0)
         except Exception:
             pass
         st.write("**Title:**", _title)
@@ -1448,7 +1446,6 @@ def _ensure_indices(conn):
 def _db_connect(db_path: str, **kwargs):
     import sqlite3
     import streamlit as st
-import re, html
 
     # Build connect kwargs with safe defaults
     base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
@@ -1500,7 +1497,6 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
 # Expand Phase 0 write guard to clear caches after commits
 def _write_guard(conn, fn, *args, **kwargs):
     import streamlit as st
-import re, html
 
     with conn:
         out = fn(*args, **kwargs)
@@ -1561,7 +1557,6 @@ if "apply_theme" not in globals():
 # ===== Phase 1 Theme (auto-injected) =====
 def _apply_theme_old():
     import streamlit as st
-import re, html
 
     if st.session_state.get("_phase1_theme_applied"):
         return
@@ -2004,7 +1999,7 @@ def _x3_render_modal(conn, notice: dict):
         try:
             descs = sam_try_fetch_attachments(str(notice.get('Notice ID') or "")) or []
             for name, b in descs:
-                if name.endswith("_description.html"):
+                if name.endswith("_description.sig_html"):
                     try:
                         import bs4
                         soup = bs4.BeautifulSoup(b.decode('utf-8', errors='ignore'), 'html.parser')
@@ -2037,8 +2032,8 @@ def _x3_render_modal(conn, notice: dict):
                     _text = ""
                 st.session_state["x3_docsum"] = _rfp_ai_summary(_text, notice)
         if st.session_state.get("x3_docsum"):
-            with st.expander("Document Summary", expanded=True):
-                st.markdown(st.session_state.get("x3_docsum"))
+            with st.expander("Document Summary", expanded=True):    _rfp_highlight_css()
+    st.markdown(_rfp_highlight_html(st.session_state.get("x3_docsum") or ""), unsafe_allow_html=True)
 
     # Chat
     st.divider()
@@ -2110,7 +2105,6 @@ def get_db():
 
 def get_o4_conn():
     import streamlit as st
-import re, html
 
     global _O4_CONN
 
@@ -2726,7 +2720,6 @@ except Exception:
     mathquests = None
 import smtplib
 import streamlit as st
-import re, html
 
 
 # --- DB helpers: ensure column exists ---
@@ -2956,7 +2949,6 @@ import textwrap
 from typing import List, Dict, Any
 
 import streamlit as st
-import re, html
 
 
 # ---- Minimal AI helpers (mirror app helpers; safe fallbacks) ----
@@ -2990,6 +2982,168 @@ def _resolve_openai_client():
         return None
 
 def _resolve_model():
+    try:
+        import streamlit as st
+        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
+    except Exception:
+        return 'gpt-4o-mini'
+
+def _rfp_highlight_css() -> None:
+    """Inject CSS once for highlighted previews."""
+    try:
+        import streamlit as _st
+        if not _st.session_state.get("_rfp_hl_css", False):
+            _st.markdown(
+                """
+                <style>
+                .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
+                .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
+                .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
+                .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
+                .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 2px; border-radius: 2px; }
+                .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            _st.session_state["_rfp_hl_css"] = True
+    except Exception:
+        pass
+
+
+def _render_highlights_panel(conn, rid):
+    import pandas as pd
+    import streamlit as st
+    st.divider()
+    with st.expander("Highlights (auto)", expanded=True):
+        try:
+            df_lm = pd.read_sql_query("SELECT item_text AS requirement, is_must FROM lm_items WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+        except Exception:
+            df_lm = pd.DataFrame(columns=["requirement","is_must"])
+        try:
+            df_clin = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+        except Exception:
+            df_clin = pd.DataFrame(columns=["clin","description","qty","unit"])
+        try:
+            df_dates = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+        except Exception:
+            df_dates = pd.DataFrame(columns=["label","date_text"])
+        try:
+            df_poc = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+        except Exception:
+            df_poc = pd.DataFrame(columns=["name","role","email","phone"])
+        try:
+            full_txt = y5_extract_from_rfp(conn, int(rid))
+        except Exception:
+            full_txt = ""
+        pricing_hits = _extract_pricing_factors_text(full_txt, max_hits=20)
+        task_hits = _extract_task_lines(full_txt, max_hits=30)
+
+        c1, c2 = st.columns([1,1])
+        with c1:
+            st.markdown("**Requirements (L/M)**")
+            if df_lm is None or df_lm.empty:
+                st.caption("None detected yet.")
+            else:
+                _styled_dataframe(df_lm.rename(columns={"is_must":"Must?"}), use_container_width=True, hide_index=True)
+            st.markdown("**Due Dates**")
+            if df_dates is None or df_dates.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_dates, use_container_width=True, hide_index=True)
+        with c2:
+            st.markdown("**POCs**")
+            if df_poc is None or df_poc.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_poc, use_container_width=True, hide_index=True)
+            st.markdown("**CLINs / Pricing Inputs**")
+            if df_clin is None or df_clin.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_clin, use_container_width=True, hide_index=True)
+
+        st.markdown("**Pricing Evaluation Mentions**")
+        if pricing_hits:
+            st.write("\\n".join([f"• {h}" for h in pricing_hits[:20]]))
+        else:
+            st.caption("None found.")
+
+        st.markdown("**Task / SOW Lines**")
+        if task_hits:
+            st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
+        else:
+            st.caption("None found.")
+def _rfp_highlight_html(txt: str) -> str:
+    """Return HTML with important items highlighted."""
+    if not txt:
+        return "<div class='rfp-pre'>(empty)</div>"
+    s = _esc(txt)
+
+    # Patterns
+    req_pat   = re.compile(r"(?i)\\b(shall|must|required|mandatory|shall not|no later than|will)\\b")
+    due_pat   = re.compile(r"(?i)\\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\\b")
+    date_pat  = re.compile(r"(?i)\\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{3,4}\\s?(?:hrs|hours|et|ct|mt|pt)\\b|\\b\\d{1,2}:\\d{2}\\s?(?:am|pm|a\\.m\\.|p\\.m\\.)?)")
+    poc_pat   = re.compile(r"(?i)\\b(point of contact|poc|contracting officer|co|contract specialist)\\b")
+    email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})")
+    phone_pat = re.compile(r"(?i)(\\+?1?\\s*\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4})")
+    price_pat = re.compile(r"(?i)\\b(price(?:\\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\\b")
+    task_pat  = re.compile(r"(?i)\\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\\b")
+
+    # Apply wrappers
+    s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
+    s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
+    s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
+
+    return "<div class='rfp-pre'>" + s + "</div>"
+
+def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    keys = re.compile(r"(?i)\\b(price realism|price reasonableness|best value|tradeoff|lpta|basis of award|evaluation factors? for award|most advantageous|lowest price)\\b")
+    for ln in lines:
+        if keys.search(ln):
+            hits.append(ln)
+            if len(hits) >= max_hits:
+                break
+    return hits
+
+def _extract_task_lines(text: str, max_hits: int = 30) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines()]
+    section = None
+    for ln in lines:
+        low = ln.lower()
+        if any(h in low for h in ["scope of work", "statement of work", "performance work statement", "pws", "sow", "tasks", "deliverables"]):
+            section = "task"
+        if section == "task":
+            # Collect bullets or numbered lines as tasks
+            if re.match(r"^\\s*(?:[-*•\\u2022]|\\(?[a-z0-9]\\)|\\d+\\.)\\s+", ln, re.IGNORECASE):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+            # Stop if a new all-caps section header appears
+            if re.match(r"^[A-Z][A-Z \\-/]{6,}$", ln.strip()):
+                section = None
+    # Fallback: catch "shall" sentences
+    if not hits:
+        for ln in lines:
+            if re.search(r"(?i)\\b(shall|must)\\b", ln):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+    return hits
+
     return st.secrets.get("openai_model") or st.secrets.get("OPENAI_MODEL") or "gpt-4o-mini"
 
 def _ai_chat(prompt: str) -> str:
@@ -3226,7 +3380,6 @@ BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Su
 
 def apply_theme_phase1():
     import streamlit as st
-import re, html
 
     if st.session_state.get("_phase1_theme_applied"):
         return
@@ -3270,10 +3423,107 @@ import os
 import tempfile
 
 def _resolve_model():
+    try:
+        import streamlit as st
+        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
+    except Exception:
+        return 'gpt-4o-mini'
+
+def _rfp_highlight_css() -> None:
+    """Inject CSS once for highlighted previews."""
+    try:
+        import streamlit as _st
+        if not _st.session_state.get("_rfp_hl_css", False):
+            _st.markdown(
+                """
+                <style>
+                .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
+                .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
+                .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
+                .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
+                .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 2px; border-radius: 2px; }
+                .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            _st.session_state["_rfp_hl_css"] = True
+    except Exception:
+        pass
+
+def _rfp_highlight_html(txt: str) -> str:
+    """Return HTML with important items highlighted."""
+    if not txt:
+        return "<div class='rfp-pre'>(empty)</div>"
+    s = _esc(txt)
+
+    # Patterns
+    req_pat   = re.compile(r"(?i)\\b(shall|must|required|mandatory|shall not|no later than|will)\\b")
+    due_pat   = re.compile(r"(?i)\\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\\b")
+    date_pat  = re.compile(r"(?i)\\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{3,4}\\s?(?:hrs|hours|et|ct|mt|pt)\\b|\\b\\d{1,2}:\\d{2}\\s?(?:am|pm|a\\.m\\.|p\\.m\\.)?)")
+    poc_pat   = re.compile(r"(?i)\\b(point of contact|poc|contracting officer|co|contract specialist)\\b")
+    email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})")
+    phone_pat = re.compile(r"(?i)(\\+?1?\\s*\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4})")
+    price_pat = re.compile(r"(?i)\\b(price(?:\\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\\b")
+    task_pat  = re.compile(r"(?i)\\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\\b")
+
+    # Apply wrappers
+    s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
+    s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
+    s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
+    s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
+    s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
+
+    return "<div class='rfp-pre'>" + s + "</div>"
+
+def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    keys = re.compile(r"(?i)\\b(price realism|price reasonableness|best value|tradeoff|lpta|basis of award|evaluation factors? for award|most advantageous|lowest price)\\b")
+    for ln in lines:
+        if keys.search(ln):
+            hits.append(ln)
+            if len(hits) >= max_hits:
+                break
+    return hits
+
+def _extract_task_lines(text: str, max_hits: int = 30) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines()]
+    section = None
+    for ln in lines:
+        low = ln.lower()
+        if any(h in low for h in ["scope of work", "statement of work", "performance work statement", "pws", "sow", "tasks", "deliverables"]):
+            section = "task"
+        if section == "task":
+            # Collect bullets or numbered lines as tasks
+            if re.match(r"^\\s*(?:[-*•\\u2022]|\\(?[a-z0-9]\\)|\\d+\\.)\\s+", ln, re.IGNORECASE):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+            # Stop if a new all-caps section header appears
+            if re.match(r"^[A-Z][A-Z \\-/]{6,}$", ln.strip()):
+                section = None
+    # Fallback: catch "shall" sentences
+    if not hits:
+        for ln in lines:
+            if re.search(r"(?i)\\b(shall|must)\\b", ln):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+    return hits
+
     # Priority: Streamlit secrets -> env var -> safe default
     try:
         import streamlit as st
-import re, html
 
         for key in ("OPENAI_MODEL", "openai_model", "model"):
             try:
@@ -3289,7 +3539,6 @@ import re, html
 _ai_client = None
 def get_ai():
     import streamlit as st
-import re, html
 
     global _ai_client
     if _ai_client is None:
@@ -3511,7 +3760,7 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
 def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     _ensure_y1_schema(conn)
     try:
-        df = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if df is None or df.empty:
@@ -4317,7 +4566,7 @@ def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text:
 # === Phase 2: Dedicated finders and status chips ===
 def _collect_full_text(conn: "sqlite3.Connection", rfp_id: int) -> str:
     try:
-        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+        df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
     except Exception:
         df = pd.DataFrame()
     parts = []
@@ -5243,7 +5492,7 @@ def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
             params["api_key"] = api_key
         resp = requests.get(desc_url, params=params, timeout=30)
         if resp.ok and resp.text:
-            files.append((f"{notice_id}_description.html", resp.text.encode("utf-8", errors="ignore")))
+            files.append((f"{notice_id}_description.sig_html", resp.text.encode("utf-8", errors="ignore")))
     except Exception:
         pass
 
@@ -7449,7 +7698,7 @@ def _run_rfp_analyzer_phase3(conn):
         # X2: Files for this RFP
         with st.expander("Files for this RFP (X2)", expanded=False):
             try:
-                df_files = pd.read_sql_query("SELECT id, filename, mime, pages, sha256 FROM rfp_files WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rid),))
+                df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception as e:
                 df_files = pd.DataFrame()
             st.caption("Linked files")
@@ -7484,6 +7733,7 @@ def _run_rfp_analyzer_phase3(conn):
                                     st.markdown(_rfp_highlight_html(preview), unsafe_allow_html=True)
                                 with t2:
                                     st.text_area("Preview (first 20k chars)", value=preview, height=300)
+
                         except Exception as e:
                             st.info(f"Preview unavailable: {e}")
                 except Exception as e:
@@ -7496,7 +7746,7 @@ def _run_rfp_analyzer_phase3(conn):
                     if st.button("Download all linked files as ZIP", key=f"zip_all_{rid}"):
                         try:
                             # Fetch bytes for all linked files
-                            df_bytes = pd.read_sql_query("SELECT filename, bytes, mime FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
+                            df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
                             if df_bytes is None or df_bytes.empty:
                                 st.warning("No files to package.")
                             else:
@@ -7562,12 +7812,24 @@ def _run_rfp_analyzer_phase3(conn):
                         st.error(f"Unlink failed: {e}")
             st.caption("Attach from library")
             try:
-                df_pool = pd.read_sql_query("SELECT id, filename, mime, pages FROM rfp_files WHERE rfp_id IS NULL ORDER BY id DESC LIMIT 500;", conn, params=())
+                df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
                 df_pool = pd.DataFrame()
             if df_pool is None or df_pool.empty:
                 st.write("No unlinked files in library.")
             else:
+                bio = _io.BytesIO()
+                with _zipfile.ZipFile(bio, 'w', _zipfile.ZIP_DEFLATED) as zf:
+                    for _, r in df_bytes.iterrows():
+                        fn = r.get('filename') or f"rfp_file_{int(r.get('id', 0))}"
+                        zf.writestr(fn, r.get('bytes'))
+                st.download_button(
+                    label='Download ZIP',
+                    data=bio.getvalue(),
+                    file_name=f'rfp_{rid}_files.zip',
+                    mime='application/zip',
+                    key=f'zip_{rid}'
+                )
                 _styled_dataframe(df_pool, use_container_width=True, hide_index=True)
                 to_link = st.multiselect("Attach file IDs", options=df_pool["id"].tolist(), key=f"link_{rid}")
                 if st.button("Attach selected to this RFP", key=f"link_btn_{rid}") and to_link:
@@ -7628,6 +7890,7 @@ def _run_rfp_analyzer_phase3(conn):
 
         with st.expander("Acquisition Meta (X4)", expanded=False):
             _render_highlights_panel(conn, rid)
+    
             try:
                 df_meta_all = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
             except Exception:
@@ -8273,7 +8536,6 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     import math
     import streamlit as st
-import re, html
 
     n = 0 if df is None else len(df)
     page_size = max(5, int(page_size or 25))
@@ -8454,7 +8716,7 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
     msg["From"] = f"{cfg.get('from_name') or ''} <{cfg['from_email']}>"
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(html_body, "html"))
+    msg.attach(MIMEText(html_body, "sig_html"))
 
     for path in attachments or []:
         try:
@@ -10503,7 +10765,7 @@ def _apply_theme_old() -> None:
     css = """
     <style>
     /* Base font and spacing */
-    html, body, [class*="css"]  { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+    sig_html, body, [class*="css"]  { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
     .main .block-container { padding-top: 1rem; padding-bottom: 4rem; max-width: 1400px; }
     /* Headings */
     h1, h2, h3 { letter-spacing: 0.2px; }
@@ -10583,7 +10845,6 @@ def nav() -> str:
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
     import streamlit as st
-import re, html
 
     from contextlib import closing as _closing
 
@@ -10901,7 +11162,6 @@ if "_o3_collect_recipients_ui" not in globals():
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker_legacy():
         import streamlit as st
-import re, html
 
         conn = get_o4_conn()
         try:
@@ -10930,7 +11190,6 @@ import re, html
                         st.success("Saved")
                         try:
                             import streamlit as st
-import re, html
 
                             st.session_state["o4_sender_sel"] = email.strip()
                         except Exception:
@@ -11324,7 +11583,6 @@ def s1_calc_radius_meters(miles:int)->int:
     return int(float(miles) * 1609.344)
 def s1_render_places_panel(conn, default_addr:str|None=None):
     import streamlit as st
-import re, html
 
     ensure_subfinder_s1_schema(conn)
     st.markdown("### Google Places search")
@@ -11483,14 +11741,14 @@ def render_outreach_templates(conn):
         tid = None
         name = st.text_input("Name", key="tpl_name")
         subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
-        html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
+sig_html = st.text_area("HTML body", value=st.session_state.get("outreach_html",""), height=300)
     else:
         row = next(r for r in rows if r[1] == sel)
         tid = row[0]
         name = st.text_input("Name", value=row[1], key="tpl_name__2")
         subject = st.text_input("Subject", value=row[2], key="tpl_subject")
-        html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
-    missing = template_missing_tags((subject or "") + " " + (html or ""))
+sig_html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
+    missing = template_missing_tags((subject or "") + " " + (sig_html or ""))
     if missing:
         st.info("Missing merge tags: " + ", ".join(sorted(missing)))
     c1, c2, c3 = st.columns(3)
@@ -11499,11 +11757,11 @@ def render_outreach_templates(conn):
             if not (name or "").strip():
                 st.error("Name required")
             else:
-                email_template_upsert(conn, name, subject or "", html or "", tid)
+                email_template_upsert(conn, name, subject or "", sig_html or "", tid)
                 st.success("Saved")
     with c2:
         if (tid is not None) and st.button("Duplicate"):
-            email_template_upsert(conn, f"{name} copy", subject or "", html or "", None)
+            email_template_upsert(conn, f"{name} copy", subject or "", sig_html or "", None)
             st.success("Duplicated")
             st.rerun()
     with c3:
@@ -11590,7 +11848,6 @@ def o4_sender_accounts_ui(conn):
 def render_outreach_mailmerge(conn):
     globals()['_O4_CONN'] = conn
     import streamlit as st
-import re, html
 
     import pandas as _pd
     # 1) Recipients
@@ -11655,7 +11912,6 @@ import re, html
 
 def run_outreach(conn):
     import streamlit as st
-import re, html
 
 
     # O4 badge if present
@@ -11724,19 +11980,19 @@ def _o3_ensure_schema(conn):
         conn.commit()
 
 
-def _o3_wrap_email_html(html: str) -> str:
+def _o3_wrap_email_html(sig_html: str) -> str:
     # Basic, client-safe wrapper to ensure readable default font size.
     # Uses table layout and inline styles for Gmail/Outlook compatibility.
-    safe = html or ""
+    safe = sig_html or ""
     return (
-        "<!doctype html>"
-        "<html><head><meta charset=\"utf-8\"></head>"
+        "<!doctype sig_html>"
+        "<sig_html><head><meta charset=\"utf-8\"></head>"
         "<body style=\"margin:0;padding:0;background:#ffffff;\">"
         "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
         "<tr><td style=\"font-family: Arial, sans-serif; font-size:16px; line-height:1.5; color:#222222;\">"
         + safe +
         "</td></tr></table>"
-        "</body></html>"
+        "</body></sig_html>"
     )
 def _o3_merge(text, data: dict) -> str:
     import re as _re
@@ -11783,7 +12039,6 @@ def _o3_load_vendors_df(conn):
 
 def _o3_collect_recipients_ui(conn):
     import streamlit as st
-import re, html
 
     _o3_ensure_schema(conn)
     st.subheader("Recipients")
@@ -11883,7 +12138,6 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     except Exception:
         pass
     import streamlit as st
-import re, html
 
     _o3_ensure_schema(conn)
     if rows is None or rows.empty:
@@ -11934,9 +12188,9 @@ import re, html
         else:
             data = {k: str(r.get(k,"") or "") for k in r.index}
             subj = _o3_merge(subject_tpl or "", data)
-            html = _o3_merge(html_tpl or "", data)
+            sig_html = _o3_merge(html_tpl or "", data)
             if "unsubscribe" not in html.lower():
-                html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
+                sig_html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
             if test_only:
                 status = "Preview"; err = ""
             else:
@@ -11948,11 +12202,11 @@ import re, html
                     # Apply saved signature for the active sender
                     try:
                         _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None) or conn
-                        html, _inline_imgs = __p_render_signature(_sig_conn, (sender.get('email') or sender.get('username') or '').strip(), html)
+                        sig_html, _inline_imgs = __p_render_signature(_sig_conn, (sender.get('email') or sender.get('username') or '').strip(), sig_html)
                     except Exception:
                         pass
-                    html = _o3_wrap_email_html(html)
-                    msg.attach(_O3MIMEText(html, "html", "utf-8"))
+                    sig_html = _o3_wrap_email_html(sig_html)
+                    msg.attach(_O3MIMEText(sig_html, "sig_html", "utf-8"))
                     # Attach files if provided
                     try:
                         if attachments:
@@ -12030,10 +12284,8 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
 # === O4: Multi-sender accounts + opt-outs + audit UI ================================
 def _o4_accounts_ui(conn):
     import streamlit as st
-import re, html
 
     import streamlit as st
-import re, html
 
     ensure_outreach_o1_schema(conn)
     rows = conn.execute("SELECT user_email, display_name, smtp_host, smtp_port, use_ssl FROM email_accounts ORDER BY user_email").fetchall()
@@ -12084,7 +12336,6 @@ import re, html
 
 def _o3_render_sender_picker():
     import streamlit as st
-import re, html
 
     # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
 
@@ -12130,7 +12381,6 @@ import re, html
 
 def _o4_optout_ui(conn):
     import streamlit as st
-import re, html
 
     # tables already created by O3; ensure again for safety
     with conn:
@@ -12160,7 +12410,6 @@ import re, html
 
 def _o4_audit_ui(conn):
     import streamlit as st
-import re, html
 
     try:
         blasts = _pd.__p_read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
@@ -12255,15 +12504,15 @@ def _o5_pick_sender_from_session():
     password = st.session_state.get("smtp_password", "")
     return {"host": host or "smtp.gmail.com", "port": int(port or 587), "tls": tls, "username": username, "password": password}
 
-def _o5_smtp_send(sender: dict, to_email: str, subject: str, html: str):
+def _o5_smtp_send(sender: dict, to_email: str, subject: str, sig_html: str):
     # Apply signature HTML inside the function scope
     try:
         _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
-        html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
+        sig_html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), sig_html)
     except Exception:
         pass
     msg = MIMEMultipart("alternative"); msg["Subject"] = subject or ""; msg["From"] = sender.get("username") or sender.get("email"); msg["To"] = to_email
-    msg.attach(MIMEText(html or "", "html"))
+    msg.attach(MIMEText(sig_html or "", "sig_html"))
     if sender.get('tls'):
         server = smtplib.SMTP(sender["host"], sender["port"]); server.starttls(); server.login(sender.get("username") or sender.get("email"), sender.get("password") or sender.get("app_password",""))
     else:
@@ -12432,23 +12681,23 @@ def _o6_wrap_o3_send_batch():
         return
     def wrapped(*args, **kwargs):
         import pandas as _pd
-        # Normalize to new signature: (conn, sender, rows_df, subj, html, test_only=False, max_send=500)
+        # Normalize to new signature: (conn, sender, rows_df, subj, sig_html, test_only=False, max_send=500)
         conn = kwargs.get("conn")
         sender = kwargs.get("sender")
         rows = kwargs.get("rows")
         subj = kwargs.get("subj")
-        html = kwargs.get("html")
+        sig_html = kwargs.get("sig_html")
         test_only = kwargs.get("test_only", False)
         max_send = kwargs.get("max_send", 500)
 
         # Positional fallbacks
-        if conn is None or sender is None or rows is None or subj is None or html is None:
+        if conn is None or sender is None or rows is None or subj is None or sig_html is None:
             if len(args) >= 5:
-                conn, sender, rows, subj, html = args[:5]
+                conn, sender, rows, subj, sig_html = args[:5]
                 if len(args) >= 6: test_only = args[5]
                 if len(args) >= 7: max_send = args[6]
             elif len(args) == 2:
-                # Old call style: _o3_send_batch(sender, [{to, subject, html}, ])
+                # Old call style: _o3_send_batch(sender, [{to, subject, sig_html}, ])
                 sender, rows_list = args
                 # Build conn via get_db if available
                 if conn is None and "get_db" in g:
@@ -12463,10 +12712,10 @@ def _o6_wrap_o3_send_batch():
                     rows = _pd.DataFrame(rows_list)
                 else:
                     rows = _pd.DataFrame([])
-                # Derive subj and html defaults per-row later
+                # Derive subj and sig_html defaults per-row later
                 # If provided in kwargs, use them
                 subj = subj or (rows.iloc[0]["subject"] if not rows.empty and "subject" in rows.columns else "")
-                html = html or (rows.iloc[0]["html"] if not rows.empty and "html" in rows.columns else "")
+                sig_html = sig_html or (rows.iloc[0]["sig_html"] if not rows.empty and "sig_html" in rows.columns else "")
             else:
                 # Unsupported call pattern
                 raise TypeError("Unsupported _o3_send_batch call signature")
@@ -12480,20 +12729,20 @@ def _o6_wrap_o3_send_batch():
                 _rows = _rows[mask]
             rows = _rows
 
-        # If subj/html empty but rows contain per-recipient fields, send one by one
-        if (not subj or not html) and rows is not None and not rows.empty and {"subject","html"}.issubset(set(map(str.lower, rows.columns))):
+        # If subj/sig_html empty but rows contain per-recipient fields, send one by one
+        if (not subj or not sig_html) and rows is not None and not rows.empty and {"subject","sig_html"}.issubset(set(map(str.lower, rows.columns))):
             # Normalize column names case-insensitively
             columns = {c.lower(): c for c in rows.columns}
             total = 0
             for _, r in rows.iterrows():
                 subj_i = str(r.get(columns.get("subject"), subj) or "")
-                html_i = str(r.get(columns.get("html"), html) or "")
+                html_i = str(r.get(columns.get("sig_html"), sig_html) or "")
                 # Build single-row frame to keep orig API
-                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj_i, html=html_i, test_only=test_only, max_send=1)
+                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj_i, sig_html=html_i, test_only=test_only, max_send=1)
                 total += 1
             return total
 
-        return orig(conn, sender, rows, subj, html, test_only=test_only, max_send=max_send)
+        return orig(conn, sender, rows, subj, sig_html, test_only=test_only, max_send=max_send)
     wrapped._o6_wrapped = True
     g["_o3_send_batch"] = wrapped
 
@@ -12609,7 +12858,6 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
 
 def _s1d_render_from_cache(conn, df):
     import streamlit as st
-import re, html
 
     import pandas as _pd
     if df is None or getattr(df, "empty", True):
@@ -12855,7 +13103,6 @@ def _wrap_run_subfinder():
         return
     def wrapped(conn):
         import streamlit as st
-import re, html
 
         st.header("Subcontractor Finder")
         try:
@@ -12917,16 +13164,16 @@ def __p_is_supp(conn, email):
     row = __p_db(conn, "SELECT 1 FROM outreach_optouts WHERE lower(email)=lower(?) LIMIT 1", (email,)).fetchone()
     return bool(row)
 
-def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None = None):
+def __p_smtp_send(sender, to_email, subject, sig_html, attachments: list[str] | None = None):
     msg = _MMulti("alternative"); msg["Subject"]=subject or ""; msg["From"]=sender["email"]; msg["To"]=to_email
 # Inject signature HTML
     # Inject signature HTML
     try:
         _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None)
-        html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), html)
+        sig_html, _imgs = __p_render_signature(_sig_conn or None, (sender.get('email') or sender.get('username') or '').strip(), sig_html)
     except Exception:
         pass
-    msg.attach(_MText(html or "", "html"))
+    msg.attach(_MText(sig_html or "", "sig_html"))
     # Attachments
     try:
         if attachments:
@@ -13011,10 +13258,10 @@ def __p_o3_ui(conn):
         if p and "@" in p[0]: rows.append(dict(email=p[0],name=(p[1] if len(p)>1 else ""),company=(p[2] if len(p)>2 else "")))
     def _render(s, r): return (s or "").replace("{{name}}", r.get("name","")).replace("{{company}}", r.get("company",""))
     base = __p_unsub_base(conn)
-    def _with_unsub(html, em):
-        if "{{UNSUB_LINK}}" in (html or ""): return (html or "").replace("{{UNSUB_LINK}}", __p_unsub_link(conn, em) if base else "")
-        if base: return (html or "") + f"<hr><p style='font-size:12px;color:#666'>To unsubscribe click <a href='{__p_unsub_link(conn, em)}'>here</a>.</p>"
-        return html
+    def _with_unsub(sig_html, em):
+        if "{{UNSUB_LINK}}" in (sig_html or ""): return (sig_html or "").replace("{{UNSUB_LINK}}", __p_unsub_link(conn, em) if base else "")
+        if base: return (sig_html or "") + f"<hr><p style='font-size:12px;color:#666'>To unsubscribe click <a href='{__p_unsub_link(conn, em)}'>here</a>.</p>"
+        return sig_html
     if go_test and subj and body:
         try:
             s_subj = _render(subj, {"name":"Test","company":"TestCo"})
@@ -13088,10 +13335,10 @@ def __p_o5_ui(conn):
             if not s: _st.error("No active sender in O4")
             else:
                 ok=fail=0; base=__p_unsub_base(conn)
-                def w(html,em):
-                    if "{{UNSUB_LINK}}" in (html or ""): return (html or "").replace("{{UNSUB_LINK}}", __p_unsub_link(conn, em) if base else "")
-                    if base: return (html or "")+f"<hr><p style='font-size:12px;color:#666'>To unsubscribe click <a href='{__p_unsub_link(conn, em)}'>here</a>.</p>"
-                    return html
+                def w(sig_html,em):
+                    if "{{UNSUB_LINK}}" in (sig_html or ""): return (sig_html or "").replace("{{UNSUB_LINK}}", __p_unsub_link(conn, em) if base else "")
+                    if base: return (sig_html or "")+f"<hr><p style='font-size:12px;color:#666'>To unsubscribe click <a href='{__p_unsub_link(conn, em)}'>here</a>.</p>"
+                    return sig_html
                 for _,r in due.iterrows():
                     em=r["to_email"]
                     if __p_is_supp(conn, em): __p_db(conn, "UPDATE outreach_schedules SET status='skipped' WHERE id=?", (int(r["id"]),)); continue
@@ -13271,7 +13518,6 @@ import time as _time
 # ---- Streamlit write guard: suppress rendering of None ----
 try:
     import streamlit as st
-import re, html
 
     if not hasattr(st, "_write_wrapped"):
         _orig_write = st.write
@@ -13292,7 +13538,6 @@ except Exception:
     _title_safe = "ELA GovCon Suite"
 try:
     import streamlit as st
-import re, html
 
     st.set_page_config(page_title=_title_safe, page_icon="🧭", layout="wide")
 except Exception:
@@ -13573,7 +13818,6 @@ def run_backup_data(conn):
 if "_o3_render_sender_picker" not in globals():
     def _o3_render_sender_picker():
         import streamlit as st
-import re, html
 
         from contextlib import closing
         host, port, username, password, use_tls = "smtp.gmail.com", 465, "", "", False
@@ -13603,7 +13847,6 @@ if '_wrapped_o4_mailmerge' not in globals():
     _orig__render_outreach_mailmerge = render_outreach_mailmerge
     def render_outreach_mailmerge(conn):
         import streamlit as st
-import re, html
 
         sender = _o3_render_sender_picker() if "_o3_render_sender_picker" in globals() else {}
         if sender and "username" in sender and "email" not in sender:
@@ -13620,7 +13863,6 @@ import re, html
 def o1_sender_accounts_ui(conn):
     globals()['_O4_CONN'] = conn
     import streamlit as st
-import re, html
 
     import pandas as _pd
     ensure_outreach_o1_schema(conn)
@@ -13650,7 +13892,6 @@ import re, html
             st.success("Saved")
     try:
         import streamlit as st
-import re, html
 
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
@@ -13792,7 +14033,6 @@ def relevance_score(row: dict, profile: dict | None = None) -> float:
 def _render_ask_rfp_autorender():
     """If a previous click requested the Ask RFP modal, render it open on rerun."""
     import streamlit as st
-import re, html
 
     if st.session_state.get("ask_rfp_open"):
         _ask_rfp_analyzer_modal(st.session_state.get("ask_rfp_notice") or {})
@@ -13952,7 +14192,6 @@ def _make_ics(title: str, dt):
 
 def run_router(conn):
     import streamlit as st
-import re, html
     pages = ["SAM Watch", "RFP Analyzer"]
     choice = st.sidebar.radio("Go to", pages, index=0, key="phase3_nav")
     if choice == "RFP Analyzer":
@@ -13984,119 +14223,3 @@ def _get_conn(db_path="samwatch.db"):
 # SIG+LOGO patch removed
 
 # O4 wrapper disabled
-
-
-# === ELA add-on: RFP highlighter and summary panel ===
-if "__ELA_RFP_HILITE__" not in globals():
-    __ELA_RFP_HILITE__ = True
-
-    def _rfp_highlight_css() -> None:
-        try:
-            import streamlit as _st
-            if not _st.session_state.get("_rfp_hl_css", False):
-                _st.markdown(
-                    """
-                    <style>
-                    .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
-                    .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
-                    .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
-                    .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
-                    .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
-                    .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                _st.session_state["_rfp_hl_css"] = True
-        except Exception:
-            pass
-
-    def _rfp_highlight_html(txt: str) -> str:
-        if not txt:
-            return "<div class='rfp-pre'>(empty)</div>"
-        s = html.escape(txt)
-
-        req_pat   = re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")
-        due_pat   = re.compile(r"(?i)\b(proposal due|responses? due|closing (?:date|time)|due date|submission deadline|closing)\b")
-        date_pat  = re.compile(r"(?i)\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|\b\d{3,4}\s?(?:hrs|hours|et|ct|mt|pt)\b|\b\d{1,2}:\d{2}\s?(?:am|pm|a\.m\.|p\.m\.)?)")
-        poc_pat   = re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")
-        email_pat = re.compile(r"(?i)([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})")
-        phone_pat = re.compile(r"(?i)(\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})")
-        price_pat = re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|basis of award|evaluation|lpta|best value|tradeoff|clin|unit price|bill of materials|bom|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")
-        task_pat  = re.compile(r"(?i)\b(scope of work|statement of work|performance work statement|pws|sow|tasks?|deliverables?|requirements?|period of performance|pop|place of performance)\b")
-
-        s = req_pat.sub(lambda m: f"<span class='hl-req'>{m.group(0)}</span>", s)
-        s = due_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
-        s = date_pat.sub(lambda m: f"<span class='hl-due'>{m.group(0)}</span>", s)
-        s = poc_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-        s = email_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-        s = phone_pat.sub(lambda m: f"<span class='hl-poc'>{m.group(0)}</span>", s)
-        s = price_pat.sub(lambda m: f"<span class='hl-price'>{m.group(0)}</span>", s)
-        s = task_pat.sub(lambda m: f"<span class='hl-task'>{m.group(0)}</span>", s)
-
-        return "<div class='rfp-pre'>" + s + "</div>"
-
-    def _render_highlights_panel(conn, rid):
-        import pandas as pd
-        import streamlit as st
-        st.divider()
-        with st.expander("Highlights (auto)", expanded=True):
-            try:
-                df_lm = pd.read_sql_query("SELECT item_text AS requirement, is_must FROM lm_items WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
-            except Exception:
-                df_lm = pd.DataFrame(columns=["requirement","is_must"])
-            try:
-                df_clin = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
-            except Exception:
-                df_clin = pd.DataFrame(columns=["clin","description","qty","unit"])
-            try:
-                df_dates = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
-            except Exception:
-                df_dates = pd.DataFrame(columns=["label","date_text"])
-            try:
-                df_poc = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
-            except Exception:
-                df_poc = pd.DataFrame(columns=["name","role","email","phone"])
-            try:
-                full_txt = y5_extract_from_rfp(conn, int(rid))
-            except Exception:
-                full_txt = ""
-            pricing_hits = []  # optional: wire to your extractors if present
-            task_hits = []     # optional: wire to your extractors if present
-
-            c1, c2 = st.columns([1,1])
-            with c1:
-                st.markdown("**Requirements (L/M)**")
-                if df_lm is None or df_lm.empty:
-                    st.caption("None detected yet.")
-                else:
-                    _styled_dataframe(df_lm.rename(columns={"is_must":"Must?"}), use_container_width=True, hide_index=True)
-                st.markdown("**Due Dates**")
-                if df_dates is None or df_dates.empty:
-                    st.caption("None detected.")
-                else:
-                    _styled_dataframe(df_dates, use_container_width=True, hide_index=True)
-            with c2:
-                st.markdown("**POCs**")
-                if df_poc is None or df_poc.empty:
-                    st.caption("None detected.")
-                else:
-                    _styled_dataframe(df_poc, use_container_width=True, hide_index=True)
-                st.markdown("**CLINs / Pricing Inputs**")
-                if df_clin is None or df_clin.empty:
-                    st.caption("None detected.")
-                else:
-                    _styled_dataframe(df_clin, use_container_width=True, hide_index=True)
-
-            st.markdown("**Pricing Evaluation Mentions**")
-            if pricing_hits:
-                st.write("\\n".join([f"• {h}" for h in pricing_hits[:20]]))
-            else:
-                st.caption("None found.")
-
-            st.markdown("**Task / SOW Lines**")
-            if task_hits:
-                st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
-            else:
-                st.caption("None found.")
-
