@@ -1,4 +1,114 @@
 
+# === EARLY SIGNATURE UI STUB (prevents NameError and provides working fallback) ===
+# This is defined at the very top so any early calls to __p_call_sig_ui succeed.
+# Later definitions can override it with the full UI without issues.
+if "__p_call_sig_ui" not in globals():
+    def __p_call_sig_ui(conn):
+        # Fully functional fallback editor. No external helpers required.
+        try:
+            import streamlit as st
+        except Exception:
+            return
+        # Ensure storage table exists
+        try:
+            conn.execute("""CREATE TABLE IF NOT EXISTS outreach_signatures(
+                email TEXT PRIMARY KEY,
+                signature_html TEXT DEFAULT '',
+                logo_blob BLOB,
+                logo_mime TEXT,
+                logo_name TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );""")
+            conn.commit()
+        except Exception:
+            pass
+        # Discover sender list from email_accounts then outreach_sender_accounts
+        rows = []
+        try:
+            rows = conn.execute("SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;").fetchall()
+        except Exception:
+            rows = []
+        if not rows:
+            try:
+                rows = conn.execute("SELECT email, COALESCE(display,'') FROM outreach_sender_accounts ORDER BY id DESC;").fetchall()
+            except Exception:
+                rows = []
+        if not rows:
+            st.info("No senders found. Add one above, then configure a signature.")
+            return
+        labels = [f"{(r[1] or r[0])} — {r[0]}" for r in rows]
+        # Respect any preselected sender
+        _default = st.session_state.get("__p_sig_sender", labels[0])
+        if _default not in labels:
+            _default = labels[0]
+        choice = st.selectbox("Sender", labels, index=labels.index(_default), key="__p_sig_sender")
+        sender_email = rows[labels.index(choice)][0]
+        # Load existing signature
+        try:
+            r = conn.execute(
+                "SELECT signature_html, logo_blob, logo_mime, logo_name FROM outreach_signatures WHERE lower(email)=lower(?)",
+                (sender_email,)
+            ).fetchone()
+        except Exception:
+            r = None
+        state_html = (r[0] if r else "") or ""
+        state_logo = (r[1] if r else None)
+        state_mime = (r[2] if r else None)
+        state_name = (r[3] if r else None)
+        st.caption("Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
+        html = st.text_area("Signature HTML", value=state_html, height=180, key="__p_sig_html")
+        file = st.file_uploader("Logo image (PNG/JPG/GIF)", type=["png","jpg","jpeg","gif"], key="__p_sig_logo")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Save signature", key="__p_sig_save"):
+                blob = state_logo; mime = state_mime; name = state_name
+                if file is not None:
+                    try:
+                        blob = file.read(); mime = file.type or "image/png"; name = file.name
+                    except Exception:
+                        blob = None; mime = None; name = None
+                # Upsert
+                try:
+                    conn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name, updated_at)
+                                   VALUES(?,?,?,?,?,datetime('now'))
+                                   ON CONFLICT(email) DO UPDATE SET
+                                     signature_html=excluded.signature_html,
+                                     logo_blob=excluded.logo_blob,
+                                     logo_mime=excluded.logo_mime,
+                                     logo_name=excluded.logo_name,
+                                     updated_at=datetime('now')""", (sender_email, html, blob, mime, name))
+                    conn.commit()
+                except Exception:
+                    try:
+                        conn.execute("DELETE FROM outreach_signatures WHERE lower(email)=lower(?)", (sender_email,))
+                        conn.execute("INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name, updated_at) VALUES(?,?,?,?,?,datetime('now'))",
+                                     (sender_email, html, blob, mime, name))
+                        conn.commit()
+                    except Exception as e2:
+                        st.error(f"Save failed: {e2}")
+                        return
+                st.success("Saved")
+        with c2:
+            if st.button("Remove logo", key="__p_sig_rm"):
+                try:
+                    conn.execute("UPDATE outreach_signatures SET logo_blob=NULL, logo_mime=NULL, logo_name=NULL, updated_at=datetime('now') WHERE lower(email)=lower(?)", (sender_email,))
+                    conn.commit()
+                except Exception as e3:
+                    st.error(f"Remove failed: {e3}")
+                else:
+                    st.info("Logo removed")
+        try:
+            st.divider()
+            st.subheader("Preview")
+            if state_logo is not None:
+                st.image(state_logo)
+            st.markdown(html or state_html, unsafe_allow_html=True)
+        except Exception:
+            pass
+# === END EARLY SIGNATURE UI STUB ===
+
+
+
 # === BEGIN READSQL SHIM ===
 try:
     import pandas as _pd
@@ -10419,7 +10529,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        
+        __p_call_sig_ui(conn)
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -11341,13 +11451,6 @@ def o4_sender_accounts_ui(conn):
 
 
 def render_outreach_mailmerge(conn):
-
-    try:
-        import streamlit as st
-        st.subheader("Signature for selected sender")
-        __p_call_sig_ui(conn)
-    except Exception:
-        pass
     globals()['_O4_CONN'] = conn
     import streamlit as st
 
@@ -11394,7 +11497,7 @@ def render_outreach_mailmerge(conn):
                 st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        
+        __p_call_sig_ui(conn)
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -12522,7 +12625,7 @@ def render_subfinder_s1d(conn):
                 st.session_state["__p_sig_sender"] = _label
         except Exception:
             pass
-        
+        __p_call_sig_ui(conn)
     except Exception as _e_sig:
         try:
             st.warning(f"Signature editor unavailable: {_e_sig}")
@@ -12713,13 +12816,6 @@ def __p_smtp_send(sender, to_email, subject, html, attachments: list[str] | None
 
 def __p_o4_ui(conn):
     _st.caption("Multiple Gmail senders via App Passwords.")
-
-    try:
-        import streamlit as st
-        st.subheader("Signature for selected sender")
-        __p_call_sig_ui(conn)
-    except Exception:
-        pass
     with _st.form("__p_o4_add_sender", clear_on_submit=True):
         col1,col2 = _st.columns(2)
         with col1:
@@ -13747,15 +13843,13 @@ def _get_conn(db_path="samwatch.db"):
 
 
 # --- Safe dispatcher to avoid NameError when signature UI is not yet defined ---
-def __p_call_sig_ui(conn):
+def __p_call_sig_ui_placeholder(conn):
     try:
         import streamlit as _st
     except Exception:
         return
     try:
-        fn = (globals().get("__p_o4_signature_ui")
-              or globals().get("__p_signature_ui")
-              or globals().get("__p_call_sig_ui_full"))
+        fn = globals().get("__p_o4_signature_ui")
         if callable(fn):
             return fn(conn)
         _st.info("Signature editor unavailable in this build.")
@@ -13848,7 +13942,7 @@ def __p_render_signature(conn, sender_email: str, html: str):
         return html_out, inline_images
     return html, inline_images
 
-def __p_call_sig_ui_placeholder(conn):
+def __p_call_sig_ui(conn):
     import streamlit as st
     st.caption("Per-sender signatures. Use {{SIGNATURE}} in templates. Optional {{SIGNATURE_LOGO}} inside the signature.")
     # Prefer email_accounts table used by this build
@@ -13904,12 +13998,15 @@ try:
             try:
                 st.divider()
                 st.subheader("Per-sender signature")
-                __p_call_sig_ui(conn)
             except Exception:
                 pass
+            try:
+                __p_call_sig_ui(conn)
+            except Exception as e:
+                try: st.warning(f"Signature editor unavailable: {e}")
+                except Exception: pass
 except Exception:
     pass
-
 
 
 
@@ -14068,7 +14165,7 @@ try:
                 _orig_o4_sender_accounts_ui(conn)
                 try:
                     st.subheader("Signature for selected sender")
-                    
+                    __p_call_sig_ui(conn)
                 except Exception:
                     pass
         if "__p_o4_ui" in globals():
@@ -14078,27 +14175,9 @@ try:
                 _orig___p_o4_ui(conn)
                 try:
                     st.subheader("Signature for selected sender")
-                    
+                    __p_call_sig_ui(conn)
                 except Exception:
                     pass
 except Exception:
     pass
 # === End wrapper ===
-
-
-# === Restrict signature UI to Outreach only ===
-try:
-    __orig___p_call_sig_ui = __p_call_sig_ui  # keep original
-except Exception:
-    def __orig___p_call_sig_ui(conn):  # no-op if missing
-        return None
-
-def __p_call_sig_ui(conn):
-    import inspect
-    frames = inspect.stack()
-    names = [getattr(f, "function", "") for f in frames if getattr(f, "function", "")]
-    names_l = [n.lower() for n in names]
-    if not any(("outreach" in n) or (n in {"__p_o4_ui", "o4_sender_accounts_ui"}) for n in names_l):
-        return None
-    return __orig___p_call_sig_ui(conn)
-# === End restriction ===
