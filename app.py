@@ -2940,21 +2940,31 @@ def _resolve_model():
     except Exception:
         return 'gpt-4o-mini'
 
-def _rfp_highlight_css() -> None:
-    """Inject CSS once for highlighted previews."""
+def _rfp_highlight_css():
+    """Inject CSS once for highlighted previews with human-friendly fonts."""
     try:
         import streamlit as _st
         if not _st.session_state.get("_rfp_hl_css", False):
             _st.markdown(
                 """
                 <style>
-                .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
-                .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
-                .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
-                .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
-                .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
-                .hl-mark  { background: #f1f1f1; padding: 0 2px; border-radius: 2px; }
-                .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
+                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 3px; }
+                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 3px; }
+                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 3px; }
+                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 3px; }
+                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 3px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 3px; }
+                .rfp-pre {
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+                    font-size: 1rem;
+                    line-height: 1.6;
+                    letter-spacing: .01em;
+                    -webkit-font-smoothing: antialiased;
+                    text-rendering: optimizeLegibility;
+                }
+                .rfp-pre p { margin: 0 0 .6rem; }
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -2962,6 +2972,7 @@ def _rfp_highlight_css() -> None:
             _st.session_state["_rfp_hl_css"] = True
     except Exception:
         pass
+
 
 def _render_highlights_panel(conn, rid):
     import pandas as pd
@@ -3376,21 +3387,31 @@ def _resolve_model():
     except Exception:
         return 'gpt-4o-mini'
 
-def _rfp_highlight_css() -> None:
-    """Inject CSS once for highlighted previews."""
+def _rfp_highlight_css():
+    """Inject CSS once for highlighted previews with human-friendly fonts."""
     try:
         import streamlit as _st
         if not _st.session_state.get("_rfp_hl_css", False):
             _st.markdown(
                 """
                 <style>
-                .hl-req   { background: #fff3b0; padding: 0 2px; border-radius: 2px; }
-                .hl-due   { background: #ffd6a5; padding: 0 2px; border-radius: 2px; }
-                .hl-poc   { background: #caffbf; padding: 0 2px; border-radius: 2px; }
-                .hl-price { background: #bde0fe; padding: 0 2px; border-radius: 2px; }
-                .hl-task  { background: #e0bbff; padding: 0 2px; border-radius: 2px; }
-                .hl-mark  { background: #f1f1f1; padding: 0 2px; border-radius: 2px; }
-                .rfp-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.85rem; }
+                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 3px; }
+                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 3px; }
+                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 3px; }
+                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 3px; }
+                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 3px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 3px; }
+                .rfp-pre {
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+                    font-size: 1rem;
+                    line-height: 1.6;
+                    letter-spacing: .01em;
+                    -webkit-font-smoothing: antialiased;
+                    text-rendering: optimizeLegibility;
+                }
+                .rfp-pre p { margin: 0 0 .6rem; }
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -3398,6 +3419,7 @@ def _rfp_highlight_css() -> None:
             _st.session_state["_rfp_hl_css"] = True
     except Exception:
         pass
+
 
 def _rfp_highlight_html(txt: str) -> str:
     """Return HTML with important items highlighted."""
