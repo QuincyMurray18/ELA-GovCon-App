@@ -3,7 +3,28 @@
 # This is defined at the very top so any early calls to __p_call_sig_ui succeed.
 # Later definitions can override it with the full UI without issues.
 if "__p_call_sig_ui" not in globals():
-    def __p_call_sig_ui(conn):
+    
+# --- Helper: list sender accounts robustly ---
+def __p__list_senders(conn):
+    rows = []
+    # Try email_accounts
+    try:
+        rows = conn.execute(
+            "SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;"
+        ).fetchall()
+    except Exception:
+        rows = []
+    # Fall back to outreach_sender_accounts with label or display
+    if not rows:
+        try:
+            rows = conn.execute(
+                "SELECT email, COALESCE(label, COALESCE(display,'')) FROM outreach_sender_accounts ORDER BY id DESC;"
+            ).fetchall()
+        except Exception:
+            rows = []
+    # Final fallback: try vendors table if present (unlikely)
+    return rows
+def __p_call_sig_ui(conn):
         # Fully functional fallback editor. No external helpers required.
         try:
             import streamlit as st
@@ -23,16 +44,17 @@ if "__p_call_sig_ui" not in globals():
         except Exception:
             pass
         # Discover sender list from email_accounts then outreach_sender_accounts
-        rows = []
+        rows = __p__list_senders(conn)
+        # legacy path kept for compatibility
         try:
-            rows = conn.execute("SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;").fetchall()
+            _ = rows or conn.execute("SELECT user_email, COALESCE(display_name,'') FROM email_accounts ORDER BY id DESC;").fetchall()
         except Exception:
             rows = []
         if not rows:
             try:
-                rows = conn.execute("SELECT email, COALESCE(display,'') FROM outreach_sender_accounts ORDER BY id DESC;").fetchall()
-            except Exception:
-                rows = []
+            pass
+        except Exception:
+            pass
         if not rows:
             st.info("No senders found. Add one above, then configure a signature.")
             return
