@@ -14084,3 +14084,21 @@ try:
 except Exception:
     pass
 # === End wrapper ===
+
+
+# === Restrict signature UI to Outreach only ===
+try:
+    __orig___p_call_sig_ui = __p_call_sig_ui  # keep original
+except Exception:
+    def __orig___p_call_sig_ui(conn):  # no-op if missing
+        return None
+
+def __p_call_sig_ui(conn):
+    import inspect
+    frames = inspect.stack()
+    names = [getattr(f, "function", "") for f in frames if getattr(f, "function", "")]
+    names_l = [n.lower() for n in names]
+    if not any(("outreach" in n) or (n in {"__p_o4_ui", "o4_sender_accounts_ui"}) for n in names_l):
+        return None
+    return __orig___p_call_sig_ui(conn)
+# === End restriction ===
