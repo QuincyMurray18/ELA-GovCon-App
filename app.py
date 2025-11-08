@@ -15056,3 +15056,14 @@ def y3_stream_draft(conn, rfp_id: int, section_title: str, notes: str, k: int = 
         cleaned_lines.append(sent)
     st.session_state["__y3_seen_sents"] = list(seen)
     yield " ".join(cleaned_lines)
+
+
+# =====================
+# FINAL OVERRIDE 2025-11-08T05:44:11 — Force no-citation messaging for any Y3 calls
+# =====================
+def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
+    """
+    Strict override: ignore Y1/Y2/Y4/Y5 and avoid any snippet search.
+    Build messages only from RFP Analyzer context. No citations.
+    """
+    return _pb__build_messages_no_cite(conn, int(rfp_id), str(section_title or "Untitled"), str(notes or ""), max_words)
