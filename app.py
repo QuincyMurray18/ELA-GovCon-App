@@ -3270,11 +3270,6 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
             prompt = f"Summarize the document '{fname}' for a federal proposal team. Use bullets and include key deliverables, dates, and Section L/M obligations.\n\n{t[:12000]}"
             sums[fname] = _ai_chat(prompt)
         st.session_state["onepage_summaries"] = sums
-    
-        # Keep user on RFP Analyzer after rerun
-        st.session_state['_force_rfp_analyzer'] = True
-        st.session_state['nav_target'] = 'RFP Analyzer'
-        st.rerun()
     sums = st.session_state.get("onepage_summaries") or {}
     if sums:
         for fname, ss in sums.items():
@@ -10761,8 +10756,12 @@ def init_session() -> None:
     if "initialized" not in st.session_state:
         st.session_state.initialized = True
 
-def nav() -> str:
-    if st.session_state.pop('_force_rfp_analyzer', False):
+\1    # If user selected files for RFP Analyzer uploaders, stay on Analyzer on rerun
+    if st.session_state.get('op_inline_files'):
+        return 'RFP Analyzer'
+    if st.session_state.get('op_new_files'):
+        return 'RFP Analyzer'
+    if st.session_state.get('onepage_uploads'):
         return 'RFP Analyzer'
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
@@ -10821,6 +10820,10 @@ def run_rfp_analyzer(conn) -> None:
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_new_sam", placeholder="https://sam.gov/")
         ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
                                accept_multiple_files=True, key="op_new_files")
+        # Keep on RFP Analyzer after selecting files
+        if 'op_new_files' in st.session_state and st.session_state.get('op_new_files'):
+            st.session_state['_force_rfp_analyzer'] = True
+            st.session_state['nav_target'] = 'RFP Analyzer'
         if st.button("Create RFP & Ingest", key="op_create_ingest"):
             try:
                 with _closing(conn.cursor()) as cur:
@@ -10878,6 +10881,10 @@ def run_rfp_analyzer(conn) -> None:
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam", placeholder="https://sam.gov/")
         ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
                                accept_multiple_files=True, key="op_inline_files")
+        # Keep on RFP Analyzer after selecting files
+        if 'op_inline_files' in st.session_state and st.session_state.get('op_inline_files'):
+            st.session_state['_force_rfp_analyzer'] = True
+            st.session_state['nav_target'] = 'RFP Analyzer'
         if st.button("Create RFP & Ingest", key="op_inline_create"):
             try:
                 with _closing(conn.cursor()) as cur:
