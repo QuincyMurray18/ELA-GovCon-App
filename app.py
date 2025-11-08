@@ -156,24 +156,6 @@ except Exception:
 
 import re
 import streamlit as st
-# --- Ensure citation scrubber exists early ---
-def __ensure_strip_helper__():
-    import re as _re
-    def _strip_citations_impl(text: str) -> str:
-        if not text:
-            return text
-        t = str(text)
-        t = _re.sub(r"\s*\[\d+\]", "", t)        # [1]
-        t = _re.sub(r"\s*\(\d+\)", "", t)        # (1)
-        t = _re.sub(r"\n+references:?\n.*$", "", t, flags=_re.IGNORECASE | _re.DOTALL)
-        t = _re.sub(r"^source:.*$", "", t, flags=_re.IGNORECASE | _re.MULTILINE)
-        t = _re.sub(r"\n{3,}", "\n\n", t)
-        return t.strip()
-    g = globals()
-    if "_strip_citations" not in g or not callable(g.get("_strip_citations")):
-        g["_strip_citations"] = _strip_citations_impl
-__ensure_strip_helper__()
-
 
 # === Perf+QA helpers ===
 import traceback as _traceback
@@ -3262,18 +3244,14 @@ DEFAULT_SECTIONS = [
 
 def _draft_section(section: str, context: str) -> str:
     prompt = f"""
-Using the RFP context below, draft the section **{section}**.
-- Compliant. Concise (<= 300 words unless bullets needed).
-- Government tone. No marketing fluff.
-- No citations. No bracketed numbers. No 'References' section.
+Using the RFP context below, draft **{section}** using the style guide.
+{PROPOSAL_STYLE_GUIDE}
+Scaffold: lead, need, deliverables, technical steps, management (RACI), staffing, equipment, timeline, QC metrics, subcontractors, risks, compliance bullets, past performance, price approach note.
 RFP context (truncated):
 {context[:6000]}
 """.strip()
     draft = _ai_chat(prompt)
-    return _strip_citations(draft)
-
-
-# ---- Public entrypoint ----
+    return _finalize_draft(draft)
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     st.title("RFP Analyzer — One‑Page View")
     if not pages:
@@ -4289,7 +4267,6 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
 def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     import pandas as _pd
     ctx = _y3_collect_ctx(conn, int(rfp_id))
-    # Pull extra context from One-Page Analyzer outputs
     try:
         df_dates = _pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
@@ -4309,13 +4286,33 @@ def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: s
         full_text = ""
     bullets = "\n".join([f"- {it}" for it in (ctx.get("lm") or [])])
     clins = "\n".join([f"- {r['clin']}: {r['desc']}" for r in (ctx.get("clins") or [])])
-    dates_str = "\n".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
-    pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
+    dates_str = "\n".join([f"- {r['label']}: {r['date_text']}"] for _, r in df_dates.iterrows()) if not df_dates.empty else ""
+    pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}"] for _, r in df_pocs.iterrows()) if not df_pocs.empty else ""
     meta = ctx.get("meta") or {}
-    style = ("You are a veteran federal proposal writer with $70M+ in awards. Write in crisp, compliant federal style. Tailor to THIS RFP only. No citations or bracket tags. Avoid redundancy. Align with L&M and CLINs.")
+    style = ("You are a veteran federal proposal writer with $70M+ in awards. "
+             "Write in crisp, compliant federal style. Tailor to THIS RFP only. "
+             "No citations. Provide procedures and concrete steps. Apply the style guide.")
     req_len = f"Target length: {max_words} words." if max_words else ""
     user = f"""
-SECTION TO DRAFT: {section_title}
+SECTION: {section_title}
+
+{PROPOSAL_STYLE_GUIDE}
+
+USE THIS SCAFFOLD:
+- Section lead mirroring solicitation.
+- Client need.
+- Deliverables.
+- Technical approach (step-by-step).
+- Management approach (roles and RACI).
+- Staffing and coverage.
+- Equipment and materials.
+- Timeline milestones.
+- Quality control and metrics.
+- Subcontractors and oversight.
+- Risks and mitigations.
+- Compliance crosswalk (bullets to L&M).
+- Past performance tie-in.
+- Price approach note.
 
 RFP META:
 {meta}
@@ -4340,13 +4337,11 @@ AUTHOR NOTES:
 
 REQUIREMENTS:
 - No citations or 'References'.
-- Map content precisely to the above context.
+- Map content to context.
 - {req_len}
-- Use short paragraphs and bullets when helpful.
-- If a requirement is unclear, state the assumption plainly.
+- Short sentences (<=10 words). Paragraphs <=10 sentences.
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
-
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
     msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
@@ -8730,10 +8725,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     # stream and accumulate (headless)
                     for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes, k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
                         acc.append(tok)
-                    drafted = _strip_citations("".join(acc).strip())
+                    drafted = "".join(acc).strip()
             if drafted:
                 drafted = _strip_citations(drafted)
-                st.session_state[f"pb_section_{sec}"] = _strip_citations(drafted)
+                st.session_state[f"pb_section_{sec}"] = _finalize_draft(drafted)
             st.success("Drafted all sections.")
         content_map: Dict[str, str] = {}
         for sec in selected:
@@ -8750,10 +8745,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     ph = st.empty(); acc = []
                     for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw>0 else None):
                         acc.append(tok); ph.markdown("".join(acc))
-                    drafted = _strip_citations("".join(acc).strip())
+                    drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        st.session_state[f"pb_section_{sec}"] = _strip_citations(drafted)
+                        st.session_state[f"pb_section_{sec}"] = _finalize_draft(drafted)
                         default_val = drafted
 
             content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
@@ -14166,14 +14161,9 @@ def x7_save_section(conn: "sqlite3.Connection", section_id: int, content: str | 
     conn.commit()
 
 def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "", temperature: float = 0.1) -> str:
-    # Draft a section using One-Page Analyzer context. No citations. No legacy snippets.
-    import pandas as _pd
-    import json
-    # Load analyzer context
+    import pandas as _pd, json
     try:
-        df_lm = _pd.read_sql_query(
-            "SELECT section, item_text AS item FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),)
-        )
+        df_lm = _pd.read_sql_query("SELECT section, item_text AS item FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
     except Exception:
         df_lm = _pd.DataFrame(columns=["section","item"])
     try:
@@ -14190,7 +14180,7 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
         df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
     try:
         df_meta = _pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
-        meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()} if isinstance(df_meta, _pd.DataFrame) and not df_meta.empty else {}
+        meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()} if not df_meta.empty else {}
     except Exception:
         meta = {}
     try:
@@ -14200,24 +14190,42 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
         full_text = ""
     try:
         dfp = _pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
-        profile = dfp.iloc[0].to_dict() if isinstance(dfp, _pd.DataFrame) and not dfp.empty else {}
+        profile = dfp.iloc[0].to_dict() if not dfp.empty else {}
     except Exception:
         profile = {}
     company = (profile.get("company_name") or "ELA Management LLC").strip()
     cage = profile.get("cage") or "14ZP6"
-    uei = profile.get("uei") or "U32LBVK3DDF7"
+    uei  = profile.get("uei") or "U32LBVK3DDF7"
     duns = profile.get("duns") or "14-483-4790"
-    lm_str = "\n".join([f"- {r['item']}" for _, r in (df_lm.head(150)).iterrows()]) if not df_lm.empty else ""
+
+    lm_str = "\n".join([f"- {r['item']}" for _, r in df_lm.head(150).iterrows()]) if not df_lm.empty else ""
     dates_str = "\n".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
-    pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
-    clin_str = "\n".join([f"- {r['clin']}: {r['description']} (Qty {r['qty']} {r['unit']})" for _, r in df_clin.iterrows()]) if not df_clin.empty else ""
-    system = (
-        "You are a veteran federal proposal writer with $70M+ in awards. "
-        "Write in crisp federal style for the Government. Tailor to THIS RFP only. "
-        "Do not cite sources. Do not refer to snippets. Avoid redundancy. Align with L&M."
-    )
+    pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}"] for _, r in df_pocs.iterrows()) if not df_pocs.empty else ""
+    clin_str = "\n".join([f"- {r['clin']}: {r['description']} (Qty {r['qty']} {r['unit']})"] for _, r in df_clin.iterrows()) if not df_clin.empty else ""
+
+    system = ("You are a veteran federal proposal writer with $70M+ in awards. "
+              "Draft in precise federal style. Tailor to THIS RFP only. "
+              "NO citations. Provide procedures and concrete steps. Apply the style guide.")
     user = f"""
-SECTION: {section_title}
+SECTION TO DRAFT: {section_title}
+
+{PROPOSAL_STYLE_GUIDE}
+
+USE THIS SCAFFOLD:
+- Section lead mirroring solicitation.
+- Client need.
+- Deliverables.
+- Technical approach (step-by-step).
+- Management approach (roles and RACI).
+- Staffing and coverage.
+- Equipment and materials.
+- Timeline milestones.
+- Quality control and metrics.
+- Subcontractors and oversight.
+- Risks and mitigations.
+- Compliance crosswalk (bullets to L&M).
+- Past performance tie-in.
+- Price approach note.
 
 RFP META:
 {json.dumps(meta, ensure_ascii=False)}
@@ -14244,12 +14252,13 @@ NOTES:
 {notes or '(none)'}
 
 REQUIREMENTS:
-- No citations or quotes.
-- Map content precisely to context.
-- Remove repetition.
-- 250–500 words unless bullets fit better.
-- Cover compliance expectations relevant to the section.
+- Use solicitation terms verbatim when relevant.
+- No citations or references.
+- Short sentences (<=10 words). Paragraphs max 10 sentences.
+- Organize for easy scoring.
+- If something is unknown, state an assumption.
 """
+
     try:
         from openai import OpenAI as _OpenAI
         client = _OpenAI()
@@ -14262,19 +14271,8 @@ REQUIREMENTS:
         text = (resp.choices[0].message.content or "").strip()
     except Exception as e:
         text = f"[AI unavailable] {e}"
-    # De-duplicate repeated lines
-    try:
-        lines = [ln.rstrip() for ln in text.splitlines()]
-        seen = set(); out_lines = []
-        for ln in lines:
-            key = ln.strip().lower()
-            if key and key not in seen:
-                seen.add(key); out_lines.append(ln)
-        text = "\n".join(out_lines)
-    except Exception:
-        pass
-    return text
 
+    return _finalize_draft(text)
 def _safe_int(v, default: int = 0) -> int:
     try:
         if v is None:
@@ -14736,6 +14734,72 @@ def run_router(conn):
     st.info("SAM Watch page is not available in this build. Use RFP Analyzer above.")
 
 import sqlite3
+
+# === Proposal Style + Finalizers ===
+PROPOSAL_STYLE_GUIDE = (
+    "Follow these rules strictly:\n"
+    "1) Understand client need. Mirror solicitation terms exactly.\n"
+    "2) State deliverables explicitly.\n"
+    "3) Address evaluation factors: technical, management, past performance, price.\n"
+    "4) Answer each L&M requirement directly.\n"
+    "5) Obey page and format rules.\n"
+    "6) Provide HOW procedures, not claims.\n"
+    "7) Short sentences (<=10 words). One idea per paragraph.\n"
+    "8) Use bullets. Clean headings.\n"
+    "9) Include roles, equipment, timeline, QC checks, metrics.\n"
+    "10) Identify subcontractors and responsibilities.\n"
+    "11) Organize clearly for easy scoring.\n"
+    "12) Include a Risk table with mitigations.\n"
+    "13) Add a brief L&M compliance crosswalk.\n"
+    "14) Keep tone federal and precise."
+)
+
+def _strip_citations(text: str) -> str:
+    import re
+    if not text: return text
+    t = str(text)
+    t = re.sub(r"\s*\[\d+\]", "", t)
+    t = re.sub(r"\s*\(\d+\)", "", t)
+    t = re.sub(r"\n+references?:\n.*$", "", t, flags=re.I|re.S)
+    t = re.sub(r"^source:.*$", "", t, flags=re.I|re.M)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
+    import re
+    if not text: return text
+    t = re.sub(r"[ \t]+", " ", str(text)).strip()
+    paras = re.split(r"\n\s*\n", t)
+    out = []
+    for p in paras:
+        sents = re.split(r"(?<=[.!?])\s+", p.strip())
+        fixed = []
+        for s in sents:
+            if not s: continue
+            words = s.split()
+            if len(words) <= max_words:
+                fixed.append(" ".join(words))
+                continue
+            s2 = re.sub(r"\s*,\s*", ". ", s)
+            s2 = re.sub(r"\s+and\s+", ". ", s2)
+            parts = re.split(r"(?<=[.!?])\s+", s2)
+            for part in parts:
+                w = part.strip().split()
+                if not w: continue
+                while len(w) > max_words:
+                    fixed.append(" ".join(w[:max_words]) + ".")
+                    w = w[max_words:]
+                if w: fixed.append(" ".join(w))
+        if len(fixed) > max_sents_per_para:
+            for i in range(0, len(fixed), max_sents_per_para):
+                out.append(" ".join(fixed[i:i+max_sents_per_para]))
+        else:
+            out.append(" ".join(fixed))
+    return "\n\n".join(out).strip()
+
+def _finalize_draft(text: str) -> str:
+    return _enforce_style_guide(_strip_citations(text))
+
 def _get_conn(db_path="samwatch.db"):
     import os
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
