@@ -1,3 +1,40 @@
+# ==== Draft Finalization Guards (top-of-file) ====
+try:
+    _strip_citations
+except NameError:
+    def _strip_citations(text: str) -> str:
+        import re as _re
+        if not text:
+            return text
+        t = str(text)
+        t = _re.sub(r"\s*\[\d+\]", "", t)
+        t = _re.sub(r"\s*\(\d+\)", "", t)
+        t = _re.sub(r"\n+references?:\n.*$", "", t, flags=_re.I|_re.S)
+        t = _re.sub(r"^source:.*$", "", t, flags=_re.I|_re.M)
+        t = _re.sub(r"\n{3,}", "\n\n", t)
+        return t.strip()
+
+try:
+    _enforce_style_guide
+except NameError:
+    def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
+        return str(text or "").strip()
+
+try:
+    _finalize_draft
+except NameError:
+    def _finalize_draft(text: str) -> str:
+        try:
+            t = _strip_citations(text)
+        except Exception:
+            t = str(text or "")
+        try:
+            t = _enforce_style_guide(t)
+        except Exception:
+            pass
+        return t
+# ================================================
+
 # ==== Style Guide Guards (top-of-file) ====
 try:
     _style_guide
