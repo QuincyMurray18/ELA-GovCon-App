@@ -10756,7 +10756,9 @@ def init_session() -> None:
     if "initialized" not in st.session_state:
         st.session_state.initialized = True
 
-\1    # If user selected files for RFP Analyzer uploaders, stay on Analyzer on rerun
+def nav() -> str:
+    if st.session_state.pop('_force_rfp_analyzer', False):
+        return 'RFP Analyzer'
     if st.session_state.get('op_inline_files'):
         return 'RFP Analyzer'
     if st.session_state.get('op_new_files'):
