@@ -3287,7 +3287,7 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
         try:
             joined_summaries = "\n\n".join(list(sums.values()))
             pocs_added = _p3_ingest_pocs_from_summary(conn, int(selected_rfp_id), joined_summaries)
-            if pocs_added:
+            if pocs_added or _p3_role_terms_present(joined_summaries):
                 st.success("POCs detected in summary and added to Contacts.")
                 if st.button("Open Contacts ▶", key="go_contacts_after_summary"):
                     st.session_state.update({
@@ -7118,9 +7118,9 @@ def _p3_extract_pocs_from_text(txt: str):
     if not txt:
         return []
     emails = list(set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", txt)))
-    phones = list(set(re.findall(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", txt)))
     roles = ["contracting officer","contract specialist","contracting specialist","co","poc","point of contact"]
     out = []
+    # Pass 1: email-anchored extraction
     for em in emails:
         name = ""
         role = ""
@@ -7140,18 +7140,28 @@ def _p3_extract_pocs_from_text(txt: str):
         mphone = re.search(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", win)
         phone = mphone.group(0) if mphone else ""
         out.append({"name": name or "", "email": em, "phone": phone, "role": role or ""})
+    # Pass 2: role-only lines without email
     for line in txt.splitlines():
         if re.search(r"(?i)contract(ing)? (officer|specialist)|\bpoc\b", line):
             m_em = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", line)
             m_nm = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})", line)
             m_ph = re.search(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", line)
-            if m_em:
-                out.append({"name": (m_nm.group(1) if m_nm else ""), "email": m_em.group(0), "phone": (m_ph.group(0) if m_ph else ""), "role": ""})
+            out.append({
+                "name": (m_nm.group(1) if m_nm else ""),
+                "email": (m_em.group(0) if m_em else ""),
+                "phone": (m_ph.group(0) if m_ph else ""),
+                "role": ""
+            })
+    # Deduplicate on (email, name)
     uniq = {}
     for c in out:
-        uniq[c["email"].lower()] = c
+        key = (c.get("email","").lower(), c.get("name","").strip().lower())
+        uniq[key] = c
     return list(uniq.values())
-
+def _p3_role_terms_present(txt: str) -> bool:
+    import re
+    if not txt: return False
+    return re.search(r"(?i)contract(ing)? (officer|specialist)|\bpoc\b", txt) is not None
 def _p3_ingest_pocs_from_summary(conn, rfp_id: int, txt: str):
     from contextlib import closing as _closing
     import pandas as _pd
@@ -7159,16 +7169,23 @@ def _p3_ingest_pocs_from_summary(conn, rfp_id: int, txt: str):
     if not pcs:
         return False
     inserted_any = False
-    for c in pcs[:10]:
+    for c in pcs[:12]:
         try:
-            if c.get("email"):
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("INSERT OR IGNORE INTO contacts(name, email, org) VALUES(?,?,?);",
-                                (c.get("name") or "", c.get("email") or "", ""))
+            name = c.get("name") or ""
+            email = c.get("email") or ""
+            role = c.get("role") or ""
+            phone = c.get("phone") or ""
+            with _closing(conn.cursor()) as cur:
+                # Always write POC row if we have at least one field
+                if name or email or phone or role:
                     cur.execute("INSERT OR IGNORE INTO pocs(rfp_id, name, role, email, phone) VALUES(?,?,?,?,?);",
-                                (int(rfp_id), c.get("name") or "", c.get("role") or "", c.get("email") or "", c.get("phone") or ""))
-                    conn.commit()
-                inserted_any = True
+                                (int(rfp_id), name, role, email, phone))
+                # Write contact even without email to let user edit later
+                if name or email:
+                    cur.execute("INSERT OR IGNORE INTO contacts(name, email, org) VALUES(?,?,?);",
+                                (name, email, ""))
+                conn.commit()
+            inserted_any = True
         except Exception:
             continue
     return inserted_any
