@@ -3282,6 +3282,23 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
             prompt = f"Summarize the document '{fname}' for a federal proposal team. Use bullets and include key deliverables, dates, and Section L/M obligations.\n\n{t[:12000]}"
             sums[fname] = _ai_chat(prompt)
         st.session_state["onepage_summaries"] = sums
+
+# Auto-ingest POCs from the combined summaries and redirect to Contacts
+try:
+    joined_summaries = "\n\n".join(list(sums.values()))
+    if _p3_ingest_pocs_from_summary(conn, int(selected_rfp_id), joined_summaries):
+        st.success("POCs detected in summary and added to Contacts.")
+        st.session_state.update({
+            "main_nav": "Contacts",
+            "phase3_nav": "Contacts",
+            "active_page": "Contacts"
+        })
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+except Exception:
+    pass
     sums = st.session_state.get("onepage_summaries") or {}
     if sums:
         for fname, ss in sums.items():
@@ -7094,6 +7111,66 @@ def _p3_auto_wire_crm_from_rfp(conn, rfp_id: int):
         _p3_auto_stage_for_rfp(conn, int(rfp_id))
     except Exception:
         pass
+# --- POC extraction from free text (summary) ---
+def _p3_extract_pocs_from_text(txt: str):
+    import re
+    if not txt:
+        return []
+    emails = list(set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", txt)))
+    phones = list(set(re.findall(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", txt)))
+    roles = ["contracting officer","contract specialist","contracting specialist","co","poc","point of contact"]
+    out = []
+    for em in emails:
+        name = ""
+        role = ""
+        try:
+            idx = txt.lower().index(em.lower())
+            win = txt[max(0, idx-120): idx+120]
+        except ValueError:
+            win = ""
+        mname = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*(?:,|\(|-|–)?\s*$", win.split(em)[0][-120:])
+        if mname:
+            name = mname.group(1).strip()
+        low = win.lower()
+        for rk in roles:
+            if rk in low:
+                role = rk.title()
+                break
+        mphone = re.search(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", win)
+        phone = mphone.group(0) if mphone else ""
+        out.append({"name": name or "", "email": em, "phone": phone, "role": role or ""})
+    for line in txt.splitlines():
+        if re.search(r"(?i)contract(ing)? (officer|specialist)|\bpoc\b", line):
+            m_em = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", line)
+            m_nm = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})", line)
+            m_ph = re.search(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", line)
+            if m_em:
+                out.append({"name": (m_nm.group(1) if m_nm else ""), "email": m_em.group(0), "phone": (m_ph.group(0) if m_ph else ""), "role": ""})
+    uniq = {}
+    for c in out:
+        uniq[c["email"].lower()] = c
+    return list(uniq.values())
+
+def _p3_ingest_pocs_from_summary(conn, rfp_id: int, txt: str):
+    from contextlib import closing as _closing
+    import pandas as _pd
+    pcs = _p3_extract_pocs_from_text(txt or "")
+    if not pcs:
+        return False
+    inserted_any = False
+    for c in pcs[:10]:
+        try:
+            if c.get("email"):
+                with _closing(conn.cursor()) as cur:
+                    cur.execute("INSERT OR IGNORE INTO contacts(name, email, org) VALUES(?,?,?);",
+                                (c.get("name") or "", c.get("email") or "", ""))
+                    cur.execute("INSERT OR IGNORE INTO pocs(rfp_id, name, role, email, phone) VALUES(?,?,?,?,?);",
+                                (int(rfp_id), c.get("name") or "", c.get("role") or "", c.get("email") or "", c.get("phone") or ""))
+                    conn.commit()
+                inserted_any = True
+        except Exception:
+            continue
+    return inserted_any
 def _p3_make_ics(summary: str, when_str: str) -> bytes:
     from datetime import datetime
     dt = None
