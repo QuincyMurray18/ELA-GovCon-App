@@ -3283,30 +3283,22 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
             sums[fname] = _ai_chat(prompt)
         st.session_state["onepage_summaries"] = sums
 
-# Auto-ingest POCs from the combined summaries and redirect to Contacts
-try:
-    joined_summaries = "\n\n".join(list(sums.values()))
-    if _p3_ingest_pocs_from_summary(conn, int(selected_rfp_id), joined_summaries):
-        st.success("POCs detected in summary and added to Contacts.")
-        st.session_state.update({
-            "main_nav": "Contacts",
-            "phase3_nav": "Contacts",
-            "active_page": "Contacts"
-        })
+        # Auto-ingest POCs from the combined summaries and redirect to Contacts
         try:
-            st.experimental_rerun()
+            joined_summaries = "\n\n".join(list(sums.values()))
+            if _p3_ingest_pocs_from_summary(conn, int(selected_rfp_id), joined_summaries):
+                st.success("POCs detected in summary and added to Contacts.")
+                st.session_state.update({
+                    "main_nav": "Contacts",
+                    "phase3_nav": "Contacts",
+                    "active_page": "Contacts"
+                })
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
         except Exception:
             pass
-except Exception:
-    pass
-    sums = st.session_state.get("onepage_summaries") or {}
-    if sums:
-        for fname, ss in sums.items():
-            with st.expander(f"Summary — {fname}", expanded=False):
-                _rfp_highlight_css()
-                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
-
-    # Compliance (auto-extracted)
     st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
     reqs = _find_requirements(combined)
     if not reqs:
