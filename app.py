@@ -13077,6 +13077,73 @@ def render_subfinder_s1d(conn):
                 st.session_state["s1d_trigger"] = "next"
                 st.rerun()
 
+
+    # --- S1D inline add with edits and selection
+    with st.expander("S1D: Add selected to Vendors (edit email/phone)", expanded=False):
+        try:
+            df2 = _pd.DataFrame(st.session_state.get("s1d_df") or [])
+            if not df2.empty:
+                # Filter out duplicates if the flag exists
+                if "_dup" in df2.columns:
+                    df2 = df2.loc[~df2["_dup"]].copy()
+                df2 = df2.copy()
+                if "email" not in df2.columns:
+                    df2["email"] = ""
+                if "phone" not in df2.columns:
+                    df2["phone"] = ""
+                show_cols = [c for c in ["name","email","phone","website","address","city","state","distance_mi","place_id"] if c in df2.columns]
+                view = df2[show_cols].copy()
+                view.insert(0, "Select", False)
+                edited = st.data_editor(view, hide_index=True, key="s1d_add_editor", num_rows="dynamic")
+                sel = edited.loc[edited["Select"]==True].drop(columns=["Select"], errors="ignore")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Add selected to Vendors", key="s1d_add_selected") and not sel.empty:
+                        n = _s1d_save_new_vendors(conn, sel.to_dict("records"))
+                        st.success(f"Saved {n} vendors")
+                with c2:
+                    if st.button("Add all shown to Vendors", key="s1d_add_all_shown"):
+                        n = _s1d_save_new_vendors(conn, edited.drop(columns=["Select"], errors="ignore").to_dict("records"))
+                        st.success(f"Saved {n} vendors")
+            else:
+                st.caption("No S1D results to add")
+        except Exception as e:
+            st.warning(f"Inline add unavailable: {e}")
+
+    # --- Quick edit existing vendors
+    with st.expander("S1D: Quick edit existing vendors (email/phone/website)", expanded=False):
+        try:
+            try:
+                dfv = _pd.read_sql_query("SELECT id,name,email,phone,website,city,state FROM vendors_t ORDER BY name ASC;", conn)
+                tbl = "vendors_t"
+            except Exception:
+                dfv = _pd.read_sql_query("SELECT id,name,email,phone,website,city,state FROM vendors ORDER BY name ASC;", conn)
+                tbl = "vendors"
+            if dfv.empty:
+                st.caption("Vendor list is empty")
+            else:
+                edited_v = st.data_editor(dfv, key="s1d_vendor_quick_edit", hide_index=True, disabled=["id","name"])
+                if st.button("Save vendor changes", key="s1d_vendor_quick_save"):
+                    # Detect changes
+                    merged = edited_v.merge(dfv, on="id", suffixes=("", "_old"))
+                    updates = []
+                    for _, r in merged.iterrows():
+                        if any([str(r.get("email","")) != str(r.get("email_old","")),
+                                str(r.get("phone","")) != str(r.get("phone_old","")),
+                                str(r.get("website","")) != str(r.get("website_old","")),
+                                str(r.get("city","")) != str(r.get("city_old","")),
+                                str(r.get("state","")) != str(r.get("state_old",""))]):
+                            updates.append((str(r["email"] or ""), str(r["phone"] or ""), str(r["website"] or ""),
+                                            str(r["city"] or ""), str(r["state"] or ""), int(r["id"])))
+                    if updates:
+                        with conn:
+                            for em, ph, web, city, state, vid in updates:
+                                conn.execute(f"UPDATE {tbl} SET email=?, phone=?, website=?, city=?, state=? WHERE id=?", (em, ph, web, city, state, vid))
+                        st.success(f"Updated {len(updates)} vendors")
+                    else:
+                        st.info("No changes detected")
+        except Exception as e:
+            st.warning(f"Quick edit unavailable: {e}")
 # === End S1D ================================================================
 
 def _wrap_run_subfinder():
@@ -14244,186 +14311,3 @@ def _get_conn(db_path="samwatch.db"):
 # SIG+LOGO patch removed
 
 # O4 wrapper disabled
-
-
-# =========================
-# APPEND-ONLY PATCH • S1D Add-to-Vendors + Quick Edit
-# =========================
-try:
-    import streamlit as _st
-    import pandas as _pd
-except Exception:
-    pass
-
-def __p_try_get_s1d_df():
-    # Support multiple variants used across builds
-    ss = getattr(_st, "session_state", {})
-    for k in ("s1d_df", "__p_s1d_df"):
-        recs = ss.get(k)
-        if recs:
-            try:
-                df = _pd.DataFrame(recs)
-                return df
-            except Exception:
-                continue
-    return _pd.DataFrame()
-
-def __p_vendor_write_table(conn):
-    try:
-        return _s1d_vendor_write_table(conn)
-    except Exception:
-        # fallback
-        return "vendors"
-
-def __p_save_rows_to_vendors(conn, rows):
-    """Upsert minimal fields into vendors write table."""
-    tbl = __p_vendor_write_table(conn)
-    try:
-        _s1d_ensure_vendor_table(conn, tbl)
-    except Exception:
-        pass
-    saved = 0
-    with conn:
-        for r in rows:
-            conn.execute(f"""
-                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, naics, notes, created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                ON CONFLICT(place_id) DO UPDATE SET
-                    name=COALESCE(excluded.name, {tbl}.name),
-                    email=COALESCE(NULLIF(TRIM(excluded.email),''), {tbl}.email),
-                    phone=COALESCE(NULLIF(TRIM(excluded.phone),''), {tbl}.phone),
-                    website=COALESCE(excluded.website, {tbl}.website),
-                    address=COALESCE(excluded.address, {tbl}.address),
-                    city=COALESCE(excluded.city, {tbl}.city),
-                    state=COALESCE(excluded.state, {tbl}.state),
-                    naics=COALESCE(excluded.naics, {tbl}.naics),
-                    notes=CASE WHEN length({tbl}.notes)>0 THEN {tbl}.notes ELSE COALESCE(excluded.notes, {tbl}.notes) END
-            """, (
-                str(r.get("source","S1D")),
-                str(r.get("place_id","") or ""),
-                str(r.get("name","") or ""),
-                str(r.get("email","") or ""),
-                str(r.get("phone","") or ""),
-                str(r.get("website","") or ""),
-                str(r.get("address","") or ""),
-                str(r.get("city","") or ""),
-                str(r.get("state","") or ""),
-                str(r.get("naics","") or ""),
-                str(r.get("notes","") or ""),
-            ))
-            saved += 1
-    return saved
-
-def __p_s1d_enhance_ui(conn):
-    """Below the S1D results, show a selectable, editable table for email/phone and add to vendors."""
-    import hashlib as _hashlib
-    try:
-        df = __p_try_get_s1d_df()
-        if df is None or df.empty:
-            return
-        # Derive a stable row id
-        def _row_id(r):
-            pid = str(r.get("place_id","") or "")
-            if pid:
-                return pid
-            s = f"{r.get('name','')}-{r.get('address','')}-{r.get('city','')}-{r.get('state','')}"
-            return _hashlib.sha1(s.encode()).hexdigest()[:12]
-        df = df.copy()
-        if "email" not in df.columns:
-            df["email"] = ""
-        if "phone" not in df.columns:
-            df["phone"] = df.get("phone", "")
-        if "_dup" in df.columns:
-            keep = df.loc[~df["_dup"]].copy()
-        else:
-            keep = df.copy()
-        if keep.empty:
-            _st.info("All results already exist in your vendor list.")
-            return
-        # Build view
-        view = keep[["name","email","phone","website","address","city","state","distance_mi","place_id"]].copy()
-        view.insert(0, "Select", False)
-        # Let user edit email/phone before saving
-        _st.markdown("**Select and edit before adding to Vendors**")
-        edited = _st.data_editor(view, hide_index=True, key="__p_s1d_editor_add", num_rows="dynamic")
-        # Persist selection
-        selected = edited.loc[edited["Select"]==True].copy()
-        c1, c2 = _st.columns([1,1])
-        with c1:
-            if _st.button("Add selected to Vendors", key="__p_s1d_add_sel") and not selected.empty:
-                rows = selected.drop(columns=["Select"], errors="ignore").to_dict("records")
-                n = __p_save_rows_to_vendors(conn, rows)
-                _st.success(f"Added {n} vendors")
-        with c2:
-            if _st.button("Add all shown to Vendors", key="__p_s1d_add_all"):
-                rows = edited.drop(columns=["Select"], errors="ignore").to_dict("records")
-                n = __p_save_rows_to_vendors(conn, rows)
-                _st.success(f"Added {n} vendors")
-    except Exception as _e:
-        _st.warning(f"S1D add-to-vendors panel unavailable: {_e}")
-
-def __p_vendor_quick_edit(conn):
-    """Inline editor for existing vendors to fix missing email/phone quickly."""
-    import pandas as _pd
-    _st.subheader("Quick Edit Vendors")
-    try:
-        tbl = "vendors_t"
-        # Pull a light view that works on both view or table
-        try:
-            df = _pd.read_sql_query("SELECT id, name, email, phone, website, city, state FROM vendors_t ORDER BY name ASC", conn)
-        except Exception:
-            df = _pd.read_sql_query("SELECT id, name, email, phone, website, city, state FROM vendors ORDER BY name ASC", conn)
-            tbl = "vendors"
-        if df.empty:
-            _st.caption("No vendors to edit")
-            return
-        _st.caption("Edit email and phone. Click Save changes to write updates.")
-        edited = _st.data_editor(df, key="__p_vendor_editor", hide_index=True, disabled=["id","name"])
-        if _st.button("Save changes", key="__p_vendor_save"):
-            changed = edited.merge(df, on="id", suffixes=("", "_old"))
-            updates = []
-            for _, r in changed.iterrows():
-                if any([str(r.get("email","")) != str(r.get("email_old","")),
-                        str(r.get("phone","")) != str(r.get("phone_old","")),
-                        str(r.get("website","")) != str(r.get("website_old","")),
-                        str(r.get("city","")) != str(r.get("city_old","")),
-                        str(r.get("state","")) != str(r.get("state_old",""))]):
-                    updates.append((str(r["email"] or ""), str(r["phone"] or ""), str(r["website"] or ""),
-                                    str(r["city"] or ""), str(r["state"] or ""), int(r["id"])))
-            if updates:
-                with conn:
-                    for em, ph, web, city, state, vid in updates:
-                        conn.execute(f"UPDATE {tbl} SET email=?, phone=?, website=?, city=?, state=? WHERE id=?", (em, ph, web, city, state, vid))
-                _st.success(f"Updated {len(updates)} vendors")
-            else:
-                _st.info("No changes detected")
-    except Exception as _e:
-        _st.warning(f"Quick edit unavailable: {_e}")
-
-def __p_wire_s1d_enhancements():
-    """Attach enhancements without rewriting your original handlers."""
-    g = globals()
-    base = g.get("run_subcontractor_finder")
-    if not callable(base) or getattr(base, "_p_s1d_enhanced", False):
-        return
-    def wrapped(conn):
-        base(conn)
-        try:
-            import streamlit as _st
-            with _st.expander("S1D: Add pulled places to Vendors", expanded=True):
-                __p_s1d_enhance_ui(conn)
-            with _st.expander("S1D: Fix missing email/phone in Vendors", expanded=False):
-                __p_vendor_quick_edit(conn)
-        except Exception as e:
-            try:
-                import streamlit as _st
-                _st.warning(f"S1D enhancements skipped: {e}")
-            except Exception:
-                pass
-    wrapped._p_s1d_enhanced = True
-    g["run_subcontractor_finder"] = wrapped
-
-try:
-    __p_wire_s1d_enhancements()
-except Exception:
-    pass
