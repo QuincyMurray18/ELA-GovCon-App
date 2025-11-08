@@ -14819,3 +14819,240 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
     cleaned, seen = _pb__dedupe_text(text, seen)
     st.session_state["__y3_seen_sents"] = list(seen)
     yield cleaned
+
+
+# =====================
+# PATCH: No-citation drafting using RFP Analyzer context only
+# Date: 2025-11-08T05:24:44
+# Purpose:
+# - Stop relying on Y1 Y2 Y4 Y5 and any bracket citations
+# - Draft from Analyzer outputs and saved summaries only
+# - Keep de-duplication across sections during Draft all
+# =====================
+
+import re as _re
+
+def _pb__collect_from_db(conn, rfp_id: int) -> dict:
+    """
+    Try a series of likely tables to extract Analyzer context without citations.
+    Returns a dict with keys: requirements, pricing, submission, evaluation, schedule, contacts, other
+    All values are strings. Missing tables are ignored.
+    """
+    import pandas as _pd
+    buckets = {k: [] for k in ["requirements","pricing","submission","evaluation","schedule","contacts","other"]}
+    qplans = [
+        # Common consolidated table
+        ("SELECT kind, content FROM rfp_analyzer_outputs WHERE rfp_id=?", ("kind","content")),
+        # Summaries table variants
+        ("SELECT section, summary as content FROM rfp_summaries WHERE rfp_id=?", ("section","content")),
+        ("SELECT label as section, text as content FROM rfp_highlights WHERE rfp_id=?", ("section","content")),
+        # Generic sections
+        ("SELECT section, content FROM rfp_sections WHERE rfp_id=?", ("section","content")),
+        # Requirements tables
+        ("SELECT requirement as content FROM rfp_requirements WHERE rfp_id=?", (None,"content")),
+        # Documents summaries
+        ("SELECT filename as section, summary as content FROM rfp_doc_summaries WHERE rfp_id=?", ("section","content")),
+    ]
+    def _bucket_for(name: str) -> str:
+        n = (name or "").lower()
+        if any(k in n for k in ["l&m","lm","section l","instructions","proposal","format","page limit","submission","delivery","due"]):
+            return "submission"
+        if any(k in n for k in ["m&","m ", "evaluation", "basis of award", "factors", "subfactors", "adjectival"]):
+            return "evaluation"
+        if any(k in n for k in ["requirement", "sow", "pws", "work", "tasks", "scope"]):
+            return "requirements"
+        if any(k in n for k in ["price", "pricing", "clin", "clins", "schedule of items", "bid"]):
+            return "pricing"
+        if any(k in n for k in ["period of performance", "pop", "schedule", "milestone", "timeline"]):
+            return "schedule"
+        if any(k in n for k in ["poc", "point of contact", "contracting officer", "contract specialist", "email", "phone"]):
+            return "contacts"
+        return "other"
+
+    for sql, cols in qplans:
+        try:
+            df = _pd.read_sql_query(sql, conn, params=(int(rfp_id),))
+            if df is None or df.empty:
+                continue
+            # Normalize
+            sect_col, content_col = cols
+            if sect_col is None:
+                df["_section"] = ""
+            else:
+                df["_section"] = df[sect_col].astype(str)
+            df["_content"] = df[content_col].astype(str)
+            for _, row in df.iterrows():
+                b = _bucket_for(row["_section"])
+                text = row["_content"].strip()
+                if text:
+                    buckets[b].append(text)
+        except Exception:
+            # ignore missing tables
+            pass
+
+    # Join each bucket
+    return {k: "\n".join(v).strip() for k, v in buckets.items() if v}
+
+def _pb__collect_from_session() -> dict:
+    """Scrape Streamlit session for analyzer keys if present."""
+    try:
+        import streamlit as st
+    except Exception:
+        return {}
+    buckets = {}
+    ss = getattr(st, "session_state", {})
+    if not ss:
+        return {}
+    # Heuristics
+    def pick(prefixes):
+        out = []
+        for k, v in ss.items():
+            if not isinstance(k, str): 
+                continue
+            if any(k.lower().startswith(p) for p in prefixes):
+                s = str(v or "").strip()
+                if s:
+                    out.append(s)
+        return "\n".join(out).strip()
+    candidates = {
+        "requirements": pick(["rfp_req","lm_req","pws_req","sow_req","requirements"]),
+        "pricing": pick(["rfp_price","pricing","price"]),
+        "submission": pick(["rfp_lm","lm_","submission","format","page_limit"]),
+        "evaluation": pick(["rfp_eval","eval","m_","evaluation"]),
+        "schedule": pick(["rfp_schedule","pop","timeline","milestone"]),
+        "contacts": pick(["rfp_poc","poc","co_","cs_","contact"]),
+        "other": pick(["rfp_summary","analyzer_summary","summary"]),
+    }
+    for k, v in candidates.items():
+        if v:
+            buckets[k] = v
+    return buckets
+
+def _pb__rfp_context_blob(conn, rfp_id: int) -> str:
+    """Combine DB and session into one concise context block. No citations."""
+    parts = []
+    db = {}
+    try:
+        db = _pb__collect_from_db(conn, int(rfp_id))
+    except Exception:
+        db = {}
+    ss = {}
+    try:
+        ss = _pb__collect_from_session()
+    except Exception:
+        ss = {}
+    merged = {}
+    for k in ["requirements","pricing","submission","evaluation","schedule","contacts","other"]:
+        texts = []
+        if k in db and db[k]:
+            texts.append(db[k])
+        if k in ss and ss[k]:
+            texts.append(ss[k])
+        if texts:
+            merged[k] = "\n".join(texts).strip()
+    # Format compactly
+    order = ["requirements","pricing","submission","evaluation","schedule","contacts","other"]
+    for k in order:
+        if k in merged:
+            parts.append(f"[{k.upper()}]\n{merged[k]}")
+    return "\n\n".join(parts).strip()
+
+def _pb__trim(text: str, max_words: int | None):
+    if not max_words:
+        return text
+    toks = _re.findall(r"\S+", text or "")
+    if len(toks) <= max_words:
+        return text
+    return " ".join(toks[:max_words])
+
+def _pb__build_messages_no_cite(conn, rfp_id: int, section_title: str, guidance: str, max_words: int | None):
+    """Compose system and user messages that avoid citations and rely only on Analyzer context."""
+    ctx = _pb__rfp_context_blob(conn, int(rfp_id))
+    sys = (
+        "You are a veteran federal proposal manager with over 70 million dollars awarded. "
+        "Write like a compliant federal contractor. Do not include citations. "
+        "Base every claim only on the provided context. If context is missing, say what is missing. "
+        "Be precise, concise, and avoid redundancy. Use clear section specific language."
+    )
+    user = f"""RFP CONTEXT
+{ctx or '(no analyzer context was found)'}
+
+TASK
+Draft the section titled: {section_title}
+
+AUTHOR NOTES
+{guidance or '(none)'}
+
+OUTPUT RULES
+1. No citations. No brackets. No footnotes.
+2. Use agency appropriate language and answer exactly what is asked.
+3. If needed information is missing from CONTEXT, state it as a short assumption or a question to the CO.
+4. Maximize relevance to requirements, submission instructions, evaluation factors, pricing, and schedule.
+"""
+    # Apply optional trim only to context to keep prompt size bounded. The model will still write fully.
+    if max_words:
+        # crude trim on context portion to keep token budgets sane
+        ctx_words = max(200, int(max_words) * 4)
+        ctx_tokens = _re.findall(r"\S+", ctx)
+        if len(ctx_tokens) > ctx_words:
+            ctx = " ".join(ctx_tokens[:ctx_words]) + " [context trimmed]"
+            user = user.replace("RFP CONTEXT\n", f"RFP CONTEXT\n{ctx}\n")
+    return [{"role":"system","content": sys}, {"role":"user","content": user}]
+
+# Override single section drafting to no-citation behavior
+def x7_generate_section_ai(conn, rfp_id, title, guidance="", temperature=0.15, k: int = 8, max_words: int | None = None):
+    try:
+        client = get_ai()
+        model_name = _resolve_model()
+    except Exception:
+        client = None
+        model_name = "gpt-4o-mini"
+    msgs = _pb__build_messages_no_cite(conn, int(rfp_id), str(title or "Untitled"), str(guidance or ""), max_words)
+    try:
+        if client:
+            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
+            return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        pass
+    # Fallback small model
+    try:
+        resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"[system] AI unavailable: {type(e).__name__}: {e}"
+
+# Override Draft-all stream with the same no-citation behavior and de-dup across sections
+def y3_stream_draft(conn, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
+    import streamlit as st
+    try:
+        client = get_ai()
+        model_name = _resolve_model()
+    except Exception:
+        client = None
+        model_name = "gpt-4o-mini"
+    msgs = _pb__build_messages_no_cite(conn, int(rfp_id), str(section_title or "Untitled"), str(notes or ""), max_words)
+    text = ""
+    try:
+        if client:
+            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
+            text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        try:
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
+            text = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            yield f"[system] AI unavailable: {type(e).__name__}: {e}"
+            return
+    # De-dup across sections per run
+    seen = set(st.session_state.get("__y3_seen_sents", []))
+    def _extract_sents(t):
+        return [s.strip() for s in _re.split(r"(?<=[.!?])\s+", t or "") if s.strip()]
+    cleaned_lines = []
+    for sent in _extract_sents(text):
+        low = sent.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        cleaned_lines.append(sent)
+    st.session_state["__y3_seen_sents"] = list(seen)
+    yield " ".join(cleaned_lines)
