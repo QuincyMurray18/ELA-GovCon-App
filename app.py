@@ -156,6 +156,24 @@ except Exception:
 
 import re
 import streamlit as st
+# --- Ensure citation scrubber exists early ---
+def __ensure_strip_helper__():
+    import re as _re
+    def _strip_citations_impl(text: str) -> str:
+        if not text:
+            return text
+        t = str(text)
+        t = _re.sub(r"\s*\[\d+\]", "", t)        # [1]
+        t = _re.sub(r"\s*\(\d+\)", "", t)        # (1)
+        t = _re.sub(r"\n+references:?\n.*$", "", t, flags=_re.IGNORECASE | _re.DOTALL)
+        t = _re.sub(r"^source:.*$", "", t, flags=_re.IGNORECASE | _re.MULTILINE)
+        t = _re.sub(r"\n{3,}", "\n\n", t)
+        return t.strip()
+    g = globals()
+    if "_strip_citations" not in g or not callable(g.get("_strip_citations")):
+        g["_strip_citations"] = _strip_citations_impl
+__ensure_strip_helper__()
+
 
 # === Perf+QA helpers ===
 import traceback as _traceback
@@ -4294,11 +4312,7 @@ def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: s
     dates_str = "\n".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
     pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
     meta = ctx.get("meta") or {}
-    style = (
-        "You are a veteran federal proposal writer with $70M+ in awards. "
-        "Write in crisp, compliant federal style. Tailor to THIS RFP only. "
-        "No citations. No bracketed tags. Avoid redundancy. Align with L&M and CLINs."
-    )
+    style = ("You are a veteran federal proposal writer with $70M+ in awards. Write in crisp, compliant federal style. Tailor to THIS RFP only. No citations or bracket tags. Avoid redundancy. Align with L&M and CLINs.")
     req_len = f"Target length: {max_words} words." if max_words else ""
     user = f"""
 SECTION TO DRAFT: {section_title}
@@ -8716,10 +8730,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     # stream and accumulate (headless)
                     for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes, k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
                         acc.append(tok)
-                    drafted = "".join(acc).strip()
+                    drafted = _strip_citations("".join(acc).strip())
             if drafted:
                 drafted = _strip_citations(drafted)
-                st.session_state[f"pb_section_{sec}"] = drafted
+                st.session_state[f"pb_section_{sec}"] = _strip_citations(drafted)
             st.success("Drafted all sections.")
         content_map: Dict[str, str] = {}
         for sec in selected:
@@ -8736,10 +8750,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     ph = st.empty(); acc = []
                     for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw>0 else None):
                         acc.append(tok); ph.markdown("".join(acc))
-                    drafted = "".join(acc).strip()
+                    drafted = _strip_citations("".join(acc).strip())
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        st.session_state[f"pb_section_{sec}"] = drafted
+                        st.session_state[f"pb_section_{sec}"] = _strip_citations(drafted)
                         default_val = drafted
 
             content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
