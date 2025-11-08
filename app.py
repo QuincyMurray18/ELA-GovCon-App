@@ -5,7 +5,7 @@ except NameError:
     def _strip_citations(text: str) -> str:
         import re as _re
         if not text:
-            return text
+            return _apply_org_placeholders(conn, text)
         t = str(text)
         t = _re.sub(r"\s*\[\d+\]", "", t)
         t = _re.sub(r"\s*\(\d+\)", "", t)
@@ -79,11 +79,144 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
 from html import escape as _esc
 
 
+# ===== Org Profile (ELA) =====
+# Defaults used if DB row is empty.
+__ELA_DEFAULTS__ = {
+    "COMPANY_NAME": "ELA Management, LLC",
+    "CAGE": "14ZP6",
+    "UEI": "U32LBVK3DDF7",
+    "DUNS": "14-483-4790",
+    "EIN": "39-3925658",
+    "EMAIL": "quincy.elamgmt@gmail.com",
+    "PHONE": "832-273-0498",
+    "ADDRESS": "",
+    "WEBSITE": "",
+}
+
+def __ensure_org_profile_table__(conn):
+    try:
+        sql = (
+            "CREATE TABLE IF NOT EXISTS org_profile ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1),"
+            "company_name TEXT,"
+            "cage TEXT,"
+            "uei TEXT,"
+            "duns TEXT,"
+            "ein TEXT,"
+            "email TEXT,"
+            "phone TEXT,"
+            "address TEXT,"
+            "website TEXT"
+            ");"
+        )
+        conn.execute(sql)
+        row = conn.execute("SELECT 1 FROM org_profile WHERE id=1;").fetchone()
+        if not row:
+            conn.execute(
+                "INSERT INTO org_profile(id, company_name, cage, uei, duns, ein, email, phone, address, website) "
+                "VALUES (1,?,?,?,?,?,?,?,?,?);",
+                (
+                    __ELA_DEFAULTS__.get("COMPANY_NAME",""),
+                    __ELA_DEFAULTS__.get("CAGE",""),
+                    __ELA_DEFAULTS__.get("UEI",""),
+                    __ELA_DEFAULTS__.get("DUNS",""),
+                    __ELA_DEFAULTS__.get("EIN",""),
+                    __ELA_DEFAULTS__.get("EMAIL",""),
+                    __ELA_DEFAULTS__.get("PHONE",""),
+                    __ELA_DEFAULTS__.get("ADDRESS",""),
+                    __ELA_DEFAULTS__.get("WEBSITE",""),
+                )
+            )
+        conn.commit()
+    except Exception as e:
+        try:
+            import streamlit as st
+            st.warning(f"Org profile table error: {e}")
+        except Exception:
+            pass
+
+def _org_profile_load(conn) -> dict:
+    try:
+        row = conn.execute(
+            "SELECT company_name, cage, uei, duns, ein, email, phone, address, website FROM org_profile WHERE id=1;"
+        ).fetchone()
+        keys = ["COMPANY_NAME","CAGE","UEI","DUNS","EIN","EMAIL","PHONE","ADDRESS","WEBSITE"]
+        if row:
+            try:
+                # sqlite3.Row supports dict-like access
+                vals = [row["company_name"], row["cage"], row["uei"], row["duns"], row["ein"], row["email"], row["phone"], row["address"], row["website"]]
+            except Exception:
+                vals = list(row)
+            prof = dict(zip(keys, [v or "" for v in vals]))
+        else:
+            prof = {}
+    except Exception:
+        prof = {}
+    out = dict(__ELA_DEFAULTS__)
+    out.update({k: v for k, v in prof.items() if v})
+    return out
+
+def _org_profile_save(conn, data: dict):
+    vals = [
+        data.get("COMPANY_NAME",""), data.get("CAGE",""), data.get("UEI",""),
+        data.get("DUNS",""), data.get("EIN",""), data.get("EMAIL",""),
+        data.get("PHONE",""), data.get("ADDRESS",""), data.get("WEBSITE","")
+    ]
+    conn.execute(
+        "INSERT INTO org_profile(id, company_name, cage, uei, duns, ein, email, phone, address, website) "
+        "VALUES (1,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "company_name=excluded.company_name, cage=excluded.cage, uei=excluded.uei, duns=excluded.duns, "
+        "ein=excluded.ein, email=excluded.email, phone=excluded.phone, address=excluded.address, website=excluded.website;",
+        vals
+    )
+    conn.commit()
+
+def render_org_profile_panel(conn):
+    import streamlit as st
+    __ensure_org_profile_table__(conn)
+    with st.expander("Org Profile", expanded=False):
+        prof = _org_profile_load(conn)
+        c1, c2 = st.columns(2)
+        with c1:
+            prof["COMPANY_NAME"] = st.text_input("Company name", value=prof.get("COMPANY_NAME",""))
+            prof["CAGE"] = st.text_input("CAGE", value=prof.get("CAGE",""))
+            prof["UEI"] = st.text_input("UEI", value=prof.get("UEI",""))
+            prof["DUNS"] = st.text_input("DUNS", value=prof.get("DUNS",""))
+            prof["EIN"] = st.text_input("EIN", value=prof.get("EIN",""))
+        with c2:
+            prof["EMAIL"] = st.text_input("Email", value=prof.get("EMAIL",""))
+            prof["PHONE"] = st.text_input("Phone", value=prof.get("PHONE",""))
+            prof["ADDRESS"] = st.text_input("Address", value=prof.get("ADDRESS",""))
+            prof["WEBSITE"] = st.text_input("Website", value=prof.get("WEBSITE",""))
+        colA, colB = st.columns([1,1])
+        with colA:
+            if st.button("Save org profile"):
+                _org_profile_save(conn, prof)
+                st.success("Saved")
+        with colB:
+            if st.button("Reset to ELA defaults"):
+                _org_profile_save(conn, dict(__ELA_DEFAULTS__))
+                st.success("Defaults restored")
+
+def _apply_org_placeholders(conn, text: str) -> str:
+    t = str(text or "")
+    try:
+        prof = _org_profile_load(conn)
+        for k, v in prof.items():
+            t = t.replace(f"{{{{{k}}}}}", str(v))
+    except Exception:
+        pass
+    return t
+# ===== End Org Profile =====
+
+
+
 # === One-paragraph-per-idea enforcement ===
 def _one_idea_per_paragraph(text: str) -> str:
     import re as _re
     if not text:
-        return text
+        return _apply_org_placeholders(conn, text)
     t = str(text)
     t = _re.sub(r"(?m)^(?:-|\*|\d+\.)\s", r"\n\g<0>", t)
     t = _re.sub(r"\n{3,}", "\n\n", t)
@@ -634,7 +767,7 @@ def _section_blueprint(section_title: str) -> str:
 def _clip_to_single_section(section_title: str, text: str) -> str:
     # Keep content up to first unrelated top-level heading
     if not text:
-        return text
+        return _apply_org_placeholders(conn, text)
     k = _normalize_section_name(section_title)
     headings = [
         "Executive Summary","Technical Approach","Management Approach","Staffing","Quality Control",
@@ -9079,7 +9212,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
             if drafted:
                 drafted = _strip_citations(drafted)
-                st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
+                st.session_state[f"pb_section_{sec}"] = _apply_org_placeholders(conn, _finalize_section(sec, drafted))
             st.success("Drafted all sections.")
         content_map: Dict[str, str] = {}
         for sec in selected:
@@ -9099,7 +9232,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
+                        st.session_state[f"pb_section_{sec}"] = _apply_org_placeholders(conn, _finalize_section(sec, drafted))
                         default_val = drafted
 
             content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
@@ -10185,7 +10318,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
         st.write(final_md)
 
         # Push to Proposal Builder section
-        st.session_state["pb_section_Past Performance Summary"] = final_md
+        st.session_state["pb_section_Past Performance Summary"] = _apply_org_placeholders(conn, final_md)
         st.success("Pushed to Proposal Builder → Past Performance Summary")
 
         # Export DOCX
@@ -10421,7 +10554,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                     for _, rr in secs.sort_values("position").iterrows():
                         lines.append(f"## {rr.get('title') or 'Section'}\n\n{rr.get('body') or ''}")
                     md = "\n\n".join(lines)
-                    st.session_state["pb_section_White Paper"] = md
+                    st.session_state["pb_section_White Paper"] = _apply_org_placeholders(conn, md)
                     st.success("Pushed to Proposal Builder → 'White Paper' section")
 
 # ---------- Phase I: CRM (Activities • Tasks • Pipeline) ----------
@@ -13388,7 +13521,7 @@ def _s1d_render_from_cache(conn, df):
         return
     # Show with links and dedupe flags
     def _mk_link(url, text):
-        if not url: return text
+        if not url: return _apply_org_placeholders(conn, text)
         return f"<a href='{url}' target='_blank'>{text}</a>"
     show = df.copy()
     if "google_url" in show.columns:
@@ -13659,7 +13792,7 @@ def render_subfinder_s1d(conn):
     from urllib.parse import urlparse
     def _mk_link(url, text):
         if not url:
-            return text
+            return _apply_org_placeholders(conn, text)
         return f"<a href='{url}' target='_blank'>{text}</a>"
     def _tel_link(digits, label):
         if not digits:
@@ -15137,7 +15270,7 @@ PROPOSAL_STYLE_GUIDE = (
 
 def _strip_citations(text: str) -> str:
     import re
-    if not text: return text
+    if not text: return _apply_org_placeholders(conn, text)
     t = str(text)
     t = re.sub(r"\s*\[\d+\]", "", t)
     t = re.sub(r"\s*\(\d+\)", "", t)
@@ -15148,7 +15281,7 @@ def _strip_citations(text: str) -> str:
 
 def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
     import re
-    if not text: return text
+    if not text: return _apply_org_placeholders(conn, text)
     t = re.sub(r"[ \t]+", " ", str(text)).strip()
     paras = re.split(r"\n\s*\n", t)
     out = []
