@@ -12876,130 +12876,152 @@ def render_subfinder_s1d(conn):
         st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
         return
 
-    import pandas as _pd
-    _cache = st.session_state.get("s1d_df")
-    if _cache:
-        df = _pd.DataFrame(_cache)
-        try:
-            _s1d_render_from_cache(conn, df)
-            return
-        except Exception:
-            pass
+    # Ensure state
+    for k, v in {
+        "s1d_q": "",
+        "s1d_loc": "Address",
+        "s1d_addr": "",
+        "s1d_lat": 38.8951,
+        "s1d_lng": -77.0364,
+        "s1d_radius": 25,
+        "s1d_next_token": None,
+        "s1d_df": None,
+    }.items():
+        st.session_state.setdefault(k, v)
 
-    q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
+    # Persistent form keeps controls visible across reruns
+    with st.form("s1d_form", clear_on_submit=False):
+        q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
+        loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True, key="s1d_loc")
+        if loc_choice == "Address":
+            addr = st.text_input("Place of performance address", key="s1d_addr")
+            radius_mi = st.number_input("Radius (miles)", 1, 200, value=st.session_state["s1d_radius"], key="s1d_radius")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.number_input("Latitude", key="s1d_lat")
+            with c2:
+                st.number_input("Longitude", key="s1d_lng")
+            radius_mi = st.number_input("Radius (miles)", 1, 200, value=st.session_state["s1d_radius"], key="s1d_radius")
 
-    loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
+        c1, c2 = st.columns([1,1])
+        with c1:
+            do_search = st.form_submit_button("Search", use_container_width=False)
+        with c2:
+            do_next = st.form_submit_button("Next page", use_container_width=False)
+
+    # Resolve center point
     lat = lng = None
-    if loc_choice == "Address":
-        addr = st.text_input("Place of performance address")
-        radius_mi = st.number_input("Radius (miles)", 1, 200, value=25)
-        if addr:
-            ll = _s1d_geocode(addr, key)
+    if st.session_state["s1d_loc"] == "Address":
+        if st.session_state["s1d_addr"]:
+            ll = _s1d_geocode(st.session_state["s1d_addr"], key)
             if ll:
                 lat, lng = ll
     else:
-        col1, col2 = st.columns(2)
-        with col1:
-            lat = st.number_input("Latitude", value=38.8951)
-        with col2:
-            lng = st.number_input("Longitude", value=-77.0364)
-        radius_mi = st.number_input("Radius (miles)", 1, 200, value=25)
+        lat = float(st.session_state["s1d_lat"])
+        lng = float(st.session_state["s1d_lng"])
 
-    radius_m = int(float(radius_mi) * 1609.34)
+    # Fetch logic
+    radius_m = int(float(st.session_state["s1d_radius"]) * 1609.34)
+    if do_search:
+        st.session_state["s1d_next_token"] = None
+        st.session_state["s1d_df"] = None
+        tok = None
+    elif do_next:
+        tok = st.session_state.get("s1d_next_token")
+    else:
+        tok = None
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        go = st.button("Search", key="s1d_go")
-    with c2:
-        nxt = st.button("Next page", key="s1d_next")
-
-    tok_key = "s1d_next_token"
-    if go:
-        st.session_state.pop(tok_key, None)
-
-    js = None
-    try:
-        if go or nxt:
-            tok = st.session_state.get(tok_key) if nxt else None
-            if q:
-                js = _s1d_places_textsearch(q, lat, lng, radius_m, tok, key)
-                if js.get("next_page_token"):
-                    st.session_state[tok_key] = js["next_page_token"]
-                else:
-                    st.session_state.pop(tok_key, None)
-    except Exception as e:
-        st.error(f"Search failed: {e}")
-        return
-
-    if not js or not js.get("results"):
-        st.info("No results yet. Enter a query and click Search.")
-        return
-
-    rows = []
-    for r in js["results"]:
-        name = r.get("name", "") or ""
-        pid = r.get("place_id", "") or ""
-        addr = r.get("formatted_address", "") or ""
-        city = state = ""
-        if "," in addr:
-            parts = [p.strip() for p in addr.split(",")]
-            if len(parts) >= 2:
-                city = parts[-2]
-                state = parts[-1].split()[0]
-        gl = (r.get("geometry") or {}).get("location") or {}
-        rlat = gl.get("lat")
-        rlng = gl.get("lng")
-        dist = _s1d_haversine_mi(lat, lng,
-                                 float(rlat) if rlat is not None else None,
-                                 float(rlng) if rlng is not None else None)
-
-        # Fetch details for phone, website, and canonical Google URL
-        phone_disp = ""
-        phone = ""
-        website = ""
-        google_url = f"https://www.google.com/maps/place/?q=place_id:{pid}"
+    if do_search or do_next:
         try:
-            import requests as _rqd
-            det = _rqd.get("https://maps.googleapis.com/maps/api/place/details/json",
-                           params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
-                           timeout=10).json().get("result",{}) or {}
-            phone_disp = det.get("formatted_phone_number","") or ""
-            digits = "".join([c for c in phone_disp if c.isdigit()])
-            if len(digits)==11 and digits.startswith("1"):
-                digits = digits[1:]
-            phone = digits
-            website = det.get("website","") or ""
-            google_url = det.get("url","") or google_url
-        except Exception:
-            pass
+            if st.session_state["s1d_q"]:
+                js = _s1d_places_textsearch(st.session_state["s1d_q"], lat, lng, radius_m, tok, key)
+                # Update token
+                st.session_state["s1d_next_token"] = js.get("next_page_token")
+                results = js.get("results", [])
+            else:
+                results = []
+        except Exception as e:
+            st.error(f"Search failed: {e}")
+            results = []
 
-        dup = ((name.strip().lower(), _s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
-        rows.append({
-            "name": name,
-            "address": addr,
-            "city": city,
-            "state": state,
-            "phone": phone,
-            "phone_display": phone_disp,
-            "website": website,
-            "place_id": pid,
-            "google_url": google_url,
-            "distance_mi": round(dist, 2) if dist is not None else None,
-            "_dup": dup,
-        })
-        _time.sleep(0.05)
+        rows = []
+        for r in results:
+            name = r.get("name", "") or ""
+            pid = r.get("place_id", "") or ""
+            addr = r.get("formatted_address", "") or ""
+            city = state = ""
+            if "," in addr:
+                parts = [p.strip() for p in addr.split(",")]
+                if len(parts) >= 2:
+                    city = parts[-2]
+                    state = parts[-1].split()[0]
+            gl = (r.get("geometry") or {}).get("location") or {}
+            rlat = gl.get("lat")
+            rlng = gl.get("lng")
+            dist = _s1d_haversine_mi(lat, lng,
+                                     float(rlat) if rlat is not None else None,
+                                     float(rlng) if rlng is not None else None)
 
-    df = _pd.DataFrame(rows)
-    if "distance_mi" in df.columns:
-        try:
-            df = df.sort_values(by=["distance_mi"], ascending=True, na_position="last")
-        except Exception:
-            pass
+            # Details for hyperlinks
+            phone_disp = ""
+            phone = ""
+            website = ""
+            google_url = f"https://www.google.com/maps/place/?q=place_id:{pid}"
+            try:
+                import requests as _rqd
+                det = _rqd.get("https://maps.googleapis.com/maps/api/place/details/json",
+                               params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
+                               timeout=10).json().get("result",{}) or {}
+                phone_disp = det.get("formatted_phone_number","") or ""
+                digits = "".join([c for c in phone_disp if c.isdigit()])
+                if len(digits)==11 and digits.startswith("1"):
+                    digits = digits[1:]
+                phone = digits
+                website = det.get("website","") or ""
+                google_url = det.get("url","") or google_url
+            except Exception:
+                pass
 
-    st.session_state["s1d_df"] = df.to_dict("records")
+            dup = ((name.strip().lower(), _s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
+            rows.append({
+                "name": name,
+                "address": addr,
+                "city": city,
+                "state": state,
+                "phone": phone,
+                "phone_display": phone_disp,
+                "website": website,
+                "place_id": pid,
+                "google_url": google_url,
+                "distance_mi": round(dist, 2) if dist is not None else None,
+                "_dup": dup,
+            })
+            _time.sleep(0.05)
+
+        import pandas as _pd
+        df_new = _pd.DataFrame(rows)
+        if not df_new.empty:
+            try:
+                df_new = df_new.sort_values(by=["distance_mi"], ascending=True, na_position="last")
+            except Exception:
+                pass
+
+            # Append to existing results on Next
+            if do_next and isinstance(st.session_state.get("s1d_df"), list):
+                df_old = _pd.DataFrame(st.session_state["s1d_df"])
+                df_combined = _pd.concat([df_old, df_new], ignore_index=True)
+                st.session_state["s1d_df"] = df_combined.to_dict("records")
+            else:
+                st.session_state["s1d_df"] = df_new.to_dict("records")
+
+    # Results panel: always visible and independent of form reruns
+    import pandas as _pd
+    _cache = st.session_state.get("s1d_df") or []
+    df = _pd.DataFrame(_cache)
 
     if df.empty:
-        st.info("No results.")
+        st.info("No results yet. Enter a query and click Search.")
         return
 
     from urllib.parse import urlparse
@@ -13030,9 +13052,6 @@ def render_subfinder_s1d(conn):
     st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     keep = df[~df["_dup"]].copy()
-    if keep.empty:
-        st.success("All results are already in your vendor list.")
-        return
     st.caption(f"{len(keep)} new vendors can be saved")
 
     keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
@@ -13040,15 +13059,21 @@ def render_subfinder_s1d(conn):
     edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
     sel = edited[edited["Select"]==True]
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
             n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
             st.success(f"Saved {n} vendors")
     with c2:
-        if st.button("Save all new vendors", key="s1d_save_all"):
+        if st.button("Save all new vendors", key="s1d_save_all") and not keep.empty:
             n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
             st.success(f"Saved {n} vendors")
+    with c3:
+        if st.session_state.get("s1d_next_token"):
+            # Extra Next button under results for convenience
+            if st.button("Next page ▶", key="s1d_next_under"):
+                st.session_state["s1d_trigger_next"] = True
+                st.rerun()
 
 # === End S1D ================================================================
 
@@ -13326,114 +13351,143 @@ def __p_s1d_ui(conn):
     if not key:
         _st.error("Missing Google API key in secrets")
         return
-    mode = _st.radio("Location mode", ["Address","Lat/Lng"], horizontal=True, key="__p_s1d_mode")
+
+    for k, v in {
+        "__p_s1d_q": "",
+        "__p_s1d_mode": "Address",
+        "__p_s1d_addr": "",
+        "__p_s1d_lat": 38.8951,
+        "__p_s1d_lng": -77.0364,
+        "__p_s1d_rad": 25,
+        "__p_s1d_tok": None,
+        "__p_s1d_df": None,
+    }.items():
+        _st.session_state.setdefault(k, v)
+
+    with _st.form("__p_s1d_form", clear_on_submit=False):
+        mode = _st.radio("Location mode", ["Address","Lat/Lng"], horizontal=True, key="__p_s1d_mode")
+        if mode == "Address":
+            _st.text_input("Place of performance address", key="__p_s1d_addr")
+            _st.number_input("Radius (miles)", 1, 200, 25, key="__p_s1d_rad")
+        else:
+            c1, c2 = _st.columns(2)
+            with c1:
+                _st.number_input("Latitude", key="__p_s1d_lat")
+            with c2:
+                _st.number_input("Longitude", key="__p_s1d_lng")
+            _st.number_input("Radius (miles)", 1, 200, 25, key="__p_s1d_rad")
+        _st.text_input("Search query", key="__p_s1d_q", placeholder="e.g. janitorial contractors, HVAC service, landscaping")
+
+        c1, c2 = _st.columns([1,1])
+        with c1:
+            go = _st.form_submit_button("Search")
+        with c2:
+            nxt = _st.form_submit_button("Next page")
+
     lat = lng = None
-    if mode == "Address":
-        addr = _st.text_input("Place of performance address", key="__p_s1d_addr")
-        radius = _st.number_input("Radius (miles)", 1, 200, 25, key="__p_s1d_rad")
-        if addr:
+    if _st.session_state["__p_s1d_mode"] == "Address":
+        if _st.session_state["__p_s1d_addr"]:
             try:
                 import requests as _rq
-                js = _rq.get("https://maps.googleapis.com/maps/api/geocode/json", params={"address": addr, "key": key}, timeout=10).json()
+                js = _rq.get("https://maps.googleapis.com/maps/api/geocode/json",
+                             params={"address": _st.session_state["__p_s1d_addr"], "key": key}, timeout=10).json()
                 if js.get("status") == "OK":
                     loc = js["results"][0]["geometry"]["location"]
                     lat, lng = float(loc["lat"]), float(loc["lng"])
             except Exception:
                 pass
     else:
-        c1, c2 = _st.columns(2)
-        with c1:
-            lat = _st.number_input("Latitude", value=38.8951, key="__p_s1d_lat")
-        with c2:
-            lng = _st.number_input("Longitude", value=-77.0364, key="__p_s1d_lng")
-        radius = _st.number_input("Radius (miles)", 1, 200, 25, key="__p_s1d_rad_ll")
+        lat = float(_st.session_state["__p_s1d_lat"])
+        lng = float(_st.session_state["__p_s1d_lng"])
 
-    radius_m = int(float(radius) * 1609.34)
-
-    q = _st.text_input("Search query", key="__p_s1d_q", placeholder="e.g. janitorial contractors, HVAC service, landscaping")
-    c1, c2 = _st.columns([1,1])
-    with c1:
-        go = _st.button("Search", key="__p_s1d_go")
-    with c2:
-        nxt = _st.button("Next page", key="__p_s1d_next")
-
-    tok_key = "__p_s1d_tok"
+    radius_m = int(float(_st.session_state["__p_s1d_rad"]) * 1609.34)
+    tok = None
     if go:
-        _st.session_state.pop(tok_key, None)
+        _st.session_state["__p_s1d_tok"] = None
+        _st.session_state["__p_s1d_df"] = None
+    elif nxt:
+        tok = _st.session_state.get("__p_s1d_tok")
 
-    results = []
-    try:
-        if go or nxt:
-            import requests as _rq2
-            params = {"query": q, "key": key, "region": "us"}
-            if nxt and _st.session_state.get(tok_key):
-                params = {"pagetoken": _st.session_state[tok_key], "key": key}
-            elif lat is not None and lng is not None:
-                params.update({"location": f"{lat},{lng}", "radius": int(radius_m)})
-            js = _rq2.get("https://maps.googleapis.com/maps/api/place/textsearch/json", params=params, timeout=12).json()
-            if js.get("next_page_token"):
-                _st.session_state[tok_key] = js["next_page_token"]
-            else:
-                _st.session_state.pop(tok_key, None)
-            results = js.get("results", [])
-    except Exception as e:
-        _st.error(f"Search failed: {e}")
-        return
-
-    if not results:
-        _st.info("Enter a query and click Search.")
-        return
-
-    rows = []
-    for r in results:
-        name = r.get("name","")
-        pid = r.get("place_id","") or ""
-        addr = r.get("formatted_address","") or ""
-        city = state = ""
-        if "," in addr:
-            parts = [p.strip() for p in addr.split(",")]
-            if len(parts) >= 2:
-                city = parts[-2]
-                state = parts[-1].split()[0]
-        gl = (r.get("geometry") or {}).get("location") or {}
-        rlat, rlng = gl.get("lat"), gl.get("lng")
-        dist = _s1d_haversine_mi(lat, lng,
-                                 float(rlat) if rlat is not None else None,
-                                 float(rlng) if rlng is not None else None)
-
-        # Details for links
-        phone_disp = ""
-        phone = ""
-        website = ""
-        gurl = f"https://www.google.com/maps/place/?q=place_id:{pid}"
+    if go or nxt:
         try:
-            import requests as _rqd2
-            det = _rqd2.get("https://maps.googleapis.com/maps/api/place/details/json",
-                            params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
-                            timeout=10).json().get("result",{}) or {}
-            phone_disp = det.get("formatted_phone_number","") or ""
-            digits = "".join([c for c in phone_disp if c.isdigit()])
-            if len(digits)==11 and digits.startswith("1"):
-                digits = digits[1:]
-            phone = digits
-            website = det.get("website","") or ""
-            gurl = det.get("url","") or gurl
-        except Exception:
-            pass
+            if _st.session_state["__p_s1d_q"]:
+                import requests as _rq2
+                params = {"query": _st.session_state["__p_s1d_q"], "key": key, "region": "us"}
+                if tok:
+                    params = {"pagetoken": tok, "key": key}
+                elif lat is not None and lng is not None:
+                    params.update({"location": f"{lat},{lng}", "radius": int(radius_m)})
+                js = _rq2.get("https://maps.googleapis.com/maps/api/place/textsearch/json", params=params, timeout=12).json()
+                _st.session_state["__p_s1d_tok"] = js.get("next_page_token")
+                results = js.get("results", [])
+            else:
+                results = []
+        except Exception as e:
+            _st.error(f"Search failed: {e}")
+            results = []
 
-        dup = ((name.strip().lower(), __p_s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
-        rows.append(dict(name=name, address=addr, city=city, state=state, phone=phone, phone_display=phone_disp,
-                         website=website, place_id=pid, google_url=gurl,
-                         distance_mi=(round(dist,2) if dist is not None else None), _dup=dup))
-        _time.sleep(0.05)
+        rows = []
+        for r in results:
+            name = r.get("name","")
+            pid = r.get("place_id","") or ""
+            addr = r.get("formatted_address","") or ""
+            city = state = ""
+            if "," in addr:
+                parts = [p.strip() for p in addr.split(",")]
+                if len(parts) >= 2:
+                    city = parts[-2]
+                    state = parts[-1].split()[0]
+            gl = (r.get("geometry") or {}).get("location") or {}
+            rlat, rlng = gl.get("lat"), gl.get("lng")
+            dist = _s1d_haversine_mi(lat, lng,
+                                     float(rlat) if rlat is not None else None,
+                                     float(rlng) if rlng is not None else None)
+
+            phone_disp = ""
+            phone = ""
+            website = ""
+            gurl = f"https://www.google.com/maps/place/?q=place_id:{pid}"
+            try:
+                import requests as _rqd2
+                det = _rqd2.get("https://maps.googleapis.com/maps/api/place/details/json",
+                                params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
+                                timeout=10).json().get("result",{}) or {}
+                phone_disp = det.get("formatted_phone_number","") or ""
+                digits = "".join([c for c in phone_disp if c.isdigit()])
+                if len(digits)==11 and digits.startswith("1"):
+                    digits = digits[1:]
+                phone = digits
+                website = det.get("website","") or ""
+                gurl = det.get("url","") or gurl
+            except Exception:
+                pass
+
+            dup = ((name.strip().lower(), __p_s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
+            rows.append(dict(name=name, address=addr, city=city, state=state, phone=phone, phone_display=phone_disp,
+                             website=website, place_id=pid, google_url=gurl,
+                             distance_mi=(round(dist,2) if dist is not None else None), _dup=dup))
+            _time.sleep(0.05)
+
+        import pandas as _pandas
+        df_new = _pandas.DataFrame(rows)
+        if not df_new.empty:
+            try:
+                df_new = df_new.sort_values(by=["distance_mi"], ascending=True, na_position="last")
+            except Exception:
+                pass
+            if nxt and isinstance(_st.session_state.get("__p_s1d_df"), list):
+                df_old = _pandas.DataFrame(_st.session_state["__p_s1d_df"])
+                df_combined = _pandas.concat([df_old, df_new], ignore_index=True)
+                _st.session_state["__p_s1d_df"] = df_combined.to_dict("records")
+            else:
+                _st.session_state["__p_s1d_df"] = df_new.to_dict("records")
 
     import pandas as _pandas
-    df = _pandas.DataFrame(rows)
-    if "distance_mi" in df.columns:
-        try:
-            df = df.sort_values(by=["distance_mi"], ascending=True, na_position="last")
-        except Exception:
-            pass
+    _cache = _st.session_state.get("__p_s1d_df") or []
+    df = _pandas.DataFrame(_cache)
+    if df.empty:
+        _st.info("Enter a query and click Search.")
+        return
 
     from urllib.parse import urlparse
     def _link(u, t):
