@@ -13077,73 +13077,192 @@ def render_subfinder_s1d(conn):
                 st.session_state["s1d_trigger"] = "next"
                 st.rerun()
 
+    # === S1D CARDS: Add Places to Vendors and Quick Edit Vendors ===
+    import sqlite3 as _sqlite3
+    import pandas as _pd
 
-    # --- S1D inline add with edits and selection
-    with st.expander("S1D: Add selected to Vendors (edit email/phone)", expanded=False):
+    def _is_view(_conn, name: str) -> bool:
         try:
-            df2 = _pd.DataFrame(st.session_state.get("s1d_df") or [])
-            if not df2.empty:
-                # Filter out duplicates if the flag exists
-                if "_dup" in df2.columns:
-                    df2 = df2.loc[~df2["_dup"]].copy()
-                df2 = df2.copy()
-                if "email" not in df2.columns:
-                    df2["email"] = ""
-                if "phone" not in df2.columns:
-                    df2["phone"] = ""
-                show_cols = [c for c in ["name","email","phone","website","address","city","state","distance_mi","place_id"] if c in df2.columns]
-                view = df2[show_cols].copy()
-                view.insert(0, "Select", False)
-                edited = st.data_editor(view, hide_index=True, key="s1d_add_editor", num_rows="dynamic")
-                sel = edited.loc[edited["Select"]==True].drop(columns=["Select"], errors="ignore")
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Add selected to Vendors", key="s1d_add_selected") and not sel.empty:
-                        n = _s1d_save_new_vendors(conn, sel.to_dict("records"))
-                        st.success(f"Saved {n} vendors")
-                with c2:
-                    if st.button("Add all shown to Vendors", key="s1d_add_all_shown"):
-                        n = _s1d_save_new_vendors(conn, edited.drop(columns=["Select"], errors="ignore").to_dict("records"))
-                        st.success(f"Saved {n} vendors")
-            else:
-                st.caption("No S1D results to add")
-        except Exception as e:
-            st.warning(f"Inline add unavailable: {e}")
+            row = _pd.read_sql_query("SELECT type FROM sqlite_master WHERE name=?;", _conn, params=[name]).head(1)
+            if not row.empty:
+                return str(row.iloc[0]["type"]).lower() == "view"
+        except Exception:
+            pass
+        return False
 
-    # --- Quick edit existing vendors
-    with st.expander("S1D: Quick edit existing vendors (email/phone/website)", expanded=False):
+    def _vendor_write_table(_conn) -> str:
+        # Prefer vendors_t if it is a real table, else vendors
         try:
-            try:
-                dfv = _pd.read_sql_query("SELECT id,name,email,phone,website,city,state FROM vendors_t ORDER BY name ASC;", conn)
-                tbl = "vendors_t"
-            except Exception:
-                dfv = _pd.read_sql_query("SELECT id,name,email,phone,website,city,state FROM vendors ORDER BY name ASC;", conn)
-                tbl = "vendors"
-            if dfv.empty:
-                st.caption("Vendor list is empty")
+            if not _is_view(_conn, "vendors_t"):
+                # vendors_t might be a table or not exist
+                row = _pd.read_sql_query("SELECT name, type FROM sqlite_master WHERE name='vendors_t';", _conn)
+                if not row.empty and str(row.iloc[0]["type"]).lower() == "table":
+                    return "vendors_t"
+        except Exception:
+            pass
+        # Fallback
+        return "vendors"
+
+    def _paginate(df, page_size_key: str, page_key: str):
+        import math
+        import streamlit as st
+        page_size = st.session_state.get(page_size_key, 12)
+        page = st.session_state.get(page_key, 1)
+        total = len(df)
+        pages = max(1, math.ceil(total / page_size))
+        page = max(1, min(page, pages))
+        start = (page - 1) * page_size
+        end = start + page_size
+        c1, c2, c3, c4 = st.columns([1,1,2,2])
+        with c1:
+            st.number_input("Page", min_value=1, max_value=pages, key=page_key, value=page, step=1)
+        with c2:
+            st.number_input("Per page", min_value=4, max_value=40, key=page_size_key, value=page_size, step=4)
+        with c3:
+            st.caption(f"{total} items")
+        with c4:
+            st.caption(f"{pages} pages")
+        page = st.session_state[page_key]
+        page_size = st.session_state[page_size_key]
+        start = (page - 1) * page_size
+        end = start + page_size
+        return df.iloc[start:end].copy()
+
+    def _cards_add_places(conn):
+        import streamlit as st
+        df2 = _pd.DataFrame(st.session_state.get("s1d_df") or [])
+        if df2.empty:
+            st.caption("No S1D results to add")
+            return
+        # Filter UI
+        cols = st.columns([2,2,1,2])
+        with cols[0]:
+            q = st.text_input("Filter by name or city", key="s1d_cards_q", placeholder="type to filter")
+        with cols[1]:
+            missing_only = st.checkbox("Only missing email or phone", key="s1d_cards_missing", value=True)
+        with cols[2]:
+            st.write("")
+        with cols[3]:
+            st.caption("Select cards then save")
+        df = df2.copy()
+        if "_dup" in df.columns:
+            df = df.loc[~df["_dup"]].copy()
+        for col in ("email","phone","website","address","city","state","place_id","name","distance_mi"):
+            if col not in df.columns:
+                df[col] = ""
+        if q:
+            ql = q.lower()
+            df = df.loc[df["name"].astype(str).str.lower().str.contains(ql) | df["city"].astype(str).str.lower().str.contains(ql)]
+        if missing_only:
+            df = df.loc[(df["email"].astype(str)=="") | (df["phone"].astype(str)=="")]
+        if df.empty:
+            st.caption("No matches")
+            return
+        page_df = _paginate(df.reset_index(drop=True), "s1d_cards_ppg", "s1d_cards_page")
+        selected_ids = []
+        edited_rows = []
+        # Render 3 columns grid
+        grid = st.columns(3)
+        for i, (_, r) in enumerate(page_df.iterrows()):
+            col = grid[i % 3]
+            with col:
+                k = f"s1d_card_{r.get('place_id') or i}"
+                st.container(border=True)
+                st.markdown(f"**{str(r['name'])}**")
+                st.caption(f"{str(r['address'])}, {str(r['city'])}, {str(r['state'])}")
+                st.caption(f"~{str(r.get('distance_mi') or '')} mi")
+                em = st.text_input("Email", key=f"{k}_em", value=str(r.get('email') or ""))
+                ph = st.text_input("Phone", key=f"{k}_ph", value=str(r.get('phone') or ""))
+                sel = st.checkbox("Select", key=f"{k}_sel", value=False)
+                edited = dict(r)
+                edited["email"] = em
+                edited["phone"] = ph
+                if sel:
+                    selected_ids.append(k)
+                edited_rows.append(edited)
+        # Actions
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Add selected to Vendors", key="s1d_cards_add_sel"):
+                rows = [row for row in edited_rows if st.session_state.get(f"s1d_card_{row.get('place_id') or edited_rows.index(row)}_sel")]
+                if rows:
+                    try:
+                        n = _s1d_save_new_vendors(conn, rows)
+                        st.success(f"Saved {n} vendors")
+                    except Exception as e:
+                        st.warning(f"Save failed: {e}")
+                else:
+                    st.info("No cards selected")
+        with c2:
+            if st.button("Add all on page to Vendors", key="s1d_cards_add_page"):
+                rows = edited_rows
+                try:
+                    n = _s1d_save_new_vendors(conn, rows)
+                    st.success(f"Saved {n} vendors")
+                except Exception as e:
+                    st.warning(f"Save failed: {e}")
+
+    def _cards_quick_edit_vendors(conn):
+        import streamlit as st
+        tbl_view = "vendors_t"
+        write_tbl = _vendor_write_table(conn)
+        # Read from view if available, else from base
+        try:
+            dfv = _pd.read_sql_query("SELECT id,name,email,phone,website,city,state FROM vendors_t ORDER BY name ASC;", conn)
+        except Exception:
+            dfv = _pd.read_sql_query("SELECT id,name,email,phone,website,city,state FROM vendors ORDER BY name ASC;", conn)
+            tbl_view = "vendors"
+        if dfv.empty:
+            st.caption("Vendor list is empty")
+            return
+        cols = st.columns([2,2,1,2])
+        with cols[0]:
+            qv = st.text_input("Filter by name or city", key="s1d_vendor_q", placeholder="type to filter")
+        with cols[1]:
+            missing = st.checkbox("Only missing email or phone", key="s1d_vendor_missing", value=True)
+        df = dfv.copy()
+        if qv:
+            qvl = qv.lower()
+            df = df.loc[df["name"].astype(str).str.lower().str.contains(qvl) | df["city"].astype(str).str.lower().str.contains(qvl)]
+        if missing:
+            df = df.loc[(df["email"].astype(str)=="") | (df["phone"].astype(str)=="")]
+        if df.empty:
+            st.caption("No matches")
+            return
+        page_df = _paginate(df.reset_index(drop=True), "s1d_vendor_ppg", "s1d_vendor_page")
+        changed = []
+        grid = st.columns(3)
+        for i, (_, r) in enumerate(page_df.iterrows()):
+            col = grid[i % 3]
+            with col:
+                k = f"vend_card_{int(r['id'])}"
+                st.container(border=True)
+                st.markdown(f"**{str(r['name'])}**")
+                st.caption(f"{str(r['city'])}, {str(r['state'])}")
+                em = st.text_input("Email", key=f"{k}_em", value=str(r.get('email') or ""))
+                ph = st.text_input("Phone", key=f"{k}_ph", value=str(r.get('phone') or ""))
+                web = st.text_input("Website", key=f"{k}_web", value=str(r.get('website') or ""))
+                if any([em != str(r.get('email') or ""), ph != str(r.get('phone') or ""), web != str(r.get('website') or "")]):
+                    changed.append((em, ph, web, int(r["id"])))
+        if st.button("Save changes", key="s1d_vendor_cards_save"):
+            if not changed:
+                st.info("No changes detected")
             else:
-                edited_v = st.data_editor(dfv, key="s1d_vendor_quick_edit", hide_index=True, disabled=["id","name"])
-                if st.button("Save vendor changes", key="s1d_vendor_quick_save"):
-                    # Detect changes
-                    merged = edited_v.merge(dfv, on="id", suffixes=("", "_old"))
-                    updates = []
-                    for _, r in merged.iterrows():
-                        if any([str(r.get("email","")) != str(r.get("email_old","")),
-                                str(r.get("phone","")) != str(r.get("phone_old","")),
-                                str(r.get("website","")) != str(r.get("website_old","")),
-                                str(r.get("city","")) != str(r.get("city_old","")),
-                                str(r.get("state","")) != str(r.get("state_old",""))]):
-                            updates.append((str(r["email"] or ""), str(r["phone"] or ""), str(r["website"] or ""),
-                                            str(r["city"] or ""), str(r["state"] or ""), int(r["id"])))
-                    if updates:
-                        with conn:
-                            for em, ph, web, city, state, vid in updates:
-                                conn.execute(f"UPDATE {tbl} SET email=?, phone=?, website=?, city=?, state=? WHERE id=?", (em, ph, web, city, state, vid))
-                        st.success(f"Updated {len(updates)} vendors")
-                    else:
-                        st.info("No changes detected")
-        except Exception as e:
-            st.warning(f"Quick edit unavailable: {e}")
+                try:
+                    with conn:
+                        for em, ph, web, vid in changed:
+                            conn.execute(f"UPDATE {write_tbl} SET email=?, phone=?, website=? WHERE id=?", (em, ph, web, vid))
+                    st.success(f"Updated {len(changed)} vendors")
+                except Exception as e:
+                    st.warning(f"Save failed: {e}")
+
+    # Render card-based expanders
+    with st.expander("S1D: Add places to Vendors (cards)", expanded=True):
+        _cards_add_places(conn)
+
+    with st.expander("S1D: Quick edit Vendors (cards)", expanded=False):
+        _cards_quick_edit_vendors(conn)
+    # === END S1D CARDS ===
 # === End S1D ================================================================
 
 def _wrap_run_subfinder():
