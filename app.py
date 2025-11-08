@@ -417,6 +417,14 @@ def _normalize_section_name(name: str) -> str:
         "subcontractor plan": "subs",
         "subcontracting plan": "subs",
         "compliance crosswalk": "compliance",
+        "quality assurance": "qc",
+        "quality assurance / qc": "qc",
+        "qa": "qc",
+        "qc": "qc",
+        "compliance crosswalk": "compliance",
+        "pricing narrative (non-cost)": "price",
+        "management plan": "management",
+        "understanding of requirements": "exec"
     }
     return mapping.get(n, n)
 
@@ -8875,8 +8883,18 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     with left:
         st.subheader("Sections")
         default_sections = [
-            "Cover Letter","Executive Summary","Understanding of Requirements","Technical Approach","Management Plan",
-            "Staffing and Key Personnel","Quality Assurance","Past Performance Summary","Pricing and CLINs","Certifications and Reps","Appendices",
+            "Cover Letter",
+            "Executive Summary",
+            "Understanding of Requirements",
+            "Technical Approach",
+            "Management Approach",
+            "Staffing and Key Personnel",
+            "Quality Assurance / QC",
+            "Risks and Mitigations",
+            "Past Performance",
+            "Pricing Narrative (non-cost)",
+            "Compliance Crosswalk",
+            "Appendices"
         ]
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
         if st.button("Draft All Sections ▶", key="pb_draft_all"):
