@@ -3285,33 +3285,6 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
 
 
 
-# Auto-ingest POCs from the combined summaries and offer navigation to Contacts
-try:
-    joined_summaries = "\n\n".join(list(sums.values()))
-    # Resolve RFP id from session or DB
-    rid = st.session_state.get("current_rfp_id") or st.session_state.get("selected_rfp_id")
-    if not rid:
-        try:
-            import pandas as _pd
-            _df_last = _pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn)
-            rid = int(_df_last.iloc[0]["id"]) if not _df_last.empty else None
-        except Exception:
-            rid = None
-    pocs_added = _p3_ingest_pocs_from_summary(conn, rid, joined_summaries)
-    if pocs_added or _p3_role_terms_present(joined_summaries):
-        st.success("POCs detected in summary and added to Contacts list.")
-        if st.button("Open Contacts ▶", key="go_contacts_after_summary"):
-            st.session_state.update({
-                "main_nav": "Contacts",
-                "phase3_nav": "Contacts",
-                "active_page": "Contacts"
-            })
-            try:
-                st.experimental_rerun()
-            except Exception:
-                pass
-except Exception:
-    pass
     st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
     reqs = _find_requirements(combined)
     if not reqs:
