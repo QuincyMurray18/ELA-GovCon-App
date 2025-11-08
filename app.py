@@ -79,6 +79,41 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
 from html import escape as _esc
 
 
+# === One-paragraph-per-idea enforcement ===
+def _one_idea_per_paragraph(text: str) -> str:
+    import re as _re
+    if not text:
+        return text
+    t = str(text)
+    t = _re.sub(r"(?m)^(?:-|\*|\d+\.)\s", r"\n\g<0>", t)
+    t = _re.sub(r"\n{3,}", "\n\n", t)
+    markers = r"(?:^|\s)(Moreover|Furthermore|Additionally|Also|Next|Then|Therefore|Thus|However|In addition|Separately|Risk:|Mitigation:|Method:|Rationale:|Sequence:|Benefit:)"
+    def split_para(p):
+        sents = _re.split(r"(?<=[.!?])\s+", p.strip())
+        out = []
+        for s in sents:
+            if not s:
+                continue
+            if _re.search(markers, s):
+                out.append("\n" + s.strip())
+            else:
+                out.append(s.strip())
+        joined = " ".join(out).replace("\n ", "\n").strip()
+        chunks = _re.split(r"(?<=[.!?])\s+", joined)
+        if len(chunks) > 4:
+            parts = []
+            for i in range(0, len(chunks), 4):
+                parts.append(" ".join(chunks[i:i+4]).strip())
+            return "\n\n".join([p for p in parts if p])
+        return joined
+    paras = _re.split(r"\n\s*\n", t.strip())
+    processed = [split_para(p) for p in paras if p.strip()]
+    out = "\n\n".join(processed)
+    out = _re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
+
+
+
 # ===== Structure-aware drafting helpers =====
 def _normalize_section_name(name: str) -> str:
     n = (name or "").strip().lower()
@@ -4637,6 +4672,7 @@ AUTHOR NOTES:
 {notes or 'n/a'}
 
 REQUIREMENTS:
+- Write one paragraph per idea. Start a new paragraph when the topic shifts.
 - No citations or 'References'.
 - Map content to context.
 - {req_len}
@@ -14567,6 +14603,7 @@ NOTES:
 {notes or '(none)'}
 
 REQUIREMENTS:
+- Write one paragraph per idea. Start a new paragraph when the topic shifts.
 - Use solicitation terms verbatim when relevant.
 - No citations or references.
 - Short sentences (<=10 words). Paragraphs max 10 sentences.
@@ -15142,7 +15179,7 @@ def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
     return "\n\n".join(out).strip()
 
 def _finalize_draft(text: str) -> str:
-    return _enforce_style_guide(_strip_citations(text))
+    return _one_idea_per_paragraph(_enforce_style_guide(_strip_citations(text)))
 
 def _get_conn(db_path="samwatch.db"):
     import os
