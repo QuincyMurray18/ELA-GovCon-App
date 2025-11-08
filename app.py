@@ -4426,7 +4426,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             pass
 
 def y4_ui_review(conn: "sqlite3.Connection") -> None:
-    st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
+# [removed]     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
         st.info("No RFPs yet. Parse & save first."); return
@@ -7790,7 +7790,7 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success(f"Saved {saved} RFP record(s).")
     # ---------------- Y1: Ask with citations ----------------
     with tab_y1:
-        st.caption("Build a local search index once, then ask CO-style questions with bracketed citations.")
+# [removed]         st.caption("Build a local search index once, then ask CO-style questions with bracketed citations.")
         df_rf_y1 = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf_y1.empty:
             st.info("No RFPs yet. Parse & save first.")
@@ -8757,25 +8757,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                 st.success(f"Exported to {exported}")
                 st.markdown(f"[Download DOCX]({exported})")
 
-        with st.expander("Snippets Inbox (from Y1/Y2/Y4/Y5)", expanded=True):
-            try:
-                df_snip = pd.read_sql_query("SELECT id, section, source, text, created_at FROM draft_snippets WHERE rfp_id=? ORDER BY id DESC;", conn, params=(int(rfp_id),))
-            except Exception:
-                df_snip = pd.DataFrame()
-            if df_snip is None or df_snip.empty:
-                st.caption("No snippets saved yet")
-            else:
-                _styled_dataframe(df_snip[["id","section","source","created_at"]], use_container_width=True, hide_index=True, height=200)
-                sid = st.selectbox("Pick snippet ID", options=df_snip["id"].tolist())
-                sec_choice = st.selectbox("Insert into section", options=selected, index=min(len(selected)-1, 0))
-                if st.button("Insert snippet"):
-                    txt = df_snip[df_snip["id"]==sid].iloc[0]["text"]
-                    key = f"pb_ta_{sec_choice}"
-                    cur = st.session_state.get(key, "")
-                    st.session_state[key] = (cur + ("\n\n" if cur else "") + str(txt)).strip()
-                    st.session_state[f"pb_section_{sec_choice}"] = st.session_state[key]
-                    st.success("Inserted into section")
-
+        # [removed] Legacy Snippets/Citations panel hidden
 # ---------- Subcontractor Finder (Phase D) ----------
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
