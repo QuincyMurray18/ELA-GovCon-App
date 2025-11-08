@@ -12909,14 +12909,14 @@ def render_subfinder_s1d(conn):
         loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True, key="s1d_loc")
         if loc_choice == "Address":
             st.text_input("Place of performance address", key="s1d_addr")
-            st.number_input("Radius (miles)", 1, 200, value=st.session_state["s1d_radius"], key="s1d_radius")
+            st.number_input("Radius (miles)", 1, 200, key="s1d_radius")
         else:
             c1, c2 = st.columns(2)
             with c1:
                 st.number_input("Latitude", key="s1d_lat")
             with c2:
                 st.number_input("Longitude", key="s1d_lng")
-            st.number_input("Radius (miles)", 1, 200, value=st.session_state["s1d_radius"], key="s1d_radius")
+            st.number_input("Radius (miles)", 1, 200, key="s1d_radius")
         colA, colB = st.columns([1,1])
         with colA:
             do_search = st.form_submit_button("Search")
