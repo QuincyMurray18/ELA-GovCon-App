@@ -1,3 +1,15 @@
+def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
+    try:
+        from math import radians, sin, cos, asin, sqrt
+        if None in (lat1, lon1, lat2, lon2):
+            return None
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        return 3958.756 * 2 * asin(sqrt(a))
+    except Exception:
+        return None
+
 from html import escape as _esc
 # --- early stub: ensures __p_call_sig_ui exists before any imports call it ---
 try:
@@ -12667,19 +12679,6 @@ def _s1d_geocode(addr: str, key: str):
             return float(loc["lat"]), float(loc["lng"])
     except Exception:
         return None
-
-def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
-    """Great-circle distance in miles. No external deps."""
-    try:
-        from math import radians, sin, cos, asin, sqrt
-        if None in (lat1, lon1, lat2, lon2):
-            return None
-        dlat = radians(lat2 - lat1)
-        dlon = radians(lon2 - lon1)
-        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-        return 3958.756 * 2 * asin(sqrt(a))
-    except Exception:
-        return None
     return None
 
 def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_m: int|None, page_token: str|None, key: str):
@@ -12953,9 +12952,27 @@ def render_subfinder_s1d(conn):
         dist = _s1d_haversine_mi(lat, lng,
                                  float(rlat) if rlat is not None else None,
                                  float(rlng) if rlng is not None else None)
-        # Minimal details to keep calls fast; enrich later if needed
+
+        # Fetch details for phone, website, and canonical Google URL
+        phone_disp = ""
         phone = ""
         website = ""
+        google_url = f"https://www.google.com/maps/place/?q=place_id:{pid}"
+        try:
+            import requests as _rqd
+            det = _rqd.get("https://maps.googleapis.com/maps/api/place/details/json",
+                           params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
+                           timeout=10).json().get("result",{}) or {}
+            phone_disp = det.get("formatted_phone_number","") or ""
+            digits = "".join([c for c in phone_disp if c.isdigit()])
+            if len(digits)==11 and digits.startswith("1"):
+                digits = digits[1:]
+            phone = digits
+            website = det.get("website","") or ""
+            google_url = det.get("url","") or google_url
+        except Exception:
+            pass
+
         dup = ((name.strip().lower(), _s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
         rows.append({
             "name": name,
@@ -12963,15 +12980,15 @@ def render_subfinder_s1d(conn):
             "city": city,
             "state": state,
             "phone": phone,
+            "phone_display": phone_disp,
             "website": website,
             "place_id": pid,
-            "google_url": "",
+            "google_url": google_url,
             "distance_mi": round(dist, 2) if dist is not None else None,
             "_dup": dup,
         })
         _time.sleep(0.05)
 
-    import pandas as _pd
     df = _pd.DataFrame(rows)
     if "distance_mi" in df.columns:
         try:
@@ -12985,14 +13002,28 @@ def render_subfinder_s1d(conn):
         st.info("No results.")
         return
 
+    from urllib.parse import urlparse
     def _mk_link(url, text):
         if not url:
             return text
         return f"<a href='{url}' target='_blank'>{text}</a>"
 
+    def _tel_link(digits, label):
+        if not digits:
+            return label
+        return f"<a href='tel:{digits}'>{label or digits}</a>"
+
+    def _site_label(u):
+        try:
+            d = urlparse(u).netloc
+            return d[4:] if d.startswith("www.") else d
+        except Exception:
+            return "website"
+
     show = df.copy()
     show["name"] = show.apply(lambda r: _mk_link(r.get("google_url",""), r["name"]), axis=1)
-    show["website"] = show.apply(lambda r: _mk_link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
+    show["website"] = show.apply(lambda r: _mk_link(r.get("website",""), _site_label(r.get("website",""))) if r.get("website","") else "", axis=1)
+    show["phone"] = show.apply(lambda r: _tel_link(r.get("phone",""), r.get("phone_display","")), axis=1)
     show = show[["name","phone","website","address","city","state","distance_mi","place_id","_dup"]]
 
     st.markdown("**Results**")
@@ -13289,7 +13320,6 @@ def __p_s1d_existing(conn):
     return by_np, by_pid
 
 def __p_s1d_ui(conn):
-    # Lightweight Google Places search with dedupe and distance sorting
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     _st.subheader("S1D — Google Places & Dedupe")
     key = __p_s1d_key()
@@ -13370,11 +13400,31 @@ def __p_s1d_ui(conn):
         dist = _s1d_haversine_mi(lat, lng,
                                  float(rlat) if rlat is not None else None,
                                  float(rlng) if rlng is not None else None)
+
+        # Details for links
+        phone_disp = ""
         phone = ""
         website = ""
+        gurl = f"https://www.google.com/maps/place/?q=place_id:{pid}"
+        try:
+            import requests as _rqd2
+            det = _rqd2.get("https://maps.googleapis.com/maps/api/place/details/json",
+                            params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
+                            timeout=10).json().get("result",{}) or {}
+            phone_disp = det.get("formatted_phone_number","") or ""
+            digits = "".join([c for c in phone_disp if c.isdigit()])
+            if len(digits)==11 and digits.startswith("1"):
+                digits = digits[1:]
+            phone = digits
+            website = det.get("website","") or ""
+            gurl = det.get("url","") or gurl
+        except Exception:
+            pass
+
         dup = ((name.strip().lower(), __p_s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
-        rows.append(dict(name=name, address=addr, city=city, state=state, phone=phone, website=website,
-                         place_id=pid, google_url="", distance_mi=(round(dist,2) if dist is not None else None), _dup=dup))
+        rows.append(dict(name=name, address=addr, city=city, state=state, phone=phone, phone_display=phone_disp,
+                         website=website, place_id=pid, google_url=gurl,
+                         distance_mi=(round(dist,2) if dist is not None else None), _dup=dup))
         _time.sleep(0.05)
 
     import pandas as _pandas
@@ -13385,12 +13435,22 @@ def __p_s1d_ui(conn):
         except Exception:
             pass
 
+    from urllib.parse import urlparse
     def _link(u, t):
         return f"<a href='{u}' target='_blank'>{t}</a>" if u else t
+    def _tel(digits, label):
+        return f"<a href='tel:{digits}'>{label or digits}</a>" if digits else (label or "")
+    def _site_label(u):
+        try:
+            d = urlparse(u).netloc
+            return d[4:] if d.startswith("www.") else d
+        except Exception:
+            return "website"
 
     show = df.copy()
     show["name"] = show.apply(lambda r: _link(r.get("google_url",""), r["name"]), axis=1)
-    show["website"] = show.apply(lambda r: _link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
+    show["website"] = show.apply(lambda r: _link(r.get("website",""), _site_label(r.get("website",""))) if r.get("website","") else "", axis=1)
+    show["phone"] = show.apply(lambda r: _tel(r.get("phone",""), r.get("phone_display","")), axis=1)
     show = show[["name","phone","website","address","city","state","distance_mi","place_id","_dup"]]
     _st.markdown("**Results**")
     _st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
