@@ -12667,6 +12667,19 @@ def _s1d_geocode(addr: str, key: str):
             return float(loc["lat"]), float(loc["lng"])
     except Exception:
         return None
+
+def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
+    """Great-circle distance in miles. No external deps."""
+    try:
+        from math import radians, sin, cos, asin, sqrt
+        if None in (lat1, lon1, lat2, lon2):
+            return None
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        return 3958.756 * 2 * asin(sqrt(a))
+    except Exception:
+        return None
     return None
 
 def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_m: int|None, page_token: str|None, key: str):
@@ -12857,42 +12870,54 @@ def _s1d_select_existing_pairs(conn):
 
 def render_subfinder_s1d(conn):
     st.subheader("S1D — Subcontractor Finder")
-    
+
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     key = _s1d_get_api_key()
     if not key:
         st.error("Missing Google API key in secrets. Set google.api_key or GOOGLE_API_KEY.")
         return
-    # Use cached results if present
+
     import pandas as _pd
     _cache = st.session_state.get("s1d_df")
     if _cache:
         df = _pd.DataFrame(_cache)
-        _s1d_render_from_cache(conn, df)
-        return
+        try:
+            _s1d_render_from_cache(conn, df)
+            return
+        except Exception:
+            pass
+
     q = st.text_input("Search query", key="s1d_q", placeholder="e.g., HVAC contractors, plumbing, IT services")
+
     loc_choice = st.radio("Location", ["Address", "Lat/Lng"], horizontal=True)
     lat = lng = None
     if loc_choice == "Address":
         addr = st.text_input("Place of performance address")
-        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=25)
         if addr:
             ll = _s1d_geocode(addr, key)
-            if ll: lat, lng = ll
+            if ll:
+                lat, lng = ll
     else:
         col1, col2 = st.columns(2)
-        with col1: lat = st.number_input("Latitude", value=38.8951)
-        with col2: lng = st.number_input("Longitude", value=-77.0364)
-        radius_mi = st.number_input("Radius (miles)", 1, 200, value=50)
-    radius_m = int(radius_mi * 1609.34)
-    c1, c2, c3 = st.columns([1,1,2])
+        with col1:
+            lat = st.number_input("Latitude", value=38.8951)
+        with col2:
+            lng = st.number_input("Longitude", value=-77.0364)
+        radius_mi = st.number_input("Radius (miles)", 1, 200, value=25)
+
+    radius_m = int(float(radius_mi) * 1609.34)
+
+    c1, c2 = st.columns([1, 1])
     with c1:
         go = st.button("Search", key="s1d_go")
     with c2:
         nxt = st.button("Next page", key="s1d_next")
-    # Persist page token
+
     tok_key = "s1d_next_token"
-    if go: st.session_state.pop(tok_key, None)
+    if go:
+        st.session_state.pop(tok_key, None)
+
     js = None
     try:
         if go or nxt:
@@ -12906,61 +12931,84 @@ def render_subfinder_s1d(conn):
     except Exception as e:
         st.error(f"Search failed: {e}")
         return
+
     if not js or not js.get("results"):
         st.info("No results yet. Enter a query and click Search.")
         return
-    by_np, by_pid = _s1d_existing_vendor_keys(conn)
+
     rows = []
     for r in js["results"]:
-        name = r.get("name","")
-        pid = r.get("place_id","")
-        addr = r.get("formatted_address","")
+        name = r.get("name", "") or ""
+        pid = r.get("place_id", "") or ""
+        addr = r.get("formatted_address", "") or ""
         city = state = ""
         if "," in addr:
             parts = [p.strip() for p in addr.split(",")]
-            if len(parts)>=2:
+            if len(parts) >= 2:
                 city = parts[-2]
                 state = parts[-1].split()[0]
-        details = {}
-        phone = _s1d_norm_phone(details.get("formatted_phone_number",""))
-        website = details.get("website") or ""
-        dup = (name.strip().lower(), phone) in by_np or (pid in by_pid)
+        gl = (r.get("geometry") or {}).get("location") or {}
+        rlat = gl.get("lat")
+        rlng = gl.get("lng")
+        dist = _s1d_haversine_mi(lat, lng,
+                                 float(rlat) if rlat is not None else None,
+                                 float(rlng) if rlng is not None else None)
+        # Minimal details to keep calls fast; enrich later if needed
+        phone = ""
+        website = ""
+        dup = ((name.strip().lower(), _s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
         rows.append({
-            "name": name, "address": addr, "city": city, "state": state,
-            "phone": phone, "website": website, "place_id": pid,
-            "google_url": details.get("url") or "",
-            "_dup": dup
+            "name": name,
+            "address": addr,
+            "city": city,
+            "state": state,
+            "phone": phone,
+            "website": website,
+            "place_id": pid,
+            "google_url": "",
+            "distance_mi": round(dist, 2) if dist is not None else None,
+            "_dup": dup,
         })
-        # be nice to Places
         _time.sleep(0.05)
+
     import pandas as _pd
     df = _pd.DataFrame(rows)
+    if "distance_mi" in df.columns:
+        try:
+            df = df.sort_values(by=["distance_mi"], ascending=True, na_position="last")
+        except Exception:
+            pass
+
     st.session_state["s1d_df"] = df.to_dict("records")
+
     if df.empty:
         st.info("No results.")
         return
-    # Show with links and dedupe flags
+
     def _mk_link(url, text):
-        if not url: return text
+        if not url:
+            return text
         return f"<a href='{url}' target='_blank'>{text}</a>"
+
     show = df.copy()
-    show["name"] = show.apply(lambda r: _mk_link(r["google_url"], r["name"]), axis=1)
-    show["website"] = show.apply(lambda r: _mk_link(r["website"], "site") if r["website"] else "", axis=1)
-    show = show[["name","phone","website","address","city","state","place_id","_dup"]]
+    show["name"] = show.apply(lambda r: _mk_link(r.get("google_url",""), r["name"]), axis=1)
+    show["website"] = show.apply(lambda r: _mk_link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
+    show = show[["name","phone","website","address","city","state","distance_mi","place_id","_dup"]]
+
     st.markdown("**Results**")
     st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-    # Selection and save
     keep = df[~df["_dup"]].copy()
     if keep.empty:
         st.success("All results are already in your vendor list.")
         return
     st.caption(f"{len(keep)} new vendors can be saved")
-    # Interactive selection
+
     keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
     keep_view.insert(0, "Select", False)
     edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
     sel = edited[edited["Select"]==True]
+
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
@@ -12970,6 +13018,7 @@ def render_subfinder_s1d(conn):
         if st.button("Save all new vendors", key="s1d_save_all"):
             n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
             st.success(f"Saved {n} vendors")
+
 # === End S1D ================================================================
 
 def _wrap_run_subfinder():
@@ -13240,93 +13289,118 @@ def __p_s1d_existing(conn):
     return by_np, by_pid
 
 def __p_s1d_ui(conn):
-
+    # Lightweight Google Places search with dedupe and distance sorting
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     _st.subheader("S1D — Google Places & Dedupe")
     key = __p_s1d_key()
-    if not key: _st.error("Missing Google API key in secrets"); return
+    if not key:
+        _st.error("Missing Google API key in secrets")
+        return
     mode = _st.radio("Location mode", ["Address","Lat/Lng"], horizontal=True, key="__p_s1d_mode")
-    lat=lng=None
-    if mode=="Address":
-        addr=_st.text_input("Place of performance address", key="__p_s1d_addr")
-        radius=_st.number_input("Radius (miles)",1,200,50, key="__p_s1d_rad")
+    lat = lng = None
+    if mode == "Address":
+        addr = _st.text_input("Place of performance address", key="__p_s1d_addr")
+        radius = _st.number_input("Radius (miles)", 1, 200, 25, key="__p_s1d_rad")
         if addr:
-            import requests as _rq
-            js=_rq.get("https://maps.googleapis.com/maps/api/geocode/json", params={"address":addr,"key":key}, timeout=10).json()
-            if js.get("status")=="OK":
-                loc=js["results"][0]["geometry"]["location"]; lat,lng=float(loc["lat"]),float(loc["lng"])
+            try:
+                import requests as _rq
+                js = _rq.get("https://maps.googleapis.com/maps/api/geocode/json", params={"address": addr, "key": key}, timeout=10).json()
+                if js.get("status") == "OK":
+                    loc = js["results"][0]["geometry"]["location"]
+                    lat, lng = float(loc["lat"]), float(loc["lng"])
+            except Exception:
+                pass
     else:
-        c1,c2=_st.columns(2)
-        with c1: lat=_st.number_input("Latitude", value=38.8951, key="__p_s1d_lat")
-        with c2: lng=_st.number_input("Longitude", value=-77.0364, key="__p_s1d_lng")
-        radius=_st.number_input("Radius (miles)",1,200,50, key="__p_s1d_rad2")
-    q=_st.text_input("Search query", placeholder="HVAC contractors, cabling, IT services", key="__p_s1d_q")
-    c1,c2=_st.columns(2)
-    with c1: go=_st.button("Search", key="__p_s1d_go")
-    with c2: nxt=_st.button("Next page", key="__p_s1d_next")
-    tok_key="__p_s1d_tok"
-    if go: _st.session_state.pop(tok_key, None)
-    results=[]
-    if go or nxt:
-        import requests as _rq2
-        params={"query":q,"key":key,"region":"us"}
-        if nxt and _st.session_state.get(tok_key): params={"pagetoken":_st.session_state[tok_key],"key":key}
-        elif lat is not None and lng is not None: params.update({"location":f"{lat},{lng}","radius":int(float(radius)*1609.34)})
-        js=_rq2.get("https://maps.googleapis.com/maps/api/place/textsearch/json", params=params, timeout=12).json()
-        if js.get("next_page_token"): _st.session_state[tok_key]=js["next_page_token"]
-        else: _st.session_state.pop(tok_key, None)
-        results=js.get("results",[])
-    if not results: _st.info("Enter a query and click Search."); return
-    rows=[]; by_np,by_pid=__p_s1d_existing(conn)
-    import requests as _rq3
+        c1, c2 = _st.columns(2)
+        with c1:
+            lat = _st.number_input("Latitude", value=38.8951, key="__p_s1d_lat")
+        with c2:
+            lng = _st.number_input("Longitude", value=-77.0364, key="__p_s1d_lng")
+        radius = _st.number_input("Radius (miles)", 1, 200, 25, key="__p_s1d_rad_ll")
+
+    radius_m = int(float(radius) * 1609.34)
+
+    q = _st.text_input("Search query", key="__p_s1d_q", placeholder="e.g. janitorial contractors, HVAC service, landscaping")
+    c1, c2 = _st.columns([1,1])
+    with c1:
+        go = _st.button("Search", key="__p_s1d_go")
+    with c2:
+        nxt = _st.button("Next page", key="__p_s1d_next")
+
+    tok_key = "__p_s1d_tok"
+    if go:
+        _st.session_state.pop(tok_key, None)
+
+    results = []
+    try:
+        if go or nxt:
+            import requests as _rq2
+            params = {"query": q, "key": key, "region": "us"}
+            if nxt and _st.session_state.get(tok_key):
+                params = {"pagetoken": _st.session_state[tok_key], "key": key}
+            elif lat is not None and lng is not None:
+                params.update({"location": f"{lat},{lng}", "radius": int(radius_m)})
+            js = _rq2.get("https://maps.googleapis.com/maps/api/place/textsearch/json", params=params, timeout=12).json()
+            if js.get("next_page_token"):
+                _st.session_state[tok_key] = js["next_page_token"]
+            else:
+                _st.session_state.pop(tok_key, None)
+            results = js.get("results", [])
+    except Exception as e:
+        _st.error(f"Search failed: {e}")
+        return
+
+    if not results:
+        _st.info("Enter a query and click Search.")
+        return
+
+    rows = []
     for r in results:
-        name=r.get("name",""); pid=r.get("place_id",""); addr=r.get("formatted_address","")
-        city=state=""
+        name = r.get("name","")
+        pid = r.get("place_id","") or ""
+        addr = r.get("formatted_address","") or ""
+        city = state = ""
         if "," in addr:
-            parts=[p.strip() for p in addr.split(",")]
-            if len(parts)>=2: city=parts[-2]; state=parts[-1].split()[0]
-        phone=""; website=""; gurl=""
+            parts = [p.strip() for p in addr.split(",")]
+            if len(parts) >= 2:
+                city = parts[-2]
+                state = parts[-1].split()[0]
+        gl = (r.get("geometry") or {}).get("location") or {}
+        rlat, rlng = gl.get("lat"), gl.get("lng")
+        dist = _s1d_haversine_mi(lat, lng,
+                                 float(rlat) if rlat is not None else None,
+                                 float(rlng) if rlng is not None else None)
+        phone = ""
+        website = ""
+        dup = ((name.strip().lower(), __p_s1d_norm_phone(phone)) in by_np) or (pid in by_pid)
+        rows.append(dict(name=name, address=addr, city=city, state=state, phone=phone, website=website,
+                         place_id=pid, google_url="", distance_mi=(round(dist,2) if dist is not None else None), _dup=dup))
+        _time.sleep(0.05)
+
+    import pandas as _pandas
+    df = _pandas.DataFrame(rows)
+    if "distance_mi" in df.columns:
         try:
-            det=_rq3.get("https://maps.googleapis.com/maps/api/place/details/json",
-                         params={"place_id":pid,"fields":"formatted_phone_number,website,url","key":key}, timeout=10).json().get("result",{}) or {}
-            digits="".join(_re2.findall(r"\\d+", det.get("formatted_phone_number","") or ""))
-            if len(digits)==11 and digits.startswith("1"): digits=digits[1:]
-            phone=digits; website=det.get("website","") or ""; gurl=det.get("url","") or ""
-        except Exception: pass
-        dup=((name.strip().lower(), phone) in by_np) or (pid in by_pid)
-        rows.append(dict(name=name,address=addr,city=city,state=state,phone=phone,website=website,place_id=pid,google_url=gurl,_dup=dup))
-        _time2.sleep(0.05)
-    df=_pandas.DataFrame(rows)
-    def _link(u,t): return f"<a href='{u}' target='_blank'>{t}</a>" if u else t
-    show=df.copy(); show["name"]=show.apply(lambda r: _link(r["google_url"], r["name"]), axis=1); show["website"]=show.apply(lambda r: _link(r["website"],"site") if r["website"] else "", axis=1)
-    show=show[["name","phone","website","address","city","state","place_id","_dup"]]
-    _st.markdown("**Results**"); _st.write(show.to_html(escape=False,index=False), unsafe_allow_html=True)
-    keep=df[~df["_dup"]]
+            df = df.sort_values(by=["distance_mi"], ascending=True, na_position="last")
+        except Exception:
+            pass
+
+    def _link(u, t):
+        return f"<a href='{u}' target='_blank'>{t}</a>" if u else t
+
+    show = df.copy()
+    show["name"] = show.apply(lambda r: _link(r.get("google_url",""), r["name"]), axis=1)
+    show["website"] = show.apply(lambda r: _link(r.get("website",""), "site") if r.get("website","") else "", axis=1)
+    show = show[["name","phone","website","address","city","state","distance_mi","place_id","_dup"]]
+    _st.markdown("**Results**")
+    _st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+    keep = df[~df["_dup"]]
     _st.caption(f"{len(keep)} new vendors can be saved")
-    if _st.button("Save all new vendors", key="__p_s1d_save"):
+    if _st.button("Save all new vendors", key="__p_s1d_save") and not keep.empty:
         n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
         _st.success(f"Saved {n} new vendors")
 
-def __p_run_outreach(conn):
-    __p_ensure_core(conn)
-    _st.header("Outreach")
-    try:
-        n = __p_db(conn, "SELECT COUNT(1) FROM outreach_sender_accounts").fetchone()[0]
-        _st.sidebar.success("O4 Active" if n else "O4 Not Configured")
-    except Exception:
-        pass
-    with _st.expander("O4 • Sender accounts", expanded=True):
-        try: __p_o4_ui(conn)
-        except Exception as e: _st.warning(f"O4 unavailable: {e}")
-    with _st.expander("O2 • Templates", expanded=True):
-        try: __p_o2_ui(conn)
-        except Exception as e: _st.warning(f"O2 unavailable: {e}")
-    with _st.expander("O5 • Follow-ups & SLA", expanded=False):
-        try: __p_o5_ui(conn)
-        except Exception as e: _st.warning(f"O5 unavailable: {e}")
-    with _st.expander("O3 • Mail merge & Send", expanded=True):
-        try: __p_o3_ui(conn)
-        except Exception as e: _st.error(f"O3 error: {e}")
 
 # Removed legacy monkeypatch block at load time
 
