@@ -6250,16 +6250,21 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
 
 def run_deals(conn: "sqlite3.Connection") -> None:
     st.header("Deals")
-    with st.form("add_deal", clear_on_submit=True):
-            try:
-        _p3_crm_deals_migrate(conn)
-    except Exception:
-        pass
     try:
-        _p3_sync_from_session(conn)
+        _migrate_deals_columns(conn)
     except Exception:
         pass
-c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+
+    # Ensure any current RFP in session is wired to CRM/Deals
+    try:
+        rid = int(st.session_state.get("current_rfp_id") or 0)
+        if rid:
+            _p3_auto_wire_crm_from_rfp(conn, rid)
+    except Exception:
+        pass
+
+    with st.form("add_deal", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
         with c1:
             title = st.text_input("Title")
         with c2:
@@ -6272,57 +6277,69 @@ c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
         with c4:
             value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
         submitted = st.form_submit_button("Add Deal")
-    if submitted:
+
+    if submitted and title:
         try:
             with closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO deals(title, agency, status, value) VALUES (?, ?, ?, ?);",
-                    (title.strip(), agency.strip(), status, float(value)),
+                    "INSERT INTO deals(title, agency, status, stage, value, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                    (title.strip(), agency.strip(), status, status, float(value)),
                 )
+                # log stage
+                cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (status,))
                 conn.commit()
             st.success(f"Added deal {title}")
         except Exception as e:
             st.error(f"Error saving deal {e}")
 
+    # Editable pipeline table
     try:
         df = pd.read_sql_query(
-            "SELECT title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+            "SELECT id, title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
             conn,
+            params=(),
         )
         st.subheader("Pipeline")
         if df.empty:
             st.write("No deals yet")
-        else:
-            _styled_dataframe(df, use_container_width=True, hide_index=True)
-
-    # --- Quick Edit ---
-    try:
-        st.subheader("Quick Edit")
-        _df_edit = pd.read_sql_query("SELECT id, title, agency, COALESCE(stage,status) AS stage, value, rfp_deadline, sam_url FROM deals_t ORDER BY id DESC;", conn, params=())
-        if _df_edit.empty:
-            st.caption("No deals to edit")
-        else:
-            _edited = st.data_editor(_df_edit, num_rows="dynamic", use_container_width=True, hide_index=True, disabled=["id"])
-            if st.button("Save Changes", key="deals_quick_save"):
-                with conn:
-                    for _, r in _edited.iterrows():
-                        try:
-                            conn.execute("UPDATE deals SET title=?, agency=?, stage=?, status=?, value=?, rfp_deadline=?, close_date=?, sam_url=?, updated_at=datetime('now') WHERE id=?",
-                                         (r.get("title") or "", r.get("agency") or "", r.get("stage") or "", r.get("stage") or "", 
-                                          float(r.get("value") or 0) if pd.notna(r.get("value")) else None,
-                                          r.get("rfp_deadline") or None, r.get("rfp_deadline") or None, r.get("sam_url") or "", int(r["id"])))
-                            _p3_log_stage(conn, int(r["id"]), str(r.get("stage") or ""))
-                        except Exception:
-                            pass
-                st.success("Saved")
-    except Exception as _e:
-        try: st.warning(f"Quick edit unavailable: {_e}")
-        except Exception: pass
-
+            return
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "status": st.column_config.SelectboxColumn(options=["New","Qualifying","Bidding","Submitted","Awarded","Lost"])
+            },
+            key="deals_editor",
+        )
+        if st.button("Save Edits", key="deals_save"):
+            try:
+                # Detect status changes to log stage
+                df_orig = df.set_index("id")
+                with closing(conn.cursor()) as cur:
+                    for _, r in edited.iterrows():
+                        rid = int(r["id"])
+                        old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
+                        new_status = str(r["status"] or "New")
+                        cur.execute(
+                            "UPDATE deals SET title=?, agency=?, status=?, stage=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
+                            (str(r["title"] or "").strip(),
+                             str(r["agency"] or "").strip(),
+                             new_status,
+                             new_status,
+                             float(r["value"] or 0.0),
+                             str(r["sam_url"] or "").strip(),
+                             rid)
+                        )
+                        if new_status != old_status:
+                            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
+                conn.commit()
+                st.success("Saved edits")
+            except Exception as e:
+                st.error(f"Error saving edits {e}")
+        _styled_dataframe(edited, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load deals {e}")
-
-# ---- Phase 3 helpers: ensure RFP record, modal renderer ----
 def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
     from contextlib import closing as _closing
     nid = str(notice_row.get('Notice ID') or "")
@@ -7006,6 +7023,77 @@ def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
         pass
     return _p3_rfp_meta_get(conn, rfp_id, "proposal_due", "")
 
+# --- P3 auto wiring helpers: Deals/Contacts/Tasks from RFP ---
+def _p3_get_deal_id_for_rfp(conn, rfp_id: int):
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query("SELECT id FROM deals WHERE rfp_id=?", conn, params=(int(rfp_id),))
+        if not df.empty:
+            return int(df.iloc[0]["id"])
+    except Exception:
+        pass
+    return None
+
+def _p3_auto_stage_for_rfp(conn, rfp_id: int):
+    from contextlib import closing as _closing
+    import pandas as _pd
+    # Simple rule set
+    has_clins = False
+    has_dates = False
+    has_pocs = False
+    try:
+        has_clins = _pd.read_sql_query("SELECT 1 FROM clin_lines WHERE rfp_id=? LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
+    except Exception:
+        pass
+    try:
+        has_dates = _pd.read_sql_query("SELECT 1 FROM key_dates WHERE rfp_id=? LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
+    except Exception:
+        pass
+    try:
+        has_pocs = _pd.read_sql_query("SELECT 1 FROM pocs WHERE rfp_id=? LIMIT 1;", conn, params=(int(rfp_id),)).shape[0] > 0
+    except Exception:
+        pass
+    new_stage = "Intake"
+    if has_clins or has_dates:
+        new_stage = "Bidding"
+    elif has_pocs:
+        new_stage = "Qualifying"
+    deal_id = _p3_get_deal_id_for_rfp(conn, rfp_id)
+    if deal_id is None:
+        return
+    try:
+        # Fetch current stage
+        df = _pd.read_sql_query("SELECT stage, status FROM deals WHERE id=?", conn, params=(int(deal_id),))
+        cur_stage = str(df.iloc[0]["stage"] or "") if not df.empty else ""
+    except Exception:
+        cur_stage = ""
+    if cur_stage != new_stage:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("UPDATE deals SET stage=?, status=?, updated_at=datetime('now') WHERE id=?;", (new_stage, new_stage, int(deal_id)))
+            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (int(deal_id), new_stage))
+            conn.commit()
+
+    # Create a "Proposal due" task if we have any due date in key_dates but no such open task
+    try:
+        df_due = _pd.read_sql_query("SELECT COALESCE(date_iso, date_text) AS d FROM key_dates WHERE rfp_id=? AND (LOWER(label) LIKE '%due%' OR LOWER(label) LIKE '%close%') ORDER BY id DESC LIMIT 1;", conn, params=(int(rfp_id),))
+        if not df_due.empty:
+            deal_id = _p3_get_deal_id_for_rfp(conn, rfp_id)
+            if deal_id:
+                df_task = _pd.read_sql_query("SELECT 1 FROM tasks WHERE deal_id=? AND title LIKE 'Proposal due%';", conn, params=(int(deal_id),))
+                if df_task.empty:
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute("INSERT INTO tasks(title, due_date, status, deal_id) VALUES(?,?,?,?);", ("Proposal due", str(df_due.iloc[0]['d'] or ''), "Open", int(deal_id)))
+                        conn.commit()
+    except Exception:
+        pass
+
+def _p3_auto_wire_crm_from_rfp(conn, rfp_id: int):
+    try:
+        if _p3_get_deal_id_for_rfp(conn, rfp_id) is None:
+            _p3_ensure_deal_and_contacts(conn, int(rfp_id))
+        _p3_auto_stage_for_rfp(conn, int(rfp_id))
+    except Exception:
+        pass
 def _p3_make_ics(summary: str, when_str: str) -> bytes:
     from datetime import datetime
     dt = None
@@ -7053,12 +7141,17 @@ def _run_rfp_analyzer_phase3(conn):
             default_idx = 0
 
     selected_rfp_id = st.selectbox(
+
         "RFP (One‑Page Analyzer)",
         options=df_rfps["id"].tolist(),
         index=default_idx,
         format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0],
         key="onepage_rfp_default"
     )
+    try:
+        _p3_auto_wire_crm_from_rfp(conn, int(selected_rfp_id))
+    except Exception:
+        pass
 
     # Phase 3 controls
     colA, colB, colC = st.columns([1,1,2])
@@ -9870,15 +9963,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         with a_col3:
             a_notes = st.text_area("Notes", height=100, key="act_notes")
             if st.button("Save Activity", key="act_save"):
-                    try:
-        _p3_crm_deals_migrate(conn)
-    except Exception:
-        pass
-    try:
-        _p3_sync_from_session(conn)
-    except Exception:
-        pass
-with closing(conn.cursor()) as cur:
+                with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT INTO activities(ts, type, subject, notes, deal_id, contact_id) VALUES(datetime('now'),?,?,?,?,?);
                     """, (a_type, a_subject.strip(), a_notes.strip(), a_deal if a_deal else None, a_contact if a_contact else None))
@@ -14471,219 +14556,3 @@ def _get_conn(db_path="samwatch.db"):
 # SIG+LOGO patch removed
 
 # O4 wrapper disabled
-# === ELA P3: CRM↔Deals auto-sync helpers (injected) ===
-try:
-    import streamlit as st as _st3
-except Exception:
-    try:
-        import streamlit as _st3
-    except Exception:
-        _st3 = None
-
-def _p3_crm_deals_migrate(conn):
-    \"\"\"Best-effort ensure extra columns used by CRM/Deals exist.\"\"\"
-    try:
-        cur = conn.cursor()
-        # deals columns
-        for col, defn in [
-            ("rfp_id", "INTEGER"),
-            ("sam_url", "TEXT"),
-            ("notice_id", "TEXT"),
-            ("solnum", "TEXT"),
-            ("agency", "TEXT"),
-            ("rfp_deadline", "TEXT"),
-            ("posted_date", "TEXT"),
-            ("naics", "TEXT"),
-            ("psc", "TEXT"),
-            ("stage", "TEXT"),
-            ("close_date", "TEXT"),
-            ("owner", "TEXT"),
-            ("updated_at", "TEXT"),
-        ]:
-            try:
-                cur.execute(f"ALTER TABLE deals ADD COLUMN {col} {defn};")
-            except Exception:
-                pass
-        # contacts columns
-        for col, defn in [
-            ("title", "TEXT"),
-            ("phone", "TEXT"),
-            ("role", "TEXT"),
-            ("organization", "TEXT")
-        ]:
-            try:
-                cur.execute(f"ALTER TABLE contacts ADD COLUMN {col} {defn};")
-            except Exception:
-                pass
-        # stage log
-        cur.execute(\"\"\"
-            CREATE TABLE IF NOT EXISTS deal_stage_log(
-                id INTEGER PRIMARY KEY,
-                deal_id INTEGER NOT NULL,
-                stage TEXT,
-                changed_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        \"\"\")
-        conn.commit()
-    except Exception:
-        try: conn.rollback()
-        except Exception: pass
-
-def _p3_due_date_for_rfp(conn, rfp_id: int) -> str | None:
-    \"\"\"Return ISO due date if found from key_dates or meta.\"\"\"
-    try:
-        import pandas as _pd
-        df = _pd.__p_read_sql_query(
-            "SELECT COALESCE(date_iso, date_text) AS d FROM key_dates WHERE rfp_id=? AND (lower(label) LIKE '%due%' OR lower(label) LIKE '%close%') ORDER BY id DESC LIMIT 1;",
-            conn, params=(int(rfp_id),)
-        )
-        if df is not None and not df.empty:
-            d = str(df.iloc[0]['d'] or '').strip()
-            if d:
-                return d
-    except Exception:
-        pass
-    # fall back to rfp_meta keys
-    try:
-        for k in ("response_due","due_date","proposal_due","closing_date"):
-            with conn:
-                row = conn.execute("SELECT value FROM rfp_meta WHERE rfp_id=? AND lower(key)=lower(?) ORDER BY id DESC LIMIT 1;",
-                                   (int(rfp_id), k)).fetchone()
-            if row and (row[0] or "").strip():
-                return str(row[0]).strip()
-    except Exception:
-        pass
-    return None
-
-def _p3_log_stage(conn, deal_id: int, stage: str):
-    try:
-        with conn:
-            conn.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?,?,datetime('now'))", (int(deal_id), str(stage)))
-    except Exception:
-        pass
-
-def _p3_update_stage(conn, deal_id: int, new_stage: str):
-    try:
-        row = conn.execute("SELECT COALESCE(stage, status) FROM deals WHERE id=?", (int(deal_id),)).fetchone()
-        prev = (row[0] if row else "") or ""
-    except Exception:
-        prev = ""
-    try:
-        with conn:
-            conn.execute("UPDATE deals SET stage=?, status=?, updated_at=datetime('now') WHERE id=?", (str(new_stage), str(new_stage), int(deal_id)))
-        if (prev or "") != (new_stage or ""):
-            _p3_log_stage(conn, int(deal_id), str(new_stage))
-    except Exception:
-        pass
-
-def _p3_auto_stage_for_rfp(conn, rfp_id: int, deal_id: int | None = None):
-    \"\"\"Simple rules engine: ensure at least Qualifying, promote to Bidding once requirements/CLINs exist.\"\"\"
-    try:
-        # ensure deal_id
-        if deal_id is None:
-            row = conn.execute("SELECT id, COALESCE(stage,status) FROM deals WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", (int(rfp_id),)).fetchone()
-            if row: deal_id = int(row[0])
-    except Exception:
-        deal_id = None
-    if not deal_id:
-        return
-    # default: Qualifying
-    _p3_update_stage(conn, int(deal_id), "Qualifying")
-    # escalate if we see compliance requirements or CLINs
-    try:
-        has_req = bool(conn.execute("SELECT 1 FROM compliance_requirements WHERE rfp_id=? LIMIT 1;", (int(rfp_id),)).fetchone())
-    except Exception:
-        has_req = False
-    try:
-        has_clin = bool(conn.execute("SELECT 1 FROM proposal_clins WHERE rfp_id=? LIMIT 1;", (int(rfp_id),)).fetchone())
-    except Exception:
-        has_clin = False
-    if has_req or has_clin:
-        _p3_update_stage(conn, int(deal_id), "Bidding")
-
-def _p3_ensure_deal_and_contacts(conn, rfp_id: int) -> int | None:
-    \"\"\"Create or update a deal for this RFP. Mirror POCs to contacts. Return deal_id.\"\"\"
-    _p3_crm_deals_migrate(conn)
-    deal_id = None
-    try:
-        row = conn.execute("SELECT id FROM deals WHERE rfp_id=? ORDER BY id DESC LIMIT 1;", (int(rfp_id),)).fetchone()
-        deal_id = int(row[0]) if row else None
-    except Exception:
-        deal_id = None
-    # Insert deal if missing
-    if not deal_id:
-        try:
-            # gather meta
-            meta = {}
-            try:
-                for k in ("title","solnum","notice_id","sam_url","agency"):
-                    row = conn.execute("SELECT value FROM rfp_meta WHERE rfp_id=? AND lower(key)=lower(?) ORDER BY id DESC LIMIT 1;", (int(rfp_id), k)).fetchone()
-                    if row and row[0] is not None:
-                        meta[k] = str(row[0])
-            except Exception:
-                pass
-            # fallback to rfps table
-            try:
-                r = conn.execute("SELECT title, solnum, notice_id, sam_url FROM rfps WHERE id=?", (int(rfp_id),)).fetchone()
-                if r:
-                    meta.setdefault("title", r[0] or "")
-                    meta.setdefault("solnum", r[1] or "")
-                    meta.setdefault("notice_id", r[2] or "")
-                    meta.setdefault("sam_url", r[3] or "")
-            except Exception:
-                pass
-            with conn:
-                conn.execute(
-                    "INSERT INTO deals(title, agency, status, value, rfp_id, sam_url, notice_id, solnum, updated_at) VALUES(?,?,?,?,?,?,?,?,datetime('now'))",
-                    (meta.get("title","") or "", meta.get("agency","") or "", "Intake", None, int(rfp_id), meta.get("sam_url","") or "", meta.get("notice_id","") or "", meta.get("solnum","") or "")
-                )
-                deal_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            _p3_log_stage(conn, int(deal_id), "Intake")
-        except Exception:
-            pass
-    # Upsert contacts from POCs
-    try:
-        rows = conn.execute("SELECT name, email, phone, title, org FROM pocs WHERE rfp_id=?", (int(rfp_id),)).fetchall()
-        with conn:
-            for (name, email, phone, title, org) in rows or []:
-                conn.execute(
-                    "INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at) VALUES(?,?,?,?,?, datetime('now'))",
-                    (name or "", email or "", phone or "", title or "", org or "")
-                )
-    except Exception:
-        pass
-    # Apply due date
-    try:
-        due = _p3_due_date_for_rfp(conn, int(rfp_id))
-        if due:
-            with conn:
-                if deal_id:
-                    conn.execute("UPDATE deals SET close_date=?, rfp_deadline=? WHERE id=?", (str(due), str(due), int(deal_id)))
-                # Task
-                conn.execute(
-                    "INSERT INTO tasks(title, due_date, status, priority, deal_id, created_at) VALUES(?,?,?,?,?, datetime('now'))",
-                    ("Proposal due", str(due), "Open", "High", deal_id if deal_id else None)
-                )
-    except Exception:
-        pass
-    # Final auto-stage
-    try:
-        _p3_auto_stage_for_rfp(conn, int(rfp_id), deal_id)
-    except Exception:
-        pass
-    return deal_id
-
-def _p3_sync_from_rfp(conn, rfp_id: int):
-    try:
-        _p3_ensure_deal_and_contacts(conn, int(rfp_id))
-    except Exception:
-        pass
-
-def _p3_sync_from_session(conn):
-    try:
-        rid = int((_st3.session_state.get("current_rfp_id") if _st3 else 0) or 0)
-        if rid:
-            _p3_sync_from_rfp(conn, rid)
-    except Exception:
-        pass
-# === end injected helpers ===
