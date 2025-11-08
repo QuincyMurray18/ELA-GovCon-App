@@ -3283,31 +3283,34 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
             sums[fname] = _ai_chat(prompt)
         st.session_state["onepage_summaries"] = sums
 
-        # Auto-ingest POCs from the combined summaries and offer navigation to Contacts
+
+# Auto-ingest POCs from the combined summaries and offer navigation to Contacts
+try:
+    joined_summaries = "\n\n".join(list(sums.values()))
+    # Resolve RFP id from session or DB
+    rid = st.session_state.get("current_rfp_id") or st.session_state.get("selected_rfp_id")
+    if not rid:
         try:
-            joined_summaries = "\n\n".join(list(sums.values()))
-            pocs_added = _p3_ingest_pocs_from_summary(conn, int(selected_rfp_id), joined_summaries)
-            if pocs_added or _p3_role_terms_present(joined_summaries):
-                st.success("POCs detected in summary and added to Contacts.")
-                if st.button("Open Contacts ▶", key="go_contacts_after_summary"):
-                    st.session_state.update({
-                        "main_nav": "Contacts",
-                        "phase3_nav": "Contacts",
-                        "active_page": "Contacts"
-                    })
-                    try:
-                        st.experimental_rerun()
-                    except Exception:
-                        pass
+            import pandas as _pd
+            _df_last = _pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn)
+            rid = int(_df_last.iloc[0]["id"]) if not _df_last.empty else None
         except Exception:
-            pass
-    # Render summaries if present
-    sums = st.session_state.get("onepage_summaries") or {}
-    if sums:
-        for fname, ss in sums.items():
-            with st.expander(f"Summary — {fname}", expanded=False):
-                _rfp_highlight_css()
-                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
+            rid = None
+    pocs_added = _p3_ingest_pocs_from_summary(conn, rid, joined_summaries)
+    if pocs_added or _p3_role_terms_present(joined_summaries):
+        st.success("POCs detected in summary and added to Contacts list.")
+        if st.button("Open Contacts ▶", key="go_contacts_after_summary"):
+            st.session_state.update({
+                "main_nav": "Contacts",
+                "phase3_nav": "Contacts",
+                "active_page": "Contacts"
+            })
+            try:
+                st.experimental_rerun()
+            except Exception:
+                pass
+except Exception:
+    pass
     st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
     reqs = _find_requirements(combined)
     if not reqs:
@@ -7162,28 +7165,27 @@ def _p3_role_terms_present(txt: str) -> bool:
     import re
     if not txt: return False
     return re.search(r"(?i)contract(ing)? (officer|specialist)|\bpoc\b", txt) is not None
-def _p3_ingest_pocs_from_summary(conn, rfp_id: int, txt: str):
+def _p3_ingest_pocs_from_summary(conn, rfp_id, txt: str):
     from contextlib import closing as _closing
     import pandas as _pd
     pcs = _p3_extract_pocs_from_text(txt or "")
     if not pcs:
         return False
     inserted_any = False
-    for c in pcs[:12]:
+    for c in pcs[:20]:
         try:
             name = c.get("name") or ""
             email = c.get("email") or ""
             role = c.get("role") or ""
             phone = c.get("phone") or ""
             with _closing(conn.cursor()) as cur:
-                # Always write POC row if we have at least one field
-                if name or email or phone or role:
+                # Always write Contact for later editing
+                if name or email:
+                    cur.execute("INSERT OR IGNORE INTO contacts(name, email, org) VALUES(?,?,?);", (name, email, ""))
+                # Write POC row when we have an rfp_id
+                if rfp_id:
                     cur.execute("INSERT OR IGNORE INTO pocs(rfp_id, name, role, email, phone) VALUES(?,?,?,?,?);",
                                 (int(rfp_id), name, role, email, phone))
-                # Write contact even without email to let user edit later
-                if name or email:
-                    cur.execute("INSERT OR IGNORE INTO contacts(name, email, org) VALUES(?,?,?);",
-                                (name, email, ""))
                 conn.commit()
             inserted_any = True
         except Exception:
