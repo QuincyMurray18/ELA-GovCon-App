@@ -3282,9 +3282,14 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
             prompt = f"Summarize the document '{fname}' for a federal proposal team. Use bullets and include key deliverables, dates, and Section L/M obligations.\n\n{t[:12000]}"
             sums[fname] = _ai_chat(prompt)
         st.session_state["onepage_summaries"] = sums
+    sums = st.session_state.get("onepage_summaries") or {}
+    if sums:
+        for fname, ss in sums.items():
+            with st.expander(f"Summary — {fname}", expanded=False):
+                _rfp_highlight_css()
+                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
 
-
-
+    # Compliance (auto-extracted)
     st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
     reqs = _find_requirements(combined)
     if not reqs:
@@ -5207,67 +5212,188 @@ def get_db() -> sqlite3.Connection:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_attach_pack ON rfq_attach(pack_id);");
 
         # Phase M (Tenancy 1)
+
+        # Robust multi-tenant migration. Adds tenant_id to core tables, creates scoped views and insert triggers.
+
+        def __p_table_exists(cur, name: str) -> bool:
+
+            try:
+
+                cur.execute("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?;", (name,))
+
+                return cur.fetchone() is not None
+
+            except Exception:
+
+                return False
+
+        
+
+        def __p_get_cols(cur, name: str):
+
+            cur.execute(f"PRAGMA table_info({name});")
+
+            return [r[1] for r in cur.fetchall()]
+
+        
+
+        def __p_add_tenant(cur, table: str):
+
+            try:
+
+                cols = __p_get_cols(cur, table)
+
+                if "tenant_id" not in cols:
+
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER;")
+
+            except Exception:
+
+                pass
+
+        
+
+        def __p_create_scoped_view(cur, table: str):
+
+            try:
+
+                cols = __p_get_cols(cur, table)
+
+                sel_cols = ", ".join(cols)
+
+                view = f"{table}_t"
+
+                cur.execute(f"DROP VIEW IF EXISTS {view};")
+
+                cur.execute(f"CREATE VIEW IF NOT EXISTS {view} AS SELECT {sel_cols} FROM {table} WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);")
+
+            except Exception:
+
+                pass
+
+        
+
+        def __p_create_insert_trigger(cur, table: str):
+
+            try:
+
+                trg = f"{table}_ai_tenant"
+
+                cur.execute(f"""
+
+                    CREATE TRIGGER IF NOT EXISTS {trg}
+
+                    AFTER INSERT ON {table}
+
+                    WHEN NEW.tenant_id IS NULL
+
+                    BEGIN
+
+                        UPDATE {table} SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) WHERE rowid=NEW.rowid;
+
+                    END;
+
+                """)
+
+            except Exception:
+
+                pass
+
+        
+
+        # Ensure tenants and current pointer exist
+
         cur.execute("""
+
             CREATE TABLE IF NOT EXISTS tenants(
+
                 id INTEGER PRIMARY KEY,
+
                 name TEXT UNIQUE NOT NULL,
-                created_at TEXT
+
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+
             );
+
         """)
+
         cur.execute("""
+
             CREATE TABLE IF NOT EXISTS current_tenant(
+
                 id INTEGER PRIMARY KEY CHECK(id=1),
+
                 ctid INTEGER
+
             );
+
         """)
-        cur.execute("INSERT OR IGNORE INTO tenants(id, name, created_at) VALUES(1, 'Default', datetime('now'));")
+
+        cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'Default');")
+
         cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
 
-        def _add_tenant_id(table: str):
+        
+
+        # Discover existing base tables to scope
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+
+        existing_tables = set(r[0] for r in cur.fetchall())
+
+        
+
+        # Recommended core tables
+
+        candidate_tables = [
+
+            "rfps","rfp_meta","rfp_files","lm_items","lm_meta","clin_lines","key_dates","pocs",
+
+            "quotes","quote_lines","quote_totals",
+
+            "deals","deal_stage_log","activities","tasks",
+
+            "contacts","vendors","files",
+
+            "rfq_packs","rfq_lines","rfq_vendors","rfq_attach",
+
+            "saved_searches","alerts","sam_versions","sam_extracts",
+
+            "rtm_requirements","rtm_links",
+
+            "pricing_scenarios","pricing_rates","pricing_other","past_perf","org_profile"
+
+        ]
+
+        
+
+        core_tables = [t for t in candidate_tables if t in existing_tables]
+
+        
+
+        # Add tenant_id where missing and backfill NULLs to current tenant
+
+        for t in core_tables:
+
+            __p_add_tenant(cur, t)
+
             try:
-                cols = pd.read_sql_query(f"PRAGMA table_info({table});", conn)
-                if "tenant_id" not in cols["name"].tolist():
-                    cur.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER;")
-                    conn.commit()
+
+                cur.execute(f"UPDATE {t} SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) WHERE tenant_id IS NULL;")
+
             except Exception:
-                pass
-            try:
-                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_tenant ON {table}(tenant_id);")
-            except Exception:
+
                 pass
 
-        core_tables = ["rfps","lm_items","lm_meta","deals","activities","tasks","deal_stage_log",
-                       "vendors","files","rfq_packs","rfq_lines","rfq_vendors","rfq_attach","contacts"]
-        for t in core_tables:
-            _add_tenant_id(t)
+        
 
-        # AFTER INSERT triggers: always stamp tenant_id to current_tenant
-        def _ensure_trigger(table: str):
-            trg = f"{table}_ai_tenant"
-            try:
-                cur.execute(f"""
-                    CREATE TRIGGER IF NOT EXISTS {trg}
-                    AFTER INSERT ON {table}
-                    BEGIN
-                        UPDATE {table}
-                        SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1)
-                        WHERE rowid=NEW.rowid;
-                    END;
-                """)
-            except Exception:
-                pass
-        for t in core_tables:
-            _ensure_trigger(t)
+        # Create scoped views and insert triggers
 
-        # Scoped views
-        def _create_view(table: str):
-            v = f"{table}_t"
-            try:
-                cur.execute(f"CREATE VIEW IF NOT EXISTS {v} AS SELECT * FROM {table} WHERE tenant_id=(SELECT ctid FROM current_tenant WHERE id=1);")
-            except Exception:
-                pass
         for t in core_tables:
-            _create_view(t)
+
+            __p_create_scoped_view(cur, t)
+
+            __p_create_insert_trigger(cur, t)
 
         # Phase N (Persist): Pragmas
         try:
@@ -7089,82 +7215,6 @@ def _p3_auto_wire_crm_from_rfp(conn, rfp_id: int):
         _p3_auto_stage_for_rfp(conn, int(rfp_id))
     except Exception:
         pass
-# --- POC extraction from free text (summary) ---
-def _p3_extract_pocs_from_text(txt: str):
-    import re
-    if not txt:
-        return []
-    emails = list(set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", txt)))
-    roles = ["contracting officer","contract specialist","contracting specialist","co","poc","point of contact"]
-    out = []
-    # Pass 1: email-anchored extraction
-    for em in emails:
-        name = ""
-        role = ""
-        try:
-            idx = txt.lower().index(em.lower())
-            win = txt[max(0, idx-120): idx+120]
-        except ValueError:
-            win = ""
-        mname = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*(?:,|\(|-|–)?\s*$", win.split(em)[0][-120:])
-        if mname:
-            name = mname.group(1).strip()
-        low = win.lower()
-        for rk in roles:
-            if rk in low:
-                role = rk.title()
-                break
-        mphone = re.search(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", win)
-        phone = mphone.group(0) if mphone else ""
-        out.append({"name": name or "", "email": em, "phone": phone, "role": role or ""})
-    # Pass 2: role-only lines without email
-    for line in txt.splitlines():
-        if re.search(r"(?i)contract(ing)? (officer|specialist)|\bpoc\b", line):
-            m_em = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", line)
-            m_nm = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})", line)
-            m_ph = re.search(r"(?:\+?1\s*)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}", line)
-            out.append({
-                "name": (m_nm.group(1) if m_nm else ""),
-                "email": (m_em.group(0) if m_em else ""),
-                "phone": (m_ph.group(0) if m_ph else ""),
-                "role": ""
-            })
-    # Deduplicate on (email, name)
-    uniq = {}
-    for c in out:
-        key = (c.get("email","").lower(), c.get("name","").strip().lower())
-        uniq[key] = c
-    return list(uniq.values())
-def _p3_role_terms_present(txt: str) -> bool:
-    import re
-    if not txt: return False
-    return re.search(r"(?i)contract(ing)? (officer|specialist)|\bpoc\b", txt) is not None
-def _p3_ingest_pocs_from_summary(conn, rfp_id, txt: str):
-    from contextlib import closing as _closing
-    import pandas as _pd
-    pcs = _p3_extract_pocs_from_text(txt or "")
-    if not pcs:
-        return False
-    inserted_any = False
-    for c in pcs[:20]:
-        try:
-            name = c.get("name") or ""
-            email = c.get("email") or ""
-            role = c.get("role") or ""
-            phone = c.get("phone") or ""
-            with _closing(conn.cursor()) as cur:
-                # Always write Contact for later editing
-                if name or email:
-                    cur.execute("INSERT OR IGNORE INTO contacts(name, email, org) VALUES(?,?,?);", (name, email, ""))
-                # Write POC row when we have an rfp_id
-                if rfp_id:
-                    cur.execute("INSERT OR IGNORE INTO pocs(rfp_id, name, role, email, phone) VALUES(?,?,?,?,?);",
-                                (int(rfp_id), name, role, email, phone))
-                conn.commit()
-            inserted_any = True
-        except Exception:
-            continue
-    return inserted_any
 def _p3_make_ics(summary: str, when_str: str) -> bytes:
     from datetime import datetime
     dt = None
@@ -14609,11 +14659,9 @@ def run_router(conn):
 
 import sqlite3
 def _get_conn(db_path="samwatch.db"):
-    try:
-        return sqlite3.connect(db_path, check_same_thread=False)
-    except Exception:
-        return sqlite3.connect(":memory:", check_same_thread=False)
-
+    import os
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    return sqlite3.connect(db_path, check_same_thread=False)
 # (Phase 3 router entry removed to avoid duplicate UI in host app)
 
     st.set_page_config(page_title="GovCon — SAM Watch & Analyzer", layout="wide")
