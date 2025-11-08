@@ -3244,14 +3244,16 @@ DEFAULT_SECTIONS = [
 
 def _draft_section(section: str, context: str) -> str:
     prompt = f"""
-Using the following RFP context, draft the section **{section}**. 
-- Keep it compliant and concise (<= 300 words).
-- Mirror government tone; no marketing fluff.
-- Cite specific obligations if relevant (quote short phrases).
+Using the RFP context below, draft the section **{section}**.
+- Compliant. Concise (<= 300 words unless bullets needed).
+- Government tone. No marketing fluff.
+- No citations. No bracketed numbers. No 'References' section.
 RFP context (truncated):
 {context[:6000]}
 """.strip()
-    return _ai_chat(prompt)
+    draft = _ai_chat(prompt)
+    return _strip_citations(draft)
+
 
 # ---- Public entrypoint ----
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
@@ -4267,44 +4269,67 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
     return ctx
 
 def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
+    import pandas as _pd
     ctx = _y3_collect_ctx(conn, int(rfp_id))
-    q = f"{section_title} Section L Section M instructions {ctx.get('title','')} {ctx.get('solnum','')}"
-    hits = y1_search(conn, int(rfp_id), q, k=int(k)) or []
-    ev_lines = []
-    for i, h in enumerate(hits, start=1):
-        tag = f"[C{i}]"
-        src = f"{h['file']} p.{h['page']}"
-        snip = (h.get("text") or "").strip().replace("\n"," ")
-        ev_lines.append(f"{tag} {src} — {snip}")
-    evidence = "\n".join(ev_lines)
-    style = (SYSTEM_CO + " Write a proposal section for a federal RFP. Use short, compliant sentences."
-             + " Map claims to evidence with bracketed citations like [C1]."
-             + " Do not invent requirements. If evidence is missing, state the gap plainly.")
+    # Pull extra context from One-Page Analyzer outputs
+    try:
+        df_dates = _pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_dates = _pd.DataFrame(columns=["label","date_text"])
+    try:
+        df_pocs = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_pocs = _pd.DataFrame(columns=["name","role","email","phone"])
+    try:
+        df_clin = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
+    try:
+        full_text = y5_extract_from_rfp(conn, int(rfp_id)) or ""
+        full_text = "\n".join([ln.strip() for ln in full_text.splitlines() if ln.strip()])[:20000]
+    except Exception:
+        full_text = ""
     bullets = "\n".join([f"- {it}" for it in (ctx.get("lm") or [])])
-    clins = "\n".join([f"- {c['clin']}: {c['desc']}" for c in (ctx.get("clins") or [])])
-    constraints = []
-    if ctx["meta"].get("naics"): constraints.append(f"NAICS: {ctx['meta']['naics']}")
-    if ctx["meta"].get("set_aside"): constraints.append(f"Set-Aside: {ctx['meta']['set_aside']}")
-    if ctx["meta"].get("place_of_performance"): constraints.append(f"Place of Performance: {ctx['meta']['place_of_performance']}")
-    limit_line = f"Target length: <= {int(max_words)} words." if isinstance(max_words, int) and max_words>0 else "Target brevity."
-    user = f"""Draft the section: {section_title}
-{limit_line}
+    clins = "\n".join([f"- {r['clin']}: {r['desc']}" for r in (ctx.get("clins") or [])])
+    dates_str = "\n".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
+    pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
+    meta = ctx.get("meta") or {}
+    style = (
+        "You are a veteran federal proposal writer with $70M+ in awards. "
+        "Write in crisp, compliant federal style. Tailor to THIS RFP only. "
+        "No citations. No bracketed tags. Avoid redundancy. Align with L&M and CLINs."
+    )
+    req_len = f"Target length: {max_words} words." if max_words else ""
+    user = f"""
+SECTION TO DRAFT: {section_title}
 
-RFP title: {ctx.get('title','')}  Solicitation: {ctx.get('solnum','')}
-Constraints: {' | '.join(constraints) if constraints else 'n/a'}
+RFP META:
+{meta}
 
-Key L/M items to cover:
-{bullets or '- n/a'}
+KEY DATES:
+{dates_str or '- n/a'}
 
-Relevant CLINs:
+POCs:
+{pocs_str or '- n/a'}
+
+CLINs:
 {clins or '- n/a'}
 
-Notes from author:
+L&M ITEMS:
+{bullets or '- n/a'}
+
+FULL TEXT (truncated):
+{full_text}
+
+AUTHOR NOTES:
 {notes or 'n/a'}
 
-EVIDENCE:
-{evidence}
-Write a structured section with a short lead paragraph, 3–6 bullets, and an optional close. Use [C#] next to any factual or requirement-based claim that is tied to EVIDENCE.
+REQUIREMENTS:
+- No citations or 'References'.
+- Map content precisely to the above context.
+- {req_len}
+- Use short paragraphs and bullets when helpful.
+- If a requirement is unclear, state the assumption plainly.
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 
@@ -8692,8 +8717,9 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes, k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
                         acc.append(tok)
                     drafted = "".join(acc).strip()
-                    if drafted:
-                        st.session_state[f"pb_section_{sec}"] = drafted
+            if drafted:
+                drafted = _strip_citations(drafted)
+                st.session_state[f"pb_section_{sec}"] = drafted
             st.success("Drafted all sections.")
         content_map: Dict[str, str] = {}
         for sec in selected:
@@ -8707,13 +8733,15 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                 maxw = st.number_input(f"Max words — {sec}", min_value=0, value=220, step=10, key=f"y3_maxw_{sec}")
             with cC:
                 if st.button(f"Draft {sec}", key=f"y3_draft_{sec}"):
-                    ph = st.empty(); acc=[]
-                    for tok in y3_stream_draft(conn, int(rfp_id), sec, notes or "", k=int(k), max_words=int(maxw) if maxw>0 else None):
+                    ph = st.empty(); acc = []
+                    for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw>0 else None):
                         acc.append(tok); ph.markdown("".join(acc))
                     drafted = "".join(acc).strip()
                     if drafted:
+                        drafted = _strip_citations(drafted)
                         st.session_state[f"pb_section_{sec}"] = drafted
                         default_val = drafted
+
             content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
     with right:
         st.subheader("Guidance and limits")
