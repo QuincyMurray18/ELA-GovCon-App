@@ -3301,6 +3301,13 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
                         pass
         except Exception:
             pass
+    # Render summaries if present
+    sums = st.session_state.get("onepage_summaries") or {}
+    if sums:
+        for fname, ss in sums.items():
+            with st.expander(f"Summary — {fname}", expanded=False):
+                _rfp_highlight_css()
+                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
     st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
     reqs = _find_requirements(combined)
     if not reqs:
