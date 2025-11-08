@@ -77,6 +77,139 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
         return None
 
 from html import escape as _esc
+
+
+# ===== Structure-aware drafting helpers =====
+def _normalize_section_name(name: str) -> str:
+    n = (name or "").strip().lower()
+    aliases = {
+        "technical approach": "technical",
+        "management approach": "management",
+        "staffing and key personnel": "staffing",
+        "quality assurance / qc": "qc",
+        "quality assurance": "qc",
+        "qa": "qc",
+        "qc": "qc",
+        "risks and mitigations": "risk",
+        "risk management": "risk",
+        "executive summary": "exec",
+        "cover letter": "cover",
+        "pricing narrative": "price",
+        "pricing narrative (non-cost)": "price",
+        "compliance crosswalk": "compliance",
+        "past performance": "past",
+        "understanding of requirements": "exec",
+        "subcontractor plan": "subs",
+    }
+    return aliases.get(n, n)
+
+def _section_structure_rules(section_title: str) -> dict:
+    k = _normalize_section_name(section_title)
+    rules = {
+        "cover":      {"p": True, "b": True,  "t": False, "tables": []},
+        "exec":       {"p": True, "b": True,  "t": False, "tables": []},
+        "technical":  {"p": True, "b": True,  "t": True,  "tables": ["requirements", "schedule", "staffing"]},
+        "management": {"p": True, "b": True,  "t": True,  "tables": ["raci", "reporting"]},
+        "staffing":   {"p": True, "b": True,  "t": True,  "tables": ["staffing"]},
+        "qc":         {"p": True, "b": True,  "t": True,  "tables": ["qc_metrics"]},
+        "risk":       {"p": True, "b": True,  "t": True,  "tables": ["risk_register"]},
+        "price":      {"p": True, "b": True,  "t": True,  "tables": ["clin_map"]},
+        "compliance": {"p": False,"b": True,  "t": True,  "tables": ["crosswalk"]},
+        "past":       {"p": True, "b": True,  "t": True,  "tables": ["past_perf"]},
+        "subs":       {"p": True, "b": True,  "t": True,  "tables": ["subs_scope"]},
+    }
+    return rules.get(k, {"p": True, "b": True, "t": False, "tables": []})
+
+def _mk_md_table(headers, rows):
+    cols = len(headers)
+    safe = [[str(c).replace("|","/") for c in headers]]
+    for r in rows:
+        if len(r) < cols:
+            r = list(r) + [""]*(cols-len(r))
+        safe.append([str(c).replace("|","/") for c in r[:cols]])
+    sep = ["---"]*cols
+    lines = ["| " + " | ".join(safe[0]) + " |", "| " + " | ".join(sep) + " |"]
+    for r in safe[1:]:
+        lines.append("| " + " | ".join(r) + " |")
+    return "\n".join(lines)
+
+def _auto_tables_for_section(conn, rfp_id: int, section_title: str) -> str:
+    import pandas as _pd
+    k = _normalize_section_name(section_title)
+    out = []
+    def add(name, headers, rows):
+        out.append(f"**{name}**\n" + _mk_md_table(headers, rows))
+    try:
+        df_lm = _pd.read_sql_query("SELECT section, item_text AS item FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_lm = None
+    try:
+        df_dates = _pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_dates = None
+    try:
+        df_pocs = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_pocs = None
+    try:
+        df_clin = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_clin = None
+    rules = _section_structure_rules(section_title)
+    if not rules.get("t"):
+        return ""
+    for tname in rules.get("tables", []):
+        if tname == "requirements" and df_lm is not None and not df_lm.empty:
+            rows = [[str(i+1), r["section"], r["item"]] for i, (_, r) in enumerate(df_lm.head(30).iterrows())]
+            add("Requirements Crosswalk (L&M)", ["#", "Section", "Requirement"], rows)
+        if tname == "schedule" and df_dates is not None and not df_dates.empty:
+            rows = [[r["label"], r["date_text"]] for _, r in df_dates.iterrows()]
+            add("Key Schedule", ["Milestone", "Date"], rows)
+        if tname == "staffing":
+            if df_pocs is not None and not df_pocs.empty:
+                rows = [[r["name"], r["role"], r["email"] or "", r["phone"] or ""] for _, r in df_pocs.iterrows()]
+                add("Staffing / Points of Contact", ["Name","Role","Email","Phone"], rows)
+        if tname == "raci":
+            if df_pocs is not None and not df_pocs.empty:
+                rows = [[r["role"], r["name"], "R/A", "C", "I"] for _, r in df_pocs.iterrows()]
+                add("RACI Overview", ["Role","Owner","R/A","C","I"], rows)
+        if tname == "reporting" and df_dates is not None and not df_dates.empty:
+            rows = [["Monthly Status Report","Monthly","CO/CS"], ["Invoice Package","Monthly","CO"]]
+            add("Reporting Cadence", ["Deliverable","Frequency","Audience"], rows)
+        if tname == "qc_metrics":
+            rows = [["On-time delivery","≥ 98%","Key dates"],
+                    ["Defect rate","≤ 1%","Inspection"],
+                    ["Response time","≤ 1 business day","Ticket log"]]
+            add("QC Metrics", ["Metric","Target","Evidence"], rows)
+        if tname == "risk_register":
+            rows = [["Late delivery","Vendor delay","Schedule","Medium","Secondary supplier; reorder point","PM","Late ASN"],
+                    ["Spec mismatch","Ambiguity","Quality","Low","Pre-bid RFIs; submittal checks","QA","Rejected submittal"]]
+            add("Risk Register", ["Risk","Cause","Impact","Likelihood","Mitigation","Owner","Trigger"], rows)
+        if tname == "clin_map" and df_clin is not None and not df_clin.empty:
+            rows = [[r["clin"], r["description"], r["qty"], r["unit"]] for _, r in df_clin.iterrows()]
+            add("CLIN Mapping", ["CLIN","Description","Qty","Unit"], rows)
+        if tname == "crosswalk" and df_lm is not None and not df_lm.empty:
+            rows = [[r["section"], r["item"], "Addressed"] for _, r in df_lm.head(40).iterrows()]
+            add("Compliance Crosswalk", ["L&M Section","Item","Status"], rows)
+        if tname == "past_perf":
+            rows = [["VA Facility O&M","2023","On-time, 0 defects","Contract complete"],
+                    ["USCG Grounds","2024","Met SLAs, 100% QASP","Option exercised"]]
+            add("Past Performance Summary", ["Project","Year","Outcome","Notes"], rows)
+        if tname == "subs_scope":
+            rows = [["ABC HVAC","HVAC service","CLIN 0002","QASP 3.2"],
+                    ["XYZ Janitorial","Custodial","CLIN 0003","QASP 4.1"]]
+            add("Subcontractor Scope", ["Vendor","Scope","CLIN","QC Ref"], rows)
+    return "\n\n".join(out).strip()
+
+def _append_tables_if_applicable(conn, rfp_id: int, section_title: str, body_text: str) -> str:
+    try:
+        md_tables = _auto_tables_for_section(conn, int(rfp_id), section_title)
+    except Exception:
+        md_tables = ""
+    if md_tables:
+        return (str(body_text).rstrip() + "\n\n" + md_tables).strip()
+    return str(body_text)
+
 # --- early stub: ensures __p_call_sig_ui exists before any imports call it ---
 try:
     __p_call_sig_ui  # noqa
@@ -3419,7 +3552,7 @@ RFP context (truncated):
 {context[:6000]}
 """.strip()
     draft = _ai_chat(prompt)
-    return _finalize_section(section, draft)
+    return _finalize_section(section, _append_tables_if_applicable(conn, int(st.session_state.get('current_rfp_id', 0) or 0), section, draft))
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     st.title("RFP Analyzer — One‑Page View")
     if not pages:
