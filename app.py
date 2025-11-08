@@ -13062,20 +13062,30 @@ def render_subfinder_s1d(conn):
     show = show[["name","phone","website","address","city","state","distance_mi","place_id","_dup"]]
 
     st.markdown("**Results**")
-    st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
+st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-    c1, c2 = st.columns([1,1])
-    with c1:
-        keep = df[~df["_dup"]].copy()
-        st.caption(f"{len(keep)} new vendors can be saved")
-        if st.button("Save all new vendors", key="s1d_save_all") and not keep.empty:
-            n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
-            st.success(f"Saved {n} vendors")
-    with c2:
-        if st.session_state.get("s1d_next_token"):
-            if st.button("Next page ▶", key="s1d_next_under"):
-                st.session_state["s1d_trigger"] = "next"
-                st.rerun()
+# Vendor selection table
+keep = df[~df["_dup"]].copy()
+st.caption(f"{len(keep)} new vendors can be saved")
+keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
+keep_view.insert(0, "Select", False)
+edited = st.data_editor(keep_view, hide_index=True, key="s1d_editor")
+sel = edited[edited["Select"]==True]
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    if st.button("Save selected", key="s1d_save_selected") and not sel.empty:
+        n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
+        st.success(f"Saved {n} vendors")
+with c2:
+    if st.button("Save all new vendors", key="s1d_save_all") and not keep.empty:
+        n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
+        st.success(f"Saved {n} vendors")
+with c3:
+    if st.session_state.get("s1d_next_token"):
+        if st.button("Next page ▶", key="s1d_next_under"):
+            st.session_state["s1d_trigger"] = "next"
+            st.rerun()
 
 # === End S1D ================================================================
 
@@ -13508,10 +13518,21 @@ def __p_s1d_ui(conn):
     show["phone"] = show.apply(lambda r: _tel(r.get("phone",""), r.get("phone_display","")), axis=1)
     show = show[["name","phone","website","address","city","state","distance_mi","place_id","_dup"]]
     _st.markdown("**Results**")
-    _st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
+_st.write(show.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-    keep = df[~df["_dup"]]
-    _st.caption(f"{len(keep)} new vendors can be saved")
+keep = df[~df["_dup"]].copy()
+_st.caption(f"{len(keep)} new vendors can be saved")
+keep_view = keep[["name","phone","website","address","city","state","place_id"]].copy()
+keep_view.insert(0, "Select", False)
+edited = _st.data_editor(keep_view, hide_index=True, key="__p_s1d_editor")
+sel = edited[edited["Select"]==True]
+
+c1, c2 = _st.columns(2)
+with c1:
+    if _st.button("Save selected", key="__p_s1d_save_selected") and not sel.empty:
+        n = _s1d_save_new_vendors(conn, sel.drop(columns=["Select"]).to_dict("records"))
+        _st.success(f"Saved {n} new vendors")
+with c2:
     if _st.button("Save all new vendors", key="__p_s1d_save") and not keep.empty:
         n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
         _st.success(f"Saved {n} new vendors")
