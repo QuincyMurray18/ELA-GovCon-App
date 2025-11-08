@@ -11057,12 +11057,6 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
-def run_subcontractor_finder_s1_hook(conn):
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        pass
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
@@ -11085,8 +11079,6 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
         return
     _safe_route_call(fn, conn)
     # Hooks
-    if (page or "").strip() == "Subcontractor Finder":
-        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 def main() -> None:
@@ -11542,115 +11534,6 @@ def s1_geocode_address(address:str):
         return None
     return None
 
-def s1_places_text_search(query:str, lat:float, lon:float, radius_meters:int, page_token:str|None=None)->dict:
-    key = s1_get_google_api_key()
-    if not key: return {"error":"no_api_key"}
-    import urllib.parse, urllib.request, json, time
-    base = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {"query": query, "location": f"{lat},{lon}", "radius": radius_meters, "key": key}
-    if page_token:
-        params = {"pagetoken": page_token, "key": key}
-        time.sleep(2.0)
-    url = base + "?" + urllib.parse.urlencode(params)
-    try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return {"error": str(e)}
-
-def s1_vendor_exists(conn, place_id:str|None, email:str|None, phone:str|None)->bool:
-    q = "SELECT 1 FROM vendors WHERE 1=0"
-    args = []
-    if place_id:
-        q += " OR place_id=?"; args.append(place_id)
-    if email:
-        q += " OR LOWER(email)=LOWER(?)"; args.append(email.strip())
-    if phone:
-        q += " OR REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')','') LIKE ?"
-        args.append("%" + s1_normalize_phone(phone) + "%")
-    row = conn.execute(q, tuple(args)).fetchone()
-    return bool(row)
-
-def s1_save_vendor(conn, v:dict)->int|None:
-    ensure_subfinder_s1_schema(conn)
-    name = v.get("name") or ""
-    pid = v.get("place_id") or None
-    addr = v.get("formatted_address") or ""
-    city, state = None, None
-    phone = v.get("formatted_phone_number") or v.get("international_phone_number") or ""
-    phone = s1_normalize_phone(phone)
-    website = v.get("website") or ""
-    email = v.get("email") or ""
-    with conn:
-        conn.execute("""
-            INSERT INTO vendors(name, city, state, phone, email, website, notes, place_id)
-            VALUES(?,?,?,?,?,?,?,?)
-            ON CONFLICT(place_id) DO UPDATE SET
-              name=excluded.name,
-              phone=COALESCE(excluded.phone, vendors.phone),
-              website=COALESCE(excluded.website, vendors.website)
-        """, (name, city, state, phone, email, website, addr, pid))
-    row = conn.execute("SELECT id FROM vendors WHERE place_id=?", (pid,)).fetchone()
-    return row[0] if row else None
-
-def s1_calc_radius_meters(miles:int)->int:
-    return int(float(miles) * 1609.344)
-def s1_render_places_panel(conn, default_addr:str|None=None):
-    import streamlit as st
-
-    ensure_subfinder_s1_schema(conn)
-    st.markdown("### Google Places search")
-    key_addr = st.text_input("Place of performance address", value=default_addr or "", key="s1_addr")
-    miles = st.slider("Miles radius", min_value=5, max_value=250, value=50, step=5, key="s1_miles")
-    q = st.text_input("Search keywords or NAICS", value=st.session_state.get("s1_q","janitorial"), key="s1_q")
-    hide_saved = st.checkbox("Hide vendors already saved", value=True, key="s1_hide_saved")
-    if "s1_page_token" not in st.session_state: st.session_state["s1_page_token"] = None
-    cols = st.columns([1,1,1])
-    search_clicked = cols[0].button("Search")
-    next_clicked = cols[1].button("Next page")
-    clear_clicked = cols[2].button("Clear")
-    if clear_clicked: st.session_state["s1_page_token"] = None
-    if not (search_clicked or next_clicked): return
-    if not key_addr:
-        st.error("Address required"); return
-    loc = s1_geocode_address(key_addr)
-    if not loc:
-        st.error("Geocoding failed or API key missing"); return
-    lat, lon = loc
-    token = st.session_state.get("s1_page_token") if next_clicked else None
-    data = s1_places_text_search(q, lat, lon, s1_calc_radius_meters(miles), token)
-    if "error" in data:
-        st.error(f"Places error: {data['error']}"); return
-    st.session_state["s1_page_token"] = data.get("next_page_token")
-    rows = []
-    for r in data.get("results", []):
-        pid = r.get("place_id")
-        name = r.get("name")
-        addr = r.get("formatted_address", "")
-        rating = r.get("rating", None)
-        open_now = (r.get("opening_hours") or {}).get("open_now")
-        dup = hide_saved and pid and s1_vendor_exists(conn, pid, None, None)
-        if not dup:
-            rows.append({"place_id": pid,"name": name,"address": addr,"rating": rating,"open_now": open_now})
-    if not rows:
-        st.info("No new vendors in this page"); return
-    df = pd.DataFrame(rows)
-    _styled_dataframe(df, use_container_width=True, hide_index=True)
-    ids = [r["place_id"] for r in rows if r.get("place_id")]
-    if not ids: return
-    to_save = st.multiselect("Select vendors to save", ids, format_func=lambda x: next((r["name"] for r in rows if r["place_id"]==x), x))
-    # [removed duplicate Save selected block]
-    if st.session_state.get("s1_page_token"):
-        st.caption("Another page is available. Click Next page to load more.")
-    st.caption("Set st.secrets['google']['api_key'] or env GOOGLE_API_KEY")
-
-def o1_list_accounts(conn):
-    ensure_outreach_o1_schema(conn)
-    rows = conn.execute("""
-      SELECT user_email, display_name, smtp_host, smtp_port
-      FROM email_accounts ORDER BY user_email
-    """).fetchall()
-    return rows
 def ensure_outreach_o1_schema(conn):
     """Create or migrate email_accounts table for Outreach."""
     with conn:
@@ -13456,12 +13339,6 @@ if __name__ == '__main__':
         # fallback: run default entry if main() not defined in this build
         pass
 
-def run_subcontractor_finder_s1_hook(conn):
-    ensure_subfinder_s1_schema(conn)
-    try:
-        s1_render_places_panel(conn)
-    except Exception:
-        pass
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
@@ -13484,8 +13361,6 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
         return
     _safe_route_call(fn, conn)
     # Hooks
-    if (page or "").strip() == "Subcontractor Finder":
-        _safe_route_call(globals().get("run_subcontractor_finder_s1_hook", lambda _c: None), conn)
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 
