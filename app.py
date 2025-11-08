@@ -395,6 +395,100 @@ def __p___p_read_sql_query(q, conn, params=()):
 
 import zipfile
 import re
+
+# ==== Section Focus Helpers ====
+def _normalize_section_name(name: str) -> str:
+    n = (name or "").lower().strip()
+    mapping = {
+        "technical approach": "technical",
+        "management approach": "management",
+        "staffing plan": "staffing",
+        "quality control": "qc",
+        "quality control plan": "qc",
+        "risk": "risk",
+        "risk management": "risk",
+        "risks and mitigations": "risk",
+        "transition plan": "transition",
+        "cover letter": "cover",
+        "executive summary": "exec",
+        "price approach": "price",
+        "pricing approach": "price",
+        "past performance": "past",
+        "subcontractor plan": "subs",
+        "subcontracting plan": "subs",
+        "compliance crosswalk": "compliance",
+    }
+    return mapping.get(n, n)
+
+def _section_blueprint(section_title: str) -> str:
+    k = _normalize_section_name(section_title)
+    if k == "technical":
+        return ("Write only the Technical Approach. Include: assumptions; step-by-step procedure; "
+                "tools and materials; interfaces; schedule with dependencies; acceptance criteria and QC checks. "
+                "Do not include management, staffing, risks, or crosswalks.")
+    if k == "management":
+        return ("Write only the Management Approach. Include: organization; RACI; communications; "
+                "risk control loop; reporting cadence; change control. "
+                "Do not include technical steps or cover letter.")
+    if k == "staffing":
+        return ("Write only the Staffing Plan. Include: roles; certifications; coverage; surge/backfill; training. "
+                "Do not include technical steps or pricing.")
+    if k == "qc":
+        return ("Write only the Quality Control Plan. Include: QC objectives; inspections; metrics; "
+                "nonconformance handling; corrective actions; audit schedule.")
+    if k == "risk":
+        return ("Write only the Risks and Mitigations. Provide 3–5 risks with causes, impacts, likelihood, and mitigations.")
+    if k == "transition":
+        return ("Write only the Transition Plan. Include: kickoff; knowledge transfer; asset handoff; cutover; Day-30 and Day-60 checks.")
+    if k == "cover":
+        return ("Write only the Cover Letter. One page max. Mirror solicitation title and number. "
+                "State understanding, commitment, points of contact.")
+    if k == "exec":
+        return ("Write only the Executive Summary. State client need, proposed solution, value, and key discriminators.")
+    if k == "price":
+        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and assumptions. No numbers.")
+    if k == "past":
+        return ("Write only the Past Performance section. Two concise examples with relevance and outcomes.")
+    if k == "subs":
+        return ("Write only the Subcontractor Plan. Identify vendors, scope, oversight, and flow-down compliance.")
+    if k == "compliance":
+        return ("Write only the Compliance Crosswalk. Bullet mapping of L&M items to where addressed in the proposal.")
+    return ("Write only the requested section content. Do not include other sections.")
+
+def _clip_to_single_section(section_title: str, text: str) -> str:
+    # Keep content up to first unrelated top-level heading
+    if not text:
+        return text
+    k = _normalize_section_name(section_title)
+    headings = [
+        "Executive Summary","Technical Approach","Management Approach","Staffing","Quality Control",
+        "Risk","Risks and Mitigations","Transition Plan","Price Approach","Past Performance",
+        "Subcontractor Plan","Compliance Crosswalk","Cover Letter"
+    ]
+    # If the text clearly starts with the wrong heading, remove it
+    import re as _re
+    lines = text.splitlines()
+    out_lines = []
+    for ln in lines:
+        m = _re.match(r"^\s*([A-Z][A-Za-z ]{2,40})\s*:?\s*$", ln.strip())
+        if m:
+            head = m.group(1).strip().lower()
+            norm = _normalize_section_name(head)
+            if norm and norm != k:
+                break  # stop at first unrelated heading
+        out_lines.append(ln)
+    t = "\n".join(out_lines).strip()
+    return t or text
+
+def _finalize_section(section_title: str, text: str) -> str:
+    try:
+        clipped = _clip_to_single_section(section_title, text)
+    except Exception:
+        clipped = text
+    return _finalize_draft(clipped)
+# ==================================
+
+
 # --- Phase 3 inline Analyzer (fallback if run_rfp_analyzer is missing) ---
 def _phase3_analyzer_inline(conn):
     import os, io, zipfile, tempfile, re
@@ -3317,7 +3411,7 @@ RFP context (truncated):
 {context[:6000]}
 """.strip()
     draft = _ai_chat(prompt)
-    return _finalize_draft(draft)
+    return _finalize_section(section, draft)
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     st.title("RFP Analyzer — One‑Page View")
     if not pages:
@@ -4406,6 +4500,10 @@ REQUIREMENTS:
 - Map content to context.
 - {req_len}
 - Short sentences (<=10 words). Paragraphs <=10 sentences.
+- Output only the requested section. No other sections.
+- Do not include TOC or extra headings.
+- Apply this blueprint:
+{_section_blueprint(section_title)}
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
@@ -8794,7 +8892,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
             if drafted:
                 drafted = _strip_citations(drafted)
-                st.session_state[f"pb_section_{sec}"] = _finalize_draft(drafted)
+                st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
             st.success("Drafted all sections.")
         content_map: Dict[str, str] = {}
         for sec in selected:
@@ -8814,7 +8912,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        st.session_state[f"pb_section_{sec}"] = _finalize_draft(drafted)
+                        st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
                         default_val = drafted
 
             content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
@@ -14323,6 +14421,10 @@ REQUIREMENTS:
 - Short sentences (<=10 words). Paragraphs max 10 sentences.
 - Organize for easy scoring.
 - If something is unknown, state an assumption.
+- Output only the requested section. No other sections.
+- Do not include TOC or extra headings.
+- Apply this blueprint:
+{_section_blueprint(section_title)}
 """
 
     try:
@@ -14338,7 +14440,7 @@ REQUIREMENTS:
     except Exception as e:
         text = f"[AI unavailable] {e}"
 
-    return _finalize_draft(text)
+    return _finalize_section(section_title, text)
 def _safe_int(v, default: int = 0) -> int:
     try:
         if v is None:
