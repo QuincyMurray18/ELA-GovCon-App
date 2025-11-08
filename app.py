@@ -14675,3 +14675,156 @@ def _get_conn(db_path="samwatch.db"):
 # SIG+LOGO patch removed
 
 # O4 wrapper disabled
+
+# === ELA Company Profile Bootstrap + Proposal Builder Hook (auto-added) ===
+# This block ensures org_profile includes DUNS and EIN and pre-populates your ELA identifiers.
+# It also injects a ready-to-use "Company Information" block into Proposal Builder's section library.
+from contextlib import closing as __ela_closing
+import sqlite3 as __ela_sqlite3
+
+def __ela_bootstrap_company_profile() -> None:
+    try:
+        conn = __ela_sqlite3.connect(DB_PATH, check_same_thread=False)
+        with __ela_closing(conn.cursor()) as cur:
+            # Ensure org_profile table exists with full schema
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS org_profile(
+                    id INTEGER PRIMARY KEY,
+                    company_name TEXT,
+                    address TEXT,
+                    phone TEXT,
+                    email TEXT,
+                    website TEXT,
+                    uei TEXT,
+                    cage TEXT,
+                    duns TEXT,
+                    ein TEXT,
+                    tagline TEXT,
+                    core_competencies TEXT,
+                    differentiators TEXT
+                );
+                """
+            )
+            # Add missing columns if needed
+            cur.execute("PRAGMA table_info(org_profile);")
+            cols = {r[1] for r in cur.fetchall()}
+            for col in ("duns","ein","tagline","core_competencies","differentiators","address","phone","email","website"):
+                if col not in cols:
+                    try:
+                        cur.execute(f"ALTER TABLE org_profile ADD COLUMN {col} TEXT;")
+                    except Exception:
+                        pass
+            conn.commit()
+
+            # Defaults from request
+            defaults = {
+                "company_name": "ELA Management LLC",
+                "uei": "U32LBVK3DDF7",
+                "cage": "14ZP6",
+                "duns": "14-483-4790",
+                "ein": "39-3925658",
+            }
+
+            # Ensure row id=1 exists and fill blanks only
+            row = conn.execute("SELECT id, company_name, uei, cage, duns, ein FROM org_profile WHERE id=1;").fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO org_profile(id, company_name, uei, cage, duns, ein) VALUES(1,?,?,?,?,?);",
+                    (defaults["company_name"], defaults["uei"], defaults["cage"], defaults["duns"], defaults["ein"])
+                )
+            else:
+                current = {
+                    "company_name": row[1] or "",
+                    "uei": row[2] or "",
+                    "cage": row[3] or "",
+                    "duns": row[4] or "",
+                    "ein": row[5] or "",
+                }
+                for k, v in defaults.items():
+                    if not (current.get(k) or "").strip():
+                        try:
+                            conn.execute(f"UPDATE org_profile SET {k}=? WHERE id=1;", (v,))
+                        except Exception:
+                            pass
+            conn.commit()
+    except Exception as __e:
+        # Avoid crashing the app if DB not ready yet
+        try:
+            import streamlit as _st
+            _st.caption(f"ELA bootstrap note: {type(__e).__name__}: {__e}")
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+__ela_bootstrap_company_profile()
+
+
+# Inject company block into Proposal Builder's section library on demand.
+def pb_phase_v_section_library(conn):
+    import pandas as _pd
+    import streamlit as _st
+
+    # Read profile
+    try:
+        df = _pd.read_sql_query(
+            "SELECT company_name, address, phone, email, website, uei, cage, COALESCE(duns,'') AS duns, COALESCE(ein,'') AS ein FROM org_profile WHERE id=1;",
+            conn, params=()
+        )
+    except Exception:
+        df = _pd.DataFrame(columns=["company_name","address","phone","email","website","uei","cage","duns","ein"])
+
+    if df is None or df.empty:
+        name, uei, cage, duns, ein = "ELA Management LLC", "U32LBVK3DDF7", "14ZP6", "14-483-4790", "39-3925658"
+        addr = phone = email = website = ""
+    else:
+        r = df.iloc[0].fillna("")
+        name, uei, cage, duns, ein = str(r["company_name"]), str(r["uei"]), str(r["cage"]), str(r["duns"]), str(r["ein"])
+        addr, phone, email, website = str(r["address"]), str(r["phone"]), str(r["email"]), str(r["website"])
+
+    # Build a clean markdown block
+    lines = []
+    lines.append(f"**{name}**")
+    if addr:
+        lines.append(addr)
+    if phone:
+        lines.append(f"Phone: {phone}")
+    if email:
+        lines.append(f"Email: {email}")
+    if website:
+        lines.append(f"Website: {website}")
+    lines.append(f"UEI: {uei}")
+    lines.append(f"CAGE: {cage}")
+    if duns:
+        lines.append(f"DUNS: {duns}")
+    if ein:
+        lines.append(f"EIN: {ein}")
+    company_block = "\n".join(lines)
+
+    # Expose to Proposal Builder consumers via session_state
+    _st.session_state["pb_company_information_block"] = company_block
+
+    # One-time auto-save into Drafts for the current RFP, if available
+    try:
+        rid = int(_st.session_state.get("current_rfp_id") or 0)
+        flag_key = f"__ela_pb_company_block_saved_{rid}"
+        if rid and not _st.session_state.get(flag_key, False):
+            try:
+                # y5_save_snippet is present in this app; ignore if not available
+                y5_save_snippet(conn, rid, "Company Information", company_block, source="ELA Profile")
+                _st.session_state[flag_key] = True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Visual hint
+    try:
+        _st.caption("Company information injected. Look for 'Company Information' in your Proposal Builder sections.")
+    except Exception:
+        pass
+
