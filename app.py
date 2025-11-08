@@ -14828,3 +14828,129 @@ def pb_phase_v_section_library(conn):
     except Exception:
         pass
 
+
+
+# === ELA Draft Hooks: ensure Company Information is present when drafting ===
+import functools as __ela_fun
+import sqlite3 as __ela_sqlite3
+from contextlib import closing as __ela_closing
+
+def __ela_get_db_path_default():
+    return globals().get("DB_PATH", "app.db")
+
+def __ela_company_block_text(conn):
+    import pandas as _pd
+    try:
+        df = _pd.read_sql_query(
+            "SELECT company_name, address, phone, email, website, uei, cage, COALESCE(duns,'') AS duns, COALESCE(ein,'') AS ein FROM org_profile WHERE id=1;",
+            conn, params=()
+        )
+    except Exception:
+        df = None
+    if df is None or df.empty:
+        name, uei, cage, duns, ein = "ELA Management LLC", "U32LBVK3DDF7", "14ZP6", "14-483-4790", "39-3925658"
+        addr = phone = email = website = ""
+    else:
+        r = df.iloc[0].fillna("")
+        name, uei, cage, duns, ein = str(r["company_name"]), str(r["uei"]), str(r["cage"]), str(r["duns"]), str(r["ein"])
+        addr, phone, email, website = str(r["address"]), str(r["phone"]), str(r["email"]), str(r["website"])
+
+    lines = [f"**{name}**"]
+    if addr: lines.append(addr)
+    if phone: lines.append(f"Phone: {phone}")
+    if email: lines.append(f"Email: {email}")
+    if website: lines.append(f"Website: {website}")
+    lines.append(f"UEI: {uei}")
+    lines.append(f"CAGE: {cage}")
+    if duns: lines.append(f"DUNS: {duns}")
+    if ein: lines.append(f"EIN: {ein}")
+    return "\n".join(lines)
+
+def __ela_resolve_conn(args, kwargs):
+    # Try explicit kw
+    conn = kwargs.get("conn")
+    if conn is not None:
+        return conn
+    # Try first sqlite3-like arg
+    for a in args:
+        try:
+            if hasattr(a, "cursor"):
+                return a
+        except Exception:
+            pass
+    # Try global connection
+    conn = globals().get("CONN") or globals().get("conn")
+    if conn is not None:
+        return conn
+    # Fallback: open from DB_PATH
+    try:
+        dbp = __ela_get_db_path_default()
+        return __ela_sqlite3.connect(dbp, check_same_thread=False)
+    except Exception:
+        return None
+
+def __ela_insert_company_into_current_rfp(conn):
+    try:
+        import streamlit as _st
+    except Exception:
+        return
+    rid = int(_st.session_state.get("current_rfp_id") or 0)
+    if not rid:
+        return
+    block = __ela_company_block_text(conn)
+    # Save via helper if available
+    try:
+        y5_save_snippet(conn, rid, "Company Information", block, source="ELA Profile")
+    except Exception:
+        # Fallback: try generic table if exists
+        try:
+            with __ela_closing(conn.cursor()) as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS proposal_snippets(id INTEGER PRIMARY KEY, rfp_id INTEGER, title TEXT, content TEXT, source TEXT);")
+                cur.execute("INSERT INTO proposal_snippets(rfp_id, title, content, source) VALUES(?,?,?,?);", (rid, "Company Information", block, "ELA Profile"))
+                conn.commit()
+        except Exception:
+            pass
+    # Expose to session for UIs that assemble in-memory
+    try:
+        _st.session_state["pb_company_information_block"] = block
+    except Exception:
+        pass
+
+def __ela_make_wrapper(fn):
+    @__ela_fun.wraps(fn)
+    def _wrap(*args, **kwargs):
+        conn = __ela_resolve_conn(args, kwargs)
+        if conn is not None:
+            try:
+                __ela_insert_company_into_current_rfp(conn)
+            except Exception:
+                pass
+        return fn(*args, **kwargs)
+    setattr(_wrap, "__ela_wrapped__", True)
+    return _wrap
+
+def __ela_wrap_drafters():
+    targets = ["pb_draft_all", "draft_all", "pb_draft_section", "draft_section", "pb_compile_document", "compile_proposal"]
+    for name in targets:
+        fn = globals().get(name)
+        if callable(fn) and not getattr(fn, "__ela_wrapped__", False):
+            globals()[name] = __ela_make_wrapper(fn)
+
+__ela_wrap_drafters()
+
+# Also ensure the injection runs when opening the Proposal Builder UI
+def __ela_patch_builder_entry():
+    import inspect
+    for name in list(globals().keys()):
+        if not name.startswith("render_") and "proposal" not in name.lower():
+            continue
+        obj = globals().get(name)
+        if callable(obj) and not getattr(obj, "__ela_wrapped__", False):
+            src = getattr(obj, "__name__", "")
+            if "builder" in name.lower() or "proposal" in name.lower():
+                globals()[name] = __ela_make_wrapper(obj)
+
+try:
+    __ela_patch_builder_entry()
+except Exception:
+    pass
