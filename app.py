@@ -3245,7 +3245,7 @@ DEFAULT_SECTIONS = [
 def _draft_section(section: str, context: str) -> str:
     prompt = f"""
 Using the RFP context below, draft **{section}** using the style guide.
-{PROPOSAL_STYLE_GUIDE}
+{_style_guide()}
 Scaffold: lead, need, deliverables, technical steps, management (RACI), staffing, equipment, timeline, QC metrics, subcontractors, risks, compliance bullets, past performance, price approach note.
 RFP context (truncated):
 {context[:6000]}
@@ -4296,7 +4296,7 @@ def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: s
     user = f"""
 SECTION: {section_title}
 
-{PROPOSAL_STYLE_GUIDE}
+{_style_guide()}
 
 USE THIS SCAFFOLD:
 - Section lead mirroring solicitation.
@@ -14209,7 +14209,7 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
     user = f"""
 SECTION TO DRAFT: {section_title}
 
-{PROPOSAL_STYLE_GUIDE}
+{_style_guide()}
 
 USE THIS SCAFFOLD:
 - Section lead mirroring solicitation.
@@ -14734,6 +14734,31 @@ def run_router(conn):
     st.info("SAM Watch page is not available in this build. Use RFP Analyzer above.")
 
 import sqlite3
+
+# --- Style guide accessor to avoid NameError ---
+def _style_guide() -> str:
+    try:
+        return PROPOSAL_STYLE_GUIDE  # type: ignore[name-defined]
+    except Exception:
+        return (
+            "Follow these rules strictly:\n"
+            "1) Understand client need. Mirror solicitation terms exactly.\n"
+            "2) State deliverables explicitly.\n"
+            "3) Address evaluation factors: technical, management, past performance, price.\n"
+            "4) Answer each L&M requirement directly.\n"
+            "5) Obey page and format rules.\n"
+            "6) Provide HOW procedures, not claims.\n"
+            "7) Short sentences (<=10 words). One idea per paragraph.\n"
+            "8) Use bullets. Clean headings.\n"
+            "9) Include roles, equipment, timeline, QC checks, metrics.\n"
+            "10) Identify subcontractors and responsibilities.\n"
+            "11) Organize clearly for easy scoring.\n"
+            "12) Include a Risk table with mitigations.\n"
+            "13) Add a brief L&M compliance crosswalk.\n"
+            "14) Keep tone federal and precise."
+        )
+
+
 
 # === Proposal Style + Finalizers ===
 PROPOSAL_STYLE_GUIDE = (
