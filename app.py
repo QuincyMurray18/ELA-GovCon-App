@@ -1,3 +1,32 @@
+# ==== Style Guide Guards (top-of-file) ====
+try:
+    _style_guide
+except NameError:  # define if missing
+    def _style_guide() -> str:
+        return (
+            "Follow these rules strictly:\n"
+            "1) Understand client need. Mirror solicitation terms exactly.\n"
+            "2) State deliverables explicitly.\n"
+            "3) Address evaluation factors: technical, management, past performance, price.\n"
+            "4) Answer each L&M requirement directly.\n"
+            "5) Obey page and format rules.\n"
+            "6) Provide HOW procedures, not claims.\n"
+            "7) Short sentences (<=10 words). One idea per paragraph.\n"
+            "8) Use bullets. Clean headings.\n"
+            "9) Include roles, equipment, timeline, QC checks, metrics.\n"
+            "10) Identify subcontractors and responsibilities.\n"
+            "11) Organize clearly for easy scoring.\n"
+            "12) Include a Risk table with mitigations.\n"
+            "13) Add a brief L&M compliance crosswalk.\n"
+            "14) Keep tone federal and precise."
+        )
+
+try:
+    PROPOSAL_STYLE_GUIDE
+except NameError:  # set if missing
+    PROPOSAL_STYLE_GUIDE = _style_guide()
+# ==========================================
+
 def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
     try:
         from math import radians, sin, cos, asin, sqrt
