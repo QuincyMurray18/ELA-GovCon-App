@@ -14141,61 +14141,121 @@ def x7_save_section(conn: "sqlite3.Connection", section_id: int, content: str | 
         cur.execute("UPDATE proposal_sections SET content=?, settings_json=COALESCE(?, settings_json), updated_at=datetime('now') WHERE id=?", (content or "", settings_json, int(section_id)))
     conn.commit()
 
-def x7_generate_section_ai(conn: "sqlite3.Connection", rfp_id: int, title: str, guidance: str = "", temperature: float = 0.1, k: int = 8) -> str:
-    # Use Y1 index for grounding and GPT model for drafting
+def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "", temperature: float = 0.1) -> str:
+    # Draft a section using One-Page Analyzer context. No citations. No legacy snippets.
+    import pandas as _pd
+    import json
+    # Load analyzer context
     try:
-        hits = y1_search(conn, int(rfp_id), f"{title} {guidance}", k=int(k))
+        df_lm = _pd.read_sql_query(
+            "SELECT section, item_text AS item FROM lm_items WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),)
+        )
     except Exception:
-        hits = []
-    ctx = []
-    for h in hits or []:
-        src = f"{h.get('file') or ''} p.{h.get('page') or ''}".strip()
-        snippet = (h.get('text') or '')[:900]
-        ctx.append(f"[{src}] {snippet}")
-    prompt = "\n\n".join(ctx + [f"Write the section: {title}", f"Guidance: {guidance}"])
-    client = get_ai()
-    model = _resolve_model()
-    sys = "You draft precise, proposal ready text. Use clear headings. Cite source brackets inline only where needed."
+        df_lm = _pd.DataFrame(columns=["section","item"])
     try:
-        resp = client.chat.completions.create(model=model, messages=[
-            {"role":"system","content": sys},
-            {"role":"user","content": prompt}
-        ], temperature=float(temperature))
-        return (resp.choices[0].message.content or "").strip()
+        df_dates = _pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_dates = _pd.DataFrame(columns=["label","date_text"])
+    try:
+        df_pocs = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_pocs = _pd.DataFrame(columns=["name","role","email","phone"])
+    try:
+        df_clin = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
+    try:
+        df_meta = _pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()} if isinstance(df_meta, _pd.DataFrame) and not df_meta.empty else {}
+    except Exception:
+        meta = {}
+    try:
+        full_text = y5_extract_from_rfp(conn, int(rfp_id)) or ""
+        full_text = "
+".join([ln.strip() for ln in full_text.splitlines() if ln.strip()])[:20000]
+    except Exception:
+        full_text = ""
+    try:
+        dfp = _pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
+        profile = dfp.iloc[0].to_dict() if isinstance(dfp, _pd.DataFrame) and not dfp.empty else {}
+    except Exception:
+        profile = {}
+    company = (profile.get("company_name") or "ELA Management LLC").strip()
+    cage = profile.get("cage") or "14ZP6"
+    uei = profile.get("uei") or "U32LBVK3DDF7"
+    duns = profile.get("duns") or "14-483-4790"
+    lm_str = "
+".join([f"- {r['item']}" for _, r in (df_lm.head(150)).iterrows()]) if not df_lm.empty else ""
+    dates_str = "
+".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
+    pocs_str = "
+".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
+    clin_str = "
+".join([f"- {r['clin']}: {r['description']} (Qty {r['qty']} {r['unit']})" for _, r in df_clin.iterrows()]) if not df_clin.empty else ""
+    system = (
+        "You are a veteran federal proposal writer with $70M+ in awards. "
+        "Write in crisp federal style for the Government. Tailor to THIS RFP only. "
+        "Do not cite sources. Do not refer to snippets. Avoid redundancy. Align with L&M."
+    )
+    user = f"""
+SECTION: {section_title}
+
+RFP META:
+{json.dumps(meta, ensure_ascii=False)}
+
+KEY DATES:
+{dates_str or '(none)'}
+
+POCs:
+{pocs_str or '(none)'}
+
+CLINs:
+{clin_str or '(none)'}
+
+L&M ITEMS:
+{lm_str or '(none)'}
+
+FULL TEXT (truncated):
+{full_text}
+
+COMPANY:
+- {company} | CAGE {cage} | UEI {uei} | DUNS {duns}
+
+NOTES:
+{notes or '(none)'}
+
+REQUIREMENTS:
+- No citations or quotes.
+- Map content precisely to context.
+- Remove repetition.
+- 250–500 words unless bullets fit better.
+- Cover compliance expectations relevant to the section.
+"""
+    try:
+        from openai import OpenAI as _OpenAI
+        client = _OpenAI()
+        model = _resolve_model()
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=float(temperature or 0.1),
+            messages=[{"role":"system","content":system},{"role":"user","content":user}]
+        )
+        text = (resp.choices[0].message.content or "").strip()
     except Exception as e:
-        return f"AI error: {e}"
-
-def x7_export_docx(conn: "sqlite3.Connection", proposal_id: int) -> bytes | None:
-    # Best effort DOCX export. If python-docx is missing, return None.
+        text = f"[AI unavailable] {e}"
+    # De-duplicate repeated lines
     try:
-        import docx
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        seen = set(); out_lines = []
+        for ln in lines:
+            key = ln.strip().lower()
+            if key and key not in seen:
+                seen.add(key); out_lines.append(ln)
+        text = "
+".join(out_lines)
     except Exception:
-        return None
-    from contextlib import closing as _closing
-    doc = docx.Document()
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT p.title, p.rfp_id FROM proposals p WHERE p.id=?", (int(proposal_id),))
-        row = cur.fetchone()
-        title = row[0] if row else f"Proposal {int(proposal_id)}"
-        rfp_id = row[1] if row else 0
-    doc.add_heading(title, 0)
-    # sections
-    secs = x7_get_sections(conn, int(proposal_id))
-    for _, r in secs.iterrows():
-        doc.add_heading(str(r.get("title") or ""), level=1)
-        body = r.get("content") or ""
-        for para in body.split("\n\n"):
-            doc.add_paragraph(para)
-    import io
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-# ==== end X.7 helpers ====
-
-# ==== end X.6 helpers ====
-
-# ==== X.5 Transcript Viewer ====
-# ==== end X.5 Transcript Viewer ====
+        pass
+    return text
 
 def _safe_int(v, default: int = 0) -> int:
     try:
@@ -14676,394 +14736,13 @@ def _get_conn(db_path="samwatch.db"):
 
 # O4 wrapper disabled
 
-
-# =====================
-# PATCH: Proposal Builder accuracy, word-count, and RFP-tailored drafting
-# Date: 2025-11-08T05:10:13
-# Notes:
-# - Override x7_generate_section_ai to use Y3 evidence-grounded drafting with [C#] citations
-# - Override y3_stream_draft to de-duplicate across sections during "Draft all sections"
-# - Add Proposal Builder word-count panel hooked via pb_phase_v_section_library()
-# =====================
-
-import re as _re
-
-def _pb__wc(s: str) -> int:
-    return len(_re.findall(r"\b\w+\b", (s or "")))
-
-def _pb__extract_sentences(text: str):
-    # Simple sentence splitter. No NLP dependency.
-    parts = _re.split(r"(?<=[.!?])\s+", text or "")
-    return [p.strip() for p in parts if p.strip()]
-
-def _pb__dedupe_text(text: str, seen_sentences: set[str] | None = None):
-    if seen_sentences is None: seen_sentences = set()
-    out = []
-    for sent in _pb__extract_sentences(text or ""):
-        key = sent.lower()
-        if key in seen_sentences:
-            continue
-        seen_sentences.add(key)
-        out.append(sent)
-    return " ".join(out), seen_sentences
-
-def pb_wc_metrics_panel(conn):
-    """Show Proposal Builder live word counts.
-    Sources:
-      1) Live editors in session: keys that start with 'pb_ta_'.
-      2) Current proposal sections in DB if a proposal is selected in session.
-    """
-    import streamlit as st, pandas as pd
-    rows = []
-    # Session editors
-    for k, v in list(st.session_state.items()):
-        if isinstance(k, str) and k.startswith("pb_ta_"):
-            name = k.replace("pb_ta_", "", 1)
-            rows.append({"Section": name, "Words": _pb__wc(str(v or "")), "Source": "Editor"})
-    # Database sections for current proposal, if present
-    pid = None
+def _pb_word_count_section(text: str) -> int:
     try:
-        pid = int(st.session_state.get("current_proposal_id") or 0)
+        import re as _re
+        return len(_re.findall(r"[A-Za-z0-9']+", str(text or "")))
     except Exception:
-        pid = None
-    if pid:
+        
         try:
-            import pandas as _pd
-            df = _pd.read_sql_query(
-                "SELECT title, content FROM proposal_sections WHERE proposal_id=? ORDER BY id;",
-                conn, params=(int(pid),)
-            )
-            for _, r in df.iterrows():
-                rows.append({"Section": r.get("title") or "(untitled)",
-                             "Words": _pb__wc(str(r.get("content") or "")),
-                             "Source": "Saved"})
+            return len((text or "").split())
         except Exception:
-            pass
-    if not rows:
-        return
-    df_show = pd.DataFrame(rows).groupby(["Section", "Source"], as_index=False)["Words"].sum()
-    df_show["Est pages @ 300wpp"] = (df_show["Words"] / 300).round(2)
-    st.markdown("**Proposal word counts**")
-    st.dataframe(df_show.sort_values(["Section","Source"]), use_container_width=True, hide_index=True)
-
-# Router hook: the main app calls pb_phase_v_section_library() after rendering Proposal Builder if it exists.
-def pb_phase_v_section_library(conn):
-    try:
-        pb_wc_metrics_panel(conn)
-    except Exception:
-        # Never block the page
-        pass
-
-# --- Evidence-grounded single-section draft used by Proposal Builder ---
-def x7_generate_section_ai(conn, rfp_id, title, guidance="", temperature=0.1, k=8):
-    """Return a tailored section with [C#] citations. Uses the same evidence builder as Y3."""
-    # Prefer the stronger Y3 message builder if available
-    try:
-        msgs = _y3_build_messages(conn, int(rfp_id), str(title or "Untitled"), str(guidance or ""), k=int(k), max_words=None)
-        client = get_ai()
-        model_name = _resolve_model()
-        try:
-            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
-        except Exception as _e:
-            # Fallback small model
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
-        out = (resp.choices[0].message.content or "").strip()
-        return out
-    except Exception:
-        # Hard fallback: minimal behavior compatible with older builds
-        hits = _safe_y1_search(conn, int(rfp_id), str(title or ""), k=int(k)) or []
-        if not hits:
-            return "[system] Build or update the Y1 index for this RFP to enable grounded drafting."
-        ev_lines = []
-        for i, h in enumerate(hits, start=1):
-            tag = f"[C{i}]"
-            src = f"{h.get('file','')} p.{h.get('page','')}"
-            snip = (h.get('text') or '').strip().replace("\n", " ")
-            ev_lines.append(f"{tag} {src} — {snip}")
-        evidence = "\n".join(ev_lines)
-        prompt = f"""You are a seasoned federal proposal manager. Draft the section '{title}'.
-Use short sentences. Tie factual claims to EVIDENCE with [C#].
-If the evidence misses key details, say so.
-
-Author notes:
-{guidance or '(none)'}
-
-EVIDENCE
-{evidence}
-"""
-        # Return a non-empty string to avoid UI errors
-        return prompt
-
-# --- Non-redundant "Draft all" with de-dup across sections ---
-def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
-    """Override: generate full text in one call, then de-duplicate sentences seen in prior sections this run."""
-    import streamlit as st
-    try:
-        msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
-    except Exception as e:
-        yield f"[system] Error building messages: {e}"
-        return
-    client = get_ai()
-    model_name = _resolve_model()
-    try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
-    except Exception as _e:
-        try:
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
-        except Exception as _e2:
-            yield f"[system] AI unavailable: {type(_e2).__name__}: {_e2}"
-            return
-    text = (getattr(resp.choices[0], "message", None).content if resp and resp.choices else "") or ""
-    # Persist a per-run set of seen sentences to cut redundancy across sections
-    seen = set(st.session_state.get("__y3_seen_sents", []))
-    cleaned, seen = _pb__dedupe_text(text, seen)
-    st.session_state["__y3_seen_sents"] = list(seen)
-    yield cleaned
-
-
-# =====================
-# PATCH: No-citation drafting using RFP Analyzer context only
-# Date: 2025-11-08T05:24:44
-# Purpose:
-# - Stop relying on Y1 Y2 Y4 Y5 and any bracket citations
-# - Draft from Analyzer outputs and saved summaries only
-# - Keep de-duplication across sections during Draft all
-# =====================
-
-import re as _re
-
-def _pb__collect_from_db(conn, rfp_id: int) -> dict:
-    """
-    Try a series of likely tables to extract Analyzer context without citations.
-    Returns a dict with keys: requirements, pricing, submission, evaluation, schedule, contacts, other
-    All values are strings. Missing tables are ignored.
-    """
-    import pandas as _pd
-    buckets = {k: [] for k in ["requirements","pricing","submission","evaluation","schedule","contacts","other"]}
-    qplans = [
-        # Common consolidated table
-        ("SELECT kind, content FROM rfp_analyzer_outputs WHERE rfp_id=?", ("kind","content")),
-        # Summaries table variants
-        ("SELECT section, summary as content FROM rfp_summaries WHERE rfp_id=?", ("section","content")),
-        ("SELECT label as section, text as content FROM rfp_highlights WHERE rfp_id=?", ("section","content")),
-        # Generic sections
-        ("SELECT section, content FROM rfp_sections WHERE rfp_id=?", ("section","content")),
-        # Requirements tables
-        ("SELECT requirement as content FROM rfp_requirements WHERE rfp_id=?", (None,"content")),
-        # Documents summaries
-        ("SELECT filename as section, summary as content FROM rfp_doc_summaries WHERE rfp_id=?", ("section","content")),
-    ]
-    def _bucket_for(name: str) -> str:
-        n = (name or "").lower()
-        if any(k in n for k in ["l&m","lm","section l","instructions","proposal","format","page limit","submission","delivery","due"]):
-            return "submission"
-        if any(k in n for k in ["m&","m ", "evaluation", "basis of award", "factors", "subfactors", "adjectival"]):
-            return "evaluation"
-        if any(k in n for k in ["requirement", "sow", "pws", "work", "tasks", "scope"]):
-            return "requirements"
-        if any(k in n for k in ["price", "pricing", "clin", "clins", "schedule of items", "bid"]):
-            return "pricing"
-        if any(k in n for k in ["period of performance", "pop", "schedule", "milestone", "timeline"]):
-            return "schedule"
-        if any(k in n for k in ["poc", "point of contact", "contracting officer", "contract specialist", "email", "phone"]):
-            return "contacts"
-        return "other"
-
-    for sql, cols in qplans:
-        try:
-            df = _pd.read_sql_query(sql, conn, params=(int(rfp_id),))
-            if df is None or df.empty:
-                continue
-            # Normalize
-            sect_col, content_col = cols
-            if sect_col is None:
-                df["_section"] = ""
-            else:
-                df["_section"] = df[sect_col].astype(str)
-            df["_content"] = df[content_col].astype(str)
-            for _, row in df.iterrows():
-                b = _bucket_for(row["_section"])
-                text = row["_content"].strip()
-                if text:
-                    buckets[b].append(text)
-        except Exception:
-            # ignore missing tables
-            pass
-
-    # Join each bucket
-    return {k: "\n".join(v).strip() for k, v in buckets.items() if v}
-
-def _pb__collect_from_session() -> dict:
-    """Scrape Streamlit session for analyzer keys if present."""
-    try:
-        import streamlit as st
-    except Exception:
-        return {}
-    buckets = {}
-    ss = getattr(st, "session_state", {})
-    if not ss:
-        return {}
-    # Heuristics
-    def pick(prefixes):
-        out = []
-        for k, v in ss.items():
-            if not isinstance(k, str): 
-                continue
-            if any(k.lower().startswith(p) for p in prefixes):
-                s = str(v or "").strip()
-                if s:
-                    out.append(s)
-        return "\n".join(out).strip()
-    candidates = {
-        "requirements": pick(["rfp_req","lm_req","pws_req","sow_req","requirements"]),
-        "pricing": pick(["rfp_price","pricing","price"]),
-        "submission": pick(["rfp_lm","lm_","submission","format","page_limit"]),
-        "evaluation": pick(["rfp_eval","eval","m_","evaluation"]),
-        "schedule": pick(["rfp_schedule","pop","timeline","milestone"]),
-        "contacts": pick(["rfp_poc","poc","co_","cs_","contact"]),
-        "other": pick(["rfp_summary","analyzer_summary","summary"]),
-    }
-    for k, v in candidates.items():
-        if v:
-            buckets[k] = v
-    return buckets
-
-def _pb__rfp_context_blob(conn, rfp_id: int) -> str:
-    """Combine DB and session into one concise context block. No citations."""
-    parts = []
-    db = {}
-    try:
-        db = _pb__collect_from_db(conn, int(rfp_id))
-    except Exception:
-        db = {}
-    ss = {}
-    try:
-        ss = _pb__collect_from_session()
-    except Exception:
-        ss = {}
-    merged = {}
-    for k in ["requirements","pricing","submission","evaluation","schedule","contacts","other"]:
-        texts = []
-        if k in db and db[k]:
-            texts.append(db[k])
-        if k in ss and ss[k]:
-            texts.append(ss[k])
-        if texts:
-            merged[k] = "\n".join(texts).strip()
-    # Format compactly
-    order = ["requirements","pricing","submission","evaluation","schedule","contacts","other"]
-    for k in order:
-        if k in merged:
-            parts.append(f"[{k.upper()}]\n{merged[k]}")
-    return "\n\n".join(parts).strip()
-
-def _pb__trim(text: str, max_words: int | None):
-    if not max_words:
-        return text
-    toks = _re.findall(r"\S+", text or "")
-    if len(toks) <= max_words:
-        return text
-    return " ".join(toks[:max_words])
-
-def _pb__build_messages_no_cite(conn, rfp_id: int, section_title: str, guidance: str, max_words: int | None):
-    """Compose system and user messages that avoid citations and rely only on Analyzer context."""
-    ctx = _pb__rfp_context_blob(conn, int(rfp_id))
-    sys = (
-        "You are a veteran federal proposal manager with over 70 million dollars awarded. "
-        "Write like a compliant federal contractor. Do not include citations. "
-        "Base every claim only on the provided context. If context is missing, say what is missing. "
-        "Be precise, concise, and avoid redundancy. Use clear section specific language."
-    )
-    user = f"""RFP CONTEXT
-{ctx or '(no analyzer context was found)'}
-
-TASK
-Draft the section titled: {section_title}
-
-AUTHOR NOTES
-{guidance or '(none)'}
-
-OUTPUT RULES
-1. No citations. No brackets. No footnotes.
-2. Use agency appropriate language and answer exactly what is asked.
-3. If needed information is missing from CONTEXT, state it as a short assumption or a question to the CO.
-4. Maximize relevance to requirements, submission instructions, evaluation factors, pricing, and schedule.
-"""
-    # Apply optional trim only to context to keep prompt size bounded. The model will still write fully.
-    if max_words:
-        # crude trim on context portion to keep token budgets sane
-        ctx_words = max(200, int(max_words) * 4)
-        ctx_tokens = _re.findall(r"\S+", ctx)
-        if len(ctx_tokens) > ctx_words:
-            ctx = " ".join(ctx_tokens[:ctx_words]) + " [context trimmed]"
-            user = user.replace("RFP CONTEXT\n", f"RFP CONTEXT\n{ctx}\n")
-    return [{"role":"system","content": sys}, {"role":"user","content": user}]
-
-# Override single section drafting to no-citation behavior
-def x7_generate_section_ai(conn, rfp_id, title, guidance="", temperature=0.15, k: int = 8, max_words: int | None = None):
-    try:
-        client = get_ai()
-        model_name = _resolve_model()
-    except Exception:
-        client = None
-        model_name = "gpt-4o-mini"
-    msgs = _pb__build_messages_no_cite(conn, int(rfp_id), str(title or "Untitled"), str(guidance or ""), max_words)
-    try:
-        if client:
-            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
-            return (resp.choices[0].message.content or "").strip()
-    except Exception:
-        pass
-    # Fallback small model
-    try:
-        resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"[system] AI unavailable: {type(e).__name__}: {e}"
-
-# Override Draft-all stream with the same no-citation behavior and de-dup across sections
-def y3_stream_draft(conn, rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
-    import streamlit as st
-    try:
-        client = get_ai()
-        model_name = _resolve_model()
-    except Exception:
-        client = None
-        model_name = "gpt-4o-mini"
-    msgs = _pb__build_messages_no_cite(conn, int(rfp_id), str(section_title or "Untitled"), str(notes or ""), max_words)
-    text = ""
-    try:
-        if client:
-            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
-            text = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        try:
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
-            text = (resp.choices[0].message.content or "").strip()
-        except Exception as e:
-            yield f"[system] AI unavailable: {type(e).__name__}: {e}"
-            return
-    # De-dup across sections per run
-    seen = set(st.session_state.get("__y3_seen_sents", []))
-    def _extract_sents(t):
-        return [s.strip() for s in _re.split(r"(?<=[.!?])\s+", t or "") if s.strip()]
-    cleaned_lines = []
-    for sent in _extract_sents(text):
-        low = sent.lower()
-        if low in seen:
-            continue
-        seen.add(low)
-        cleaned_lines.append(sent)
-    st.session_state["__y3_seen_sents"] = list(seen)
-    yield " ".join(cleaned_lines)
-
-
-# =====================
-# FINAL OVERRIDE 2025-11-08T05:44:11 — Force no-citation messaging for any Y3 calls
-# =====================
-def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
-    """
-    Strict override: ignore Y1/Y2/Y4/Y5 and avoid any snippet search.
-    Build messages only from RFP Analyzer context. No citations.
-    """
-    return _pb__build_messages_no_cite(conn, int(rfp_id), str(section_title or "Untitled"), str(notes or ""), max_words)
+            return 0
