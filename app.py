@@ -14153,8 +14153,7 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
         meta = {}
     try:
         full_text = y5_extract_from_rfp(conn, int(rfp_id)) or ""
-        full_text = "
-".join([ln.strip() for ln in full_text.splitlines() if ln.strip()])[:20000]
+        full_text = "\n".join([ln.strip() for ln in full_text.splitlines() if ln.strip()])[:20000]
     except Exception:
         full_text = ""
     try:
@@ -14166,14 +14165,10 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
     cage = profile.get("cage") or "14ZP6"
     uei = profile.get("uei") or "U32LBVK3DDF7"
     duns = profile.get("duns") or "14-483-4790"
-    lm_str = "
-".join([f"- {r['item']}" for _, r in (df_lm.head(150)).iterrows()]) if not df_lm.empty else ""
-    dates_str = "
-".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
-    pocs_str = "
-".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
-    clin_str = "
-".join([f"- {r['clin']}: {r['description']} (Qty {r['qty']} {r['unit']})" for _, r in df_clin.iterrows()]) if not df_clin.empty else ""
+    lm_str = "\n".join([f"- {r['item']}" for _, r in (df_lm.head(150)).iterrows()]) if not df_lm.empty else ""
+    dates_str = "\n".join([f"- {r['label']}: {r['date_text']}" for _, r in df_dates.iterrows()]) if not df_dates.empty else ""
+    pocs_str = "\n".join([f"- {r['name']} ({r['role']}) {r['email']} {r['phone']}" for _, r in df_pocs.iterrows()]) if not df_pocs.empty else ""
+    clin_str = "\n".join([f"- {r['clin']}: {r['description']} (Qty {r['qty']} {r['unit']})" for _, r in df_clin.iterrows()]) if not df_clin.empty else ""
     system = (
         "You are a veteran federal proposal writer with $70M+ in awards. "
         "Write in crisp federal style for the Government. Tailor to THIS RFP only. "
@@ -14233,8 +14228,7 @@ REQUIREMENTS:
             key = ln.strip().lower()
             if key and key not in seen:
                 seen.add(key); out_lines.append(ln)
-        text = "
-".join(out_lines)
+        text = "\n".join(out_lines)
     except Exception:
         pass
     return text
