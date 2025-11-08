@@ -3284,6 +3284,7 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
         st.session_state["onepage_summaries"] = sums
 
 
+
 # Auto-ingest POCs from the combined summaries and offer navigation to Contacts
 try:
     joined_summaries = "\n\n".join(list(sums.values()))
