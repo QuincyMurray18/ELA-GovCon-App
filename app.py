@@ -10757,45 +10757,60 @@ def init_session() -> None:
         st.session_state.initialized = True
 
 def nav() -> str:
+    # One-shot overrides still supported
     if st.session_state.pop('_force_rfp_analyzer', False):
+        st.session_state['nav_current'] = 'RFP Analyzer'
         return 'RFP Analyzer'
+
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
-    # Auto-jump to One‑Page Analyzer when a SAM notice was pushed,
-    # or when a one-shot nav_target is set.
+
+    # Pushes from other flows
     if st.session_state.pop('rfp_selected_notice', None):
+        st.session_state['nav_current'] = 'RFP Analyzer'
         return 'RFP Analyzer'
+
     _tgt = st.session_state.pop("nav_target", None)
     if _tgt:
+        st.session_state['nav_current'] = _tgt
         return _tgt
 
-    return st.sidebar.selectbox(
-        "Go to",
-        [
-            "SAM Watch",
-            "RFP Analyzer",
-            "L and M Checklist",
-            "Proposal Builder",
-            "File Manager",
-            "Past Performance",
-            "White Paper Builder",
-            "Subcontractor Finder",
-            "Outreach",
-            "RFQ Pack",
-            "Backup & Data",
-            "Quote Comparison",
-            "Pricing Calculator",
-            "Win Probability",
-            "Chat Assistant",
-            "Capability Statement",
-            "CRM",
-            "Contacts",
-            "Deals",
-        ],
-    )
+    # Sticky selectbox
+    options = [
+        "SAM Watch",
+        "RFP Analyzer",
+        "L and M Checklist",
+        "Proposal Builder",
+        "File Manager",
+        "Past Performance",
+        "White Paper Builder",
+        "Subcontractor Finder",
+        "Outreach",
+        "RFQ Pack",
+        "Backup & Data",
+        "Quote Comparison",
+        "Pricing Calculator",
+        "Win Probability",
+        "Chat Assistant",
+        "Capability Statement",
+        "CRM",
+        "Contacts",
+        "Deals",
+    ]
 
-def run_rfp_analyzer(conn) -> None:
+    default = st.session_state.get('nav_current')
+    if default not in options:
+        default = 'RFP Analyzer' if st.session_state.get('current_rfp_id') else options[0]
+
+    try:
+        idx = options.index(default)
+    except Exception:
+        idx = 0
+
+    choice = st.sidebar.selectbox("Go to", options, index=idx, key="nav_select")
+    st.session_state['nav_current'] = choice
+    return choicedef run_rfp_analyzer(conn) -> None:
     import pandas as _pd
     import streamlit as st
 
@@ -10860,67 +10875,12 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
+                st.session_state["_force_rfp_analyzer"] = True
+                st.session_state["_force_rfp_analyzer"] = True
                 st.rerun()
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
         return
-
-    # New RFP inline form (always available)
-    with st.expander("➕ Start a new RFP", expanded=False):
-        ctx0 = st.session_state.get("rfp_selected_notice") or {}
-        t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title")
-        s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol")
-        u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam", placeholder="https://sam.gov/")
-        ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
-                               accept_multiple_files=True, key="op_inline_files")
-        if st.button("Create RFP & Ingest", key="op_inline_create"):
-            try:
-                with _closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                        ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
-                    )
-                    new_id = cur.lastrowid
-                    conn.commit()
-                # Save uploads (ZIPs expanded)
-                import io as _io, zipfile as _zip
-                saved = 0
-                for f in (ups or []):
-                    try:
-                        name = (getattr(f, "name", "upload") or "").lower()
-                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                    except Exception:
-                        name, b = "upload", b""
-                    if name.endswith(".zip") and b:
-                        try:
-                            zf = _zip.ZipFile(_io.BytesIO(b))
-                            for zname in zf.namelist()[:80]:
-                                if zname.endswith("/"):
-                                    continue
-                                try:
-                                    save_rfp_file_db(conn, int(new_id), zname.split("/")[-1], zf.read(zname))
-                                    saved += 1
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            save_rfp_file_db(conn, int(new_id), getattr(f, "name", "upload"), b)
-                            saved += 1
-                        except Exception:
-                            pass
-                try:
-                    y1_index_rfp(conn, int(new_id), rebuild=False)
-                except Exception:
-                    pass
-                st.session_state["current_rfp_id"] = int(new_id)
-                st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
-                st.session_state["nav_target"] = "RFP Analyzer"
-                st.rerun()
-            except Exception as e:
-                st.error(f"Create & ingest failed: {e}")
-
 
     # Selection
     current_id = st.session_state.get("current_rfp_id")
@@ -10955,6 +10915,7 @@ def run_rfp_analyzer(conn) -> None:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
             try:
                 _one_click_analyze(conn, int(rid))
+                st.session_state["_force_rfp_analyzer"] = True
                 st.rerun()
             except Exception as e:
                 st.error(f"Ingest failed: {e}")
@@ -10979,6 +10940,7 @@ def run_rfp_analyzer(conn) -> None:
                     y1_index_rfp(conn, int(rid), rebuild=False)
                 except Exception:
                     pass
+                st.session_state["_force_rfp_analyzer"] = True
                 st.rerun()
 
     # Build pages and render One-Page
