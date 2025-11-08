@@ -14676,281 +14676,146 @@ def _get_conn(db_path="samwatch.db"):
 
 # O4 wrapper disabled
 
-# === ELA Company Profile Bootstrap + Proposal Builder Hook (auto-added) ===
-# This block ensures org_profile includes DUNS and EIN and pre-populates your ELA identifiers.
-# It also injects a ready-to-use "Company Information" block into Proposal Builder's section library.
-from contextlib import closing as __ela_closing
-import sqlite3 as __ela_sqlite3
 
-def __ela_bootstrap_company_profile() -> None:
-    try:
-        conn = __ela_sqlite3.connect(DB_PATH, check_same_thread=False)
-        with __ela_closing(conn.cursor()) as cur:
-            # Ensure org_profile table exists with full schema
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS org_profile(
-                    id INTEGER PRIMARY KEY,
-                    company_name TEXT,
-                    address TEXT,
-                    phone TEXT,
-                    email TEXT,
-                    website TEXT,
-                    uei TEXT,
-                    cage TEXT,
-                    duns TEXT,
-                    ein TEXT,
-                    tagline TEXT,
-                    core_competencies TEXT,
-                    differentiators TEXT
-                );
-                """
-            )
-            # Add missing columns if needed
-            cur.execute("PRAGMA table_info(org_profile);")
-            cols = {r[1] for r in cur.fetchall()}
-            for col in ("duns","ein","tagline","core_competencies","differentiators","address","phone","email","website"):
-                if col not in cols:
-                    try:
-                        cur.execute(f"ALTER TABLE org_profile ADD COLUMN {col} TEXT;")
-                    except Exception:
-                        pass
-            conn.commit()
+# =====================
+# PATCH: Proposal Builder accuracy, word-count, and RFP-tailored drafting
+# Date: 2025-11-08T05:10:13
+# Notes:
+# - Override x7_generate_section_ai to use Y3 evidence-grounded drafting with [C#] citations
+# - Override y3_stream_draft to de-duplicate across sections during "Draft all sections"
+# - Add Proposal Builder word-count panel hooked via pb_phase_v_section_library()
+# =====================
 
-            # Defaults from request
-            defaults = {
-                "company_name": "ELA Management LLC",
-                "uei": "U32LBVK3DDF7",
-                "cage": "14ZP6",
-                "duns": "14-483-4790",
-                "ein": "39-3925658",
-            }
+import re as _re
 
-            # Ensure row id=1 exists and fill blanks only
-            row = conn.execute("SELECT id, company_name, uei, cage, duns, ein FROM org_profile WHERE id=1;").fetchone()
-            if row is None:
-                conn.execute(
-                    "INSERT INTO org_profile(id, company_name, uei, cage, duns, ein) VALUES(1,?,?,?,?,?);",
-                    (defaults["company_name"], defaults["uei"], defaults["cage"], defaults["duns"], defaults["ein"])
-                )
-            else:
-                current = {
-                    "company_name": row[1] or "",
-                    "uei": row[2] or "",
-                    "cage": row[3] or "",
-                    "duns": row[4] or "",
-                    "ein": row[5] or "",
-                }
-                for k, v in defaults.items():
-                    if not (current.get(k) or "").strip():
-                        try:
-                            conn.execute(f"UPDATE org_profile SET {k}=? WHERE id=1;", (v,))
-                        except Exception:
-                            pass
-            conn.commit()
-    except Exception as __e:
-        # Avoid crashing the app if DB not ready yet
-        try:
-            import streamlit as _st
-            _st.caption(f"ELA bootstrap note: {type(__e).__name__}: {__e}")
-        except Exception:
-            pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+def _pb__wc(s: str) -> int:
+    return len(_re.findall(r"\b\w+\b", (s or "")))
 
-__ela_bootstrap_company_profile()
+def _pb__extract_sentences(text: str):
+    # Simple sentence splitter. No NLP dependency.
+    parts = _re.split(r"(?<=[.!?])\s+", text or "")
+    return [p.strip() for p in parts if p.strip()]
 
-
-# Inject company block into Proposal Builder's section library on demand.
-def pb_phase_v_section_library(conn):
-    import pandas as _pd
-    import streamlit as _st
-
-    # Read profile
-    try:
-        df = _pd.read_sql_query(
-            "SELECT company_name, address, phone, email, website, uei, cage, COALESCE(duns,'') AS duns, COALESCE(ein,'') AS ein FROM org_profile WHERE id=1;",
-            conn, params=()
-        )
-    except Exception:
-        df = _pd.DataFrame(columns=["company_name","address","phone","email","website","uei","cage","duns","ein"])
-
-    if df is None or df.empty:
-        name, uei, cage, duns, ein = "ELA Management LLC", "U32LBVK3DDF7", "14ZP6", "14-483-4790", "39-3925658"
-        addr = phone = email = website = ""
-    else:
-        r = df.iloc[0].fillna("")
-        name, uei, cage, duns, ein = str(r["company_name"]), str(r["uei"]), str(r["cage"]), str(r["duns"]), str(r["ein"])
-        addr, phone, email, website = str(r["address"]), str(r["phone"]), str(r["email"]), str(r["website"])
-
-    # Build a clean markdown block
-    lines = []
-    lines.append(f"**{name}**")
-    if addr:
-        lines.append(addr)
-    if phone:
-        lines.append(f"Phone: {phone}")
-    if email:
-        lines.append(f"Email: {email}")
-    if website:
-        lines.append(f"Website: {website}")
-    lines.append(f"UEI: {uei}")
-    lines.append(f"CAGE: {cage}")
-    if duns:
-        lines.append(f"DUNS: {duns}")
-    if ein:
-        lines.append(f"EIN: {ein}")
-    company_block = "\n".join(lines)
-
-    # Expose to Proposal Builder consumers via session_state
-    _st.session_state["pb_company_information_block"] = company_block
-
-    # One-time auto-save into Drafts for the current RFP, if available
-    try:
-        rid = int(_st.session_state.get("current_rfp_id") or 0)
-        flag_key = f"__ela_pb_company_block_saved_{rid}"
-        if rid and not _st.session_state.get(flag_key, False):
-            try:
-                # y5_save_snippet is present in this app; ignore if not available
-                y5_save_snippet(conn, rid, "Company Information", company_block, source="ELA Profile")
-                _st.session_state[flag_key] = True
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Visual hint
-    try:
-        _st.caption("Company information injected. Look for 'Company Information' in your Proposal Builder sections.")
-    except Exception:
-        pass
-
-
-
-# === ELA Draft Hooks: ensure Company Information is present when drafting ===
-import functools as __ela_fun
-import sqlite3 as __ela_sqlite3
-from contextlib import closing as __ela_closing
-
-def __ela_get_db_path_default():
-    return globals().get("DB_PATH", "app.db")
-
-def __ela_company_block_text(conn):
-    import pandas as _pd
-    try:
-        df = _pd.read_sql_query(
-            "SELECT company_name, address, phone, email, website, uei, cage, COALESCE(duns,'') AS duns, COALESCE(ein,'') AS ein FROM org_profile WHERE id=1;",
-            conn, params=()
-        )
-    except Exception:
-        df = None
-    if df is None or df.empty:
-        name, uei, cage, duns, ein = "ELA Management LLC", "U32LBVK3DDF7", "14ZP6", "14-483-4790", "39-3925658"
-        addr = phone = email = website = ""
-    else:
-        r = df.iloc[0].fillna("")
-        name, uei, cage, duns, ein = str(r["company_name"]), str(r["uei"]), str(r["cage"]), str(r["duns"]), str(r["ein"])
-        addr, phone, email, website = str(r["address"]), str(r["phone"]), str(r["email"]), str(r["website"])
-
-    lines = [f"**{name}**"]
-    if addr: lines.append(addr)
-    if phone: lines.append(f"Phone: {phone}")
-    if email: lines.append(f"Email: {email}")
-    if website: lines.append(f"Website: {website}")
-    lines.append(f"UEI: {uei}")
-    lines.append(f"CAGE: {cage}")
-    if duns: lines.append(f"DUNS: {duns}")
-    if ein: lines.append(f"EIN: {ein}")
-    return "\n".join(lines)
-
-def __ela_resolve_conn(args, kwargs):
-    # Try explicit kw
-    conn = kwargs.get("conn")
-    if conn is not None:
-        return conn
-    # Try first sqlite3-like arg
-    for a in args:
-        try:
-            if hasattr(a, "cursor"):
-                return a
-        except Exception:
-            pass
-    # Try global connection
-    conn = globals().get("CONN") or globals().get("conn")
-    if conn is not None:
-        return conn
-    # Fallback: open from DB_PATH
-    try:
-        dbp = __ela_get_db_path_default()
-        return __ela_sqlite3.connect(dbp, check_same_thread=False)
-    except Exception:
-        return None
-
-def __ela_insert_company_into_current_rfp(conn):
-    try:
-        import streamlit as _st
-    except Exception:
-        return
-    rid = int(_st.session_state.get("current_rfp_id") or 0)
-    if not rid:
-        return
-    block = __ela_company_block_text(conn)
-    # Save via helper if available
-    try:
-        y5_save_snippet(conn, rid, "Company Information", block, source="ELA Profile")
-    except Exception:
-        # Fallback: try generic table if exists
-        try:
-            with __ela_closing(conn.cursor()) as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS proposal_snippets(id INTEGER PRIMARY KEY, rfp_id INTEGER, title TEXT, content TEXT, source TEXT);")
-                cur.execute("INSERT INTO proposal_snippets(rfp_id, title, content, source) VALUES(?,?,?,?);", (rid, "Company Information", block, "ELA Profile"))
-                conn.commit()
-        except Exception:
-            pass
-    # Expose to session for UIs that assemble in-memory
-    try:
-        _st.session_state["pb_company_information_block"] = block
-    except Exception:
-        pass
-
-def __ela_make_wrapper(fn):
-    @__ela_fun.wraps(fn)
-    def _wrap(*args, **kwargs):
-        conn = __ela_resolve_conn(args, kwargs)
-        if conn is not None:
-            try:
-                __ela_insert_company_into_current_rfp(conn)
-            except Exception:
-                pass
-        return fn(*args, **kwargs)
-    setattr(_wrap, "__ela_wrapped__", True)
-    return _wrap
-
-def __ela_wrap_drafters():
-    targets = ["pb_draft_all", "draft_all", "pb_draft_section", "draft_section", "pb_compile_document", "compile_proposal"]
-    for name in targets:
-        fn = globals().get(name)
-        if callable(fn) and not getattr(fn, "__ela_wrapped__", False):
-            globals()[name] = __ela_make_wrapper(fn)
-
-__ela_wrap_drafters()
-
-# Also ensure the injection runs when opening the Proposal Builder UI
-def __ela_patch_builder_entry():
-    import inspect
-    for name in list(globals().keys()):
-        if not name.startswith("render_") and "proposal" not in name.lower():
+def _pb__dedupe_text(text: str, seen_sentences: set[str] | None = None):
+    if seen_sentences is None: seen_sentences = set()
+    out = []
+    for sent in _pb__extract_sentences(text or ""):
+        key = sent.lower()
+        if key in seen_sentences:
             continue
-        obj = globals().get(name)
-        if callable(obj) and not getattr(obj, "__ela_wrapped__", False):
-            src = getattr(obj, "__name__", "")
-            if "builder" in name.lower() or "proposal" in name.lower():
-                globals()[name] = __ela_make_wrapper(obj)
+        seen_sentences.add(key)
+        out.append(sent)
+    return " ".join(out), seen_sentences
 
-try:
-    __ela_patch_builder_entry()
-except Exception:
-    pass
+def pb_wc_metrics_panel(conn):
+    """Show Proposal Builder live word counts.
+    Sources:
+      1) Live editors in session: keys that start with 'pb_ta_'.
+      2) Current proposal sections in DB if a proposal is selected in session.
+    """
+    import streamlit as st, pandas as pd
+    rows = []
+    # Session editors
+    for k, v in list(st.session_state.items()):
+        if isinstance(k, str) and k.startswith("pb_ta_"):
+            name = k.replace("pb_ta_", "", 1)
+            rows.append({"Section": name, "Words": _pb__wc(str(v or "")), "Source": "Editor"})
+    # Database sections for current proposal, if present
+    pid = None
+    try:
+        pid = int(st.session_state.get("current_proposal_id") or 0)
+    except Exception:
+        pid = None
+    if pid:
+        try:
+            import pandas as _pd
+            df = _pd.read_sql_query(
+                "SELECT title, content FROM proposal_sections WHERE proposal_id=? ORDER BY id;",
+                conn, params=(int(pid),)
+            )
+            for _, r in df.iterrows():
+                rows.append({"Section": r.get("title") or "(untitled)",
+                             "Words": _pb__wc(str(r.get("content") or "")),
+                             "Source": "Saved"})
+        except Exception:
+            pass
+    if not rows:
+        return
+    df_show = pd.DataFrame(rows).groupby(["Section", "Source"], as_index=False)["Words"].sum()
+    df_show["Est pages @ 300wpp"] = (df_show["Words"] / 300).round(2)
+    st.markdown("**Proposal word counts**")
+    st.dataframe(df_show.sort_values(["Section","Source"]), use_container_width=True, hide_index=True)
+
+# Router hook: the main app calls pb_phase_v_section_library() after rendering Proposal Builder if it exists.
+def pb_phase_v_section_library(conn):
+    try:
+        pb_wc_metrics_panel(conn)
+    except Exception:
+        # Never block the page
+        pass
+
+# --- Evidence-grounded single-section draft used by Proposal Builder ---
+def x7_generate_section_ai(conn, rfp_id, title, guidance="", temperature=0.1, k=8):
+    """Return a tailored section with [C#] citations. Uses the same evidence builder as Y3."""
+    # Prefer the stronger Y3 message builder if available
+    try:
+        msgs = _y3_build_messages(conn, int(rfp_id), str(title or "Untitled"), str(guidance or ""), k=int(k), max_words=None)
+        client = get_ai()
+        model_name = _resolve_model()
+        try:
+            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
+        except Exception as _e:
+            # Fallback small model
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
+        out = (resp.choices[0].message.content or "").strip()
+        return out
+    except Exception:
+        # Hard fallback: minimal behavior compatible with older builds
+        hits = _safe_y1_search(conn, int(rfp_id), str(title or ""), k=int(k)) or []
+        if not hits:
+            return "[system] Build or update the Y1 index for this RFP to enable grounded drafting."
+        ev_lines = []
+        for i, h in enumerate(hits, start=1):
+            tag = f"[C{i}]"
+            src = f"{h.get('file','')} p.{h.get('page','')}"
+            snip = (h.get('text') or '').strip().replace("\n", " ")
+            ev_lines.append(f"{tag} {src} — {snip}")
+        evidence = "\n".join(ev_lines)
+        prompt = f"""You are a seasoned federal proposal manager. Draft the section '{title}'.
+Use short sentences. Tie factual claims to EVIDENCE with [C#].
+If the evidence misses key details, say so.
+
+Author notes:
+{guidance or '(none)'}
+
+EVIDENCE
+{evidence}
+"""
+        # Return a non-empty string to avoid UI errors
+        return prompt
+
+# --- Non-redundant "Draft all" with de-dup across sections ---
+def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
+    """Override: generate full text in one call, then de-duplicate sentences seen in prior sections this run."""
+    import streamlit as st
+    try:
+        msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+    except Exception as e:
+        yield f"[system] Error building messages: {e}"
+        return
+    client = get_ai()
+    model_name = _resolve_model()
+    try:
+        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
+    except Exception as _e:
+        try:
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature))
+        except Exception as _e2:
+            yield f"[system] AI unavailable: {type(_e2).__name__}: {_e2}"
+            return
+    text = (getattr(resp.choices[0], "message", None).content if resp and resp.choices else "") or ""
+    # Persist a per-run set of seen sentences to cut redundancy across sections
+    seen = set(st.session_state.get("__y3_seen_sents", []))
+    cleaned, seen = _pb__dedupe_text(text, seen)
+    st.session_state["__y3_seen_sents"] = list(seen)
+    yield cleaned
