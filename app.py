@@ -10810,7 +10810,9 @@ def nav() -> str:
 
     choice = st.sidebar.selectbox("Go to", options, index=idx, key="nav_select")
     st.session_state['nav_current'] = choice
-    return choicedef run_rfp_analyzer(conn) -> None:
+    return choice
+
+def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
     import streamlit as st
 
