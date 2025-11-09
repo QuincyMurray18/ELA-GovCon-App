@@ -5215,12 +5215,12 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             current = ln_stripped.split(":")[0].lower()
             bullet_count = 0
             out.append(ln)
-            idx_line += 1
+            i += 1
             continue
         if re.match(r"^(Score:|Conclusion:)", ln_stripped, re.I):
             current = None
             out.append(ln)
-            idx_line += 1
+            i += 1
             continue
         # cap bullets in the four sections
         if current in {"strengths", "gaps", "risks", "required fixes"}:
@@ -5231,7 +5231,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
                 # else drop extra bullets
             else:
                 out.append(ln)
-            idx_line += 1
+            i += 1
             continue
         out.append(ln)
         i += 1
@@ -9479,289 +9479,32 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     import re as _re_md
 
     def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
-
-
-
-        if not isinstance(text, str):
-
-            text = str(text or "")
-
-
-
-        import re as _re_md2
-
-        from docx.shared import Pt  # type: ignore
-
-
-
-        lines = text.splitlines()
-
-        idx_line = 0
-
-
-
-        def _apply_para_style(p):
-
-            try:
-
-                if line_spacing:
-
-                    p.paragraph_format.line_spacing_rule = line_spacing
-
-                for run in p.runs:
-
-                    run.font.name = font_name
-
-                    run.font.size = Pt(font_size_pt)
-
-            except Exception:
-
-                pass
-
-
-
-        def _add_inline_runs(p, content: str):
-
-            idx = 0
-
-            pattern = _re_md2.compile(r"(\*\*.+?\*\*|\*.+?\*|`.+?`)")
-
-            for m in pattern.finditer(content):
-
-                if m.start() > idx:
-
-                    p.add_run(content[idx:m.start()])
-
-                token = m.group(0)
-
-                if token.startswith("**"):
-
-                    r = p.add_run(token[2:-2])
-
-                    r.bold = True
-
-                elif token.startswith("*"):
-
-                    r = p.add_run(token[1:-1])
-
-                    r.italic = True
-
-                elif token.startswith("`"):
-
-                    r = p.add_run(token[1:-1])
-
-                idx = m.end()
-
-            if idx < len(content):
-
-                p.add_run(content[idx:])
-
-
-
-        while idx_line < len(lines):
-
-            raw_line = lines[idx_line]
-
+        if not isinstance(text, str): text = str(text or "")
+        # Basic markdown to docx
+        for raw_line in text.splitlines():
             line = raw_line.rstrip()
-
-
-
-            # pipe table: header then separator row
-
-            if _re_md2.match(r"^\|\s*.+\s*\|$", line) and (idx_line + 1) < len(lines) and _re_md2.match(r"^\|\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|$", lines[idx_line + 1]):
-
-                header_cells = [c.strip() for c in line.strip()[1:-1].split("|")]
-
-                idx_line += 2
-
-                rows = []
-
-                while idx_line < len(lines) and _re_md2.match(r"^\|\s*.*\|$", lines[idx_line]):
-
-                    cells = [c.strip() for c in lines[idx_line].strip()[1:-1].split("|")]
-
-                    rows.append(cells)
-
-                    idx_line += 1
-
-                tbl = doc.add_table(rows=1 + len(rows), cols=len(header_cells))
-
-                tbl.style = "Table Grid"
-
-                for c_idx, val in enumerate(header_cells):
-
-                    tbl.cell(0, c_idx).text = val
-
-                for r_idx, row in enumerate(rows, start=1):
-
-                    for c_idx in range(len(header_cells)):
-
-                        tbl.cell(r_idx, c_idx).text = row[c_idx] if c_idx < len(row) else ""
-
-                continue
-
-
-
             if not line.strip():
-
                 p = doc.add_paragraph("")
-
-                _apply_para_style(p)
-
-                idx_line += 1
-
-                continue
-
-
-
-            m = _re_md2.match(r"^(#{1,6})\s+(.*)$", line)
-
-            if m:
-
-                level = min(6, len(m.group(1)))
-
-                p = doc.add_heading(m.group(2).strip(), level=level)
-
-                _apply_para_style(p)
-
-                idx_line += 1
-
-                continue
-
-
-
-            if _re_md2.match(r"^\d+[\.)]\s+", line):
-
-                content = _re_md2.sub(r"^\d+[\.)]\s+", "", line).strip()
-
-                p = doc.add_paragraph("", style="List Number")
-
-                _add_inline_runs(p, content)
-
-                _apply_para_style(p)
-
-                idx_line += 1
-
-                continue
-
-
-
-            if _re_md2.match(r"^[-*•]\s+", line):
-
-                content = _re_md2.sub(r"^[-*•]\s+", "", line).strip()
-
-                p = doc.add_paragraph("", style="List Bullet")
-
-                _add_inline_runs(p, content)
-
-                _apply_para_style(p)
-
-                idx_line += 1
-
-                continue
-
-
-
-            p = doc.add_paragraph("")
-
-            _add_inline_runs(p, line.strip())
-
-            _apply_para_style(p)
-
-            idx_line += 1
-    def _apply_para_style(p):
-        try:
-            if line_spacing:
+            elif _re_md.match(r"^#{1,6}\s+", line):
+                htxt = _re_md.sub(r"^#{1,6}\s+", "", line).strip()
+                level = min(6, len(_re_md.match(r"^(#+)", line).group(1)))
+                p = doc.add_heading(htxt, level=level)
+            elif _re_md.match(r"^\d+[\.)]\s+", line):
+                p = doc.add_paragraph(_re_md.sub(r"^\d+[\.)]\s+", "", line).strip(), style="List Number")
+            elif _re_md.match(r"^[-*•]\s+", line):
+                p = doc.add_paragraph(_re_md.sub(r"^[-*•]\s+", "", line).strip(), style="List Bullet")
+            else:
+                # strip basic inline markdown tokens for docx
+                _clean = _re_md.sub(r"[`*_]{1,3}", "", line.strip())
+                p = doc.add_paragraph(_clean)
+            try:
                 p.paragraph_format.line_spacing_rule = line_spacing
-            for run in p.runs:
-                run.font.name = font_name
-                run.font.size = Pt(font_size_pt)
-        except Exception:
-            pass
-
-    # simple inline formatter for **bold** and *italic*
-    def _add_inline_runs(p, content: str):
-        # handle bold first
-        idx = 0
-        pattern = _re_md2.compile(r"(\*\*.+?\*\*|\*.+?\*|`.+?`)")
-        for m in pattern.finditer(content):
-            if m.start() > idx:
-                p.add_run(content[idx:m.start()])
-            token = m.group(0)
-            if token.startswith("**"):
-                r = p.add_run(token[2:-2])
-                r.bold = True
-            elif token.startswith("*"):
-                r = p.add_run(token[1:-1])
-                r.italic = True
-            elif token.startswith("`"):
-                r = p.add_run(token[1:-1])
-                # leave as monospace if desired; python-docx lacks monospace toggle by default
-            idx = m.end()
-        if idx < len(content):
-            p.add_run(content[idx:])
-
-    while i < len(lines):
-        raw_line = lines[i]
-        line = raw_line.rstrip()
-
-        # detect markdown pipe table
-        if _re_md2.match(r"^\|\s*.+\s*\|$", line) and (i + 1) < len(lines) and _re_md2.match(r"^\|\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|$", lines[i+1]):
-            header_cells = [c.strip() for c in line.strip()[1:-1].split("|")]
-            i += 2  # skip separator
-            rows = []
-            while i < len(lines) and _re_md2.match(r"^\|\s*.*\|$", lines[i]):
-                cells = [c.strip() for c in lines[i].strip()[1:-1].split("|")]
-                rows.append(cells)
-                i += 1
-            tbl = doc.add_table(rows=1 + len(rows), cols=len(header_cells))
-            tbl.style = "Table Grid"
-            # header
-            for c_idx, val in enumerate(header_cells):
-                tbl.cell(0, c_idx).text = val
-            # rows
-            for r_idx, row in enumerate(rows, start=1):
-                for c_idx in range(len(header_cells)):
-                    tbl.cell(r_idx, c_idx).text = row[c_idx] if c_idx < len(row) else ""
-            continue  # do not increment i here as we already moved
-        # blank line
-        if not line.strip():
-            p = doc.add_paragraph("")
-            _apply_para_style(p)
-            idx_line += 1
-            continue
-        # headings
-        if _re_md2.match(r"^#{1,6}\s+", line):
-            htxt = _re_md2.sub(r"^#{1,6}\s+", "", line).strip()
-            level = min(6, len(_re_md2.match(r"^(#+)", line).group(1)))
-            p = doc.add_heading(htxt, level=level)
-            _apply_para_style(p)
-            idx_line += 1
-            continue
-        # ordered list
-        if _re_md2.match(r"^\d+[\.)]\s+", line):
-            content = _re_md2.sub(r"^\d+[\.)]\s+", "", line).strip()
-            p = doc.add_paragraph("", style="List Number")
-            _add_inline_runs(p, content)
-            _apply_para_style(p)
-            idx_line += 1
-            continue
-        # unordered list
-        if _re_md2.match(r"^[-*•]\s+", line):
-            content = _re_md2.sub(r"^[-*•]\s+", "", line).strip()
-            p = doc.add_paragraph("", style="List Bullet")
-            _add_inline_runs(p, content)
-            _apply_para_style(p)
-            idx_line += 1
-            continue
-        # default paragraph with inline formatting
-        clean = line.strip()
-        p = doc.add_paragraph("")
-        _add_inline_runs(p, clean)
-        _apply_para_style(p)
-        i += 1
+                for run in p.runs:
+                    run.font.name = font_name; run.font.size = Pt(font_size_pt)
+            except Exception:
+                pass
     line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
-    doc = Document()
+    doc = docx.Document()
     h = doc.add_heading(doc_title or "Proposal", level=1)
     if metadata:
         p = doc.add_paragraph(" | ".join(f"{k}: {v}" for k,v in metadata.items()))
@@ -16221,3 +15964,179 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
+
+
+# === Patched DOCX export (bullet cleanup + markdown tables) ===
+def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.DataFrame|None" = None, checklist: "pd.DataFrame|None" = None, metadata: dict|None = None,
+                 font_name: str = "Times New Roman",
+                 font_size_pt: int = 11,
+                 spacing: str = "1.15") -> "str|None":
+    try:
+        import docx  # type: ignore
+        from docx.shared import Pt  # type: ignore
+        from docx.enum.text import WD_LINE_SPACING  # type: ignore
+    except Exception:
+        try:
+            import streamlit as st  # type: ignore
+            st.error("python-docx is required. pip install python-docx")
+        except Exception:
+            pass
+        return None
+
+    spacing_map = {
+        "single": WD_LINE_SPACING.SINGLE, "1": WD_LINE_SPACING.SINGLE, "1.0": WD_LINE_SPACING.SINGLE,
+        "1.15": WD_LINE_SPACING.ONE_POINT_FIVE, "1,15": WD_LINE_SPACING.ONE_POINT_FIVE,
+        "1.5": WD_LINE_SPACING.ONE_POINT_FIVE, "double": WD_LINE_SPACING.DOUBLE,
+        "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
+    }
+
+    import re as _re_md
+
+    def _strip_inline_tokens(s: str) -> str:
+        # Remove inline markdown markers so **bold** doesn't show raw tokens.
+        s = _re_md.sub(r"`([^`]*)`", r"\1", s)
+        s = s.replace("**", "").replace("__", "")
+        s = s.replace("*", "").replace("_", "")
+        return s
+
+    def _split_md_row(line: str) -> list[str]:
+        # "| a | b |" -> ["a","b"]
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    def _is_md_table_sep(line: str) -> bool:
+        # e.g. "|---|:---:|---|"
+        t = line.strip()
+        if not (t.startswith("|") and t.endswith("|")):
+            return False
+        cells = _split_md_row(t)
+        if not cells:
+            return False
+        return all(_re_md.fullmatch(r":?-{3,}:?", c.replace(" ", "")) for c in cells)
+
+    def _write_md_table(doc, header_line: str, data_lines: list[str]):
+        headers = _split_md_row(header_line)
+        ncols = max(1, len(headers))
+        nrows = 1 + len(data_lines)
+        tbl = doc.add_table(rows=nrows, cols=ncols)
+        tbl.style = "Table Grid"
+        # header row
+        for j, h in enumerate(headers):
+            cell = tbl.rows[0].cells[j]
+            cell.text = _strip_inline_tokens(h)
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.bold = True
+        # data rows
+        for i, raw in enumerate(data_lines, start=1):
+            vals = _split_md_row(raw)
+            for j in range(ncols):
+                cell = tbl.rows[i].cells[j]
+                v = vals[j] if j < len(vals) else ""
+                cell.text = _strip_inline_tokens(v)
+        # apply font to all cells
+        from docx.shared import Pt
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.font.name = font_name
+                        run.font.size = Pt(font_size_pt)
+
+    def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
+        if not isinstance(text, str):
+            text = str(text or "")
+        lines = text.splitlines()
+        i = 0
+        while i < len(lines):
+            raw_line = lines[i].rstrip()
+            line = raw_line
+            if not line.strip():
+                p = doc.add_paragraph("")
+                i += 1; 
+                try:
+                    p.paragraph_format.line_spacing_rule = line_spacing
+                    for run in p.runs:
+                        run.font.name = font_name; run.font.size = Pt(font_size_pt)
+                except Exception:
+                    pass
+                continue
+
+            # Markdown table detection: header + separator
+            if line.strip().startswith("|") and i + 1 < len(lines) and _is_md_table_sep(lines[i+1]):
+                header = line
+                j = i + 2
+                body_rows: list[str] = []
+                while j < len(lines) and lines[j].strip().startswith("|"):
+                    body_rows.append(lines[j])
+                    j += 1
+                _write_md_table(doc, header, body_rows)
+                i = j
+                continue
+
+            if _re_md.match(r"^#{1,6}\s+", line):
+                htxt = _re_md.sub(r"^#{1,6}\s+", "", line).strip()
+                level = min(6, len(_re_md.match(r"^(#+)", line).group(1)))
+                p = doc.add_heading(htxt, level=level)
+            elif _re_md.match(r"^\d+[\.)]\s+", line):
+                txt = _strip_inline_tokens(_re_md.sub(r"^\d+[\.)]\s+", "", line).strip())
+                p = doc.add_paragraph(txt, style="List Number")
+            elif _re_md.match(r"^[-*•]\s+", line):
+                txt = _strip_inline_tokens(_re_md.sub(r"^[-*•]\s+", "", line).strip())
+                p = doc.add_paragraph(txt, style="List Bullet")
+            else:
+                _clean = _strip_inline_tokens(line.strip())
+                p = doc.add_paragraph(_clean)
+            try:
+                p.paragraph_format.line_spacing_rule = line_spacing
+                for run in p.runs:
+                    run.font.name = font_name; run.font.size = Pt(font_size_pt)
+            except Exception:
+                pass
+            i += 1
+
+    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
+    doc = docx.Document()
+    doc.add_heading(doc_title or "Proposal", level=1)
+    if metadata:
+        doc.add_paragraph(" | ".join(f"{k}: {v}" for k, v in metadata.items()))
+
+    for s in (sections or []):
+        title = str(s.get("title","")).strip()
+        body = _pb_normalize_text(str(s.get("body","")).strip())
+        if title:
+            doc.add_heading(title, level=2)
+        _pb__write_md(doc, body, font_name, font_size_pt, line_spacing)
+
+    # Optional CLINs grid
+    try:
+        import pandas as _pd
+        if isinstance(clins, _pd.DataFrame) and not clins.empty:
+            tbl = doc.add_table(rows=1, cols=len(clins.columns))
+            tbl.style = "Table Grid"
+            for j, col in enumerate(clins.columns):
+                cell = tbl.rows[0].cells[j]; cell.text = str(col)
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.bold = True
+            for _, row in clins.iterrows():
+                cells = tbl.add_row().cells
+                for j, col in enumerate(clins.columns):
+                    val = row.get(col)
+                    cells[j].text = "" if _pd.isna(val) else str(val)
+    except Exception:
+        pass
+
+    # Optional compliance checklist
+    try:
+        import pandas as _pd
+        if isinstance(checklist, _pd.DataFrame) and not checklist.empty:
+            doc.add_heading("Compliance Checklist", level=2)
+            for _, r in checklist.iterrows():
+                txt = str(r.get("item_text","")).strip()
+                if txt:
+                    doc.add_paragraph(_strip_inline_tokens(txt), style="List Bullet")
+    except Exception:
+        pass
+
+    doc.save(path)
+    return path
