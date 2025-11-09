@@ -175,6 +175,17 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
 
 from html import escape as _esc
 
+def _pb_rename_assumptions_to_dependencies(s: str) -> str:
+    """Rename 'Assumptions' headings to 'Dependencies' without touching inline words."""
+    import re as _re
+    def repl(m):
+        prefix = m.group(1) or ""
+        return f"{prefix}Dependencies"
+    s = _re.sub(r'(?im)^(#{1,6}\s*)?Assumptions\s*:?\s*$', repl, s)
+    s = _re.sub(r'(?im)^\s*\*\*Assumptions\*\*\s*$', "**Dependencies**", s)
+    return s
+
+
 
 # === One-paragraph-per-idea enforcement ===
 def _one_idea_per_paragraph(text: str) -> str:
