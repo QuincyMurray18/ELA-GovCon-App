@@ -1,89 +1,93 @@
 
-# === Length control and generator wrapper ===
-def _pb_word_count(text: str) -> int:
-    import re as _re
-    return len(_re.findall(r"\b\w+\b", text or ""))
+# === Proposal Builder normalization helpers ===
+def _pb_try_json(text: str):
+    try:
+        import json as _json
+        return _json.loads(text)
+    except Exception:
+        return None
 
-def _pb_target_bounds(maxw: int):
-    if not maxw or maxw <= 0:
-        return 0, 10**9
-    tol = max(20, int(maxw*0.03))
-    tol = min(tol, 60)
-    return maxw - tol, maxw + tol
-
-def _pb_trim_to_target(text: str, target: int, slack: int = 25) -> str:
-    if not isinstance(text, str): 
+def _pb_strip_html(text: str) -> str:
+    if not isinstance(text, str) or ("<" not in text and ">" not in text):
         return text
-    words = _pb_word_count(text)
-    if words <= target + slack:
-        return text.strip()
     import re as _re
-    pars = [p.strip() for p in text.split("\n\n") if p.strip()]
-    kept = []
-    count = 0
-    for p in pars:
-        p_words = _pb_word_count(p)
-        if count + p_words <= target:
-            kept.append(p); count += p_words; continue
-        sents = _re.split(r'(?<=[\.?!])\s+', p)
-        cur = []
-        for s in sents:
-            sw = _pb_word_count(s)
-            if count + sw <= target:
-                cur.append(s); count += sw
-            else:
-                break
-        if cur:
-            kept.append(" ".join(cur).strip())
-        break
-    return "\n\n".join([k for k in kept if k]).strip()
+    t = text
+    t = _re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", t)
+    t = _re.sub(r"(?is)<br\s*/?>", "\n", t)
+    t = _re.sub(r"(?is)</p\s*>", "\n\n", t)
+    t = _re.sub(r"(?is)</li\s*>", "\n", t)
+    t = _re.sub(r"(?is)<li[^>]*>\s*", "- ", t)
+    t = _re.sub(r"(?is)</h[1-6]\s*>", "\n\n", t)
+    t = _re.sub(r"(?is)<[^>]+>", "", t)
+    t = _re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
 
-def _pb_generate_section(conn, rfp_id: int, sec: str, notes: str, k: int, maxw: int, ui_ph=None) -> str:
-    acc = []
-    try:
-        for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
-            acc.append(tok)
-            if ui_ph is not None:
+def _pb_struct_to_text(obj) -> str:
+    import pandas as _pd
+    lines = []
+    if isinstance(obj, dict):
+        paras = []
+        for k in ("paragraphs","method","rationale","sequence","sequence_of_work","approach"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                paras.append((k, v.strip()))
+            elif isinstance(v, list):
+                for p in v:
+                    if isinstance(p, str) and p.strip():
+                        paras.append((k, p.strip()))
+        for _, p in paras:
+            lines.append(p); lines.append("")
+        bullets = obj.get("bullets") or {k: obj[k] for k in ["features","compliance","evidence","benefits"] if k in obj}
+        if isinstance(bullets, dict):
+            for hdr, items in bullets.items():
+                if not items: continue
+                lines.append(f"**{str(hdr).title()}**")
+                if isinstance(items, list):
+                    for b in items:
+                        if isinstance(b, str) and b.strip():
+                            lines.append(f"- {b.strip()}")
+                elif isinstance(items, str):
+                    for b in items.splitlines():
+                        b = b.strip()
+                        if b:
+                            lines.append(f"- {b}")
+                lines.append("")
+        elif isinstance(bullets, list):
+            for b in bullets:
+                if isinstance(b, str) and b.strip():
+                    lines.append(f"- {b.strip()}")
+            lines.append("")
+        tables = obj.get("tables")
+        if isinstance(tables, list):
+            for t in tables:
                 try:
-                    ui_ph.markdown("".join(acc))
+                    df = _pd.DataFrame(t)
+                    if not df.empty:
+                        hdr = "| " + " | ".join(map(str, df.columns)) + " |"
+                        sep = "| " + " | ".join("---" for _ in df.columns) + " |"
+                        lines.append(hdr); lines.append(sep)
+                        for _, row in df.iterrows():
+                            lines.append("| " + " | ".join("" if _pd.isna(x) else str(x) for x in row.values) + " |")
+                        lines.append("")
                 except Exception:
-                    pass
-    except Exception:
-        pass
-    drafted = "".join(acc).strip()
-    if not drafted:
-        return ""
-    drafted = _strip_citations(drafted)
-    final = _finalize_section(sec, drafted)
-    try:
-        norm = _pb_normalize_text(final)  # if available
-    except Exception:
-        norm = final
-    try:
-        maxw_val = int(maxw) if maxw else 0
-    except Exception:
-        maxw_val = 0
-    if maxw_val and _pb_word_count(norm) < _pb_target_bounds(maxw_val)[0]:
+                    continue
+    return "\n".join(lines).strip() if lines else ""
+
+def _pb_normalize_text(text: str) -> str:
+    if not isinstance(text, str) or not text.strip():
+        return text
+    obj = _pb_try_json(text)
+    if obj is not None:
         try:
-            acc2 = []
-            cont_notes = (notes or "") + f" || Continue this {sec}. Add concrete details. Avoid repetition. Aim ~{maxw_val} words total."
-            for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=cont_notes, k=int(k), max_words=int(maxw_val)):
-                acc2.append(tok)
-            cont = "".join(acc2).strip()
-            if cont:
-                try:
-                    cont = _pb_normalize_text(_finalize_section(sec, cont))
-                except Exception:
-                    cont = _finalize_section(sec, cont)
-                norm = (norm + "\\n\\n" + cont).strip()
+            text = _pb_struct_to_text(obj) or ""
         except Exception:
             pass
-    if maxw_val:
-        low, high = _pb_target_bounds(maxw_val)
-        wc = _pb_word_count(norm)
-        if wc > high:
-            norm = _pb_trim_to_target(norm, maxw_val)
-    return norm
+    text = _pb_strip_html(text)
+    text = text.replace("\r\n", "\n").replace("\n", "\n")
+    import re as _re
+    text = _re.sub(r"[ \t]{3,}", "  ", text)
+    text = _one_idea_per_paragraph(text)
+    return text.strip()
 
 # ==== Draft Finalization Guards (top-of-file) ====
 try:
@@ -4715,7 +4719,7 @@ def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: s
     style = ("You are a veteran federal proposal writer with $70M+ in awards. "
              "Write in crisp, compliant federal style. Tailor to THIS RFP only. "
              "No citations. Provide procedures and concrete steps. Apply the style guide.")
-    req_len = f"Target length: {max_words} words." if max_words else ""
+    req_len = (f"Aim for {max_words} words. Do not go under {int(max_words*0.97)} words. You may exceed by one or two sentences to complete the thought.") if max_words else ""
     user = f"""
 SECTION: {section_title}
 
@@ -4789,6 +4793,86 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
                 yield delta.content
         except Exception:
             pass
+
+    # === Y3 length top-off helper ===
+    def _y3_word_count(text: str) -> int:
+        try:
+            import re as _re_wc
+            return len(_re_wc.findall(r"\b\w+\b", str(text or "")))
+        except Exception:
+            # Fallback simple split
+            return len(str(text or "").split())
+
+    def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+        """
+        If the initial draft is under the target, ask the model to append continuation only
+        until the total length approaches the target. Never rewrite prior text.
+        """
+        try:
+            mw = int(max_words) if max_words else 0
+        except Exception:
+            mw = 0
+        if not mw or mw <= 0:
+            return drafted or ""
+
+        current = _y3_word_count(drafted)
+        # Accept small undershoot for very small targets
+        low = int(mw * (0.95 if mw < 120 else 0.97))
+        if current >= low:
+            return drafted or ""
+
+        client = get_ai()
+        model_name = _resolve_model()
+
+        system = (
+            "You are a veteran federal proposal writer with $70M+ in awards. "
+            "Keep the style, voice, and structure of the existing text. "
+            "Append only. Do not repeat or restart."
+        )
+        user = (
+            f"Continue the following section for RFP {{int(rfp_id)}} so that the TOTAL length is about {{mw}} words.\n"
+            "Rules:\n"
+            "- Do not modify prior text. Append continuation only.\n"
+            "- Keep one paragraph per idea. Short sentences (<=10 words).\n"
+            "- Deepen technical steps, management, schedule, QC, and compliance mapping as relevant.\n"
+            "- Stop after a natural sentence boundary. Exceed by up to two sentences if needed.\n\n"
+            "--- EXISTING DRAFT START ---\n"
+            f"{drafted}\n"
+            "--- EXISTING DRAFT END ---\n\n"
+            "Append continuation only:"
+        )
+
+        try:
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role":"system","content": system}, {"role":"user","content": user}],
+                temperature=0.2,
+                stream=False,
+            )
+            add = ""
+            if hasattr(resp, "choices") and resp.choices:
+                add = getattr(resp.choices[0].message, "content", "") or ""
+        except Exception as _e:
+            # Fallback to mini model if primary fails
+            try:
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role":"system","content": system}, {"role":"user","content": user}],
+                    temperature=0.2,
+                    stream=False,
+                )
+                add = ""
+                if hasattr(resp, "choices") and resp.choices:
+                    add = getattr(resp.choices[0].message, "content", "") or ""
+            except Exception:
+                add = ""
+
+        combined = (drafted or "") + (("
+
+" + (add or "").strip()) if (add or "").strip() else "")
+        return combined.strip()
+    # === end Y3 length top-off helper ===
+
 # === end Y3 ===
 
 # === Y4: CO Review (scored compliance with citations) ===
@@ -9156,13 +9240,22 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         if st.button("Draft All Sections ▶", key="pb_draft_all"):
             with st.spinner("Drafting all selected sections…"):
                 for sec in selected:
-                    notes = st.session_state.get(f"y3_notes_{sec}", st.session_state.get(f"pb_notes_{sec}", ""))
+                    notes = st.session_state.get(f"y3_notes_{sec}", st.session_state.get(f"y3_notes_{sec}", ""))
                     k = y_auto_k(f"{sec} {notes}")
                     maxw = st.session_state.get(f"y3_maxw_{sec}", 220)
-                    norm = _pb_generate_section(conn, int(rfp_id), sec, notes or "", int(k), int(maxw) if maxw and int(maxw)>0 else 0)
-                    st.session_state[f"pb_section_{sec}"] = norm
-                    st.session_state[f"pb_ta_{sec}"] = norm
-            st.success("Drafted all sections."); st.rerun()
+                    acc = []
+                    for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
+                        acc.append(tok)
+                    drafted = "".join(acc).strip()
+                    if drafted:
+                        drafted = _strip_citations(drafted)
+                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        final = _finalize_section(sec, drafted)
+                norm = _pb_normalize_text(final)
+                st.session_state[f"pb_section_{sec}"] = norm
+                st.session_state[f"pb_ta_{sec}"] = norm
+            st.success("Drafted all sections.")
+            st.rerun()
         content_map: Dict[str, str] = {}
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
@@ -9181,10 +9274,27 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
-                        default_val = drafted
+                        final = _finalize_section(sec, drafted)
+                        norm = _pb_normalize_text(final)
+                        st.session_state[f"pb_section_{sec}"] = norm
+                        st.session_state[f"pb_ta_{sec}"] = norm
+                        st.rerun()
 
-            content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
+            ta_key = f"pb_ta_{sec}"
+
+            if ta_key not in st.session_state:
+
+                st.session_state[ta_key] = st.session_state.get(f"pb_section_{sec}", "")
+
+            content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
+            with st.expander(f"Preview — {sec}", expanded=False):
+                st.markdown(st.session_state.get(ta_key, ""))
+    # Ensure text areas reflect latest session values
+    for sec in selected:
+        src = st.session_state.get(f"pb_section_{sec}")
+        if src is not None and st.session_state.get(f"pb_ta_{sec}", None) != src:
+            st.session_state[f"pb_ta_{sec}"] = src
+            st.rerun()
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
