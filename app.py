@@ -4867,9 +4867,7 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             except Exception:
                 add = ""
 
-        combined = (drafted or "") + (("
-
-" + (add or "").strip()) if (add or "").strip() else "")
+        combined = (drafted or "") + (("\n\n" + (add or "").strip()) if (add or "").strip() else "")
         return combined.strip()
     # === end Y3 length top-off helper ===
 
