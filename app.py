@@ -4,6 +4,115 @@ except NameError:
     def _pb_psychology_framework() -> str:
         return ""
 
+# ---- Markdown → DOCX helpers (global) ----
+import re as _re_md
+
+def _pb__strip_inline_md(text: str) -> str:
+    if not isinstance(text, str):
+        text = str(text or "")
+    text = _re_md.sub(r'!\[([^\]]*)\]\(([^\)]+)\)', r'\1', text)
+    text = _re_md.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'\1', text)
+    text = _re_md.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = _re_md.sub(r'__(.*?)__', r'\1', text)
+    text = _re_md.sub(r'\*(.*?)\*', r'\1', text)
+    text = _re_md.sub(r'_(.*?)_', r'\1', text)
+    text = _re_md.sub(r'`([^`]+)`', r'\1', text)
+    text = _re_md.sub(r'<[^>]+>', '', text)
+    return text
+
+def _pb__split_md_table_line(line: str):
+    if '|' not in line: return None
+    row = line.strip()
+    if row.startswith('|'): row = row[1:]
+    if row.endswith('|'): row = row[:-1]
+    cells = [c.strip() for c in row.split('|')]
+    return cells
+
+def _pb__is_md_table_divider(line: str) -> bool:
+    row = line.strip()
+    if not row: return False
+    if row.startswith('|'): row = row[1:]
+    if row.endswith('|'): row = row[:-1]
+    parts = [p.strip() for p in row.split('|')]
+    if not parts: return False
+    return all(_re_md.fullmatch(r':?-{3,}:?', p) is not None for p in parts)
+
+def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
+    if not isinstance(text, str): text = str(text or "")
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        raw = lines[i].rstrip()
+        if not raw.strip():
+            p = doc.add_paragraph("")
+            try: p.paragraph_format.line_spacing_rule = line_spacing
+            except Exception: pass
+            i += 1; continue
+
+        if '|' in raw and i + 1 < len(lines) and _pb__is_md_table_divider(lines[i+1]):
+            header_cells = _pb__split_md_table_line(raw) or []
+            data_rows = []
+            j = i + 2
+            while j < len(lines) and '|' in lines[j] and lines[j].strip():
+                data_rows.append(lines[j]); j += 1
+            cols = max(1, len(header_cells))
+            tbl = doc.add_table(rows=1, cols=cols)
+            for c, txt in enumerate(header_cells):
+                if c < len(tbl.rows[0].cells):
+                    tbl.rows[0].cells[c].text = _pb__strip_inline_md(txt)
+            for rline in data_rows:
+                cells = _pb__split_md_table_line(rline) or []
+                row = tbl.add_row().cells
+                for c, txt in enumerate(cells[:cols]):
+                    row[c].text = _pb__strip_inline_md(txt)
+            try:
+                for row in tbl.rows:
+                    for cell in row.cells:
+                        for para in cell.paragraphs:
+                            para.paragraph_format.line_spacing_rule = line_spacing
+                            for run in para.runs:
+                                run.font.name = font_name; run.font.size = Pt(font_size_pt)
+            except Exception: pass
+            i = j; continue
+
+        if _re_md.match(r'^#{1,6}\s+', raw):
+            level = len(_re_md.match(r'^(#+)', raw).group(1))
+            htxt = _re_md.sub(r'^#{1,6}\s+', '', raw).strip()
+            p = doc.add_heading(_pb__strip_inline_md(htxt), level=min(6, level))
+            try: p.paragraph_format.line_spacing_rule = line_spacing
+            except Exception: pass
+            i += 1; continue
+
+        if _re_md.match(r'^\d+[.)]\s+', raw):
+            txt = _re_md.sub(r'^\d+[.)]\s+', '', raw).strip()
+            p = doc.add_paragraph(_pb__strip_inline_md(txt), style="List Number")
+            try:
+                p.paragraph_format.line_spacing_rule = line_spacing
+                for run in p.runs:
+                    run.font.name = font_name; run.font.size = Pt(font_size_pt)
+            except Exception: pass
+            i += 1; continue
+
+        if _re_md.match(r'^[-*•]\s+', raw):
+            txt = _re_md.sub(r'^[-*•]\s+', '', raw).strip()
+            p = doc.add_paragraph(_pb__strip_inline_md(txt), style="List Bullet")
+            try:
+                p.paragraph_format.line_spacing_rule = line_spacing
+                for run in p.runs:
+                    run.font.name = font_name; run.font.size = Pt(font_size_pt)
+            except Exception: pass
+            i += 1; continue
+
+        p = doc.add_paragraph(_pb__strip_inline_md(raw.strip()))
+        try:
+            p.paragraph_format.line_spacing_rule = line_spacing
+            for run in p.runs:
+                run.font.name = font_name; run.font.size = Pt(font_size_pt)
+        except Exception: pass
+        i += 1
+# ---- end helpers ----
+
+
 
 def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
@@ -9476,46 +9585,22 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
         "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
     }
     
-    import re as _re_md
-
-    def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
-        if not isinstance(text, str): text = str(text or "")
-        # Basic markdown to docx
-        for raw_line in text.splitlines():
-            line = raw_line.rstrip()
-            if not line.strip():
-                p = doc.add_paragraph("")
-            elif _re_md.match(r"^#{1,6}\s+", line):
-                htxt = _re_md.sub(r"^#{1,6}\s+", "", line).strip()
-                level = min(6, len(_re_md.match(r"^(#+)", line).group(1)))
-                p = doc.add_heading(htxt, level=level)
-            elif _re_md.match(r"^\d+[\.)]\s+", line):
-                p = doc.add_paragraph(_re_md.sub(r"^\d+[\.)]\s+", "", line).strip(), style="List Number")
-            elif _re_md.match(r"^[-*•]\s+", line):
-                p = doc.add_paragraph(_re_md.sub(r"^[-*•]\s+", "", line).strip(), style="List Bullet")
-            else:
-                # strip basic inline markdown tokens for docx
-                _clean = _re_md.sub(r"[`*_]{1,3}", "", line.strip())
-                p = doc.add_paragraph(_clean)
-            try:
-                p.paragraph_format.line_spacing_rule = line_spacing
-                for run in p.runs:
-                    run.font.name = font_name; run.font.size = Pt(font_size_pt)
-            except Exception:
-                pass
-    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
     doc = docx.Document()
     h = doc.add_heading(doc_title or "Proposal", level=1)
     if metadata:
         p = doc.add_paragraph(" | ".join(f"{k}: {v}" for k,v in metadata.items()))
-    
     for s in (sections or []):
         title = str(s.get("title","")).strip()
-        body = _pb_normalize_text(str(s.get("body","")).strip())
-        if title:
-            doc.add_heading(title, level=2)
-        _pb__write_md(doc, body, font_name, font_size_pt, line_spacing)
-
+        body = str(s.get("body","")).strip()
+        if title: doc.add_heading(title, level=2)
+        for para in body.split("\n\n"):
+            if para.strip():
+                p = doc.add_paragraph(para.strip())
+                try: p.paragraph_format.line_spacing_rule = line_spacing
+                except Exception: pass
+                for run in p.runs:
+                    try: run.font.name = font_name; run.font.size = Pt(font_size_pt)
+                    except Exception: pass
     try:
         if isinstance(clins, pd.DataFrame) and not clins.empty:
             tbl = doc.add_table(rows=1, cols=len(clins.columns))
@@ -9672,19 +9757,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             )
             if exported:
                 st.success(f"Exported to {exported}")
-                
-                try:
-                    with open(exported, "rb") as _f:
-                        _data = _f.read()
-                    st.download_button(
-                        "Download DOCX",
-                        data=_data,
-                        file_name=out_name,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"dl_exported_docx"
-                    )
-                except Exception as _e:
-                    st.error(f"Download unavailable: {_e}")
+                st.markdown(f"[Download DOCX]({exported})")
 
         # [removed] Legacy Snippets/Citations panel hidden
 # ---------- Subcontractor Finder (Phase D) ----------
@@ -10423,16 +10496,8 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
         if not txt:
             return
         doc.add_heading(title, level=2)
-        for _line in [x.rstrip() for x in txt.splitlines()]:
-            if not _line.strip():
-                p = doc.add_paragraph("")
-            elif re.match(r"^\d+[\.)]\s+", _line):
-                doc.add_paragraph(re.sub(r"^\d+[\.)]\s+", "", _line).strip(), style="List Number")
-            elif re.match(r"^[-*•]\s+", _line):
-                doc.add_paragraph(re.sub(r"^[-*•]\s+", "", _line).strip(), style="List Bullet")
-            else:
-                doc.add_paragraph(_line.strip())
-            paragraph(line, style="List Bullet")
+        for line in [x.strip() for x in txt.splitlines() if x.strip()]:
+            doc.add_paragraph(line, style="List Bullet")
 
     # Content blocks
     add_bullets("Core Competencies", "core_competencies")
@@ -10508,19 +10573,7 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
             out = _export_capability_docx(path, p)
             if out:
                 st.success("Exported.")
-                
-                try:
-                    with open(out, "rb") as _f:
-                        _data = _f.read()
-                    st.download_button(
-                        "Download DOCX",
-                        data=_data,
-                        file_name=os.path.basename(out) or "export.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"dl_out_docx"
-                    )
-                except Exception as _e:
-                    st.error(f"Download unavailable: {_e}")
+                st.markdown(f"[Download DOCX]({out})")
 
 # ---------- Phase G: Past Performance Library + Generator ----------
 def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
@@ -10784,8 +10837,9 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
                 sec = str(row.get('Section') or row.get('section') or row.get('name') or "Section")
                 body = str(row.get('Content') or row.get('content') or row.get('text') or "")
                 doc.add_heading(sec, level=2)
-                body = _pb_normalize_text(body or "")
-                _pb__write_md(doc, body, font_name, font_size_pt, line_spacing)
+                for para in (body or "").split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
         doc.save(path)
         return path
     except Exception as e:
