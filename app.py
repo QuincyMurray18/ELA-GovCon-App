@@ -9458,10 +9458,16 @@ def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Opt
         wpp = max(50, int(words_per_page))
     return round((total_words or 0) / float(wpp), 2)
 
-def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optional[pd.DataFrame] = None, checklist: Optional[pd.DataFrame] = None, metadata: Optional[dict] = None,
+def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.DataFrame|None" = None, checklist: "pd.DataFrame|None" = None, metadata: dict | None = None,
                  font_name: str = "Times New Roman",
                  font_size_pt: int = 11,
-                 spacing: str = "1.15") -> Optional[str]:
+                 spacing: str = "1.15") -> str | None:
+    """
+    Clean DOCX export.
+    - Converts Markdown to Word: headings, numbered bullets, bullets, **bold**/*italic*, and Markdown tables -> real DOCX tables.
+    - Filters raw JSON lines so no dict dumps reach the file.
+    - Adds CLIN and Checklist DataFrames as tables if provided.
+    """
     try:
         from docx import Document  # type: ignore
         from docx.shared import Pt  # type: ignore
@@ -9469,102 +9475,223 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     except Exception:
         st.error("python-docx is required. pip install python-docx")
         return None
+
+    import re, json
+
     spacing_map = {
         "single": WD_LINE_SPACING.SINGLE, "1": WD_LINE_SPACING.SINGLE, "1.0": WD_LINE_SPACING.SINGLE,
-        "1.15": WD_LINE_SPACING.ONE_POINT_FIVE, "1,15": WD_LINE_SPACING.ONE_POINT_FIVE,
+        "1.15": WD_LINE_SPACING.SINGLE, "1,15": WD_LINE_SPACING.SINGLE,
         "1.5": WD_LINE_SPACING.ONE_POINT_FIVE, "double": WD_LINE_SPACING.DOUBLE,
         "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
     }
-    
-    import re as _re_md
+    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.SINGLE)
 
-def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
-    if not isinstance(text, str):
-        text = str(text or "")
-    lines = text.splitlines()
-    i = 0
-
-    def strip_inline(s: str) -> str:
-        s = _re_md.sub(r"`+", "", s)
-        s = _re_md.sub(r"\*{1,3}", "", s)
-        s = _re_md.sub(r"_+", "", s)
-        return s
-
-    def split_cells(row: str):
-        r = row.strip()
-        if r.startswith("|"): r = r[1:]
-        if r.endswith("|"): r = r[:-1]
-        return [strip_inline(c.strip()) for c in r.split("|")]
-
-    while i < len(lines):
-        raw = lines[i].rstrip()
-
-        if not raw.strip():
-            p = doc.add_paragraph("")
+    # ---------- helpers ----------
+    def _likely_json_line(s: str) -> bool:
+        s = (s or "").strip()
+        if not s:
+            return False
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
             try:
-                p.paragraph_format.line_spacing_rule = line_spacing
+                json.loads(s)
+                return True
+            except Exception:
+                return False
+        return False
+
+    _bold_pat = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+    _ital_pat = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|_(.+?)_")
+
+    def _add_inline_runs(p, text: str):
+        # render **bold** and *italic* into runs
+        i = 0
+        while i < len(text):
+            # bold
+            m_b = _bold_pat.search(text, i)
+            m_i = _ital_pat.search(text, i)
+            m = None
+            kind = None
+            if m_b and (not m_i or m_b.start() <= m_i.start()):
+                m = m_b; kind = "b"
+            elif m_i:
+                m = m_i; kind = "i"
+            if not m:
+                run = p.add_run(text[i:])
+                return
+            # pre-text
+            if m.start() > i:
+                p.add_run(text[i:m.start()])
+            # inner
+            inner = m.group(1) or m.group(2) or ""
+            run = p.add_run(inner)
+            if kind == "b":
+                run.bold = True
+            else:
+                run.italic = True
+            i = m.end()
+
+    def _para(doc, text: str, style: str | None = None):
+        p = doc.add_paragraph()
+        if style:
+            try:
+                p.style = style
             except Exception:
                 pass
-            i += 1
-            continue
-
-        m = _re_md.match(r"^(#{1,6})\s+(.*)$", raw)
-        if m:
-            level = min(6, len(m.group(1)))
-            htxt = strip_inline(m.group(2))
-            doc.add_heading(htxt, level=level)
-            i += 1
-            continue
-
-        is_header = bool(_re_md.match(r"^\|.+\|$", raw))
-        is_sep = False
-        if is_header and i + 1 < len(lines):
-            nxt = lines[i+1].strip()
-            is_sep = bool(_re_md.match(r"^\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|$", nxt))
-        if is_header and is_sep:
-            header = split_cells(raw)
-            i += 2
-            data_rows = []
-            while i < len(lines) and "|" in lines[i]:
-                row_line = lines[i].strip()
-                if not row_line:
-                    break
-                data_rows.append(split_cells(row_line))
-                i += 1
-            try:
-                tbl = doc.add_table(rows=1, cols=len(header))
-                for j, h in enumerate(header):
-                    tbl.rows[0].cells[j].text = h
-                for r in data_rows:
-                    c = tbl.add_row().cells
-                    for j in range(len(header)):
-                        c[j].text = r[j] if j < len(r) else ""
-            except Exception:
-                doc.add_paragraph(" | ".join(header))
-                for r in data_rows:
-                    doc.add_paragraph(" | ".join(r))
-            continue
-
-        if _re_md.match(r"^\d+[\.)]\s+", raw):
-            txt = strip_inline(_re_md.sub(r"^\d+[\.)]\s+", "", raw))
-            p = doc.add_paragraph(txt, style="List Number")
-        elif _re_md.match(r"^[-*•]\s+", raw):
-            txt = strip_inline(_re_md.sub(r"^[-*•]\s+", "", raw))
-            p = doc.add_paragraph(txt, style="List Bullet")
-        else:
-            txt = strip_inline(raw.strip())
-            p = doc.add_paragraph(txt)
-
+        _add_inline_runs(p, text)
         try:
             p.paragraph_format.line_spacing_rule = line_spacing
+            for r in p.runs:
+                r.font.name = font_name; r.font.size = Pt(font_size_pt)
         except Exception:
             pass
+        return p
 
-        i += 1
+    def _looks_table_header(lns: list[str], idx: int) -> bool:
+        try:
+            a = lns[idx].strip()
+            b = lns[idx+1].strip()
+            if not (a.startswith("|") and a.endswith("|")):
+                return False
+            if set(b.replace("|","").replace(" ", "")) <= set("-:"):
+                return True
+            return False
+        except Exception:
+            return False
 
+    def _parse_table_block(lns: list[str], start: int):
+        # returns end_index (exclusive), headers, rows
+        headers = [c.strip() for c in lns[start].strip().strip("|").split("|")]
+        sep_idx = start + 1
+        rows = []
+        i = sep_idx + 1
+        while i < len(lns):
+            ln = lns[i].rstrip()
+            if not ln.strip().startswith("|"):
+                break
+            cols = [c.strip() for c in ln.strip().strip("|").split("|")]
+            # pad
+            while len(cols) < len(headers):
+                cols.append("")
+            rows.append(cols[:len(headers)])
+            i += 1
+        return i, headers, rows
 
+    def _add_table(doc, maybe_title: str | None, headers: list[str], rows: list[list[str]]):
+        if (maybe_title or "").strip():
+            try:
+                doc.add_paragraph(maybe_title.strip()).runs[0].bold = True
+            except Exception:
+                pass
+        # build table
+        t = doc.add_table(rows=len(rows) + 1, cols=len(headers))
+        t.style = "Table Grid"
+        for j, h in enumerate(headers):
+            cell = t.cell(0, j)
+            cell.text = str(h)
+            try:
+                for r in cell.paragraphs[0].runs:
+                    r.bold = True
+            except Exception:
+                pass
+        for i, row in enumerate(rows, start=1):
+            for j, val in enumerate(row):
+                t.cell(i, j).text = str(val)
 
-    
+    def _write_markdown(doc, text: str):
+        if not isinstance(text, str):
+            text = str(text or "")
+        # drop raw json lines
+        lines = [ln for ln in text.splitlines() if not _likely_json_line(ln)]
+        i = 0
+        while i < len(lines):
+            ln = lines[i].rstrip()
+            if not ln.strip():
+                doc.add_paragraph("")
+                i += 1
+                continue
+            # headings #
+            m_h = re.match(r"^(#{1,6})\s+(.*)$", ln)
+            if m_h:
+                level = min(6, len(m_h.group(1)))
+                h = doc.add_heading(m_h.group(2).strip(), level=level)
+                try:
+                    h.paragraph_format.line_spacing_rule = line_spacing
+                    for run in h.runs:
+                        run.font.name = font_name; run.font.size = Pt(font_size_pt)
+                except Exception:
+                    pass
+                i += 1
+                continue
+            # ordered
+            if re.match(r"^\d+[\.)]\s+", ln):
+                text_i = re.sub(r"^\d+[\.)]\s+", "", ln).strip()
+                _para(doc, text_i, style="List Number")
+                i += 1
+                continue
+            # bullet
+            if re.match(r"^[-*•]\s+", ln):
+                text_i = re.sub(r"^[-*•]\s+", "", ln).strip()
+                _para(doc, text_i, style="List Bullet")
+                i += 1
+                continue
+            # markdown table
+            if i + 1 < len(lines) and _looks_table_header(lines, i):
+                # capture optional title line immediately before header if it is bold label like "**Risk Table**"
+                maybe_title = None
+                if i > 0 and lines[i-1].strip().endswith("**"):
+                    tline = lines[i-1].strip()
+                    # remove emphasis markers
+                    maybe_title = re.sub(r"^\*{0,2}|\*{0,2}$", "", tline).strip()
+                end_idx, headers, rows = _parse_table_block(lines, i)
+                _add_table(doc, maybe_title, headers, rows)
+                i = end_idx
+                continue
+            # normal paragraph with inline marks
+            _para(doc, ln.strip())
+            i += 1
+
+    # ---------- build document ----------
+    doc = Document()  # do NOT call docx.Document(), we imported Document above
+    title = (doc_title or "Proposal").strip()
+    doc.add_heading(title, level=1)
+    if metadata:
+        meta_line = " | ".join(f"{k}: {v}" for k, v in metadata.items() if str(v).strip())
+        if meta_line:
+            _para(doc, meta_line)
+
+    for s in (sections or []):
+        title = str(s.get("title","")).strip()
+        body = str(s.get("body","")).strip()
+        if title:
+            doc.add_heading(title, level=2)
+        _write_markdown(doc, body)
+
+    # Add CLINs table if provided
+    try:
+        import pandas as _pd  # lazy
+        if isinstance(clins, _pd.DataFrame) and not clins.empty:
+            cols = [c for c in clins.columns if c not in {"score"}]
+            doc.add_heading("CLINs", level=2)
+            _add_table(doc, None, [str(c) for c in cols], [[clins.iloc[i][c] for c in cols] for i in range(min(len(clins), 200))])
+    except Exception:
+        pass
+
+    # Add Checklist table if provided
+    try:
+        import pandas as _pd  # lazy
+        if isinstance(checklist, _pd.DataFrame) and not checklist.empty:
+            cols = list(checklist.columns)
+            doc.add_heading("Compliance Checklist", level=2)
+            _add_table(doc, None, [str(c) for c in cols], [[checklist.iloc[i][c] for c in cols] for i in range(min(len(checklist), 400))])
+    except Exception:
+        pass
+
+    try:
+        doc.save(path)
+        return path
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+        return None
 
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
@@ -13370,15 +13497,12 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
             for k in ["customer","period","value","cpars_rating"]:
                 v = rec.get(k)
                 if v:
-                    p = doc.add_paragraph()
-                    r1 = p.add_run(f"{k.title()}: ")
-                    r1.bold = True
-                    p.add_run(str(v))
+                    doc.add_paragraph(f"**{k.title()}:** {v}")
             body = str(rec.get("summary") or rec.get("description") or rec.get("results") or "").strip()
             if body:
                 for para in body.split("\n\n"):
                     if para.strip():
-                        _pb__write_md(doc, para.strip(), font_name, font_size_pt, line_spacing)
+                        doc.add_paragraph(para.strip())
         doc.save(path)
         return path
     except Exception as e:
