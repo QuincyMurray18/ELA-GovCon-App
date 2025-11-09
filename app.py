@@ -9478,62 +9478,93 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     
     import re as _re_md
 
-    def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
-        if not isinstance(text, str): text = str(text or "")
-        # Basic markdown to docx
-        for raw_line in text.splitlines():
-            line = raw_line.rstrip()
-            if not line.strip():
-                p = doc.add_paragraph("")
-            elif _re_md.match(r"^#{1,6}\s+", line):
-                htxt = _re_md.sub(r"^#{1,6}\s+", "", line).strip()
-                level = min(6, len(_re_md.match(r"^(#+)", line).group(1)))
-                p = doc.add_heading(htxt, level=level)
-            elif _re_md.match(r"^\d+[\.)]\s+", line):
-                p = doc.add_paragraph(_re_md.sub(r"^\d+[\.)]\s+", "", line).strip(), style="List Number")
-            elif _re_md.match(r"^[-*•]\s+", line):
-                p = doc.add_paragraph(_re_md.sub(r"^[-*•]\s+", "", line).strip(), style="List Bullet")
-            else:
-                # strip basic inline markdown tokens for docx
-                _clean = _re_md.sub(r"[`*_]{1,3}", "", line.strip())
-                p = doc.add_paragraph(_clean)
+def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
+    if not isinstance(text, str):
+        text = str(text or "")
+    lines = text.splitlines()
+    i = 0
+
+    def strip_inline(s: str) -> str:
+        s = _re_md.sub(r"`+", "", s)
+        s = _re_md.sub(r"\*{1,3}", "", s)
+        s = _re_md.sub(r"_+", "", s)
+        return s
+
+    def split_cells(row: str):
+        r = row.strip()
+        if r.startswith("|"): r = r[1:]
+        if r.endswith("|"): r = r[:-1]
+        return [strip_inline(c.strip()) for c in r.split("|")]
+
+    while i < len(lines):
+        raw = lines[i].rstrip()
+
+        if not raw.strip():
+            p = doc.add_paragraph("")
             try:
                 p.paragraph_format.line_spacing_rule = line_spacing
-                for run in p.runs:
-                    run.font.name = font_name; run.font.size = Pt(font_size_pt)
             except Exception:
                 pass
-    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
-    doc = Document()
-    h = doc.add_heading(doc_title or "Proposal", level=1)
-    if metadata:
-        p = doc.add_paragraph(" | ".join(f"{k}: {v}" for k,v in metadata.items()))
-    
-    for s in (sections or []):
-        title = str(s.get("title","")).strip()
-        body = _pb_normalize_text(str(s.get("body","")).strip())
-        if title:
-            doc.add_heading(title, level=2)
-        _pb__write_md(doc, body, font_name, font_size_pt, line_spacing)
+            i += 1
+            continue
 
-    try:
-        if isinstance(clins, pd.DataFrame) and not clins.empty:
-            tbl = doc.add_table(rows=1, cols=len(clins.columns))
-            for j, col in enumerate(clins.columns): tbl.rows[0].cells[j].text = str(col)
-            for _, row in clins.iterrows():
-                cells = tbl.add_row().cells
-                for j, col in enumerate(clins.columns):
-                    val = row.get(col); cells[j].text = "" if pd.isna(val) else str(val)
-    except Exception: pass
-    try:
-        if isinstance(checklist, pd.DataFrame) and not checklist.empty:
-            doc.add_heading("Compliance Checklist", level=2)
-            for _, r in checklist.iterrows():
-                txt = str(r.get("item_text","")).strip()
-                if txt: doc.add_paragraph(txt, style="List Bullet")
-    except Exception: pass
-    doc.save(path)
-    return path
+        m = _re_md.match(r"^(#{1,6})\s+(.*)$", raw)
+        if m:
+            level = min(6, len(m.group(1)))
+            htxt = strip_inline(m.group(2))
+            doc.add_heading(htxt, level=level)
+            i += 1
+            continue
+
+        is_header = bool(_re_md.match(r"^\|.+\|$", raw))
+        is_sep = False
+        if is_header and i + 1 < len(lines):
+            nxt = lines[i+1].strip()
+            is_sep = bool(_re_md.match(r"^\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|$", nxt))
+        if is_header and is_sep:
+            header = split_cells(raw)
+            i += 2
+            data_rows = []
+            while i < len(lines) and "|" in lines[i]:
+                row_line = lines[i].strip()
+                if not row_line:
+                    break
+                data_rows.append(split_cells(row_line))
+                i += 1
+            try:
+                tbl = doc.add_table(rows=1, cols=len(header))
+                for j, h in enumerate(header):
+                    tbl.rows[0].cells[j].text = h
+                for r in data_rows:
+                    c = tbl.add_row().cells
+                    for j in range(len(header)):
+                        c[j].text = r[j] if j < len(r) else ""
+            except Exception:
+                doc.add_paragraph(" | ".join(header))
+                for r in data_rows:
+                    doc.add_paragraph(" | ".join(r))
+            continue
+
+        if _re_md.match(r"^\d+[\.)]\s+", raw):
+            txt = strip_inline(_re_md.sub(r"^\d+[\.)]\s+", "", raw))
+            p = doc.add_paragraph(txt, style="List Number")
+        elif _re_md.match(r"^[-*•]\s+", raw):
+            txt = strip_inline(_re_md.sub(r"^[-*•]\s+", "", raw))
+            p = doc.add_paragraph(txt, style="List Bullet")
+        else:
+            txt = strip_inline(raw.strip())
+            p = doc.add_paragraph(txt)
+
+        try:
+            p.paragraph_format.line_spacing_rule = line_spacing
+        except Exception:
+            pass
+
+        i += 1
+
+
+
+    
 
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
@@ -13347,7 +13378,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
             if body:
                 for para in body.split("\n\n"):
                     if para.strip():
-                        doc.add_paragraph(para.strip())
+                        _pb__write_md(doc, para.strip(), font_name, font_size_pt, line_spacing)
         doc.save(path)
         return path
     except Exception as e:
