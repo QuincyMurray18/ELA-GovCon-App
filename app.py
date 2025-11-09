@@ -121,20 +121,13 @@ except NameError:
 try:
     _enforce_style_guide
 except NameError:
-    import re
-    def _enforce_style_guide(text: str, max_words: int | None = None) -> str:
-        """Light, safe post-processing: strip citations, rename headings, trim whitespace."""
-        s = str(text or "")
-        try:
-            s = _strip_citations(s)
-        except Exception:
-            s = s
-        s = re.sub(r"(?im)^\s*assumptions\s*:\s*$", "Dependencies:", s)
-        s = re.sub(r"\n{3,}", "\n\n", s)
-        return s.strip()
+    def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
+        return str(text or "").strip()
 
 try:
-    _finalize_draft(text: str) -> str:
+    _finalize_draft
+except NameError:
+    def _finalize_draft(text: str) -> str:
         try:
             t = _strip_citations(text)
         except Exception:
@@ -152,31 +145,25 @@ try:
 except NameError:  # define if missing
     def _style_guide() -> str:
         return (
-            "Follow these rules strictly:
-"
-            "1) Write only the requested section. Do not include other sections.
-"
-            "2) One idea per paragraph.
-"
-            "3) Sentences 14–20 words on average.
-"
-            "4) Use a 1:1 ratio of 'you' to 'we' across the section.
-"
-            "5) Plain words over jargon. Minimize nominalizations.
-"
-            "6) Present-tense commitments. No 'will' unless quoting a requirement.
-"
-            "7) Rename 'Assumptions' to 'Dependencies'.
-"
-            "8) End with a concrete promise tied to risk control.
-"
-            "9) Include one proof point: metric, artifact, or timeline.
-"
-            "10) No citations, no references.
-"
+            "Follow these rules strictly:\n"
+            "1) Write only the requested section. Do not include other sections.\n"
+            "2) One idea per paragraph.\n"
+            "3) Sentences 14–20 words on average.\n"
+            "4) Use a 1:1 ratio of 'you' to 'we' across the section.\n"
+            "5) Plain words over jargon. Minimize nominalizations.\n"
+            "6) Present-tense commitments. No 'will' unless quoting a requirement.\n"
+            "7) Rename 'Assumptions' to 'Dependencies'.\n"
+            "8) End with a concrete promise tied to risk control.\n"
+            "9) Include one proof point: metric, artifact, or timeline.\n"
+            "10) No citations, no references.\n"
+
         )
+
+try:
+    PROPOSAL_STYLE_GUIDE
+except NameError:  # set if missing
+    PROPOSAL_STYLE_GUIDE = _style_guide()
 # ==========================================
-=
 
 def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
     try:
@@ -3708,7 +3695,6 @@ RFP context (truncated):
 """.strip()
     draft = _ai_chat(prompt)
     return _finalize_section(section, _append_tables_if_applicable(draft))
-or 0), section, draft))
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     st.title("RFP Analyzer — One‑Page View")
     if not pages:
@@ -4940,6 +4926,76 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
     
 
 def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+    """
+    Safely extend a drafted section toward a target word count without crossing sections.
+    Targets ~97% of `max_words` and stops at a sentence boundary.
+    """
+    def wc(t: str) -> int:
+        try:
+            import re as _re_wc
+            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
+        except Exception:
+            return len(str(t or "").split())
+
+    try:
+        mw = int(max_words) if max_words else 0
+    except Exception:
+        mw = 0
+    if not mw or mw <= 0:
+        return drafted or ""
+
+    lower = int(max(1, round(0.97 * mw)))
+    hard_cap = mw + 60
+    text_acc = (drafted or "").strip()
+    if wc(text_acc) >= lower:
+        return text_acc
+
+    client = get_ai()
+    model_name = _resolve_model()
+    attempts = 0
+    while wc(text_acc) < lower and attempts < 6 and wc(text_acc) < hard_cap:
+        attempts += 1
+        cur = wc(text_acc)
+        remaining = max(0, lower - cur)
+        ask_up_to = max(80, min(200, remaining + 40))
+        system = (
+            "You are a veteran federal proposal writer with $70M+ in awards. "
+            "Append continuation only. Do not repeat or modify prior text. "
+            "Preserve bullets and paragraph breaks. Keep style unchanged. "
+            "Stay within the same section. Do not introduce Risk, Quality, Staffing, Management, Past Performance, or Pricing."
+        )
+        user = (
+            f"Continue the section '{section_title}' for RFP {int(rfp_id)}.\n"
+            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
+            "Rules:\n"
+            "- Append continuation only. No rewrites.\n"
+            "- Keep content strictly within '{section_title}'.\n"
+            "- Finish the last sentence if near the end.\n"
+            "- One idea per paragraph. Sentences average 14–20 words.\n"
+            "- Include concrete steps and one proof point if missing.\n\n"
+            "--- EXISTING DRAFT START ---\n"
+            f"{text_acc}\n"
+            "--- EXISTING DRAFT END ---\n\n"
+            "Append continuation only:"
+        )
+        try:
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                temperature=0.15,
+                stream=False,
+            )
+            add = ""
+            if hasattr(resp, "choices") and resp.choices:
+                add = getattr(resp.choices[0].message, "content", "") or ""
+        except Exception:
+            add = ""
+        add = str(add).strip()
+        if add:
+            text_acc = (text_acc + "\n\n" + add).strip()
+        else:
+            break
+    return text_acc[:]
     def wc(t: str) -> int:
         try:
             import re as _re_wc
@@ -4968,34 +5024,19 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         system = (
             "You are a veteran federal proposal writer with $70M+ in awards. "
             "Append continuation only. Do not repeat or modify prior text. "
-            "Preserve bullets and paragraph breaks. Keep style unchanged. "
-            "Stay within the same section. Do not introduce Risk, Quality, Staffing, Management, Past Performance, or Pricing."
+            "Preserve bullets and paragraph breaks. Keep style unchanged."
         )
         user = (
-            f"Continue the section '{section_title}' for RFP {int(rfp_id)}.
-"
-            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.
-"
-            "Rules:
-"
-            "- Append continuation only. No rewrites.
-"
-            "- Keep content strictly within '{section_title}'.
-"
-            "- Finish the last sentence if near the end.
-"
-            "- One idea per paragraph. Sentences average 14–20 words.
-"
-            "- Include concrete steps and one proof point if missing.
-
-"
-            "--- EXISTING DRAFT START ---
-"
-            f"{text_acc}
-"
-            "--- EXISTING DRAFT END ---
-
-"
+            f"Continue the following section for RFP {int(rfp_id)}.\n"
+            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
+            "Rules:\n"
+            "- Append continuation only. No rewrites.\n"
+            "- Finish the last sentence if near the end, even if slightly over the soft cap.\n"
+            "- Keep one idea per paragraph. Short sentences.\n"
+            "- Include concrete steps, QC points, metrics, and verification.\n\n"
+            "--- EXISTING DRAFT START ---\n"
+            f"{text_acc}\n"
+            "--- EXISTING DRAFT END ---\n\n"
             "Append continuation only:"
         )
         try:
@@ -5055,30 +5096,16 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
             "Keep style and structure unchanged."
         )
         user = (
-            f"Continue the section '{section_title}' for RFP {int(rfp_id)}.
-"
-            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.
-"
-            "Rules:
-"
-            "- Append continuation only. No rewrites.
-"
-            "- Keep content strictly within '{section_title}'.
-"
-            "- Finish the last sentence if near the end.
-"
-            "- One idea per paragraph. Sentences average 14–20 words.
-"
-            "- Include concrete steps and one proof point if missing.
-
-"
-            "--- EXISTING DRAFT START ---
-"
-            f"{text_acc}
-"
-            "--- EXISTING DRAFT END ---
-
-"
+            f"Continue the following section for RFP {int(rfp_id)}.\n"
+            f"Goal: bring the TOTAL length near {mw} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
+            "Rules:\n"
+            "- Do not modify prior text. Append continuation only.\n"
+            "- Keep one paragraph per idea. Short sentences (<=12 words).\n"
+            "- Add concrete steps, schedule, QC, staffing, and compliance mapping.\n"
+            "- Stop after a natural sentence boundary. Slightly exceed target if needed.\n\n"
+            "--- EXISTING DRAFT START ---\n"
+            f"{text_acc}\n"
+            "--- EXISTING DRAFT END ---\n\n"
             "Append continuation only:"
         )
         try:
@@ -9536,27 +9563,8 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
             content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
-                body = st.session_state.get(ta_key, "")
-                st.markdown(body)
-                import re
-                try:
-                    wc = _pb_word_count_section(body)
-                except Exception:
-                    wc = len(str(body).split())
-                def _you_we_ratio(t: str) -> float:
-                    t2 = t.lower()
-                    y = len(re.findall(r"\byou\b", t2))
-                    w = len(re.findall(r"\bwe\b", t2))
-                    return (y / w) if w else (float(y) if y else 0.0)
-                def _passive_estimate(t: str) -> float:
-                    t2 = t.lower()
-                    sentences = [s for s in re.split(r"[.!?]\s+", t2) if s.strip()]
-                    passive = sum(1 for s in sentences if re.search(r"\b(be|is|are|was|were|been|being)\s+\w+ed\b(\s+by\b)?", s))
-                    return 0.0 if not sentences else (1 - passive/len(sentences))
-                yr = _you_we_ratio(body)
-                av = _passive_estimate(body)
-                st.caption(f"Words: {wc} • You:We≈{yr:.2f} • Active voice≈{av*100:.0f}%")
-    # Session values are initialized before widgets; avoid mutations after widget creation to prevent Streamlit errors.
+                st.markdown(st.session_state.get(ta_key, ""))
+    # Session values initialized before widgets; avoid post-creation mutations.
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
