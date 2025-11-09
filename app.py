@@ -15966,11 +15966,12 @@ def _pb_word_count_section(text: str) -> int:
             return 0
 
 
-# === Patched DOCX export (bullet cleanup + markdown tables) ===
+# === DOCX export v2 (robust inline cleanup + Markdown and HTML tables) ===
 def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.DataFrame|None" = None, checklist: "pd.DataFrame|None" = None, metadata: dict|None = None,
                  font_name: str = "Times New Roman",
                  font_size_pt: int = 11,
                  spacing: str = "1.15") -> "str|None":
+    # Imports
     try:
         import docx  # type: ignore
         from docx.shared import Pt  # type: ignore
@@ -15989,103 +15990,196 @@ def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.Dat
         "1.5": WD_LINE_SPACING.ONE_POINT_FIVE, "double": WD_LINE_SPACING.DOUBLE,
         "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
     }
+    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
 
-    import re as _re_md
+    # Helpers
+    import re as _re
+    from html.parser import HTMLParser
 
     def _strip_inline_tokens(s: str) -> str:
-        # Remove inline markdown markers so **bold** doesn't show raw tokens.
-        s = _re_md.sub(r"`([^`]*)`", r"\1", s)
-        s = s.replace("**", "").replace("__", "")
-        s = s.replace("*", "").replace("_", "")
+        if not isinstance(s, str):
+            s = str(s or "")
+        # Remove zero-width and NBSP
+        s = s.replace("\\u200b", "").replace("\\xa0", " ")
+        # Images and links -> keep visible text
+        s = _re.sub(r"!\\[([^\\]]*)\\]\\([^\\)]*\\)", r"\\1", s)
+        s = _re.sub(r"\\[([^\\]]+)\\]\\([^\\)]+\\)", r"\\1", s)
+        # Code spans
+        s = _re.sub(r"`([^`]*)`", r"\\1", s)
+        # Emphasis variants
+        for pat in [r"\\*\\*([^*]+)\\*\\*", r"__([^_]+)__", r"\\*([^*]+)\\*", r"_([^_]+)_", r"~~([^~]+)~~"]:
+            s = _re.sub(pat, r"\\1", s)
+        # Clean stray markers
+        s = s.replace("**", "").replace("__", "").replace("*", "").replace("_", "").replace("~~","")
         return s
 
+    # Markdown tables --------------------------------------------------------
     def _split_md_row(line: str) -> list[str]:
-        # "| a | b |" -> ["a","b"]
-        return [c.strip() for c in line.strip().strip("|").split("|")]
+        ln = line.strip()
+        if ln.startswith("|") and ln.endswith("|"):
+            ln = ln[1:-1]
+        return [c.strip() for c in ln.split("|")]
 
     def _is_md_table_sep(line: str) -> bool:
-        # e.g. "|---|:---:|---|"
         t = line.strip()
-        if not (t.startswith("|") and t.endswith("|")):
+        if "|" not in t:
             return False
-        cells = _split_md_row(t)
-        if not cells:
+        # Allow with or without outer pipes
+        if t.startswith("|"):
+            t = t.strip("|")
+        parts = [p.strip() for p in t.split("|")]
+        if not parts:
             return False
-        return all(_re_md.fullmatch(r":?-{3,}:?", c.replace(" ", "")) for c in cells)
+        norm = [p.replace("—", "-").replace(" ", "") for p in parts]
+        return all(_re.fullmatch(r":?-{3,}:?", p) for p in norm)
 
-    def _write_md_table(doc, header_line: str, data_lines: list[str]):
-        headers = _split_md_row(header_line)
-        ncols = max(1, len(headers))
-        nrows = 1 + len(data_lines)
+    def _try_md_table(lines: list[str], i: int):
+        # Detect header + separator then consume data rows
+        if i + 1 >= len(lines):
+            return None
+        header = lines[i]
+        sep = lines[i+1]
+        # Header must contain at least one pipe and not be empty
+        if "|" not in header:
+            return None
+        if not _is_md_table_sep(sep):
+            return None
+        # Collect body rows
+        j = i + 2
+        data = []
+        while j < len(lines) and "|" in lines[j]:
+            # Stop if this looks like a heading or list starting. Keep tables contiguous.
+            if _re.match(r"^\\s*(?:#{1,6}\\s+|\\d+[\\.)]\\s+|[-*•]\\s+)$", lines[j]):
+                break
+            data.append(lines[j])
+            j += 1
+        headers = _split_md_row(header)
+        rows = [ _split_md_row(r) for r in data ]
+        return {"end": j, "headers": headers, "rows": rows}
+
+    # HTML table parsing -----------------------------------------------------
+    class _HTMLTbl(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tables = []
+            self._in_table = False
+            self._in_row = False
+            self._in_cell = False
+            self._curr_table = []
+            self._curr_row = []
+            self._curr_cell = []
+
+        def handle_starttag(self, tag, attrs):
+            t = tag.lower()
+            if t == "table":
+                self._in_table = True
+                self._curr_table = []
+            elif t == "tr" and self._in_table:
+                self._in_row = True
+                self._curr_row = []
+            elif t in ("td","th") and self._in_row:
+                self._in_cell = True
+                self._curr_cell = []
+
+        def handle_endtag(self, tag):
+            t = tag.lower()
+            if t in ("td","th") and self._in_cell:
+                text = _strip_inline_tokens("".join(self._curr_cell).strip())
+                self._curr_row.append(text)
+                self._in_cell = False
+            elif t == "tr" and self._in_row:
+                self._curr_table.append(self._curr_row)
+                self._in_row = False
+            elif t == "table" and self._in_table:
+                self.tables.append(self._curr_table)
+                self._in_table = False
+
+        def handle_data(self, data):
+            if self._in_cell:
+                self._curr_cell.append(data)
+
+    def _extract_html_tables_blocks(text: str):
+        # Yields sequence of ('text', str) and ('table', rows:list[list[str]])
+        blocks = []
+        pattern = _re.compile(r"(?is)<table\\b.*?</table>")
+        pos = 0
+        for m in pattern.finditer(text):
+            if m.start() > pos:
+                blocks.append(("text", text[pos:m.start()]))
+            frag = text[m.start():m.end()]
+            p = _HTMLTbl()
+            p.feed(frag)
+            for tbl in p.tables:
+                # Drop empty rows
+                clean = [ [c.strip() for c in r] for r in tbl if any(c.strip() for c in r) ]
+                if clean:
+                    blocks.append(("table", clean))
+            pos = m.end()
+        if pos < len(text):
+            blocks.append(("text", text[pos:]))
+        return blocks
+
+    def _write_docx_table(doc, rows: list[list[str]], header_bold=True):
+        if not rows:
+            return
+        ncols = max(len(r) for r in rows)
+        nrows = len(rows)
         tbl = doc.add_table(rows=nrows, cols=ncols)
         tbl.style = "Table Grid"
-        # header row
-        for j, h in enumerate(headers):
-            cell = tbl.rows[0].cells[j]
-            cell.text = _strip_inline_tokens(h)
-            for p in cell.paragraphs:
-                for run in p.runs:
-                    run.bold = True
-        # data rows
-        for i, raw in enumerate(data_lines, start=1):
-            vals = _split_md_row(raw)
+        for i, r in enumerate(rows):
             for j in range(ncols):
                 cell = tbl.rows[i].cells[j]
-                v = vals[j] if j < len(vals) else ""
-                cell.text = _strip_inline_tokens(v)
-        # apply font to all cells
-        from docx.shared import Pt
-        for row in tbl.rows:
-            for cell in row.cells:
+                val = r[j] if j < len(r) else ""
+                cell.text = _strip_inline_tokens(val)
                 for p in cell.paragraphs:
                     for run in p.runs:
                         run.font.name = font_name
                         run.font.size = Pt(font_size_pt)
+                        if header_bold and i == 0:
+                            run.bold = True
 
-    def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
-        if not isinstance(text, str):
-            text = str(text or "")
-        lines = text.splitlines()
+    def _pb__write_block_markdown(doc, text_block: str):
+        # Process a plain text block with Markdown bullets, headings and MD tables
+        lines = text_block.splitlines()
         i = 0
         while i < len(lines):
             raw_line = lines[i].rstrip()
             line = raw_line
             if not line.strip():
                 p = doc.add_paragraph("")
-                i += 1; 
                 try:
                     p.paragraph_format.line_spacing_rule = line_spacing
                     for run in p.runs:
                         run.font.name = font_name; run.font.size = Pt(font_size_pt)
                 except Exception:
                     pass
+                i += 1
                 continue
 
-            # Markdown table detection: header + separator
-            if line.strip().startswith("|") and i + 1 < len(lines) and _is_md_table_sep(lines[i+1]):
-                header = line
-                j = i + 2
-                body_rows: list[str] = []
-                while j < len(lines) and lines[j].strip().startswith("|"):
-                    body_rows.append(lines[j])
-                    j += 1
-                _write_md_table(doc, header, body_rows)
-                i = j
+            # MD table
+            md_tbl = _try_md_table(lines, i)
+            if md_tbl:
+                headers = md_tbl["headers"]
+                rows = md_tbl["rows"]
+                _write_docx_table(doc, [headers] + rows, header_bold=True)
+                i = md_tbl["end"]
                 continue
 
-            if _re_md.match(r"^#{1,6}\s+", line):
-                htxt = _re_md.sub(r"^#{1,6}\s+", "", line).strip()
-                level = min(6, len(_re_md.match(r"^(#+)", line).group(1)))
-                p = doc.add_heading(htxt, level=level)
-            elif _re_md.match(r"^\d+[\.)]\s+", line):
-                txt = _strip_inline_tokens(_re_md.sub(r"^\d+[\.)]\s+", "", line).strip())
+            # Headings / lists / paragraphs
+            if _re.match(r"^#{1,6}\\s+", line):
+                htxt = _re.sub(r"^#{1,6}\\s+", "", line).strip()
+                level = min(6, len(_re.match(r"^(#+)", line).group(1)))
+                p = doc.add_heading(_strip_inline_tokens(htxt), level=level)
+            elif _re.match(r"^\\d+[\\.)]\\s+", line):
+                txt = _strip_inline_tokens(_re.sub(r"^\\d+[\\.)]\\s+", "", line).strip())
                 p = doc.add_paragraph(txt, style="List Number")
-            elif _re_md.match(r"^[-*•]\s+", line):
-                txt = _strip_inline_tokens(_re_md.sub(r"^[-*•]\s+", "", line).strip())
+            elif _re.match(r"^[-*•]\\s+", line):
+                txt = _strip_inline_tokens(_re.sub(r"^[-*•]\\s+", "", line).strip())
                 p = doc.add_paragraph(txt, style="List Bullet")
             else:
                 _clean = _strip_inline_tokens(line.strip())
                 p = doc.add_paragraph(_clean)
+
             try:
                 p.paragraph_format.line_spacing_rule = line_spacing
                 for run in p.runs:
@@ -16094,7 +16188,7 @@ def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.Dat
                 pass
             i += 1
 
-    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
+    # Build document ---------------------------------------------------------
     doc = docx.Document()
     doc.add_heading(doc_title or "Proposal", level=1)
     if metadata:
@@ -16102,22 +16196,33 @@ def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.Dat
 
     for s in (sections or []):
         title = str(s.get("title","")).strip()
-        body = _pb_normalize_text(str(s.get("body","")).strip())
+        body = _pb_normalize_text(str(s.get("body","")).strip())  # existing normalizer in app
         if title:
             doc.add_heading(title, level=2)
-        _pb__write_md(doc, body, font_name, font_size_pt, line_spacing)
 
-    # Optional CLINs grid
+        # First, split into HTML-table and text blocks
+        blocks = _extract_html_tables_blocks(body)
+        if not blocks:
+            _pb__write_block_markdown(doc, body)
+        else:
+            for kind, payload in blocks:
+                if kind == "text":
+                    _pb__write_block_markdown(doc, payload)
+                else:
+                    _write_docx_table(doc, payload, header_bold=True)
+
+    # CLINs grid
     try:
         import pandas as _pd
         if isinstance(clins, _pd.DataFrame) and not clins.empty:
+            doc.add_heading("Pricing (CLINs)", level=2)
             tbl = doc.add_table(rows=1, cols=len(clins.columns))
             tbl.style = "Table Grid"
             for j, col in enumerate(clins.columns):
                 cell = tbl.rows[0].cells[j]; cell.text = str(col)
                 for p in cell.paragraphs:
                     for run in p.runs:
-                        run.bold = True
+                        run.bold = True; run.font.name = font_name; run.font.size = Pt(font_size_pt)
             for _, row in clins.iterrows():
                 cells = tbl.add_row().cells
                 for j, col in enumerate(clins.columns):
@@ -16126,7 +16231,7 @@ def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.Dat
     except Exception:
         pass
 
-    # Optional compliance checklist
+    # Compliance checklist
     try:
         import pandas as _pd
         if isinstance(checklist, _pd.DataFrame) and not checklist.empty:
@@ -16134,7 +16239,9 @@ def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.Dat
             for _, r in checklist.iterrows():
                 txt = str(r.get("item_text","")).strip()
                 if txt:
-                    doc.add_paragraph(_strip_inline_tokens(txt), style="List Bullet")
+                    p = doc.add_paragraph(_strip_inline_tokens(txt), style="List Bullet")
+                    for run in p.runs:
+                        run.font.name = font_name; run.font.size = Pt(font_size_pt)
     except Exception:
         pass
 
