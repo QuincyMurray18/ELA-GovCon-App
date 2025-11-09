@@ -129,22 +129,6 @@ except NameError:
             t = _enforce_style_guide(t)
         except Exception:
             pass
-        try:
-            import re as _re_fix
-            # Headings and terms: Assumptions -> Dependencies
-            t = _re_fix.sub(r'(?im)^\s*assumptions\s*:?', 'Dependencies', t)
-            def _swap_dep(mo):
-                word = mo.group(0)
-                # preserve case
-                if word.isupper():
-                    return 'DEPENDENCIES' if word.endswith('S') else 'DEPENDENCY'
-                if word[0].isupper():
-                    return 'Dependencies' if word.endswith('s') else 'Dependency'
-                return 'dependencies' if word.endswith('s') else 'dependency'
-            t = _re_fix.sub(r'(?i)\bassumptions\b', _swap_dep, t)
-            t = _re_fix.sub(r'(?i)\bassumption\b', _swap_dep, t)
-        except Exception:
-            pass
         return t
 # ================================================
 
@@ -712,7 +696,7 @@ def _normalize_section_name(name: str) -> str:
 def _section_blueprint(section_title: str) -> str:
     k = _normalize_section_name(section_title)
     if k == "technical":
-        return ("Write only the Technical Approach. Include: dependencies; step-by-step procedure; "
+        return ("Write only the Technical Approach. Include: assumptions; step-by-step procedure; "
                 "tools and materials; interfaces; schedule with dependencies; acceptance criteria and QC checks. "
                 "Do not include management, staffing, risks, or crosswalks.")
     if k == "management":
@@ -735,7 +719,7 @@ def _section_blueprint(section_title: str) -> str:
     if k == "exec":
         return ("Write only the Executive Summary. State client need, proposed solution, value, and key discriminators.")
     if k == "price":
-        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and dependencies. No numbers.")
+        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and assumptions. No numbers.")
     if k == "past":
         return ("Write only the Past Performance section. Two concise examples with relevance and outcomes.")
     if k == "subs":
@@ -15019,7 +15003,7 @@ REQUIREMENTS:
 - No citations or references.
 - Short sentences (<=10 words). Paragraphs max 10 sentences.
 - Organize for easy scoring.
-- If something is unknown, state the dependency or required input. Do not assume.
+- If something is unknown, state an assumption.
 - Output only the requested section. No other sections.
 - Do not include TOC or extra headings.
 - Apply this blueprint:
