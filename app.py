@@ -9069,18 +9069,20 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         if st.button("Draft All Sections ▶", key="pb_draft_all"):
             with st.spinner("Drafting all selected sections…"):
                 for sec in selected:
-                    notes = st.session_state.get(f"pb_notes_{sec}", "")
+                    notes = st.session_state.get(f"y3_notes_{sec}", st.session_state.get(f"y3_notes_{sec}", ""))
                     k = y_auto_k(f"{sec} {notes}")
                     maxw = st.session_state.get(f"y3_maxw_{sec}", 220)
                     acc = []
-                    # stream and accumulate (headless)
-                    for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes, k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
+                    for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
                         acc.append(tok)
                     drafted = "".join(acc).strip()
-            if drafted:
-                drafted = _strip_citations(drafted)
-                st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
+                    if drafted:
+                        drafted = _strip_citations(drafted)
+                        final = _finalize_section(sec, drafted)
+                        st.session_state[f"pb_section_{sec}"] = final
+                        st.session_state[f"pb_ta_{sec}"] = final
             st.success("Drafted all sections.")
+            st.rerun()
         content_map: Dict[str, str] = {}
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
@@ -9100,9 +9102,22 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     if drafted:
                         drafted = _strip_citations(drafted)
                         st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
-                        default_val = drafted
+                        st.session_state[f"pb_ta_{sec}"] = st.session_state[f"pb_section_{sec}"]
+                        st.rerun()
 
-            content_map[sec] = st.text_area(sec, value=default_val, height=200, key=f"pb_ta_{sec}")
+            ta_key = f"pb_ta_{sec}"
+
+            if ta_key not in st.session_state:
+
+                st.session_state[ta_key] = st.session_state.get(f"pb_section_{sec}", "")
+
+            content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
+    # Ensure text areas reflect latest session values
+    for sec in selected:
+        src = st.session_state.get(f"pb_section_{sec}")
+        if src is not None and st.session_state.get(f"pb_ta_{sec}", None) != src:
+            st.session_state[f"pb_ta_{sec}"] = src
+            st.rerun()
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
