@@ -675,9 +675,7 @@ def _full_rfp_text(conn, rfp_id: int, limit: int = 20000) -> str:
 
     def _coalesce_join(df, col) -> str:
         if df is not None and not df.empty:
-            s = "
-
-".join([str(x or "") for x in df[col].tolist()]).strip()
+            s = "\n\n".join([str(x or "") for x in df[col].tolist()]).strip()
             if len(s) > int(limit): s = s[:int(limit)]
             return s
         return ""
