@@ -114,8 +114,90 @@ except NameError:
 try:
     _enforce_style_guide
 except NameError:
-    def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
-        return str(text or "").strip()
+    \
+def _enforce_style_guide(text: str, target_min: int = 14, target_max: int = 20, max_sents_per_para: int = 10) -> str:
+    import re
+    t = str(text or "")
+
+    # Normalize headings: dependencies -> Dependencies
+    t = re.sub(r"(?im)^\s*dependencies(\s*[:\-]?)", r"Dependencies\1", t)
+
+    # Simple jargon and nominalization replacements
+    repl = {
+        r"\butilize\b": "use",
+        r"\bleverage\b": "use",
+        r"\bfacilitate\b": "help",
+        r"\bprioritize\b": "focus on",
+        r"\bimplement(?:ation)?\b": "implement",
+        r"\bprovide(?:r|rs)?\b": "provide",
+        r"\bprovision\b": "provide",
+        r"\boptimization\b": "improve",
+        r"\bcapability\b": "ability",
+        r"\bcommencement\b": "start",
+        r"\btermination\b": "end",
+        r"\bmitigation\b": "reduce",
+        r"\bsubmission\b": "submit",
+        r"\bverification\b": "verify",
+        r"\butilization\b": "use",
+    }
+    for pat, rep in repl.items():
+        t = re.sub(pat, rep, t, flags=re.IGNORECASE)
+
+    # Cut common hedges and shift to present tense where safe
+    t = re.sub(r"(?i)\bwe will\b", "we", t)
+    t = re.sub(r"(?i)\bwe shall\b", "we", t)
+    t = re.sub(r"(?i)\bwe (?:aim|intend|plan) to\b", "we", t)
+    t = re.sub(r"(?i)\bshould\b", "", t)
+    t = re.sub(r"(?i)\bmay\b", "", t)
+    t = re.sub(r"(?i)\bmight\b", "", t)
+
+    # Enforce sentence length 14–20 words where possible
+    def split_into_sentences(paragraph):
+        parts = re.split(r"([\.!?])", paragraph)
+        out = []
+        for i in range(0, len(parts), 2):
+            core = parts[i].strip()
+            end = parts[i+1] if i+1 < len(parts) else ""
+            if core:
+                out.append((core + end).strip())
+        return out
+
+    def fix_sentence_lengths(paragraph):
+        sents = split_into_sentences(paragraph)
+        fixed = []
+        i = 0
+        while i < len(sents):
+            s = sents[i].strip()
+            wc = len(re.findall(r"\b\w+\b", s))
+            if wc < target_min and i + 1 < len(sents):
+                glued = (s.rstrip(".!?") + " " + sents[i+1].lstrip()).strip()
+                wc2 = len(re.findall(r"\b\w+\b", glued))
+                if wc2 <= target_max + 5:
+                    fixed.append(glued)
+                    i += 2
+                    continue
+            if wc > target_max + 5:
+                split = re.split(r"(;|:|\sand\s)", s, maxsplit=1)
+                if len(split) > 1:
+                    left = (split[0] + ".").strip()
+                    right = (" ".join(split[2:])).strip()
+                    if left: fixed.append(left)
+                    if right: fixed.append(right)
+                else:
+                    fixed.append(s)
+            else:
+                fixed.append(s)
+            i += 1
+        return " ".join(fixed)
+
+    paras = [p.strip() for p in re.split(r"\n{2,}", t) if p.strip()]
+    new_paras = []
+    for p in paras:
+        new_paras.append(fix_sentence_lengths(p))
+    t = "\n\n".join(new_paras)
+
+    return t.strip()
+
 
 try:
     _finalize_draft
@@ -137,15 +219,30 @@ try:
     _style_guide
 except NameError:  # define if missing
     def _style_guide() -> str:
-        return (
-            "Follow these rules strictly:\n"
-            "1) Understand client need. Mirror solicitation terms exactly.\n"
+    return (
+        "Follow these rules strictly:\n"
+        "1) Understand client need. Mirror solicitation terms exactly.\n"
+        "2) State deliverables explicitly.\n"
+        "3) Answer each L&M requirement directly.\n"
+        "4) Provide HOW procedures and concrete steps.\n"
+        "5) Sentences 14–20 words. One idea per paragraph.\n"
+        "6) Speak to 'you' directly. Keep ~1:1 'you:we' ratio.\n"
+        "7) Use plain words. Replace jargon and nominalizations with verbs.\n"
+        "8) Cut hedges unless the solicitation requires them.\n"
+        "9) Commit in present tense.\n"
+        "10) Add one proof point per section: metric, artifact, or timeline.\n"
+        "11) Close each section with a one-sentence promise tied to risk control.\n"
+        "12) Organize clearly for easy scoring.\n"
+        "13) No citations or references.\n"
+        "14) Output only the requested section. No other sections."
+    )
+Understand client need. Mirror solicitation terms exactly.\n"
             "2) State deliverables explicitly.\n"
             "3) Address evaluation factors: technical, management, past performance, price.\n"
             "4) Answer each L&M requirement directly.\n"
             "5) Obey page and format rules.\n"
             "6) Provide HOW procedures, not claims.\n"
-            "7) Short sentences (<=10 words). One idea per paragraph.\n"
+            "7) Sentences 14–20 words. One idea per paragraph.\n"
             "8) Use bullets. Clean headings.\n"
             "9) Include roles, equipment, timeline, QC checks, metrics.\n"
             "10) Identify subcontractors and responsibilities.\n"
@@ -696,7 +793,7 @@ def _normalize_section_name(name: str) -> str:
 def _section_blueprint(section_title: str) -> str:
     k = _normalize_section_name(section_title)
     if k == "technical":
-        return ("Write only the Technical Approach. Include: assumptions; step-by-step procedure; "
+        return ("Write only the Technical Approach. Include: dependencies; step-by-step procedure; "
                 "tools and materials; interfaces; schedule with dependencies; acceptance criteria and QC checks. "
                 "Do not include management, staffing, risks, or crosswalks.")
     if k == "management":
@@ -719,7 +816,7 @@ def _section_blueprint(section_title: str) -> str:
     if k == "exec":
         return ("Write only the Executive Summary. State client need, proposed solution, value, and key discriminators.")
     if k == "price":
-        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and assumptions. No numbers.")
+        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and dependencies. No numbers.")
     if k == "past":
         return ("Write only the Past Performance section. Two concise examples with relevance and outcomes.")
     if k == "subs":
@@ -4835,22 +4932,6 @@ SECTION: {section_title}
 
 {_style_guide()}
 
-USE THIS SCAFFOLD:
-- Section lead mirroring solicitation.
-- Client need.
-- Deliverables.
-- Technical approach (step-by-step).
-- Management approach (roles and RACI).
-- Staffing and coverage.
-- Equipment and materials.
-- Timeline milestones.
-- Quality control and metrics.
-- Subcontractors and oversight.
-- Risks and mitigations.
-- Compliance crosswalk (bullets to L&M).
-- Past performance tie-in.
-- Price approach note.
-
 RFP META:
 {meta}
 
@@ -4873,11 +4954,16 @@ AUTHOR NOTES:
 {notes or 'n/a'}
 
 REQUIREMENTS:
-- Write one paragraph per idea. Start a new paragraph when the topic shifts.
-- No citations or 'References'.
-- Map content to context.
-- {req_len}
-- Short sentences (<=10 words). Paragraphs <=10 sentences.
+- One paragraph per idea. Each sentence 14–20 words.
+- Speak to 'you' directly. Maintain ~1:1 'you:we' ratio.
+- Use plain words. Replace jargon and nominalizations with verbs.
+- Cut hedges unless required by the solicitation.
+- Present tense for commitments.
+- Include at least one specific detail in each paragraph.
+- Add one concrete proof point per section: metric, artifact, or timeline.
+- Close with a one-sentence promise tied to risk control.
+- Use solicitation terms verbatim when relevant.
+- Answer L&M directly.
 - Output only the requested section. No other sections.
 - Do not include TOC or extra headings.
 - Apply this blueprint:
@@ -5020,7 +5106,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
             f"Goal: bring the TOTAL length near {mw} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
             "Rules:\n"
             "- Do not modify prior text. Append continuation only.\n"
-            "- Keep one paragraph per idea. Short sentences (<=12 words).\n"
+            "- Keep one paragraph per idea. Sentences 14–20 words.\n"
             "- Add concrete steps, schedule, QC, staffing, and compliance mapping.\n"
             "- Stop after a natural sentence boundary. Slightly exceed target if needed.\n\n"
             "--- EXISTING DRAFT START ---\n"
@@ -14949,22 +15035,6 @@ SECTION TO DRAFT: {section_title}
 
 {_style_guide()}
 
-USE THIS SCAFFOLD:
-- Section lead mirroring solicitation.
-- Client need.
-- Deliverables.
-- Technical approach (step-by-step).
-- Management approach (roles and RACI).
-- Staffing and coverage.
-- Equipment and materials.
-- Timeline milestones.
-- Quality control and metrics.
-- Subcontractors and oversight.
-- Risks and mitigations.
-- Compliance crosswalk (bullets to L&M).
-- Past performance tie-in.
-- Price approach note.
-
 RFP META:
 {json.dumps(meta, ensure_ascii=False)}
 
@@ -14990,12 +15060,16 @@ NOTES:
 {notes or '(none)'}
 
 REQUIREMENTS:
-- Write one paragraph per idea. Start a new paragraph when the topic shifts.
+- One paragraph per idea. Each sentence 14–20 words.
+- Speak to 'you' directly. Maintain ~1:1 'you:we' ratio.
+- Use plain words. Replace jargon and nominalizations with verbs.
+- Cut hedges unless required by the solicitation.
+- Present tense for commitments.
+- Include at least one specific detail in each paragraph.
+- Add one concrete proof point per section: metric, artifact, or timeline.
+- Close with a one-sentence promise tied to risk control.
 - Use solicitation terms verbatim when relevant.
-- No citations or references.
-- Short sentences (<=10 words). Paragraphs max 10 sentences.
-- Organize for easy scoring.
-- If something is unknown, state an assumption.
+- Answer L&M directly.
 - Output only the requested section. No other sections.
 - Do not include TOC or extra headings.
 - Apply this blueprint:
@@ -15491,7 +15565,7 @@ def _style_guide() -> str:
             "4) Answer each L&M requirement directly.\n"
             "5) Obey page and format rules.\n"
             "6) Provide HOW procedures, not claims.\n"
-            "7) Short sentences (<=10 words). One idea per paragraph.\n"
+            "7) Sentences 14–20 words. One idea per paragraph.\n"
             "8) Use bullets. Clean headings.\n"
             "9) Include roles, equipment, timeline, QC checks, metrics.\n"
             "10) Identify subcontractors and responsibilities.\n"
@@ -15512,7 +15586,7 @@ PROPOSAL_STYLE_GUIDE = (
     "4) Answer each L&M requirement directly.\n"
     "5) Obey page and format rules.\n"
     "6) Provide HOW procedures, not claims.\n"
-    "7) Short sentences (<=10 words). One idea per paragraph.\n"
+    "7) Sentences 14–20 words. One idea per paragraph.\n"
     "8) Use bullets. Clean headings.\n"
     "9) Include roles, equipment, timeline, QC checks, metrics.\n"
     "10) Identify subcontractors and responsibilities.\n"
@@ -15531,6 +15605,27 @@ def _strip_citations(text: str) -> str:
     t = re.sub(r"\n+references?:\n.*$", "", t, flags=re.I|re.S)
     t = re.sub(r"^source:.*$", "", t, flags=re.I|re.M)
     t = re.sub(r"\n{3,}", "\n\n", t)
+    
+    # Diagnostics: approximate active voice and you:we ratio
+    try:
+        import re as _diag_re
+        sents = _diag_re.split(r'(?<=[\.!?])\s+', t)
+        passive_pat = _diag_re.compile(r'\b(?:is|are|was|were|be|been|being)\s+\w+(?:ed|en)\b(?:[^.]*\bby\b)?', _diag_re.I)
+        passive = sum(1 for s in sents if passive_pat.search(s or ""))
+        total = max(1, len([s for s in sents if s.strip()]))
+        active_ratio = int(round(100 * (1 - passive / total)))
+        you = len(_diag_re.findall(r'\byou|your\b', t, _diag_re.I))
+        we = len(_diag_re.findall(r'\bwe|our\b', t, _diag_re.I))
+        you_we = f"{you}:{we}" if we else f"{you}:0"
+        try:
+            import streamlit as _st_diag
+            _st_diag.session_state['pb_active_voice'] = active_ratio
+            _st_diag.session_state['pb_you_we'] = you_we
+        except Exception:
+            pass
+        t = t + f"\n\n<!-- diagnostics: active_voice={active_ratio}% you_we={you_we} -->"
+    except Exception:
+        pass
     return t.strip()
 
 def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
@@ -15616,3 +15711,26 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
+
+# === Finalize Section Override ===
+def _finalize_section(section_title: str, text: str) -> str:
+    try:
+        t = _pb_normalize_text(text)
+    except Exception:
+        t = str(text or "")
+    try:
+        t = _clip_to_single_section(section_title, t)
+    except Exception:
+        pass
+    try:
+        t = _enforce_style_guide(t, target_min=14, target_max=20)
+    except Exception:
+        pass
+    import re as _re_final
+    t = _re_final.sub(r"(?im)^\s*assumptions(\s*[:\-]?)", r"Dependencies\1", t)
+    try:
+        t = _clip_to_single_section(section_title, t)
+    except Exception:
+        pass
+    return t.strip()
+
