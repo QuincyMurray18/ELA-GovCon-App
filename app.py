@@ -9496,7 +9496,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
         lines = text.splitlines()
 
-        i = 0
+        idx_line = 0
 
 
 
@@ -9558,9 +9558,9 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
 
 
-        while i < len(lines):
+        while idx_line < len(lines):
 
-            raw_line = lines[i]
+            raw_line = lines[idx_line]
 
             line = raw_line.rstrip()
 
@@ -9568,21 +9568,21 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
             # pipe table: header then separator row
 
-            if _re_md2.match(r"^\|\s*.+\s*\|$", line) and (i + 1) < len(lines) and _re_md2.match(r"^\|\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|$", lines[i+1]):
+            if _re_md2.match(r"^\|\s*.+\s*\|$", line) and (idx_line + 1) < len(lines) and _re_md2.match(r"^\|\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|$", lines[idx_line + 1]):
 
                 header_cells = [c.strip() for c in line.strip()[1:-1].split("|")]
 
-                i += 2
+                idx_line += 2
 
                 rows = []
 
-                while i < len(lines) and _re_md2.match(r"^\|\s*.*\|$", lines[i]):
+                while idx_line < len(lines) and _re_md2.match(r"^\|\s*.*\|$", lines[idx_line]):
 
-                    cells = [c.strip() for c in lines[i].strip()[1:-1].split("|")]
+                    cells = [c.strip() for c in lines[idx_line].strip()[1:-1].split("|")]
 
                     rows.append(cells)
 
-                    i += 1
+                    idx_line += 1
 
                 tbl = doc.add_table(rows=1 + len(rows), cols=len(header_cells))
 
@@ -9608,7 +9608,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
                 _apply_para_style(p)
 
-                i += 1
+                idx_line += 1
 
                 continue
 
@@ -9624,7 +9624,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
                 _apply_para_style(p)
 
-                i += 1
+                idx_line += 1
 
                 continue
 
@@ -9640,7 +9640,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
                 _apply_para_style(p)
 
-                i += 1
+                idx_line += 1
 
                 continue
 
@@ -9656,7 +9656,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
                 _apply_para_style(p)
 
-                i += 1
+                idx_line += 1
 
                 continue
 
@@ -9668,7 +9668,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
 
             _apply_para_style(p)
 
-            i += 1
+            idx_line += 1
     def _apply_para_style(p):
         try:
             if line_spacing:
