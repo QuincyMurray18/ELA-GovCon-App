@@ -9672,7 +9672,19 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             )
             if exported:
                 st.success(f"Exported to {exported}")
-                st.markdown(f"[Download DOCX]({exported})")
+                
+                try:
+                    with open(exported, "rb") as _f:
+                        _data = _f.read()
+                    st.download_button(
+                        "Download DOCX",
+                        data=_data,
+                        file_name=out_name,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"dl_exported_docx"
+                    )
+                except Exception as _e:
+                    st.error(f"Download unavailable: {_e}")
 
         # [removed] Legacy Snippets/Citations panel hidden
 # ---------- Subcontractor Finder (Phase D) ----------
@@ -10496,7 +10508,19 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
             out = _export_capability_docx(path, p)
             if out:
                 st.success("Exported.")
-                st.markdown(f"[Download DOCX]({out})")
+                
+                try:
+                    with open(out, "rb") as _f:
+                        _data = _f.read()
+                    st.download_button(
+                        "Download DOCX",
+                        data=_data,
+                        file_name=os.path.basename(out) or "export.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"dl_out_docx"
+                    )
+                except Exception as _e:
+                    st.error(f"Download unavailable: {_e}")
 
 # ---------- Phase G: Past Performance Library + Generator ----------
 def _pp_score_one(rec: dict, rfp_title: str, rfp_sections: pd.DataFrame) -> int:
