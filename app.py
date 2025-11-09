@@ -5215,12 +5215,12 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             current = ln_stripped.split(":")[0].lower()
             bullet_count = 0
             out.append(ln)
-            i += 1
+            idx_line += 1
             continue
         if re.match(r"^(Score:|Conclusion:)", ln_stripped, re.I):
             current = None
             out.append(ln)
-            i += 1
+            idx_line += 1
             continue
         # cap bullets in the four sections
         if current in {"strengths", "gaps", "risks", "required fixes"}:
@@ -5231,7 +5231,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
                 # else drop extra bullets
             else:
                 out.append(ln)
-            i += 1
+            idx_line += 1
             continue
         out.append(ln)
         i += 1
@@ -9728,7 +9728,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
         if not line.strip():
             p = doc.add_paragraph("")
             _apply_para_style(p)
-            i += 1
+            idx_line += 1
             continue
         # headings
         if _re_md2.match(r"^#{1,6}\s+", line):
@@ -9736,7 +9736,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
             level = min(6, len(_re_md2.match(r"^(#+)", line).group(1)))
             p = doc.add_heading(htxt, level=level)
             _apply_para_style(p)
-            i += 1
+            idx_line += 1
             continue
         # ordered list
         if _re_md2.match(r"^\d+[\.)]\s+", line):
@@ -9744,7 +9744,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
             p = doc.add_paragraph("", style="List Number")
             _add_inline_runs(p, content)
             _apply_para_style(p)
-            i += 1
+            idx_line += 1
             continue
         # unordered list
         if _re_md2.match(r"^[-*•]\s+", line):
@@ -9752,7 +9752,7 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
             p = doc.add_paragraph("", style="List Bullet")
             _add_inline_runs(p, content)
             _apply_para_style(p)
-            i += 1
+            idx_line += 1
             continue
         # default paragraph with inline formatting
         clean = line.strip()
