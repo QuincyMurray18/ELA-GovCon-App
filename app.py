@@ -9545,7 +9545,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                         final = _pb_clip_to_section(sec, drafted)
                     norm = _pb_normalize_text(final)
                     st.session_state[f"pb_section_{sec}"] = norm
-                    st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
+                    st.session_state[f"pb_ta_{_pb_safe_key(sec)}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
@@ -9570,10 +9570,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                         final = _pb_clip_to_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
-                        st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
+                        st.session_state[f"pb_ta_{_pb_safe_key(sec)}"] = norm
 
 
-            ta_key = f"pb_ta_{_safe_key(sec)}"
+            ta_key = f"pb_ta_{_pb_safe_key(sec)}"
 
             if ta_key not in st.session_state:
 
