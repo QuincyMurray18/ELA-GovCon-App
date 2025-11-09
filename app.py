@@ -15950,3 +15950,109 @@ def run_proposal_builder(conn: \"sqlite3.Connection\") -> None:
 if \"pb_phase_v_section_library\" not in globals():
     def pb_phase_v_section_library(conn):
         return None
+
+
+
+# ===== PB PATCH v2: fix NameError _safe_key, and session-state mutation on widget keys =====
+try:
+    import streamlit as st
+except Exception:
+    pass
+
+# Backward-compat shim for legacy callers
+if '_safe_key' not in globals():
+    def _safe_key(label: str) -> str:
+        try:
+            return _pb_safe_key(label)
+        except Exception:
+            import re as _re
+            return _re.sub(r"[^a-z0-9]+","_",str(label).lower()).strip("_") or "text"
+
+def _pb_store_key(label: str) -> str:
+    return f"pb_store_{_pb_safe_key(label)}"
+
+def _pb_widget_key(label: str) -> str:
+    return f"pb_w_{_pb_safe_key(label)}"
+
+def _pb_set_store(label: str, value: str) -> None:
+    st.session_state[_pb_store_key(label)] = value or ""
+
+# Override run_proposal_builder to use separate store vs widget keys
+def run_proposal_builder(conn: "sqlite3.Connection") -> None:  # type: ignore[name-defined]
+    import pandas as pd
+    st.header("Proposal Builder")
+    # RFP selector
+    try:
+        df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
+    except Exception:
+        try:
+            df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
+        except Exception:
+            df_rf = pd.DataFrame()
+    if df_rf is None or df_rf.empty:
+        st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
+        return
+    rfp_id = st.selectbox(
+        "RFP context",
+        options=df_rf["id"].tolist(),
+        format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid, 'title'].values[0] or 'Untitled'}",
+        index=0,
+        key="pb_rfp_sel",
+    )
+    st.session_state["current_rfp_id"] = rfp_id
+    # Sections UI
+    default_sections = [
+        "Cover Letter","Executive Summary","Technical Approach","Management Approach",
+        "Staffing","Quality Assurance / QC","Risks and Mitigations","Transition Plan",
+        "Past Performance","Price Approach","Subcontractor Plan","Compliance Crosswalk",
+    ]
+    with st.expander("Sections", expanded=True):
+        sel = st.multiselect("Select sections", options=default_sections, default=default_sections, key="pb_sel")
+        cols = st.columns(2)
+        for i, label in enumerate(sel):
+            with cols[i % 2]:
+                tw_key = _pb_target_words_key(label)
+                st.session_state.setdefault(tw_key, 600)
+                st.number_input(f"Target words — {label}", min_value=150, max_value=2000, step=50, key=tw_key)
+                # Controlled text area: widget key separate from store key
+                store_key = _pb_store_key(label)
+                current_val = st.session_state.get(store_key, "")
+                new_val = st.text_area(label, value=current_val, key=_pb_widget_key(label), height=220, placeholder=f"Draft {label} here…")
+                # Update store with user edits
+                st.session_state[store_key] = new_val
+
+    # Actions
+    c1, c2, c3 = st.columns([1,1,2])
+    rerun_needed = False
+    with c1:
+        if st.button("Draft selected", type="primary", key="pb_draft_sel"):
+            for label in st.session_state.get("pb_sel", []):
+                try:
+                    t = _pb_draft_one(conn, int(rfp_id), label, int(st.session_state.get(_pb_target_words_key(label), 600)))
+                    _pb_set_store(label, t)
+                    rerun_needed = True
+                except Exception as e:
+                    st.warning(f"{label}: {e}")
+    with c2:
+        if st.button("Draft all", key="pb_draft_all"):
+            for label in default_sections:
+                try:
+                    t = _pb_draft_one(conn, int(rfp_id), label, int(st.session_state.get(_pb_target_words_key(label), 600)))
+                    _pb_set_store(label, t)
+                    rerun_needed = True
+                except Exception as e:
+                    st.warning(f"{label}: {e}")
+    with c3:
+        if st.button("Export .docx", key="pb_export"):
+            sections = []
+            for label in st.session_state.get("pb_sel", default_sections):
+                body = st.session_state.get(_pb_store_key(label), "")
+                sections.append({"title": label, "body": body})
+            try:
+                path = _export_to_docx(sections=sections, doc_title=(df_rf.loc[df_rf['id']==rfp_id,'title'].values[0] if not df_rf.empty else "Proposal"))
+                st.success(f"Saved: {path}")
+            except Exception as e:
+                st.error(f"Export failed: {e}")
+    if rerun_needed:
+        st.rerun()
+
