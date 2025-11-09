@@ -1,9 +1,3 @@
-try:
-    _pb_psychology_framework  # type: ignore[name-defined]
-except NameError:
-    def _pb_psychology_framework() -> str:
-        return ""
-
 
 # === Proposal Builder normalization helpers ===
 def _pb_try_json(text: str):
@@ -4697,110 +4691,6 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
         ctx["title"] = ""; ctx["solnum"] = ""
     return ctx
 
-
-def _y3_build_messages_psych(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
-    import pandas as _pd
-    # Collect context via existing helper if available
-    try:
-        ctx = _y3_collect_ctx(conn, int(rfp_id))
-    except Exception:
-        ctx = {}
-    # Direct pulls for dates, POCs, CLINs
-    try:
-        df_dates = _pd.read_sql_query("SELECT label, date_text FROM rfp_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-    except Exception:
-        df_dates = _pd.DataFrame(columns=["label","date_text"])
-    try:
-        df_pocs = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-    except Exception:
-        df_pocs = _pd.DataFrame(columns=["name","role","email","phone"])
-    try:
-        df_clin = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-    except Exception:
-        df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
-    try:
-        df_org = _pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
-    except Exception:
-        df_org = _pd.DataFrame()
-
-    def _fmt_dates(df):
-        try: return "\n".join(f"- {r['label']}: {r['date_text']}" for _, r in df.iterrows()) if not df.empty else "- n/a"
-        except Exception: return "- n/a"
-    def _fmt_pocs(df):
-        try: return "\n".join(f"- {r['role']}: {r['name']} — {r.get('email','') or ''} {r.get('phone','') or ''}".strip() for _, r in df.iterrows()) if not df.empty else "- n/a"
-        except Exception: return "- n/a"
-    def _fmt_clins(df):
-        try:
-            cols = [c for c in ("clin","description","qty","unit") if c in df.columns]
-            return "\n".join("- " + " | ".join(str(r.get(c,'')) for c in cols) for _, r in df.iterrows()) if not df.empty else "- n/a"
-        except Exception: return "- n/a"
-
-    org = df_org.iloc[0].to_dict() if isinstance(df_org, _pd.DataFrame) and not df_org.empty else {}
-    org_lines = []
-    for k in ("company_name","phone","email","website","cage","uei","duns","ein","address"):
-        v = org.get(k) or org.get(k.upper()) or ""
-        if v: org_lines.append(f"{k.replace('_',' ').title()}: {v}")
-    org_block = "\n".join(org_lines) if org_lines else ""
-
-    try:
-        mw = int(max_words) if max_words else 0
-    except Exception:
-        mw = 0
-    target_clause = f"Target 97 to 103 percent of {mw} words. Finish the last sentence even if up to 40 words over." if mw > 0 else "No word target."
-
-    style = (
-        "You are a veteran federal proposal writer with $70M+ in awards.\n"
-        + _style_guide() + "\n\n"
-        + _pb_psychology_framework() + "\n"
-        "Output plain text only. No citations or snippet IDs.\n"
-    ).strip()
-
-    # Build user prompt
-    lm_items = (ctx.get("lm") or [])[:30]
-    lm_blob = "\n".join(f"- {t}" for t in lm_items) if lm_items else ""
-    meta = ctx.get("meta") or {}
-    meta_str = "\n".join(f"- {k}: {v}" for k,v in meta.items()) if isinstance(meta, dict) and meta else ""
-
-    user = f"""
-Draft the section: {section_title}
-
-Intent: disarm evaluator anxiety, show certainty, map to L&M.
-
-Notes from author:
-{notes or '- none'}
-
-Guidance:
-- {target_clause}
-- One idea per paragraph. Short sentences.
-- Lead with mission empathy. Then logic. Then verification.
-- Show reciprocity and mutual gains.
-- Use concrete steps, QC, metrics, timeline, roles.
-
-Apply this blueprint strictly:
-{_section_blueprint(section_title)}
-
-Company profile:
-{org_block or '- none on file'}
-
-RFP meta:
-{meta_str or '- n/a'}
-
-Key dates:
-{_fmt_dates(df_dates)}
-
-POCs:
-{_fmt_pocs(df_pocs)}
-
-CLINs:
-{_fmt_clins(df_clin)}
-
-Checklist items:
-{lm_blob or '- none'}
-""".strip()
-
-    return [{"role":"system","content": style}, {"role":"user","content": user}]
-
-
 def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     import pandas as _pd
     ctx = _y3_collect_ctx(conn, int(rfp_id))
@@ -4885,7 +4775,7 @@ REQUIREMENTS:
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
-    msgs = _y3_build_messages_psych(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+    msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
     model_name = _resolve_model()
     try:
@@ -4914,72 +4804,7 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             return len(str(text or "").split())
 
     
-
-def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
-    def wc(t: str) -> int:
-        try:
-            import re as _re_wc
-            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
-        except Exception:
-            return len(str(t or "").split())
-    try:
-        mw = int(max_words) if max_words else 0
-    except Exception:
-        mw = 0
-    if not mw or mw <= 0:
-        return drafted or ""
-    lower = int(max(1, round(0.97 * mw)))
-    hard_cap = mw + 60
-    text_acc = (drafted or "").strip()
-    if wc(text_acc) >= lower:
-        return text_acc
-    client = get_ai()
-    model_name = _resolve_model()
-    attempts = 0
-    while wc(text_acc) < lower and attempts < 6 and wc(text_acc) < hard_cap:
-        attempts += 1
-        cur = wc(text_acc)
-        remaining = max(0, lower - cur)
-        ask_up_to = max(80, min(200, remaining + 40))
-        system = (
-            "You are a veteran federal proposal writer with $70M+ in awards. "
-            "Append continuation only. Do not repeat or modify prior text. "
-            "Preserve bullets and paragraph breaks. Keep style unchanged."
-        )
-        user = (
-            f"Continue the following section for RFP {int(rfp_id)}.\n"
-            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
-            "Rules:\n"
-            "- Append continuation only. No rewrites.\n"
-            "- Finish the last sentence if near the end, even if slightly over the soft cap.\n"
-            "- Keep one idea per paragraph. Short sentences.\n"
-            "- Include concrete steps, QC points, metrics, and verification.\n\n"
-            "--- EXISTING DRAFT START ---\n"
-            f"{text_acc}\n"
-            "--- EXISTING DRAFT END ---\n\n"
-            "Append continuation only:"
-        )
-        try:
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-                temperature=0.15,
-                stream=False,
-            )
-            add = ""
-            if hasattr(resp, "choices") and resp.choices:
-                add = getattr(resp.choices[0].message, "content", "") or ""
-        except Exception:
-            add = ""
-        add = str(add).strip()
-        if add:
-            text_acc = (text_acc + "\n\n" + add).strip()
-        else:
-            break
-    return text_acc.strip()
-
-
-def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
     """
     Iteratively append continuation until total length ≈ target.
     Never rewrite existing text. Stop at a sentence boundary.
@@ -5161,7 +4986,6 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             pass
 
 def y4_ui_review(conn: "sqlite3.Connection") -> None:
-    pass  # auto-inserted to fix empty function body
 # [removed]     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -9444,7 +9268,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
                         final = _finalize_section(sec, drafted)
                 norm = _pb_normalize_text(final)
                 st.session_state[f"pb_section_{sec}"] = norm
@@ -9469,7 +9293,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
                         final = _finalize_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
@@ -15565,26 +15389,6 @@ def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
         else:
             out.append(" ".join(fixed))
     return "\n\n".join(out).strip()
-
-
-
-def _pb_psychology_framework() -> str:
-    """
-    Psychology rules used to shape tone and trust. Not printed verbatim.
-    """
-    return (
-        "Psychology layer:\n"
-        "- Lead with empathy to the mission and constraints.\n"
-        "- Tell a compact story: context, challenge, method, outcome.\n"
-        "- Reciprocity: mutual wins for agency and vendor.\n"
-        "- Certainty language: clear commitments, no hedging, show controls.\n"
-        "- Trust markers: past performance, QA, safety, data security, subcontractor vetting.\n"
-        "- Disarm risk early: list top risks, mitigations, verification steps.\n"
-        "- Smooth cadence: short sentences, one idea per paragraph, clean transitions.\n"
-        "- No citations or snippet IDs. Self-contained answer.\n"
-    ).strip()
-
-
 
 def _finalize_draft(text: str) -> str:
     return _one_idea_per_paragraph(_enforce_style_guide(_strip_citations(text)))
