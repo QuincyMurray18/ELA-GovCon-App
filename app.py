@@ -345,6 +345,31 @@ def _mk_md_table(headers, rows):
 
 def _auto_tables_for_section(conn, rfp_id: int, section_title: str) -> str:
     import pandas as _pd
+
+
+# --- Utilities: key sanitizer and section clipper ---
+def _safe_key(name: str) -> str:
+    import re as _re
+    return _re.sub(r'[^a-z0-9_]+', '_', str(name or '').lower()).strip('_')
+
+def _pb_clip_to_section(section_title: str, text: str) -> str:
+    if not text:
+        return text
+    k = str(section_title or '').lower().strip()
+    stops = [
+        'executive summary','technical approach','management approach','staffing',
+        'quality control','quality assurance','risk','risks and mitigations','transition',
+        'price approach','pricing approach','past performance','subcontractor plan',
+        'subcontracting plan','compliance crosswalk','cover letter'
+    ]
+    out = []
+    for line in (text or '').splitlines():
+        hdr = line.strip().lower().lstrip('#').strip()
+        if hdr in stops and hdr != k:
+            break
+        out.append(line)
+    return '\n'.join(out).strip()
+
     k = _normalize_section_name(section_title)
     out = []
     def add(name, headers, rows):
