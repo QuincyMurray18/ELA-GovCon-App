@@ -109,7 +109,7 @@ except NameError:
         t = _re.sub(r"\n+references?:\n.*$", "", t, flags=_re.I|_re.S)
         t = _re.sub(r"^source:.*$", "", t, flags=_re.I|_re.M)
         t = _re.sub(r"\n{3,}", "\n\n", t)
-        return t.strip()
+        return _filter_out_cross_section_content(section_title, t).strip()
 
 def _enforce_style_guide(text: str, target_min: int = 14, target_max: int = 20, max_sents_per_para: int = 10) -> str:
     import re
