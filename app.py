@@ -5161,7 +5161,6 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             pass
 
 def y4_ui_review(conn: "sqlite3.Connection") -> None:
-    pass  # auto-inserted to fix empty function body
 # [removed]     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -9446,9 +9445,9 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                         drafted = _strip_citations(drafted)
                         drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
                         final = _finalize_section(sec, drafted)
-                norm = _pb_normalize_text(final)
-                st.session_state[f"pb_section_{sec}"] = norm
-                st.session_state[f"pb_ta_{sec}"] = norm
+                    norm = _pb_normalize_text(final)
+                    st.session_state[f"pb_section_{sec}"] = norm
+                    st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
