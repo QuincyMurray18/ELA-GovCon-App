@@ -9479,15 +9479,196 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
     import re as _re_md
 
     def _pb__write_md(doc, text, font_name, font_size_pt, line_spacing):
-    if not isinstance(text, str):
-        text = str(text or "")
 
-    import re as _re_md2
-    from docx.shared import Pt  # type: ignore
 
-    lines = text.splitlines()
-    i = 0
 
+        if not isinstance(text, str):
+
+            text = str(text or "")
+
+
+
+        import re as _re_md2
+
+        from docx.shared import Pt  # type: ignore
+
+
+
+        lines = text.splitlines()
+
+        i = 0
+
+
+
+        def _apply_para_style(p):
+
+            try:
+
+                if line_spacing:
+
+                    p.paragraph_format.line_spacing_rule = line_spacing
+
+                for run in p.runs:
+
+                    run.font.name = font_name
+
+                    run.font.size = Pt(font_size_pt)
+
+            except Exception:
+
+                pass
+
+
+
+        def _add_inline_runs(p, content: str):
+
+            idx = 0
+
+            pattern = _re_md2.compile(r"(\*\*.+?\*\*|\*.+?\*|`.+?`)")
+
+            for m in pattern.finditer(content):
+
+                if m.start() > idx:
+
+                    p.add_run(content[idx:m.start()])
+
+                token = m.group(0)
+
+                if token.startswith("**"):
+
+                    r = p.add_run(token[2:-2])
+
+                    r.bold = True
+
+                elif token.startswith("*"):
+
+                    r = p.add_run(token[1:-1])
+
+                    r.italic = True
+
+                elif token.startswith("`"):
+
+                    r = p.add_run(token[1:-1])
+
+                idx = m.end()
+
+            if idx < len(content):
+
+                p.add_run(content[idx:])
+
+
+
+        while i < len(lines):
+
+            raw_line = lines[i]
+
+            line = raw_line.rstrip()
+
+
+
+            # pipe table: header then separator row
+
+            if _re_md2.match(r"^\|\s*.+\s*\|$", line) and (i + 1) < len(lines) and _re_md2.match(r"^\|\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|$", lines[i+1]):
+
+                header_cells = [c.strip() for c in line.strip()[1:-1].split("|")]
+
+                i += 2
+
+                rows = []
+
+                while i < len(lines) and _re_md2.match(r"^\|\s*.*\|$", lines[i]):
+
+                    cells = [c.strip() for c in lines[i].strip()[1:-1].split("|")]
+
+                    rows.append(cells)
+
+                    i += 1
+
+                tbl = doc.add_table(rows=1 + len(rows), cols=len(header_cells))
+
+                tbl.style = "Table Grid"
+
+                for c_idx, val in enumerate(header_cells):
+
+                    tbl.cell(0, c_idx).text = val
+
+                for r_idx, row in enumerate(rows, start=1):
+
+                    for c_idx in range(len(header_cells)):
+
+                        tbl.cell(r_idx, c_idx).text = row[c_idx] if c_idx < len(row) else ""
+
+                continue
+
+
+
+            if not line.strip():
+
+                p = doc.add_paragraph("")
+
+                _apply_para_style(p)
+
+                i += 1
+
+                continue
+
+
+
+            m = _re_md2.match(r"^(#{1,6})\s+(.*)$", line)
+
+            if m:
+
+                level = min(6, len(m.group(1)))
+
+                p = doc.add_heading(m.group(2).strip(), level=level)
+
+                _apply_para_style(p)
+
+                i += 1
+
+                continue
+
+
+
+            if _re_md2.match(r"^\d+[\.)]\s+", line):
+
+                content = _re_md2.sub(r"^\d+[\.)]\s+", "", line).strip()
+
+                p = doc.add_paragraph("", style="List Number")
+
+                _add_inline_runs(p, content)
+
+                _apply_para_style(p)
+
+                i += 1
+
+                continue
+
+
+
+            if _re_md2.match(r"^[-*•]\s+", line):
+
+                content = _re_md2.sub(r"^[-*•]\s+", "", line).strip()
+
+                p = doc.add_paragraph("", style="List Bullet")
+
+                _add_inline_runs(p, content)
+
+                _apply_para_style(p)
+
+                i += 1
+
+                continue
+
+
+
+            p = doc.add_paragraph("")
+
+            _add_inline_runs(p, line.strip())
+
+            _apply_para_style(p)
+
+            i += 1
     def _apply_para_style(p):
         try:
             if line_spacing:
@@ -9578,7 +9759,8 @@ def _export_docx(path: str, doc_title: str, sections: List[dict], clins: Optiona
         p = doc.add_paragraph("")
         _add_inline_runs(p, clean)
         _apply_para_style(p)
-        i += 1 spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
+        i += 1
+    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.ONE_POINT_FIVE)
     doc = Document()
     h = doc.add_heading(doc_title or "Proposal", level=1)
     if metadata:
@@ -10474,7 +10656,7 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
         st.error("python-docx is required. pip install python-docx")
         return None
 
-    doc = Document()
+    doc = docx.Document()
     for s in doc.sections:
         s.top_margin = Inches(0.7); s.bottom_margin = Inches(0.7); s.left_margin = Inches(0.7); s.right_margin = Inches(0.7)
 
@@ -10850,7 +11032,7 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
     except Exception:
         pass
     try:
-        doc = Document()
+        doc = docx.Document()
         doc.add_heading(title or "Win Plan", 0)
         if subtitle:
             doc.add_paragraph(subtitle)
@@ -13404,7 +13586,7 @@ def _export_past_perf_docx(path: str, records: list) -> Optional[str]:
         st.error("python-docx is required. pip install python-docx")
         return None
     try:
-        doc = Document()
+        doc = docx.Document()
         for s in doc.sections:
             s.top_margin = Inches(1); s.bottom_margin = Inches(1); s.left_margin = Inches(1); s.right_margin = Inches(1)
         doc.add_heading("Past Performance", level=1)
