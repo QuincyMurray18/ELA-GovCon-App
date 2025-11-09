@@ -345,6 +345,31 @@ def _mk_md_table(headers, rows):
 
 def _auto_tables_for_section(conn, rfp_id: int, section_title: str) -> str:
     import pandas as _pd
+
+
+# --- Utilities: key sanitizer and section clipper ---
+def _safe_key(name: str) -> str:
+    import re as _re
+    return _re.sub(r'[^a-z0-9_]+', '_', str(name or '').lower()).strip('_')
+
+def _pb_clip_to_section(section_title: str, text: str) -> str:
+    if not text:
+        return text
+    k = str(section_title or '').lower().strip()
+    stops = [
+        'executive summary','technical approach','management approach','staffing',
+        'quality control','quality assurance','risk','risks and mitigations','transition',
+        'price approach','pricing approach','past performance','subcontractor plan',
+        'subcontracting plan','compliance crosswalk','cover letter'
+    ]
+    out = []
+    for line in (text or '').splitlines():
+        hdr = line.strip().lower().lstrip('#').strip()
+        if hdr in stops and hdr != k:
+            break
+        out.append(line)
+    return '\n'.join(out).strip()
+
     k = _normalize_section_name(section_title)
     out = []
     def add(name, headers, rows):
@@ -1375,7 +1400,7 @@ def run_alerts_center(conn):
                             conn.execute("UPDATE saved_searches SET cadence=? WHERE id=?;", (_cad_in, int(sid)))
                 notify("Updated.", "success")
                 try:
-                    st.rerun()
+                    pass
                 except Exception:
                     pass
             except Exception as _e:
@@ -2128,7 +2153,8 @@ def _x3_open_modal(row_dict: dict):
     st.session_state["x3_modal_notice"] = dict(row_dict or {})
     st.session_state["x3_show_modal"] = True
     try:
-        st.rerun()
+        pass
+
     except Exception:
         pass
 
@@ -4610,7 +4636,7 @@ def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     if create:
         tid = y2_create_thread(conn, int(rfp_id), title="CO guidance")
         st.session_state["y2_thread_id"] = tid
-        st.rerun()
+
     if threads:
         pick = st.selectbox("Thread", options=[t["id"] for t in threads], format_func=lambda i: next((f"#{t['id']} — {t.get('title') or 'Untitled'}" for t in threads if t['id']==i), f"#{i}"), key="y2_pick")
         thread_id = int(pick)
@@ -4995,7 +5021,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         mw = 0
     if not mw or mw <= 0:
         return drafted or ""
-    lower = int(max(1, round(0.97 * mw)))
+    lower = int(max(1, round(0.99 * mw)))
     hard_cap = mw + 60
     text_acc = (drafted or "").strip()
     if wc(text_acc) >= lower:
@@ -5065,7 +5091,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         except Exception:
             return len(str(t or "").split())
 
-    low = int(mw * (0.97 if mw >= 120 else 0.95))
+    low = int(mw * (0.98 if mw >= 120 else 0.96))
     text_acc = (drafted or "").strip()
     attempts = 0
 
@@ -5570,7 +5596,7 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
                 find_section_M(conn, int(rid))
                 find_clins_all(conn, int(rid))
             st.success("Updated metadata and sections.")
-            st.rerun()
+
     # Chips
     try:
         dfm = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
@@ -6020,6 +6046,7 @@ def get_db() -> sqlite3.Connection:
         def __p_table_exists(cur, name: str) -> bool:
 
             try:
+                pass
 
                 cur.execute("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?;", (name,))
 
@@ -6042,6 +6069,7 @@ def get_db() -> sqlite3.Connection:
         def __p_add_tenant(cur, table: str):
 
             try:
+                pass
 
                 cols = __p_get_cols(cur, table)
 
@@ -6058,6 +6086,7 @@ def get_db() -> sqlite3.Connection:
         def __p_create_scoped_view(cur, table: str):
 
             try:
+                pass
 
                 cols = __p_get_cols(cur, table)
 
@@ -6078,6 +6107,7 @@ def get_db() -> sqlite3.Connection:
         def __p_create_insert_trigger(cur, table: str):
 
             try:
+                pass
 
                 trg = f"{table}_ai_tenant"
 
@@ -6180,6 +6210,7 @@ def get_db() -> sqlite3.Connection:
             __p_add_tenant(cur, t)
 
             try:
+                pass
 
                 cur.execute(f"UPDATE {t} SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) WHERE tenant_id IS NULL;")
 
@@ -7625,13 +7656,13 @@ def run_sam_watch(conn) -> None:
             with p1:
                 if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
                     st.session_state["sam_page"] = cur_page - 1
-                    st.rerun()
+
             with p2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with p3:
                 if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
                     st.session_state["sam_page"] = cur_page + 1
-                    st.rerun()
+
 
             start_i = (cur_page - 1) * page_size
             end_i = min(start_i + page_size, total)
@@ -7660,7 +7691,7 @@ def run_sam_watch(conn) -> None:
                     with c3:
                         if st.button("View details", key=f"sam_view_{i}"):
                             st.session_state["sam_selected_idx"] = i
-                            st.rerun()
+
                     with c4:
                         # Add to Deals (kept as-is; relies on project helpers)
                         if st.button("Add to Deals", key=f"add_to_deals_{i}"):
@@ -8157,7 +8188,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
 
                     st.success("Files added and Analyzer updated.")
-                    st.rerun()
+
 
         with col2:
             if st.button("Fetch from SAM.gov ▶", key="onepage_fetch_sam"):
@@ -8173,7 +8204,7 @@ def _run_rfp_analyzer_phase3(conn):
                             st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
                     except Exception as e:
                         st.error(f"SAM fetch error: {e}")
-                st.rerun()
+
 
     # Build pages for One-Page Analyzer
     try:
@@ -8711,7 +8742,7 @@ def _run_rfp_analyzer_phase3(conn):
                                     cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(rid),))
                                     conn.commit()
                                 st.success("Cleared.")
-                                st.rerun()
+
                             except Exception as e:
                                 st.error(f"Clear failed: {e}")
                 else:
@@ -8749,7 +8780,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
                             conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
-                    st.rerun()
+
             # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
@@ -8938,7 +8969,7 @@ def _run_rfp_analyzer_phase3(conn):
                         except Exception:
                             fail += 1
                     st.success(f"Retried {len(sel_retry)}. OK={ok} Fail={fail}")
-                    st.rerun()
+
 
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
@@ -9511,10 +9542,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     if drafted:
                         drafted = _strip_citations(drafted)
                         drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
-                        final = _finalize_section(sec, drafted)
+                        final = _pb_clip_to_section(sec, drafted)
                     norm = _pb_normalize_text(final)
                     st.session_state[f"pb_section_{sec}"] = norm
-                    st.session_state[f"pb_ta_{sec}"] = norm
+                    st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
@@ -9536,13 +9567,13 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     if drafted:
                         drafted = _strip_citations(drafted)
                         drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
-                        final = _finalize_section(sec, drafted)
+                        final = _pb_clip_to_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
-                        st.session_state[f"pb_ta_{sec}"] = norm
-                        st.rerun()
+                        st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
 
-            ta_key = f"pb_ta_{sec}"
+
+            ta_key = f"pb_ta_{_safe_key(sec)}"
 
             if ta_key not in st.session_state:
 
@@ -9551,12 +9582,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
                 st.markdown(st.session_state.get(ta_key, ""))
-    # Ensure text areas reflect latest session values
-    for sec in selected:
-        src = st.session_state.get(f"pb_section_{sec}")
-        if src is not None and st.session_state.get(f"pb_ta_{sec}", None) != src:
-            st.session_state[f"pb_ta_{sec}"] = src
-            st.rerun()
+
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
@@ -10017,7 +10043,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
             st.success("Scenario created.")
-            st.rerun()
+
         return
     else:
         if df_sc.empty:
@@ -11799,7 +11825,7 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
         n = _import_csv_into_table(conn, upcsv, tsel, scoped_to_current=True)
         if n:
             st.success(f"Imported {n} row(s) into {tsel}")
-            st.rerun()
+
 
 # ---------- Phase O: Global Theme & Layout ----------
 def _apply_theme_old() -> None:
@@ -11953,7 +11979,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
-                st.rerun()
+
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
         return
@@ -12014,7 +12040,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
-                st.rerun()
+
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
 
@@ -12052,7 +12078,7 @@ def run_rfp_analyzer(conn) -> None:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
             try:
                 _one_click_analyze(conn, int(rid))
-                st.rerun()
+
             except Exception as e:
                 st.error(f"Ingest failed: {e}")
 
@@ -12076,7 +12102,7 @@ def run_rfp_analyzer(conn) -> None:
                     y1_index_rfp(conn, int(rid), rebuild=False)
                 except Exception:
                     pass
-                st.rerun()
+
 
     # Build pages and render One-Page
     try:
@@ -12288,7 +12314,7 @@ if "_o3_render_sender_picker" not in globals():
                             st.session_state["o4_sender_sel"] = email.strip()
                         except Exception:
                             pass
-                        st.rerun()
+
                     except Exception as e:
                         st.error(f"Save failed: {e}")
             if ok and email:
@@ -12592,6 +12618,7 @@ def s1_normalize_phone(s:str)->str:
 def s1_get_google_api_key()->str|None:
     import os
     try:
+        pass
 
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
@@ -12741,12 +12768,12 @@ def render_outreach_templates(conn):
         if (tid is not None) and st.button("Duplicate"):
             email_template_upsert(conn, f"{name} copy", subject or "", sig_html or "", None)
             st.success("Duplicated")
-            st.rerun()
+
     with c3:
         if (tid is not None) and st.button("Delete"):
             email_template_delete(conn, tid)
             st.success("Deleted")
-            st.rerun()
+
 
 def _tpl_picker_prefill(conn):
 
@@ -13071,6 +13098,7 @@ def _o3_collect_recipients_ui(conn):
 
 def _o3_sender_accounts_from_secrets():
     try:
+        pass
 
         accs = []
         try:
@@ -13286,11 +13314,12 @@ def _o4_accounts_ui(conn):
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
     try:
+        pass
 
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-    st.rerun()
+
     with c4:
         if st.button("Delete account", key="o4_ac_del"):
             if not email:
@@ -13312,6 +13341,7 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = _get_senders(conn)
     try:
+        pass
 
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
@@ -13357,7 +13387,7 @@ def _o4_optout_ui(conn):
         with conn:
             conn.execute("INSERT OR IGNORE INTO outreach_optouts(email) VALUES(?)", (em.strip().lower(),))
         st.success("Added")
-        st.rerun()
+
     up = st.file_uploader("Bulk upload CSV with 'email' column", type=["csv"], key="o4_opt_csv")
     if up is not None:
         try:
@@ -14146,7 +14176,7 @@ def render_subfinder_s1d(conn):
         if st.session_state.get("s1d_next_token"):
             if st.button("Next page ▶", key="s1d_next_under"):
                 st.session_state["s1d_trigger"] = "next"
-                st.rerun()
+
 
     # === S1D CARDS: Add Places to Vendors and Quick Edit Vendors ===
     import sqlite3 as _sqlite3
@@ -15714,218 +15744,3 @@ def _finalize_section(section_title: str, text: str) -> str:
     except Exception:
         pass
     return t.strip()
-
-
-# =========================
-# APPEND-ONLY PATCH • PB-FIX (QC key, section bleed, RFP grounding, word-target)
-# =========================
-try:
-    import streamlit as st
-    import pandas as pd
-except Exception:
-    pass
-
-import re as _re
-
-def _pb_safe_key(label: str) -> str:
-    base = _re.sub(r"[^a-z0-9]+", "_", (label or "").lower()).strip("_")
-    alias = {
-        "quality_assurance_qc": "qc",
-        "quality_assurance": "qc",
-        "qa": "qc",
-        "qc": "qc",
-        "technical_approach": "technical",
-        "management_approach": "management",
-        "staffing_and_key_personnel": "staffing",
-        "risks_and_mitigations": "risk",
-        "risk_management": "risk",
-        "executive_summary": "exec",
-        "cover_letter": "cover",
-        "pricing_narrative": "price",
-        "pricing_narrative_non_cost": "price",
-        "compliance_crosswalk": "compliance",
-        "past_performance": "past",
-        "subcontractor_plan": "subs",
-        "understanding_of_requirements": "exec",
-        "quality_control": "qc",
-    }
-    return alias.get(base, base) or "text"
-
-def _pb_ta_key(label: str) -> str:
-    return f"pb_ta_{_pb_safe_key(label)}"
-
-def _pb_target_words_key(label: str) -> str:
-    return f"pb_target_{_pb_safe_key(label)}"
-
-def _pb_build_prompt(section_title: str, ctx: dict, target_words: int) -> str:
-    try:
-        blueprint = _section_blueprint(section_title)  # type: ignore
-    except Exception:
-        blueprint = f"Write only the {section_title} content. Do not include other sections."
-    guard = (
-        "Output only this section. Do not include headings or content from other sections. "
-        "If you need more words to reach the target, deepen specifics inside this section "
-        "(procedures, metrics, artifacts, timelines, acceptance criteria)."
-    )
-    rfp_bits = []
-    try:
-        if isinstance(ctx, dict):
-            for k in ("summary","highlights","requirements","files_text","lm_items","poc","due","title","solnum"):
-                v = ctx.get(k)
-                if v:
-                    rfp_bits.append(f"{k.upper()}:\n{v}")
-    except Exception:
-        pass
-    rfp_context = "\n\n".join(rfp_bits) or "(no context available)"
-    return (
-        f"{blueprint}\n\n"
-        f"{guard}\n\n"
-        f"Target words: about {int(target_words)}.\n\n"
-        f"RFP CONTEXT START\n{rfp_context}\nRFP CONTEXT END"
-    )
-
-def _pb_strip_cross_section_bleed(section_title: str, text: str) -> str:
-    try:
-        return _finalize_section(section_title, text or "")  # type: ignore
-    except Exception:
-        headings = [
-            "Executive Summary","Technical Approach","Management Approach","Staffing","Quality Control",
-            "Risk","Risks and Mitigations","Transition Plan","Price Approach","Past Performance",
-            "Subcontractor Plan","Compliance Crosswalk","Cover Letter"
-        ]
-        out_lines = []
-        for ln in (text or "").splitlines():
-            m = _re.match(r"^\s*([A-Z][A-Za-z ]{2,40})\s*:?\s*$", ln.strip())
-            if m and m.group(1) in headings:
-                try:
-                    norm = _normalize_section_name(m.group(1))  # type: ignore
-                except Exception:
-                    norm = (m.group(1) or "").lower()
-                try:
-                    want = _normalize_section_name(section_title)  # type: ignore
-                except Exception:
-                    want = (section_title or "").lower()
-                if norm != want:
-                    break
-            out_lines.append(ln)
-        out = "\n".join(out_lines).strip()
-        return out or (text or "")
-
-def _pb_enforce_word_target(text: str, target: int, tol: float = 0.93) -> str:
-    words = _re.findall(r"\b\w+\b", text or "")
-    n = len(words)
-    if target <= 0 or n == 0:
-        return text or ""
-    if n > target * 1.05:
-        sents = _re.split(r"(?<=[.!?])\s+", (text or "").strip())
-        acc = []
-        w = 0
-        for s in sents:
-            acc.append(s)
-            w = len(_re.findall(r"\b\w+\b", " ".join(acc)))
-            if w >= target:
-                break
-        return " ".join(acc).strip()
-    return text or ""
-
-def _pb_get_context(conn, rfp_id: int) -> dict:
-    try:
-        return _load_rfp_context(conn, int(rfp_id)) or {}  # type: ignore
-    except Exception:
-        pass
-    try:
-        import pandas as _pd
-        row = _pd.read_sql_query("SELECT id, title, solnum FROM rfps_t WHERE id=?", conn, params=(int(rfp_id),)).iloc[0]
-        return {"title": row.get("title",""), "solnum": row.get("solnum","")}
-    except Exception:
-        return {}
-
-def _pb_draft_one(conn, rfp_id: int, section_title: str, target_words: int, k: int = 3) -> str:
-    ctx = _pb_get_context(conn, int(rfp_id))
-    prompt = _pb_build_prompt(section_title, ctx, int(target_words or 500))
-    drafted = ""
-    try:
-        drafted = y3_stream_draft(conn, int(rfp_id), section_title, prompt, int(target_words or 500), int(k))  # type: ignore
-    except Exception:
-        pass
-    try:
-        if drafted and len(_re.findall(r"\b\w+\b", drafted)) < int(target_words * 0.93):
-            drafted = _y3_top_off_precise(drafted, int(target_words))  # type: ignore
-    except Exception:
-        pass
-    clean = _pb_strip_cross_section_bleed(section_title, drafted or "")
-    clean = _pb_enforce_word_target(clean, int(target_words or 500))
-    try:
-        clean = _finalize_draft(clean)  # type: ignore
-    except Exception:
-        pass
-    return (clean or "").strip()
-
-def run_proposal_builder(conn: "sqlite3.Connection") -> None:
-    import pandas as pd
-    st.header("Proposal Builder")
-    try:
-        df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
-    except Exception:
-        try:
-            df_rf = pd.read_sql_query("SELECT id, title, solnum FROM rfps ORDER BY id DESC;", conn, params=())
-        except Exception:
-            df_rf = pd.DataFrame()
-    if df_rf is None or df_rf.empty:
-        st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
-        return
-    rfp_id = st.selectbox(
-        "RFP context",
-        options=df_rf["id"].tolist(),
-        format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id']==rid, 'title'].values[0] or 'Untitled'}",
-        index=0,
-        key="pb_rfp_sel",
-    )
-    st.session_state["current_rfp_id"] = rfp_id
-    default_sections = [
-        "Cover Letter","Executive Summary","Technical Approach","Management Approach",
-        "Staffing","Quality Assurance / QC","Risks and Mitigations","Transition Plan",
-        "Past Performance","Price Approach","Subcontractor Plan","Compliance Crosswalk",
-    ]
-    with st.expander("Sections", expanded=True):
-        sel = st.multiselect("Select sections", options=default_sections, default=default_sections, key="pb_sel")
-        cols = st.columns(2)
-        for i, label in enumerate(sel):
-            with cols[i % 2]:
-                ta_key = _pb_ta_key(label)
-                tw_key = _pb_target_words_key(label)
-                st.session_state.setdefault(tw_key, 600)
-                st.number_input(f"Target words — {label}", min_value=150, max_value=2000, step=50, key=tw_key)
-                st.text_area(label, key=ta_key, height=220, placeholder=f"Draft {label} here…")
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1:
-        if st.button("Draft selected", type="primary", key="pb_draft_sel"):
-            for label in st.session_state.get("pb_sel", []):
-                try:
-                    t = _pb_draft_one(conn, int(rfp_id), label, int(st.session_state.get(_pb_target_words_key(label), 600)))
-                    st.session_state[_pb_ta_key(label)] = t
-                except Exception as e:
-                    st.warning(f"{label}: {e}")
-    with c2:
-        if st.button("Draft all", key="pb_draft_all"):
-            for label in default_sections:
-                try:
-                    t = _pb_draft_one(conn, int(rfp_id), label, int(st.session_state.get(_pb_target_words_key(label), 600)))
-                    st.session_state[_pb_ta_key(label)] = t
-                except Exception as e:
-                    st.warning(f"{label}: {e}")
-    with c3:
-        if st.button("Export .docx", key="pb_export"):
-            sections = []
-            for label in st.session_state.get("pb_sel", default_sections):
-                body = st.session_state.get(_pb_ta_key(label), "")
-                sections.append({"title": label, "body": body})
-            try:
-                path = _export_to_docx(sections=sections, doc_title=(df_rf.loc[df_rf['id']==rfp_id,'title'].values[0] if not df_rf.empty else "Proposal"))  # type: ignore
-                st.success(f"Saved: {path}")
-            except Exception as e:
-                st.error(f"Export failed: {e}")
-
-if "pb_phase_v_section_library" not in globals():
-    def pb_phase_v_section_library(conn):
-        return None
