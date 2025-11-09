@@ -4803,62 +4803,72 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             # Fallback simple split
             return len(str(text or "").split())
 
-    def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
-        """
-        If the initial draft is under the target, ask the model to append continuation only
-        until the total length approaches the target. Never rewrite prior text.
-        """
+    
+def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+    """
+    Iteratively append continuation until total length ≈ target.
+    Never rewrite existing text. Stop at a sentence boundary.
+    """
+    try:
+        mw = int(max_words) if max_words else 0
+    except Exception:
+        mw = 0
+    if not mw or mw <= 0:
+        return drafted or ""
+
+    def wc(t: str) -> int:
         try:
-            mw = int(max_words) if max_words else 0
+            import re as _re_wc
+            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
         except Exception:
-            mw = 0
-        if not mw or mw <= 0:
-            return drafted or ""
+            return len(str(t or "").split())
 
-        current = _y3_word_count(drafted)
-        # Accept small undershoot for very small targets
-        low = int(mw * (0.95 if mw < 120 else 0.97))
-        if current >= low:
-            return drafted or ""
+    low = int(mw * (0.97 if mw >= 120 else 0.95))
+    text_acc = (drafted or "").strip()
+    attempts = 0
 
-        client = get_ai()
-        model_name = _resolve_model()
-
+    client = get_ai()
+    model_name = _resolve_model()
+    while wc(text_acc) < low and attempts < 3:
+        attempts += 1
+        cur = wc(text_acc)
+        remaining = max(0, mw - cur)
+        chunk_target = 220 if mw >= 800 else 140
+        ask_up_to = max(80, min(chunk_target, remaining + 60))
         system = (
             "You are a veteran federal proposal writer with $70M+ in awards. "
-            "Keep the style, voice, and structure of the existing text. "
-            "Append only. Do not repeat or restart."
+            "Append continuation only. Do not repeat or modify prior text. "
+            "Keep style and structure unchanged."
         )
         user = (
-            f"Continue the following section for RFP {{int(rfp_id)}} so that the TOTAL length is about {{mw}} words.\n"
+            f"Continue the following section for RFP {int(rfp_id)}.\n"
+            f"Goal: bring the TOTAL length near {mw} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
             "Rules:\n"
             "- Do not modify prior text. Append continuation only.\n"
-            "- Keep one paragraph per idea. Short sentences (<=10 words).\n"
-            "- Deepen technical steps, management, schedule, QC, and compliance mapping as relevant.\n"
-            "- Stop after a natural sentence boundary. Exceed by up to two sentences if needed.\n\n"
+            "- Keep one paragraph per idea. Short sentences (<=12 words).\n"
+            "- Add concrete steps, schedule, QC, staffing, and compliance mapping.\n"
+            "- Stop after a natural sentence boundary. Slightly exceed target if needed.\n\n"
             "--- EXISTING DRAFT START ---\n"
-            f"{drafted}\n"
+            f"{text_acc}\n"
             "--- EXISTING DRAFT END ---\n\n"
             "Append continuation only:"
         )
-
         try:
             resp = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-                temperature=0.2,
+                temperature=0.15,
                 stream=False,
             )
             add = ""
             if hasattr(resp, "choices") and resp.choices:
                 add = getattr(resp.choices[0].message, "content", "") or ""
-        except Exception as _e:
-            # Fallback to mini model if primary fails
+        except Exception:
             try:
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-                    temperature=0.2,
+                    temperature=0.15,
                     stream=False,
                 )
                 add = ""
@@ -4867,8 +4877,14 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             except Exception:
                 add = ""
 
-        combined = (drafted or "") + (("\n\n" + (add or "").strip()) if (add or "").strip() else "")
-        return combined.strip()
+        add = (add or "").strip()
+        if add:
+            text_acc = (text_acc + "\n\n" + add).strip()
+        else:
+            break
+
+    return text_acc.strip()
+
     # === end Y3 length top-off helper ===
 
 # === end Y3 ===
@@ -9235,12 +9251,17 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             "Appendices"
         ]
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
+        gcol1, gcol2 = st.columns([1,1])
+        with gcol1:
+            global_maxw = st.number_input("Max words per section (Draft All)", min_value=0, value=750, step=50, key="pb_global_maxw")
+        with gcol2:
+            st.caption("Used when per-section max is unset.")
         if st.button("Draft All Sections ▶", key="pb_draft_all"):
             with st.spinner("Drafting all selected sections…"):
                 for sec in selected:
                     notes = st.session_state.get(f"y3_notes_{sec}", st.session_state.get(f"y3_notes_{sec}", ""))
                     k = y_auto_k(f"{sec} {notes}")
-                    maxw = st.session_state.get(f"y3_maxw_{sec}", 220)
+                    maxw = st.session_state.get(f"y3_maxw_{sec}", st.session_state.get("pb_global_maxw", 750))
                     acc = []
                     for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
                         acc.append(tok)
@@ -9263,7 +9284,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             with cA:
                 k = y_auto_k(f"{sec} {notes}")
             with cB:
-                maxw = st.number_input(f"Max words — {sec}", min_value=0, value=220, step=10, key=f"y3_maxw_{sec}")
+                maxw = st.number_input(f"Max words — {sec}", min_value=0, value=int(st.session_state.get("pb_global_maxw", 750)), step=10, key=f"y3_maxw_{sec}")
             with cC:
                 if st.button(f"Draft {sec}", key=f"y3_draft_{sec}"):
                     ph = st.empty(); acc = []
@@ -9272,6 +9293,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
+                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
                         final = _finalize_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
