@@ -651,6 +651,61 @@ def _force_safe_pd_read():
         pass
 # === End helpers ===
 
+# === Shared helper: load all-file RFP text ===
+def _full_rfp_text(conn, rfp_id: int, limit: int = 20000) -> str:
+    """
+    Return a single string containing the concatenated text of ALL files for this RFP.
+    Uses tenancy view rfp_files_t when available. Falls back to rfp_chunks or raw file bytes extraction.
+    Truncates to `limit` chars to keep prompts bounded.
+    """
+    try:
+        import pandas as _pd
+        # Prefer tenancy view if present
+        def _has_view(name: str) -> bool:
+            try:
+                q = "SELECT name FROM sqlite_master WHERE name=?;"
+                return _pd.read_sql_query(q, conn, params=(name,)).shape[0] > 0
+            except Exception:
+                return False
+        use_view = _has_view("rfp_files_t")
+        if use_view:
+            df = _pd.read_sql_query(
+                "SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
+                conn, params=(int(rfp_id),)
+            )
+        else:
+            df = _pd.read_sql_query(
+                "SELECT COALESCE(text,'') AS t FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                conn, params=(int(rfp_id),)
+            )
+        if df is not None and not df.empty:
+            blob = "\\n\\n".join([str(x or "") for x in df['t'].tolist()])
+            blob = (blob or "").strip()
+            if len(blob) > int(limit):
+                blob = blob[:int(limit)]
+            if blob:
+                return blob
+    except Exception:
+        pass
+    # Fallback to rfp_chunks if present
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query(
+            "SELECT text FROM rfp_chunks WHERE rfp_id=? ORDER BY id LIMIT 200;",
+            conn, params=(int(rfp_id),)
+        )
+        if df is not None and not df.empty:
+            blob = "\\n\\n".join([str(x or "") for x in df['text'].tolist()])
+            blob = (blob or "").strip()
+            if len(blob) > int(limit):
+                blob = blob[:int(limit)]
+            return blob
+    except Exception:
+        pass
+    # Final fallback: empty string
+    return ""
+
+
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
         cur = conn.execute(f"PRAGMA table_info({table})")
