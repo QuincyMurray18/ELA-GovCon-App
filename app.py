@@ -5161,6 +5161,7 @@ def y4_postprocess_brevity(text: str, max_words: int = 220, max_bullets: int = 5
             pass
 
 def y4_ui_review(conn: "sqlite3.Connection") -> None:
+    pass  # auto-inserted to fix empty function body
 # [removed]     st.caption("CO Review with score, strengths, gaps, risks, and required fixes. Citations auto-selected.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
