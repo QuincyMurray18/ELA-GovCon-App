@@ -1,3 +1,9 @@
+try:
+    _pb_psychology_framework  # type: ignore[name-defined]
+except NameError:
+    def _pb_psychology_framework() -> str:
+        return ""
+
 
 # === Proposal Builder normalization helpers ===
 def _pb_try_json(text: str):
