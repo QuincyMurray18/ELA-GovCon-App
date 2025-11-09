@@ -651,90 +651,6 @@ def _force_safe_pd_read():
         pass
 # === End helpers ===
 
-
-# === Shared helper: load all-file RFP text ===
-def _full_rfp_text(conn, rfp_id: int, limit: int = 20000) -> str:
-    """
-    Return a single string containing concatenated analyzer text for ALL files.
-    Priority:
-      1) rfp_context[_t] combined/context blobs
-      2) rfp_summaries[_t] combined summaries
-      3) rfp_sections[_t] aggregated section text
-      4) rfp_files[_t] raw parsed text
-      5) rfp_chunks text
-    Truncates to `limit` characters.
-    """
-    import pandas as _pd
-
-    def _has(name: str) -> bool:
-        try:
-            q = "SELECT name FROM sqlite_master WHERE name=?;"
-            return _pd.read_sql_query(q, conn, params=(name,)).shape[0] > 0
-        except Exception:
-            return False
-
-    def _coalesce_join(df, col) -> str:
-        if df is not None and not df.empty:
-            s = "\n\n".join([str(x or "") for x in df[col].tolist()]).strip()
-            if len(s) > int(limit): s = s[:int(limit)]
-            return s
-        return ""
-
-    # 1) rfp_context family
-    for tbl, col, where in [
-        ("rfp_context_t", "context", "rfp_id=?"),
-        ("rfp_context", "context", "rfp_id=?"),
-    ]:
-        if _has(tbl):
-            try:
-                df = _pd.read_sql_query(f"SELECT {col} FROM {tbl} WHERE {where} ORDER BY id;", conn, params=(int(rfp_id),))
-                s = _coalesce_join(df, col)
-                if s: return s
-            except Exception:
-                pass
-
-    # 2) rfp_summaries family
-    for tbl in ["rfp_summaries_t", "rfp_summaries"]:
-        if _has(tbl):
-            try:
-                df = _pd.read_sql_query(f"SELECT summary FROM {tbl} WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-                s = _coalesce_join(df, "summary")
-                if s: return s
-            except Exception:
-                pass
-
-    # 3) rfp_sections family
-    for tbl in ["rfp_sections_t", "rfp_sections"]:
-        if _has(tbl):
-            try:
-                df = _pd.read_sql_query(f"SELECT body FROM {tbl} WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-                s = _coalesce_join(df, "body")
-                if s: return s
-            except Exception:
-                pass
-
-    # 4) rfp_files family
-    for tbl in ["rfp_files_t", "rfp_files"]:
-        if _has(tbl):
-            try:
-                df = _pd.read_sql_query(f"SELECT COALESCE(text,'') AS text FROM {tbl} WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-                s = _coalesce_join(df, "text")
-                if s: return s
-            except Exception:
-                pass
-
-    # 5) rfp_chunks fallback
-    if _has("rfp_chunks"):
-        try:
-            df = _pd.read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=? ORDER BY id LIMIT 200;", conn, params=(int(rfp_id),))
-            s = _coalesce_join(df, "text")
-            if s: return s
-        except Exception:
-            pass
-
-    return ""
-
-
 def __p_ensure_column(conn, table: str, col: str, col_def: str):
     try:
         cur = conn.execute(f"PRAGMA table_info({table})")
@@ -5024,53 +4940,84 @@ REQUIREMENTS:
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
-    msgs = _y3_build_messages_psych(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
-    # Append ALL-file RFP text to user message
+    """
+    Drafts a proposal section using ALL files in the selected RFP context.
+    It appends the concatenated text of every parsed file to the user message.
+    Falls back to on the fly extraction when rfp_files_t is not populated.
+    """
+    # 1 Build messages with the existing prompt scaffold
+    _msgs = None
+    try:
+        if '_y3_build_messages_psych' in globals():
+            _msgs = _y3_build_messages_psych(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+        elif '_y3_build_messages' in globals():
+            _msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+        else:
+            _msgs = [{"role":"system","content":"You are a veteran federal proposal writer."},
+                     {"role":"user","content":f"Draft {section_title}. Notes: {notes}"}]
+    except Exception:
+        _msgs = [{"role":"system","content":"You are a veteran federal proposal writer."},
+                 {"role":"user","content":f"Draft {section_title}. Notes: {notes}"}]
+
+    # 2 Collect FULL TEXT from all files
+    _full_text = ""
     try:
         import pandas as _pd
         _df_all = _pd.read_sql_query(
             "SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
-            conn,
-            params=(int(rfp_id),),
+            conn, params=(int(rfp_id),),
         )
-        _ft = "\n\n".join([str(x or "") for x in _df_all['t'].tolist()]) if not _df_all.empty else ""
+        if _df_all is not None and not _df_all.empty:
+            _full_text = "
+
+".join([str(x or "") for x in _df_all['t'].tolist()])
     except Exception:
-        _ft = ""
-    _ft = str(_ft or "").strip()
-    if _ft:
-        if len(_ft) > 20000: _ft = _ft[:20000]
-        for _m in msgs:
-            if isinstance(_m, dict) and _m.get("role") == "user":
-                _m["content"] = str(_m.get("content","")) + f"\n\nRFP FULL TEXT (truncated):\n{_ft}"
-                break
-    client = get_ai()
-    model_name = _resolve_model()
+        _full_text = ""
+
+    if not _full_text:
+        # Fallback to direct extraction from rfp_files bytes
+        try:
+            if 'y5_extract_from_rfp' in globals():
+                _full_text = y5_extract_from_rfp(conn, int(rfp_id)) or ""
+        except Exception:
+            _full_text = ""
+
+    _full_text = "
+".join([ln.strip() for ln in str(_full_text or "").splitlines() if ln.strip()])
+    if len(_full_text) > 20000:
+        _full_text = _full_text[:20000]
+
+    # 3 Append to the user message
     try:
-        resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature), stream=True)
+        for _m in _msgs:
+            if isinstance(_m, dict) and _m.get("role") == "user":
+                _m["content"] = str(_m.get("content") or "") + "
+
+FULL TEXT from all files:
+" + _full_text
+    except Exception:
+        pass
+
+    # 4 Call the model
+    try:
+        from openai import OpenAI as _OpenAI
+        _client = _OpenAI()
+        _model = globals().get('_resolve_model', lambda: 'gpt-4o-mini')()
+        _resp = _client.chat.completions.create(
+            model=_model,
+            temperature=float(temperature or 0.1),
+            messages=_msgs
+        )
+        _text = (_resp.choices[0].message.content or "").strip()
     except Exception as _e:
-        if "model_not_found" in str(_e) or "does not exist" in str(_e):
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
-        else:
-            yield f"AI unavailable: {type(_e).__name__}: {_e}"
-            return
-    for ch in resp:
-        try:
-            delta = ch.choices[0].delta
-            if hasattr(delta, "content") and delta.content:
-                yield delta.content
-        except Exception:
-            pass
+        _text = f"[AI unavailable] {_e}"
 
-    # === Y3 length top-off helper ===
-    def _y3_word_count(text: str) -> int:
-        try:
-            import re as _re_wc
-            return len(_re_wc.findall(r"\b\w+\b", str(text or "")))
-        except Exception:
-            # Fallback simple split
-            return len(str(text or "").split())
+    # 5 Finalize using existing helper
+    try:
+        return _finalize_section(section_title, _text)
+    except Exception:
+        return _text
 
-    
 
 def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
     def wc(t: str) -> int:
