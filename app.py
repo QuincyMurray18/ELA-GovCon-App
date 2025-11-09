@@ -4910,6 +4910,24 @@ REQUIREMENTS:
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
     msgs = _y3_build_messages_psych(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+    # Append ALL-file RFP text to user message
+    try:
+        import pandas as _pd
+        _df_all = _pd.read_sql_query(
+            "SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
+            conn,
+            params=(int(rfp_id),),
+        )
+        _ft = "\n\n".join([str(x or "") for x in _df_all['t'].tolist()]) if not _df_all.empty else ""
+    except Exception:
+        _ft = ""
+    _ft = str(_ft or "").strip()
+    if _ft:
+        if len(_ft) > 20000: _ft = _ft[:20000]
+        for _m in msgs:
+            if isinstance(_m, dict) and _m.get("role") == "user":
+                _m["content"] = str(_m.get("content","")) + f"\n\nRFP FULL TEXT (truncated):\n{_ft}"
+                break
     client = get_ai()
     model_name = _resolve_model()
     try:
