@@ -111,10 +111,6 @@ except NameError:
         t = _re.sub(r"\n{3,}", "\n\n", t)
         return t.strip()
 
-try:
-    _enforce_style_guide
-except NameError:
-    \
 def _enforce_style_guide(text: str, target_min: int = 14, target_max: int = 20, max_sents_per_para: int = 10) -> str:
     import re
     t = str(text or "")
@@ -219,37 +215,22 @@ try:
     _style_guide
 except NameError:  # define if missing
     def _style_guide() -> str:
-    return (
-        "Follow these rules strictly:\n"
-        "1) Understand client need. Mirror solicitation terms exactly.\n"
-        "2) State deliverables explicitly.\n"
-        "3) Answer each L&M requirement directly.\n"
-        "4) Provide HOW procedures and concrete steps.\n"
-        "5) Sentences 14–20 words. One idea per paragraph.\n"
-        "6) Speak to 'you' directly. Keep ~1:1 'you:we' ratio.\n"
-        "7) Use plain words. Replace jargon and nominalizations with verbs.\n"
-        "8) Cut hedges unless the solicitation requires them.\n"
-        "9) Commit in present tense.\n"
-        "10) Add one proof point per section: metric, artifact, or timeline.\n"
-        "11) Close each section with a one-sentence promise tied to risk control.\n"
-        "12) Organize clearly for easy scoring.\n"
-        "13) No citations or references.\n"
-        "14) Output only the requested section. No other sections."
-    )
-Understand client need. Mirror solicitation terms exactly.\n"
+        return (
+            "Follow these rules strictly:\n"
+            "1) Understand client need. Mirror solicitation terms exactly.\n"
             "2) State deliverables explicitly.\n"
-            "3) Address evaluation factors: technical, management, past performance, price.\n"
-            "4) Answer each L&M requirement directly.\n"
-            "5) Obey page and format rules.\n"
-            "6) Provide HOW procedures, not claims.\n"
-            "7) Sentences 14–20 words. One idea per paragraph.\n"
-            "8) Use bullets. Clean headings.\n"
-            "9) Include roles, equipment, timeline, QC checks, metrics.\n"
-            "10) Identify subcontractors and responsibilities.\n"
-            "11) Organize clearly for easy scoring.\n"
-            "12) Include a Risk table with mitigations.\n"
-            "13) Add a brief L&M compliance crosswalk.\n"
-            "14) Keep tone federal and precise."
+            "3) Answer each L&M requirement directly.\n"
+            "4) Provide HOW procedures and concrete steps.\n"
+            "5) Sentences 14–20 words. One idea per paragraph.\n"
+            "6) Speak to 'you' directly. Keep ~1:1 'you:we' ratio.\n"
+            "7) Use plain words. Replace jargon and nominalizations with verbs.\n"
+            "8) Cut hedges unless the solicitation requires them.\n"
+            "9) Commit in present tense.\n"
+            "10) Add one proof point per section: metric, artifact, or timeline.\n"
+            "11) Close each section with a one-sentence promise tied to risk control.\n"
+            "12) Organize clearly for easy scoring.\n"
+            "13) No citations or references.\n"
+            "14) Output only the requested section. No other sections."
         )
 
 try:
