@@ -4968,9 +4968,7 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             conn, params=(int(rfp_id),),
         )
         if _df_all is not None and not _df_all.empty:
-            _full_text = "
-
-".join([str(x or "") for x in _df_all['t'].tolist()])
+            _full_text = "\n\n".join([str(x or "") for x in _df_all['t'].tolist()])
     except Exception:
         _full_text = ""
 
@@ -4982,8 +4980,7 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
         except Exception:
             _full_text = ""
 
-    _full_text = "
-".join([ln.strip() for ln in str(_full_text or "").splitlines() if ln.strip()])
+    _full_text = "\n".join([ln.strip() for ln in str(_full_text or "").splitlines() if ln.strip()])
     if len(_full_text) > 20000:
         _full_text = _full_text[:20000]
 
@@ -4991,10 +4988,7 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
     try:
         for _m in _msgs:
             if isinstance(_m, dict) and _m.get("role") == "user":
-                _m["content"] = str(_m.get("content") or "") + "
-
-FULL TEXT from all files:
-" + _full_text
+                _m["content"] = str(_m.get("content") or "") + "\n\nFULL TEXT from all files:\n" + _full_text
     except Exception:
         pass
 
