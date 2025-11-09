@@ -1,4 +1,17 @@
+try:
+    _pb_psychology_framework  # type: ignore[name-defined]
+except NameError:
+    def _pb_psychology_framework() -> str:
+        return ""
 
+
+
+# Helper: sanitize arbitrary strings into Streamlit-safe keys
+def _safe_key(name: str) -> str:
+    import re as _re
+    s = _re.sub(r"\s+", "_", str(name or "").strip())
+    s = _re.sub(r"[^a-zA-Z0-9_]+", "_", s)
+    return s[:120]
 # === Proposal Builder normalization helpers ===
 def _pb_try_json(text: str):
     try:
@@ -108,13 +121,20 @@ except NameError:
 try:
     _enforce_style_guide
 except NameError:
-    def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
-        return str(text or "").strip()
+    import re
+    def _enforce_style_guide(text: str, max_words: int | None = None) -> str:
+        """Light, safe post-processing: strip citations, rename headings, trim whitespace."""
+        s = str(text or "")
+        try:
+            s = _strip_citations(s)
+        except Exception:
+            s = s
+        s = re.sub(r"(?im)^\s*assumptions\s*:\s*$", "Dependencies:", s)
+        s = re.sub(r"\n{3,}", "\n\n", s)
+        return s.strip()
 
 try:
-    _finalize_draft
-except NameError:
-    def _finalize_draft(text: str) -> str:
+    _finalize_draft(text: str) -> str:
         try:
             t = _strip_citations(text)
         except Exception:
@@ -132,28 +152,31 @@ try:
 except NameError:  # define if missing
     def _style_guide() -> str:
         return (
-            "Follow these rules strictly:\n"
-            "1) Understand client need. Mirror solicitation terms exactly.\n"
-            "2) State deliverables explicitly.\n"
-            "3) Address evaluation factors: technical, management, past performance, price.\n"
-            "4) Answer each L&M requirement directly.\n"
-            "5) Obey page and format rules.\n"
-            "6) Provide HOW procedures, not claims.\n"
-            "7) Short sentences (<=10 words). One idea per paragraph.\n"
-            "8) Use bullets. Clean headings.\n"
-            "9) Include roles, equipment, timeline, QC checks, metrics.\n"
-            "10) Identify subcontractors and responsibilities.\n"
-            "11) Organize clearly for easy scoring.\n"
-            "12) Include a Risk table with mitigations.\n"
-            "13) Add a brief L&M compliance crosswalk.\n"
-            "14) Keep tone federal and precise."
+            "Follow these rules strictly:
+"
+            "1) Write only the requested section. Do not include other sections.
+"
+            "2) One idea per paragraph.
+"
+            "3) Sentences 14–20 words on average.
+"
+            "4) Use a 1:1 ratio of 'you' to 'we' across the section.
+"
+            "5) Plain words over jargon. Minimize nominalizations.
+"
+            "6) Present-tense commitments. No 'will' unless quoting a requirement.
+"
+            "7) Rename 'Assumptions' to 'Dependencies'.
+"
+            "8) End with a concrete promise tied to risk control.
+"
+            "9) Include one proof point: metric, artifact, or timeline.
+"
+            "10) No citations, no references.
+"
         )
-
-try:
-    PROPOSAL_STYLE_GUIDE
-except NameError:  # set if missing
-    PROPOSAL_STYLE_GUIDE = _style_guide()
 # ==========================================
+=
 
 def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
     try:
@@ -3671,14 +3694,21 @@ DEFAULT_SECTIONS = [
 
 def _draft_section(section: str, context: str) -> str:
     prompt = f"""
-Using the RFP context below, draft **{section}** using the style guide.
+You are a veteran federal proposal writer. Write ONLY the section titled '{section}'.
 {_style_guide()}
-Scaffold: lead, need, deliverables, technical steps, management (RACI), staffing, equipment, timeline, QC metrics, subcontractors, risks, compliance bullets, past performance, price approach note.
+Rules:
+- Stay strictly within the scope of '{section}'. Do not include Risk Mitigation, Quality, Staffing, Management, Past Performance, or Pricing.
+- One idea per paragraph. Sentences average 14–20 words.
+- Balance 'you' and 'we' near 1:1. Use present-tense commitments. Avoid hedges.
+- Include one proof point: a metric, artifact, or timeline relevant to the section.
+- Close with a promise line tied to risk control.
+
 RFP context (truncated):
 {context[:6000]}
 """.strip()
     draft = _ai_chat(prompt)
-    return _finalize_section(section, _append_tables_if_applicable(conn, int(st.session_state.get('current_rfp_id', 0) or 0), section, draft))
+    return _finalize_section(section, _append_tables_if_applicable(draft))
+or 0), section, draft))
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     st.title("RFP Analyzer — One‑Page View")
     if not pages:
@@ -4691,6 +4721,110 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
         ctx["title"] = ""; ctx["solnum"] = ""
     return ctx
 
+
+def _y3_build_messages_psych(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
+    import pandas as _pd
+    # Collect context via existing helper if available
+    try:
+        ctx = _y3_collect_ctx(conn, int(rfp_id))
+    except Exception:
+        ctx = {}
+    # Direct pulls for dates, POCs, CLINs
+    try:
+        df_dates = _pd.read_sql_query("SELECT label, date_text FROM rfp_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_dates = _pd.DataFrame(columns=["label","date_text"])
+    try:
+        df_pocs = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_pocs = _pd.DataFrame(columns=["name","role","email","phone"])
+    try:
+        df_clin = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+    except Exception:
+        df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
+    try:
+        df_org = _pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
+    except Exception:
+        df_org = _pd.DataFrame()
+
+    def _fmt_dates(df):
+        try: return "\n".join(f"- {r['label']}: {r['date_text']}" for _, r in df.iterrows()) if not df.empty else "- n/a"
+        except Exception: return "- n/a"
+    def _fmt_pocs(df):
+        try: return "\n".join(f"- {r['role']}: {r['name']} — {r.get('email','') or ''} {r.get('phone','') or ''}".strip() for _, r in df.iterrows()) if not df.empty else "- n/a"
+        except Exception: return "- n/a"
+    def _fmt_clins(df):
+        try:
+            cols = [c for c in ("clin","description","qty","unit") if c in df.columns]
+            return "\n".join("- " + " | ".join(str(r.get(c,'')) for c in cols) for _, r in df.iterrows()) if not df.empty else "- n/a"
+        except Exception: return "- n/a"
+
+    org = df_org.iloc[0].to_dict() if isinstance(df_org, _pd.DataFrame) and not df_org.empty else {}
+    org_lines = []
+    for k in ("company_name","phone","email","website","cage","uei","duns","ein","address"):
+        v = org.get(k) or org.get(k.upper()) or ""
+        if v: org_lines.append(f"{k.replace('_',' ').title()}: {v}")
+    org_block = "\n".join(org_lines) if org_lines else ""
+
+    try:
+        mw = int(max_words) if max_words else 0
+    except Exception:
+        mw = 0
+    target_clause = f"Target 97 to 103 percent of {mw} words. Finish the last sentence even if up to 40 words over." if mw > 0 else "No word target."
+
+    style = (
+        "You are a veteran federal proposal writer with $70M+ in awards.\n"
+        + _style_guide() + "\n\n"
+        + _pb_psychology_framework() + "\n"
+        "Output plain text only. No citations or snippet IDs.\n"
+    ).strip()
+
+    # Build user prompt
+    lm_items = (ctx.get("lm") or [])[:30]
+    lm_blob = "\n".join(f"- {t}" for t in lm_items) if lm_items else ""
+    meta = ctx.get("meta") or {}
+    meta_str = "\n".join(f"- {k}: {v}" for k,v in meta.items()) if isinstance(meta, dict) and meta else ""
+
+    user = f"""
+Draft the section: {section_title}
+
+Intent: disarm evaluator anxiety, show certainty, map to L&M.
+
+Notes from author:
+{notes or '- none'}
+
+Guidance:
+- {target_clause}
+- One idea per paragraph. Short sentences.
+- Lead with mission empathy. Then logic. Then verification.
+- Show reciprocity and mutual gains.
+- Use concrete steps, QC, metrics, timeline, roles.
+
+Apply this blueprint strictly:
+{_section_blueprint(section_title)}
+
+Company profile:
+{org_block or '- none on file'}
+
+RFP meta:
+{meta_str or '- n/a'}
+
+Key dates:
+{_fmt_dates(df_dates)}
+
+POCs:
+{_fmt_pocs(df_pocs)}
+
+CLINs:
+{_fmt_clins(df_clin)}
+
+Checklist items:
+{lm_blob or '- none'}
+""".strip()
+
+    return [{"role":"system","content": style}, {"role":"user","content": user}]
+
+
 def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     import pandas as _pd
     ctx = _y3_collect_ctx(conn, int(rfp_id))
@@ -4775,7 +4909,7 @@ REQUIREMENTS:
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
-    msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+    msgs = _y3_build_messages_psych(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
     model_name = _resolve_model()
     try:
@@ -4804,7 +4938,87 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             return len(str(text or "").split())
 
     
-def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+
+def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+    def wc(t: str) -> int:
+        try:
+            import re as _re_wc
+            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
+        except Exception:
+            return len(str(t or "").split())
+    try:
+        mw = int(max_words) if max_words else 0
+    except Exception:
+        mw = 0
+    if not mw or mw <= 0:
+        return drafted or ""
+    lower = int(max(1, round(0.97 * mw)))
+    hard_cap = mw + 60
+    text_acc = (drafted or "").strip()
+    if wc(text_acc) >= lower:
+        return text_acc
+    client = get_ai()
+    model_name = _resolve_model()
+    attempts = 0
+    while wc(text_acc) < lower and attempts < 6 and wc(text_acc) < hard_cap:
+        attempts += 1
+        cur = wc(text_acc)
+        remaining = max(0, lower - cur)
+        ask_up_to = max(80, min(200, remaining + 40))
+        system = (
+            "You are a veteran federal proposal writer with $70M+ in awards. "
+            "Append continuation only. Do not repeat or modify prior text. "
+            "Preserve bullets and paragraph breaks. Keep style unchanged. "
+            "Stay within the same section. Do not introduce Risk, Quality, Staffing, Management, Past Performance, or Pricing."
+        )
+        user = (
+            f"Continue the section '{section_title}' for RFP {int(rfp_id)}.
+"
+            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.
+"
+            "Rules:
+"
+            "- Append continuation only. No rewrites.
+"
+            "- Keep content strictly within '{section_title}'.
+"
+            "- Finish the last sentence if near the end.
+"
+            "- One idea per paragraph. Sentences average 14–20 words.
+"
+            "- Include concrete steps and one proof point if missing.
+
+"
+            "--- EXISTING DRAFT START ---
+"
+            f"{text_acc}
+"
+            "--- EXISTING DRAFT END ---
+
+"
+            "Append continuation only:"
+        )
+        try:
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role":"system","content": system}, {"role":"user","content": user}],
+                temperature=0.15,
+                stream=False,
+            )
+            add = ""
+            if hasattr(resp, "choices") and resp.choices:
+                add = getattr(resp.choices[0].message, "content", "") or ""
+        except Exception:
+            add = ""
+        add = str(add).strip()
+        if add:
+            text_acc = (text_acc + "\n\n" + add).strip()
+        else:
+            break
+    return text_acc.strip()
+
+
+def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
     """
     Iteratively append continuation until total length ≈ target.
     Never rewrite existing text. Stop at a sentence boundary.
@@ -4841,16 +5055,30 @@ def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str,
             "Keep style and structure unchanged."
         )
         user = (
-            f"Continue the following section for RFP {int(rfp_id)}.\n"
-            f"Goal: bring the TOTAL length near {mw} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
-            "Rules:\n"
-            "- Do not modify prior text. Append continuation only.\n"
-            "- Keep one paragraph per idea. Short sentences (<=12 words).\n"
-            "- Add concrete steps, schedule, QC, staffing, and compliance mapping.\n"
-            "- Stop after a natural sentence boundary. Slightly exceed target if needed.\n\n"
-            "--- EXISTING DRAFT START ---\n"
-            f"{text_acc}\n"
-            "--- EXISTING DRAFT END ---\n\n"
+            f"Continue the section '{section_title}' for RFP {int(rfp_id)}.
+"
+            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.
+"
+            "Rules:
+"
+            "- Append continuation only. No rewrites.
+"
+            "- Keep content strictly within '{section_title}'.
+"
+            "- Finish the last sentence if near the end.
+"
+            "- One idea per paragraph. Sentences average 14–20 words.
+"
+            "- Include concrete steps and one proof point if missing.
+
+"
+            "--- EXISTING DRAFT START ---
+"
+            f"{text_acc}
+"
+            "--- EXISTING DRAFT END ---
+
+"
             "Append continuation only:"
         )
         try:
@@ -9268,11 +9496,11 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
                         final = _finalize_section(sec, drafted)
-                norm = _pb_normalize_text(final)
-                st.session_state[f"pb_section_{sec}"] = norm
-                st.session_state[f"pb_ta_{sec}"] = norm
+                    norm = _pb_normalize_text(final)
+                    st.session_state[f"pb_section_{sec}"] = norm
+                    st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
@@ -9293,7 +9521,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
                         final = _finalize_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
@@ -9308,13 +9536,27 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
             content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
-                st.markdown(st.session_state.get(ta_key, ""))
-    # Ensure text areas reflect latest session values
-    for sec in selected:
-        src = st.session_state.get(f"pb_section_{sec}")
-        if src is not None and st.session_state.get(f"pb_ta_{sec}", None) != src:
-            st.session_state[f"pb_ta_{sec}"] = src
-            st.rerun()
+                body = st.session_state.get(ta_key, "")
+                st.markdown(body)
+                import re
+                try:
+                    wc = _pb_word_count_section(body)
+                except Exception:
+                    wc = len(str(body).split())
+                def _you_we_ratio(t: str) -> float:
+                    t2 = t.lower()
+                    y = len(re.findall(r"\byou\b", t2))
+                    w = len(re.findall(r"\bwe\b", t2))
+                    return (y / w) if w else (float(y) if y else 0.0)
+                def _passive_estimate(t: str) -> float:
+                    t2 = t.lower()
+                    sentences = [s for s in re.split(r"[.!?]\s+", t2) if s.strip()]
+                    passive = sum(1 for s in sentences if re.search(r"\b(be|is|are|was|were|been|being)\s+\w+ed\b(\s+by\b)?", s))
+                    return 0.0 if not sentences else (1 - passive/len(sentences))
+                yr = _you_we_ratio(body)
+                av = _passive_estimate(body)
+                st.caption(f"Words: {wc} • You:We≈{yr:.2f} • Active voice≈{av*100:.0f}%")
+    # Session values are initialized before widgets; avoid mutations after widget creation to prevent Streamlit errors.
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
@@ -15389,6 +15631,26 @@ def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
         else:
             out.append(" ".join(fixed))
     return "\n\n".join(out).strip()
+
+
+
+def _pb_psychology_framework() -> str:
+    """
+    Psychology rules used to shape tone and trust. Not printed verbatim.
+    """
+    return (
+        "Psychology layer:\n"
+        "- Lead with empathy to the mission and constraints.\n"
+        "- Tell a compact story: context, challenge, method, outcome.\n"
+        "- Reciprocity: mutual wins for agency and vendor.\n"
+        "- Certainty language: clear commitments, no hedging, show controls.\n"
+        "- Trust markers: past performance, QA, safety, data security, subcontractor vetting.\n"
+        "- Disarm risk early: list top risks, mitigations, verification steps.\n"
+        "- Smooth cadence: short sentences, one idea per paragraph, clean transitions.\n"
+        "- No citations or snippet IDs. Self-contained answer.\n"
+    ).strip()
+
+
 
 def _finalize_draft(text: str) -> str:
     return _one_idea_per_paragraph(_enforce_style_guide(_strip_citations(text)))
