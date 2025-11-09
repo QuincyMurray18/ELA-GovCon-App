@@ -1,3 +1,94 @@
+
+# === Proposal Builder normalization helpers ===
+def _pb_try_json(text: str):
+    try:
+        import json as _json
+        return _json.loads(text)
+    except Exception:
+        return None
+
+def _pb_strip_html(text: str) -> str:
+    if not isinstance(text, str) or ("<" not in text and ">" not in text):
+        return text
+    import re as _re
+    t = text
+    t = _re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", t)
+    t = _re.sub(r"(?is)<br\s*/?>", "\n", t)
+    t = _re.sub(r"(?is)</p\s*>", "\n\n", t)
+    t = _re.sub(r"(?is)</li\s*>", "\n", t)
+    t = _re.sub(r"(?is)<li[^>]*>\s*", "- ", t)
+    t = _re.sub(r"(?is)</h[1-6]\s*>", "\n\n", t)
+    t = _re.sub(r"(?is)<[^>]+>", "", t)
+    t = _re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+def _pb_struct_to_text(obj) -> str:
+    import pandas as _pd
+    lines = []
+    if isinstance(obj, dict):
+        paras = []
+        for k in ("paragraphs","method","rationale","sequence","sequence_of_work","approach"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                paras.append((k, v.strip()))
+            elif isinstance(v, list):
+                for p in v:
+                    if isinstance(p, str) and p.strip():
+                        paras.append((k, p.strip()))
+        for _, p in paras:
+            lines.append(p); lines.append("")
+        bullets = obj.get("bullets") or {k: obj[k] for k in ["features","compliance","evidence","benefits"] if k in obj}
+        if isinstance(bullets, dict):
+            for hdr, items in bullets.items():
+                if not items: continue
+                lines.append(f"**{str(hdr).title()}**")
+                if isinstance(items, list):
+                    for b in items:
+                        if isinstance(b, str) and b.strip():
+                            lines.append(f"- {b.strip()}")
+                elif isinstance(items, str):
+                    for b in items.splitlines():
+                        b = b.strip()
+                        if b:
+                            lines.append(f"- {b}")
+                lines.append("")
+        elif isinstance(bullets, list):
+            for b in bullets:
+                if isinstance(b, str) and b.strip():
+                    lines.append(f"- {b.strip()}")
+            lines.append("")
+        tables = obj.get("tables")
+        if isinstance(tables, list):
+            for t in tables:
+                try:
+                    df = _pd.DataFrame(t)
+                    if not df.empty:
+                        hdr = "| " + " | ".join(map(str, df.columns)) + " |"
+                        sep = "| " + " | ".join("---" for _ in df.columns) + " |"
+                        lines.append(hdr); lines.append(sep)
+                        for _, row in df.iterrows():
+                            lines.append("| " + " | ".join("" if _pd.isna(x) else str(x) for x in row.values) + " |")
+                        lines.append("")
+                except Exception:
+                    continue
+    return "\n".join(lines).strip() if lines else ""
+
+def _pb_normalize_text(text: str) -> str:
+    if not isinstance(text, str) or not text.strip():
+        return text
+    obj = _pb_try_json(text)
+    if obj is not None:
+        try:
+            text = _pb_struct_to_text(obj) or ""
+        except Exception:
+            pass
+    text = _pb_strip_html(text)
+    text = text.replace("\r\n", "\n").replace("\n", "\n")
+    import re as _re
+    text = _re.sub(r"[ \t]{3,}", "  ", text)
+    text = _one_idea_per_paragraph(text)
+    return text.strip()
+
 # ==== Draft Finalization Guards (top-of-file) ====
 try:
     _strip_citations
@@ -9079,8 +9170,9 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     if drafted:
                         drafted = _strip_citations(drafted)
                         final = _finalize_section(sec, drafted)
-                        st.session_state[f"pb_section_{sec}"] = final
-                        st.session_state[f"pb_ta_{sec}"] = final
+                norm = _pb_normalize_text(final)
+                st.session_state[f"pb_section_{sec}"] = norm
+                st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
@@ -9101,8 +9193,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        st.session_state[f"pb_section_{sec}"] = _finalize_section(sec, drafted)
-                        st.session_state[f"pb_ta_{sec}"] = st.session_state[f"pb_section_{sec}"]
+                        final = _finalize_section(sec, drafted)
+                        norm = _pb_normalize_text(final)
+                        st.session_state[f"pb_section_{sec}"] = norm
+                        st.session_state[f"pb_ta_{sec}"] = norm
                         st.rerun()
 
             ta_key = f"pb_ta_{sec}"
@@ -9112,6 +9206,8 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                 st.session_state[ta_key] = st.session_state.get(f"pb_section_{sec}", "")
 
             content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
+            with st.expander(f"Preview — {sec}", expanded=False):
+                st.markdown(st.session_state.get(ta_key, ""))
     # Ensure text areas reflect latest session values
     for sec in selected:
         src = st.session_state.get(f"pb_section_{sec}")
