@@ -1,9 +1,3 @@
-try:
-    _pb_psychology_framework  # type: ignore[name-defined]
-except NameError:
-    def _pb_psychology_framework() -> str:
-        return ""
-
 
 # === Proposal Builder normalization helpers ===
 def _pb_try_json(text: str):
@@ -111,89 +105,11 @@ except NameError:
         t = _re.sub(r"\n{3,}", "\n\n", t)
         return t.strip()
 
-def _enforce_style_guide(text: str, target_min: int = 14, target_max: int = 20, max_sents_per_para: int = 10) -> str:
-    import re
-    t = str(text or "")
-
-    # Normalize headings: dependencies -> Dependencies
-    t = re.sub(r"(?im)^\s*dependencies(\s*[:\-]?)", r"Dependencies\1", t)
-
-    # Simple jargon and nominalization replacements
-    repl = {
-        r"\butilize\b": "use",
-        r"\bleverage\b": "use",
-        r"\bfacilitate\b": "help",
-        r"\bprioritize\b": "focus on",
-        r"\bimplement(?:ation)?\b": "implement",
-        r"\bprovide(?:r|rs)?\b": "provide",
-        r"\bprovision\b": "provide",
-        r"\boptimization\b": "improve",
-        r"\bcapability\b": "ability",
-        r"\bcommencement\b": "start",
-        r"\btermination\b": "end",
-        r"\bmitigation\b": "reduce",
-        r"\bsubmission\b": "submit",
-        r"\bverification\b": "verify",
-        r"\butilization\b": "use",
-    }
-    for pat, rep in repl.items():
-        t = re.sub(pat, rep, t, flags=re.IGNORECASE)
-
-    # Cut common hedges and shift to present tense where safe
-    t = re.sub(r"(?i)\bwe will\b", "we", t)
-    t = re.sub(r"(?i)\bwe shall\b", "we", t)
-    t = re.sub(r"(?i)\bwe (?:aim|intend|plan) to\b", "we", t)
-    t = re.sub(r"(?i)\bshould\b", "", t)
-    t = re.sub(r"(?i)\bmay\b", "", t)
-    t = re.sub(r"(?i)\bmight\b", "", t)
-
-    # Enforce sentence length 14–20 words where possible
-    def split_into_sentences(paragraph):
-        parts = re.split(r"([\.!?])", paragraph)
-        out = []
-        for i in range(0, len(parts), 2):
-            core = parts[i].strip()
-            end = parts[i+1] if i+1 < len(parts) else ""
-            if core:
-                out.append((core + end).strip())
-        return out
-
-    def fix_sentence_lengths(paragraph):
-        sents = split_into_sentences(paragraph)
-        fixed = []
-        i = 0
-        while i < len(sents):
-            s = sents[i].strip()
-            wc = len(re.findall(r"\b\w+\b", s))
-            if wc < target_min and i + 1 < len(sents):
-                glued = (s.rstrip(".!?") + " " + sents[i+1].lstrip()).strip()
-                wc2 = len(re.findall(r"\b\w+\b", glued))
-                if wc2 <= target_max + 5:
-                    fixed.append(glued)
-                    i += 2
-                    continue
-            if wc > target_max + 5:
-                split = re.split(r"(;|:|\sand\s)", s, maxsplit=1)
-                if len(split) > 1:
-                    left = (split[0] + ".").strip()
-                    right = (" ".join(split[2:])).strip()
-                    if left: fixed.append(left)
-                    if right: fixed.append(right)
-                else:
-                    fixed.append(s)
-            else:
-                fixed.append(s)
-            i += 1
-        return " ".join(fixed)
-
-    paras = [p.strip() for p in re.split(r"\n{2,}", t) if p.strip()]
-    new_paras = []
-    for p in paras:
-        new_paras.append(fix_sentence_lengths(p))
-    t = "\n\n".join(new_paras)
-
-    return t.strip()
-
+try:
+    _enforce_style_guide
+except NameError:
+    def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
+        return str(text or "").strip()
 
 try:
     _finalize_draft
@@ -219,18 +135,18 @@ except NameError:  # define if missing
             "Follow these rules strictly:\n"
             "1) Understand client need. Mirror solicitation terms exactly.\n"
             "2) State deliverables explicitly.\n"
-            "3) Answer each L&M requirement directly.\n"
-            "4) Provide HOW procedures and concrete steps.\n"
-            "5) Sentences 14–20 words. One idea per paragraph.\n"
-            "6) Speak to 'you' directly. Keep ~1:1 'you:we' ratio.\n"
-            "7) Use plain words. Replace jargon and nominalizations with verbs.\n"
-            "8) Cut hedges unless the solicitation requires them.\n"
-            "9) Commit in present tense.\n"
-            "10) Add one proof point per section: metric, artifact, or timeline.\n"
-            "11) Close each section with a one-sentence promise tied to risk control.\n"
-            "12) Organize clearly for easy scoring.\n"
-            "13) No citations or references.\n"
-            "14) Output only the requested section. No other sections."
+            "3) Address evaluation factors: technical, management, past performance, price.\n"
+            "4) Answer each L&M requirement directly.\n"
+            "5) Obey page and format rules.\n"
+            "6) Provide HOW procedures, not claims.\n"
+            "7) Short sentences (<=10 words). One idea per paragraph.\n"
+            "8) Use bullets. Clean headings.\n"
+            "9) Include roles, equipment, timeline, QC checks, metrics.\n"
+            "10) Identify subcontractors and responsibilities.\n"
+            "11) Organize clearly for easy scoring.\n"
+            "12) Include a Risk table with mitigations.\n"
+            "13) Add a brief L&M compliance crosswalk.\n"
+            "14) Keep tone federal and precise."
         )
 
 try:
@@ -345,31 +261,6 @@ def _mk_md_table(headers, rows):
 
 def _auto_tables_for_section(conn, rfp_id: int, section_title: str) -> str:
     import pandas as _pd
-
-
-# --- Utilities: key sanitizer and section clipper ---
-def _safe_key(name: str) -> str:
-    import re as _re
-    return _re.sub(r'[^a-z0-9_]+', '_', str(name or '').lower()).strip('_')
-
-def _pb_clip_to_section(section_title: str, text: str) -> str:
-    if not text:
-        return text
-    k = str(section_title or '').lower().strip()
-    stops = [
-        'executive summary','technical approach','management approach','staffing',
-        'quality control','quality assurance','risk','risks and mitigations','transition',
-        'price approach','pricing approach','past performance','subcontractor plan',
-        'subcontracting plan','compliance crosswalk','cover letter'
-    ]
-    out = []
-    for line in (text or '').splitlines():
-        hdr = line.strip().lower().lstrip('#').strip()
-        if hdr in stops and hdr != k:
-            break
-        out.append(line)
-    return '\n'.join(out).strip()
-
     k = _normalize_section_name(section_title)
     out = []
     def add(name, headers, rows):
@@ -799,7 +690,7 @@ def _normalize_section_name(name: str) -> str:
 def _section_blueprint(section_title: str) -> str:
     k = _normalize_section_name(section_title)
     if k == "technical":
-        return ("Write only the Technical Approach. Include: dependencies; step-by-step procedure; "
+        return ("Write only the Technical Approach. Include: assumptions; step-by-step procedure; "
                 "tools and materials; interfaces; schedule with dependencies; acceptance criteria and QC checks. "
                 "Do not include management, staffing, risks, or crosswalks.")
     if k == "management":
@@ -822,7 +713,7 @@ def _section_blueprint(section_title: str) -> str:
     if k == "exec":
         return ("Write only the Executive Summary. State client need, proposed solution, value, and key discriminators.")
     if k == "price":
-        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and dependencies. No numbers.")
+        return ("Write only the Price Approach note. Describe estimating basis, CLIN mapping, and assumptions. No numbers.")
     if k == "past":
         return ("Write only the Past Performance section. Two concise examples with relevance and outcomes.")
     if k == "subs":
@@ -1400,7 +1291,7 @@ def run_alerts_center(conn):
                             conn.execute("UPDATE saved_searches SET cadence=? WHERE id=?;", (_cad_in, int(sid)))
                 notify("Updated.", "success")
                 try:
-                    pass
+                    st.rerun()
                 except Exception:
                     pass
             except Exception as _e:
@@ -2153,8 +2044,7 @@ def _x3_open_modal(row_dict: dict):
     st.session_state["x3_modal_notice"] = dict(row_dict or {})
     st.session_state["x3_show_modal"] = True
     try:
-        pass
-
+        st.rerun()
     except Exception:
         pass
 
@@ -4636,7 +4526,7 @@ def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     if create:
         tid = y2_create_thread(conn, int(rfp_id), title="CO guidance")
         st.session_state["y2_thread_id"] = tid
-
+        st.rerun()
     if threads:
         pick = st.selectbox("Thread", options=[t["id"] for t in threads], format_func=lambda i: next((f"#{t['id']} — {t.get('title') or 'Untitled'}" for t in threads if t['id']==i), f"#{i}"), key="y2_pick")
         thread_id = int(pick)
@@ -4801,110 +4691,6 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
         ctx["title"] = ""; ctx["solnum"] = ""
     return ctx
 
-
-def _y3_build_messages_psych(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
-    import pandas as _pd
-    # Collect context via existing helper if available
-    try:
-        ctx = _y3_collect_ctx(conn, int(rfp_id))
-    except Exception:
-        ctx = {}
-    # Direct pulls for dates, POCs, CLINs
-    try:
-        df_dates = _pd.read_sql_query("SELECT label, date_text FROM rfp_dates WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-    except Exception:
-        df_dates = _pd.DataFrame(columns=["label","date_text"])
-    try:
-        df_pocs = _pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-    except Exception:
-        df_pocs = _pd.DataFrame(columns=["name","role","email","phone"])
-    try:
-        df_clin = _pd.read_sql_query("SELECT clin, description, qty, unit FROM clines WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
-    except Exception:
-        df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
-    try:
-        df_org = _pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn, params=())
-    except Exception:
-        df_org = _pd.DataFrame()
-
-    def _fmt_dates(df):
-        try: return "\n".join(f"- {r['label']}: {r['date_text']}" for _, r in df.iterrows()) if not df.empty else "- n/a"
-        except Exception: return "- n/a"
-    def _fmt_pocs(df):
-        try: return "\n".join(f"- {r['role']}: {r['name']} — {r.get('email','') or ''} {r.get('phone','') or ''}".strip() for _, r in df.iterrows()) if not df.empty else "- n/a"
-        except Exception: return "- n/a"
-    def _fmt_clins(df):
-        try:
-            cols = [c for c in ("clin","description","qty","unit") if c in df.columns]
-            return "\n".join("- " + " | ".join(str(r.get(c,'')) for c in cols) for _, r in df.iterrows()) if not df.empty else "- n/a"
-        except Exception: return "- n/a"
-
-    org = df_org.iloc[0].to_dict() if isinstance(df_org, _pd.DataFrame) and not df_org.empty else {}
-    org_lines = []
-    for k in ("company_name","phone","email","website","cage","uei","duns","ein","address"):
-        v = org.get(k) or org.get(k.upper()) or ""
-        if v: org_lines.append(f"{k.replace('_',' ').title()}: {v}")
-    org_block = "\n".join(org_lines) if org_lines else ""
-
-    try:
-        mw = int(max_words) if max_words else 0
-    except Exception:
-        mw = 0
-    target_clause = f"Target 97 to 103 percent of {mw} words. Finish the last sentence even if up to 40 words over." if mw > 0 else "No word target."
-
-    style = (
-        "You are a veteran federal proposal writer with $70M+ in awards.\n"
-        + _style_guide() + "\n\n"
-        + _pb_psychology_framework() + "\n"
-        "Output plain text only. No citations or snippet IDs.\n"
-    ).strip()
-
-    # Build user prompt
-    lm_items = (ctx.get("lm") or [])[:30]
-    lm_blob = "\n".join(f"- {t}" for t in lm_items) if lm_items else ""
-    meta = ctx.get("meta") or {}
-    meta_str = "\n".join(f"- {k}: {v}" for k,v in meta.items()) if isinstance(meta, dict) and meta else ""
-
-    user = f"""
-Draft the section: {section_title}
-
-Intent: disarm evaluator anxiety, show certainty, map to L&M.
-
-Notes from author:
-{notes or '- none'}
-
-Guidance:
-- {target_clause}
-- One idea per paragraph. Short sentences.
-- Lead with mission empathy. Then logic. Then verification.
-- Show reciprocity and mutual gains.
-- Use concrete steps, QC, metrics, timeline, roles.
-
-Apply this blueprint strictly:
-{_section_blueprint(section_title)}
-
-Company profile:
-{org_block or '- none on file'}
-
-RFP meta:
-{meta_str or '- n/a'}
-
-Key dates:
-{_fmt_dates(df_dates)}
-
-POCs:
-{_fmt_pocs(df_pocs)}
-
-CLINs:
-{_fmt_clins(df_clin)}
-
-Checklist items:
-{lm_blob or '- none'}
-""".strip()
-
-    return [{"role":"system","content": style}, {"role":"user","content": user}]
-
-
 def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     import pandas as _pd
     ctx = _y3_collect_ctx(conn, int(rfp_id))
@@ -4939,6 +4725,22 @@ SECTION: {section_title}
 
 {_style_guide()}
 
+USE THIS SCAFFOLD:
+- Section lead mirroring solicitation.
+- Client need.
+- Deliverables.
+- Technical approach (step-by-step).
+- Management approach (roles and RACI).
+- Staffing and coverage.
+- Equipment and materials.
+- Timeline milestones.
+- Quality control and metrics.
+- Subcontractors and oversight.
+- Risks and mitigations.
+- Compliance crosswalk (bullets to L&M).
+- Past performance tie-in.
+- Price approach note.
+
 RFP META:
 {meta}
 
@@ -4961,16 +4763,11 @@ AUTHOR NOTES:
 {notes or 'n/a'}
 
 REQUIREMENTS:
-- One paragraph per idea. Each sentence 14–20 words.
-- Speak to 'you' directly. Maintain ~1:1 'you:we' ratio.
-- Use plain words. Replace jargon and nominalizations with verbs.
-- Cut hedges unless required by the solicitation.
-- Present tense for commitments.
-- Include at least one specific detail in each paragraph.
-- Add one concrete proof point per section: metric, artifact, or timeline.
-- Close with a one-sentence promise tied to risk control.
-- Use solicitation terms verbatim when relevant.
-- Answer L&M directly.
+- Write one paragraph per idea. Start a new paragraph when the topic shifts.
+- No citations or 'References'.
+- Map content to context.
+- {req_len}
+- Short sentences (<=10 words). Paragraphs <=10 sentences.
 - Output only the requested section. No other sections.
 - Do not include TOC or extra headings.
 - Apply this blueprint:
@@ -4978,7 +4775,7 @@ REQUIREMENTS:
 """
     return [{"role":"system","content": style}, {"role":"user","content": user}]
 def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None, temperature: float = 0.2):
-    msgs = _y3_build_messages_psych(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
+    msgs = _y3_build_messages(conn, int(rfp_id), section_title, notes, k=int(k), max_words=max_words)
     client = get_ai()
     model_name = _resolve_model()
     try:
@@ -5007,72 +4804,7 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
             return len(str(text or "").split())
 
     
-
-def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
-    def wc(t: str) -> int:
-        try:
-            import re as _re_wc
-            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
-        except Exception:
-            return len(str(t or "").split())
-    try:
-        mw = int(max_words) if max_words else 0
-    except Exception:
-        mw = 0
-    if not mw or mw <= 0:
-        return drafted or ""
-    lower = int(max(1, round(0.99 * mw)))
-    hard_cap = mw + 60
-    text_acc = (drafted or "").strip()
-    if wc(text_acc) >= lower:
-        return text_acc
-    client = get_ai()
-    model_name = _resolve_model()
-    attempts = 0
-    while wc(text_acc) < lower and attempts < 6 and wc(text_acc) < hard_cap:
-        attempts += 1
-        cur = wc(text_acc)
-        remaining = max(0, lower - cur)
-        ask_up_to = max(80, min(200, remaining + 40))
-        system = (
-            "You are a veteran federal proposal writer with $70M+ in awards. "
-            "Append continuation only. Do not repeat or modify prior text. "
-            "Preserve bullets and paragraph breaks. Keep style unchanged."
-        )
-        user = (
-            f"Continue the following section for RFP {int(rfp_id)}.\n"
-            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
-            "Rules:\n"
-            "- Append continuation only. No rewrites.\n"
-            "- Finish the last sentence if near the end, even if slightly over the soft cap.\n"
-            "- Keep one idea per paragraph. Short sentences.\n"
-            "- Include concrete steps, QC points, metrics, and verification.\n\n"
-            "--- EXISTING DRAFT START ---\n"
-            f"{text_acc}\n"
-            "--- EXISTING DRAFT END ---\n\n"
-            "Append continuation only:"
-        )
-        try:
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-                temperature=0.15,
-                stream=False,
-            )
-            add = ""
-            if hasattr(resp, "choices") and resp.choices:
-                add = getattr(resp.choices[0].message, "content", "") or ""
-        except Exception:
-            add = ""
-        add = str(add).strip()
-        if add:
-            text_acc = (text_acc + "\n\n" + add).strip()
-        else:
-            break
-    return text_acc.strip()
-
-
-def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
+def _y3_top_off(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
     """
     Iteratively append continuation until total length ≈ target.
     Never rewrite existing text. Stop at a sentence boundary.
@@ -5091,7 +4823,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         except Exception:
             return len(str(t or "").split())
 
-    low = int(mw * (0.98 if mw >= 120 else 0.96))
+    low = int(mw * (0.97 if mw >= 120 else 0.95))
     text_acc = (drafted or "").strip()
     attempts = 0
 
@@ -5113,7 +4845,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
             f"Goal: bring the TOTAL length near {mw} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
             "Rules:\n"
             "- Do not modify prior text. Append continuation only.\n"
-            "- Keep one paragraph per idea. Sentences 14–20 words.\n"
+            "- Keep one paragraph per idea. Short sentences (<=12 words).\n"
             "- Add concrete steps, schedule, QC, staffing, and compliance mapping.\n"
             "- Stop after a natural sentence boundary. Slightly exceed target if needed.\n\n"
             "--- EXISTING DRAFT START ---\n"
@@ -5596,7 +5328,7 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
                 find_section_M(conn, int(rid))
                 find_clins_all(conn, int(rid))
             st.success("Updated metadata and sections.")
-
+            st.rerun()
     # Chips
     try:
         dfm = pd.read_sql_query("SELECT key, value FROM rfp_meta WHERE rfp_id=?;", conn, params=(int(rid),))
@@ -6046,7 +5778,6 @@ def get_db() -> sqlite3.Connection:
         def __p_table_exists(cur, name: str) -> bool:
 
             try:
-                pass
 
                 cur.execute("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?;", (name,))
 
@@ -6069,7 +5800,6 @@ def get_db() -> sqlite3.Connection:
         def __p_add_tenant(cur, table: str):
 
             try:
-                pass
 
                 cols = __p_get_cols(cur, table)
 
@@ -6086,7 +5816,6 @@ def get_db() -> sqlite3.Connection:
         def __p_create_scoped_view(cur, table: str):
 
             try:
-                pass
 
                 cols = __p_get_cols(cur, table)
 
@@ -6107,7 +5836,6 @@ def get_db() -> sqlite3.Connection:
         def __p_create_insert_trigger(cur, table: str):
 
             try:
-                pass
 
                 trg = f"{table}_ai_tenant"
 
@@ -6210,7 +5938,6 @@ def get_db() -> sqlite3.Connection:
             __p_add_tenant(cur, t)
 
             try:
-                pass
 
                 cur.execute(f"UPDATE {t} SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) WHERE tenant_id IS NULL;")
 
@@ -7656,13 +7383,13 @@ def run_sam_watch(conn) -> None:
             with p1:
                 if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
                     st.session_state["sam_page"] = cur_page - 1
-
+                    st.rerun()
             with p2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with p3:
                 if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
                     st.session_state["sam_page"] = cur_page + 1
-
+                    st.rerun()
 
             start_i = (cur_page - 1) * page_size
             end_i = min(start_i + page_size, total)
@@ -7691,7 +7418,7 @@ def run_sam_watch(conn) -> None:
                     with c3:
                         if st.button("View details", key=f"sam_view_{i}"):
                             st.session_state["sam_selected_idx"] = i
-
+                            st.rerun()
                     with c4:
                         # Add to Deals (kept as-is; relies on project helpers)
                         if st.button("Add to Deals", key=f"add_to_deals_{i}"):
@@ -8188,7 +7915,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
 
                     st.success("Files added and Analyzer updated.")
-
+                    st.rerun()
 
         with col2:
             if st.button("Fetch from SAM.gov ▶", key="onepage_fetch_sam"):
@@ -8204,7 +7931,7 @@ def _run_rfp_analyzer_phase3(conn):
                             st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
                     except Exception as e:
                         st.error(f"SAM fetch error: {e}")
-
+                st.rerun()
 
     # Build pages for One-Page Analyzer
     try:
@@ -8742,7 +8469,7 @@ def _run_rfp_analyzer_phase3(conn):
                                     cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(rid),))
                                     conn.commit()
                                 st.success("Cleared.")
-
+                                st.rerun()
                             except Exception as e:
                                 st.error(f"Clear failed: {e}")
                 else:
@@ -8780,7 +8507,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
                             conn.commit()
                     st.success(f"Updated {len(ids)} item(s).")
-
+                    st.rerun()
             # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
                 out = df_lm.copy()
@@ -8969,7 +8696,7 @@ def _run_rfp_analyzer_phase3(conn):
                         except Exception:
                             fail += 1
                     st.success(f"Retried {len(sel_retry)}. OK={ok} Fail={fail}")
-
+                    st.rerun()
 
         df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
         if df_rf.empty:
@@ -9541,11 +9268,11 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
-                        final = _pb_clip_to_section(sec, drafted)
-                    norm = _pb_normalize_text(final)
-                    st.session_state[f"pb_section_{sec}"] = norm
-                    st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
+                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        final = _finalize_section(sec, drafted)
+                norm = _pb_normalize_text(final)
+                st.session_state[f"pb_section_{sec}"] = norm
+                st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
@@ -9566,14 +9293,14 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     drafted = "".join(acc).strip()
                     if drafted:
                         drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
-                        final = _pb_clip_to_section(sec, drafted)
+                        drafted = _y3_top_off(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
+                        final = _finalize_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
-                        st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
+                        st.session_state[f"pb_ta_{sec}"] = norm
+                        st.rerun()
 
-
-            ta_key = f"pb_ta_{_safe_key(sec)}"
+            ta_key = f"pb_ta_{sec}"
 
             if ta_key not in st.session_state:
 
@@ -9582,7 +9309,12 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
                 st.markdown(st.session_state.get(ta_key, ""))
-
+    # Ensure text areas reflect latest session values
+    for sec in selected:
+        src = st.session_state.get(f"pb_section_{sec}")
+        if src is not None and st.session_state.get(f"pb_ta_{sec}", None) != src:
+            st.session_state[f"pb_ta_{sec}"] = src
+            st.rerun()
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
@@ -10043,7 +9775,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
             st.success("Scenario created.")
-
+            st.rerun()
         return
     else:
         if df_sc.empty:
@@ -11825,7 +11557,7 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
         n = _import_csv_into_table(conn, upcsv, tsel, scoped_to_current=True)
         if n:
             st.success(f"Imported {n} row(s) into {tsel}")
-
+            st.rerun()
 
 # ---------- Phase O: Global Theme & Layout ----------
 def _apply_theme_old() -> None:
@@ -11979,7 +11711,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
-
+                st.rerun()
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
         return
@@ -12040,7 +11772,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["current_rfp_id"] = int(new_id)
                 st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
                 st.session_state["nav_target"] = "RFP Analyzer"
-
+                st.rerun()
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
 
@@ -12078,7 +11810,7 @@ def run_rfp_analyzer(conn) -> None:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
             try:
                 _one_click_analyze(conn, int(rid))
-
+                st.rerun()
             except Exception as e:
                 st.error(f"Ingest failed: {e}")
 
@@ -12102,7 +11834,7 @@ def run_rfp_analyzer(conn) -> None:
                     y1_index_rfp(conn, int(rid), rebuild=False)
                 except Exception:
                     pass
-
+                st.rerun()
 
     # Build pages and render One-Page
     try:
@@ -12314,7 +12046,7 @@ if "_o3_render_sender_picker" not in globals():
                             st.session_state["o4_sender_sel"] = email.strip()
                         except Exception:
                             pass
-
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Save failed: {e}")
             if ok and email:
@@ -12618,7 +12350,6 @@ def s1_normalize_phone(s:str)->str:
 def s1_get_google_api_key()->str|None:
     import os
     try:
-        pass
 
         if "google" in st.secrets and "api_key" in st.secrets["google"]:
             return st.secrets["google"]["api_key"]
@@ -12768,12 +12499,12 @@ def render_outreach_templates(conn):
         if (tid is not None) and st.button("Duplicate"):
             email_template_upsert(conn, f"{name} copy", subject or "", sig_html or "", None)
             st.success("Duplicated")
-
+            st.rerun()
     with c3:
         if (tid is not None) and st.button("Delete"):
             email_template_delete(conn, tid)
             st.success("Deleted")
-
+            st.rerun()
 
 def _tpl_picker_prefill(conn):
 
@@ -13098,7 +12829,6 @@ def _o3_collect_recipients_ui(conn):
 
 def _o3_sender_accounts_from_secrets():
     try:
-        pass
 
         accs = []
         try:
@@ -13314,12 +13044,11 @@ def _o4_accounts_ui(conn):
                     """, (email.strip(), display or "", app_pw or "", host or "smtp.gmail.com", int(port or 465), 1 if ssl else 0))
                 st.success("Saved")
     try:
-        pass
 
         st.session_state["o4_sender_sel"] = email.strip()
     except Exception:
         pass
-
+    st.rerun()
     with c4:
         if st.button("Delete account", key="o4_ac_del"):
             if not email:
@@ -13341,7 +13070,6 @@ def _o3_render_sender_picker():
     ensure_outreach_o1_schema(conn)
     rows = _get_senders(conn)
     try:
-        pass
 
         st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
     except Exception:
@@ -13387,7 +13115,7 @@ def _o4_optout_ui(conn):
         with conn:
             conn.execute("INSERT OR IGNORE INTO outreach_optouts(email) VALUES(?)", (em.strip().lower(),))
         st.success("Added")
-
+        st.rerun()
     up = st.file_uploader("Bulk upload CSV with 'email' column", type=["csv"], key="o4_opt_csv")
     if up is not None:
         try:
@@ -14176,7 +13904,7 @@ def render_subfinder_s1d(conn):
         if st.session_state.get("s1d_next_token"):
             if st.button("Next page ▶", key="s1d_next_under"):
                 st.session_state["s1d_trigger"] = "next"
-
+                st.rerun()
 
     # === S1D CARDS: Add Places to Vendors and Quick Edit Vendors ===
     import sqlite3 as _sqlite3
@@ -15046,6 +14774,22 @@ SECTION TO DRAFT: {section_title}
 
 {_style_guide()}
 
+USE THIS SCAFFOLD:
+- Section lead mirroring solicitation.
+- Client need.
+- Deliverables.
+- Technical approach (step-by-step).
+- Management approach (roles and RACI).
+- Staffing and coverage.
+- Equipment and materials.
+- Timeline milestones.
+- Quality control and metrics.
+- Subcontractors and oversight.
+- Risks and mitigations.
+- Compliance crosswalk (bullets to L&M).
+- Past performance tie-in.
+- Price approach note.
+
 RFP META:
 {json.dumps(meta, ensure_ascii=False)}
 
@@ -15071,16 +14815,12 @@ NOTES:
 {notes or '(none)'}
 
 REQUIREMENTS:
-- One paragraph per idea. Each sentence 14–20 words.
-- Speak to 'you' directly. Maintain ~1:1 'you:we' ratio.
-- Use plain words. Replace jargon and nominalizations with verbs.
-- Cut hedges unless required by the solicitation.
-- Present tense for commitments.
-- Include at least one specific detail in each paragraph.
-- Add one concrete proof point per section: metric, artifact, or timeline.
-- Close with a one-sentence promise tied to risk control.
+- Write one paragraph per idea. Start a new paragraph when the topic shifts.
 - Use solicitation terms verbatim when relevant.
-- Answer L&M directly.
+- No citations or references.
+- Short sentences (<=10 words). Paragraphs max 10 sentences.
+- Organize for easy scoring.
+- If something is unknown, state an assumption.
 - Output only the requested section. No other sections.
 - Do not include TOC or extra headings.
 - Apply this blueprint:
@@ -15576,7 +15316,7 @@ def _style_guide() -> str:
             "4) Answer each L&M requirement directly.\n"
             "5) Obey page and format rules.\n"
             "6) Provide HOW procedures, not claims.\n"
-            "7) Sentences 14–20 words. One idea per paragraph.\n"
+            "7) Short sentences (<=10 words). One idea per paragraph.\n"
             "8) Use bullets. Clean headings.\n"
             "9) Include roles, equipment, timeline, QC checks, metrics.\n"
             "10) Identify subcontractors and responsibilities.\n"
@@ -15597,7 +15337,7 @@ PROPOSAL_STYLE_GUIDE = (
     "4) Answer each L&M requirement directly.\n"
     "5) Obey page and format rules.\n"
     "6) Provide HOW procedures, not claims.\n"
-    "7) Sentences 14–20 words. One idea per paragraph.\n"
+    "7) Short sentences (<=10 words). One idea per paragraph.\n"
     "8) Use bullets. Clean headings.\n"
     "9) Include roles, equipment, timeline, QC checks, metrics.\n"
     "10) Identify subcontractors and responsibilities.\n"
@@ -15616,27 +15356,6 @@ def _strip_citations(text: str) -> str:
     t = re.sub(r"\n+references?:\n.*$", "", t, flags=re.I|re.S)
     t = re.sub(r"^source:.*$", "", t, flags=re.I|re.M)
     t = re.sub(r"\n{3,}", "\n\n", t)
-    
-    # Diagnostics: approximate active voice and you:we ratio
-    try:
-        import re as _diag_re
-        sents = _diag_re.split(r'(?<=[\.!?])\s+', t)
-        passive_pat = _diag_re.compile(r'\b(?:is|are|was|were|be|been|being)\s+\w+(?:ed|en)\b(?:[^.]*\bby\b)?', _diag_re.I)
-        passive = sum(1 for s in sents if passive_pat.search(s or ""))
-        total = max(1, len([s for s in sents if s.strip()]))
-        active_ratio = int(round(100 * (1 - passive / total)))
-        you = len(_diag_re.findall(r'\byou|your\b', t, _diag_re.I))
-        we = len(_diag_re.findall(r'\bwe|our\b', t, _diag_re.I))
-        you_we = f"{you}:{we}" if we else f"{you}:0"
-        try:
-            import streamlit as _st_diag
-            _st_diag.session_state['pb_active_voice'] = active_ratio
-            _st_diag.session_state['pb_you_we'] = you_we
-        except Exception:
-            pass
-        t = t + f"\n\n<!-- diagnostics: active_voice={active_ratio}% you_we={you_we} -->"
-    except Exception:
-        pass
     return t.strip()
 
 def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
@@ -15671,26 +15390,6 @@ def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
             out.append(" ".join(fixed))
     return "\n\n".join(out).strip()
 
-
-
-def _pb_psychology_framework() -> str:
-    """
-    Psychology rules used to shape tone and trust. Not printed verbatim.
-    """
-    return (
-        "Psychology layer:\n"
-        "- Lead with empathy to the mission and constraints.\n"
-        "- Tell a compact story: context, challenge, method, outcome.\n"
-        "- Reciprocity: mutual wins for agency and vendor.\n"
-        "- Certainty language: clear commitments, no hedging, show controls.\n"
-        "- Trust markers: past performance, QA, safety, data security, subcontractor vetting.\n"
-        "- Disarm risk early: list top risks, mitigations, verification steps.\n"
-        "- Smooth cadence: short sentences, one idea per paragraph, clean transitions.\n"
-        "- No citations or snippet IDs. Self-contained answer.\n"
-    ).strip()
-
-
-
 def _finalize_draft(text: str) -> str:
     return _one_idea_per_paragraph(_enforce_style_guide(_strip_citations(text)))
 
@@ -15722,25 +15421,3 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
-
-# === Finalize Section Override ===
-def _finalize_section(section_title: str, text: str) -> str:
-    try:
-        t = _pb_normalize_text(text)
-    except Exception:
-        t = str(text or "")
-    try:
-        t = _clip_to_single_section(section_title, t)
-    except Exception:
-        pass
-    try:
-        t = _enforce_style_guide(t, target_min=14, target_max=20)
-    except Exception:
-        pass
-    import re as _re_final
-    t = _re_final.sub(r"(?im)^\s*assumptions(\s*[:\-]?)", r"Dependencies\1", t)
-    try:
-        t = _clip_to_single_section(section_title, t)
-    except Exception:
-        pass
-    return t.strip()
