@@ -5,13 +5,6 @@ except NameError:
         return ""
 
 
-
-# Helper: sanitize arbitrary strings into Streamlit-safe keys
-def _safe_key(name: str) -> str:
-    import re as _re
-    s = _re.sub(r"\s+", "_", str(name or "").strip())
-    s = _re.sub(r"[^a-zA-Z0-9_]+", "_", s)
-    return s[:120]
 # === Proposal Builder normalization helpers ===
 def _pb_try_json(text: str):
     try:
@@ -146,17 +139,20 @@ except NameError:  # define if missing
     def _style_guide() -> str:
         return (
             "Follow these rules strictly:\n"
-            "1) Write only the requested section. Do not include other sections.\n"
-            "2) One idea per paragraph.\n"
-            "3) Sentences 14–20 words on average.\n"
-            "4) Use a 1:1 ratio of 'you' to 'we' across the section.\n"
-            "5) Plain words over jargon. Minimize nominalizations.\n"
-            "6) Present-tense commitments. No 'will' unless quoting a requirement.\n"
-            "7) Rename 'Assumptions' to 'Dependencies'.\n"
-            "8) End with a concrete promise tied to risk control.\n"
-            "9) Include one proof point: metric, artifact, or timeline.\n"
-            "10) No citations, no references.\n"
-
+            "1) Understand client need. Mirror solicitation terms exactly.\n"
+            "2) State deliverables explicitly.\n"
+            "3) Address evaluation factors: technical, management, past performance, price.\n"
+            "4) Answer each L&M requirement directly.\n"
+            "5) Obey page and format rules.\n"
+            "6) Provide HOW procedures, not claims.\n"
+            "7) Short sentences (<=10 words). One idea per paragraph.\n"
+            "8) Use bullets. Clean headings.\n"
+            "9) Include roles, equipment, timeline, QC checks, metrics.\n"
+            "10) Identify subcontractors and responsibilities.\n"
+            "11) Organize clearly for easy scoring.\n"
+            "12) Include a Risk table with mitigations.\n"
+            "13) Add a brief L&M compliance crosswalk.\n"
+            "14) Keep tone federal and precise."
         )
 
 try:
@@ -3694,7 +3690,9 @@ RFP context (truncated):
 {context[:6000]}
 """.strip()
     draft = _ai_chat(prompt)
-    return _finalize_section(section, _append_tables_if_applicable(draft))
+    mixed = _assemble_section_output(section, draft, context)
+    return _finalize_section(section, mixed)
+
 def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     st.title("RFP Analyzer — One‑Page View")
     if not pages:
@@ -4926,76 +4924,6 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
     
 
 def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
-    """
-    Safely extend a drafted section toward a target word count without crossing sections.
-    Targets ~97% of `max_words` and stops at a sentence boundary.
-    """
-    def wc(t: str) -> int:
-        try:
-            import re as _re_wc
-            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
-        except Exception:
-            return len(str(t or "").split())
-
-    try:
-        mw = int(max_words) if max_words else 0
-    except Exception:
-        mw = 0
-    if not mw or mw <= 0:
-        return drafted or ""
-
-    lower = int(max(1, round(0.97 * mw)))
-    hard_cap = mw + 60
-    text_acc = (drafted or "").strip()
-    if wc(text_acc) >= lower:
-        return text_acc
-
-    client = get_ai()
-    model_name = _resolve_model()
-    attempts = 0
-    while wc(text_acc) < lower and attempts < 6 and wc(text_acc) < hard_cap:
-        attempts += 1
-        cur = wc(text_acc)
-        remaining = max(0, lower - cur)
-        ask_up_to = max(80, min(200, remaining + 40))
-        system = (
-            "You are a veteran federal proposal writer with $70M+ in awards. "
-            "Append continuation only. Do not repeat or modify prior text. "
-            "Preserve bullets and paragraph breaks. Keep style unchanged. "
-            "Stay within the same section. Do not introduce Risk, Quality, Staffing, Management, Past Performance, or Pricing."
-        )
-        user = (
-            f"Continue the section '{section_title}' for RFP {int(rfp_id)}.\n"
-            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
-            "Rules:\n"
-            "- Append continuation only. No rewrites.\n"
-            "- Keep content strictly within '{section_title}'.\n"
-            "- Finish the last sentence if near the end.\n"
-            "- One idea per paragraph. Sentences average 14–20 words.\n"
-            "- Include concrete steps and one proof point if missing.\n\n"
-            "--- EXISTING DRAFT START ---\n"
-            f"{text_acc}\n"
-            "--- EXISTING DRAFT END ---\n\n"
-            "Append continuation only:"
-        )
-        try:
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                temperature=0.15,
-                stream=False,
-            )
-            add = ""
-            if hasattr(resp, "choices") and resp.choices:
-                add = getattr(resp.choices[0].message, "content", "") or ""
-        except Exception:
-            add = ""
-        add = str(add).strip()
-        if add:
-            text_acc = (text_acc + "\n\n" + add).strip()
-        else:
-            break
-    return text_acc[:]
     def wc(t: str) -> int:
         try:
             import re as _re_wc
@@ -9564,7 +9492,12 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
                 st.markdown(st.session_state.get(ta_key, ""))
-    # Session values initialized before widgets; avoid post-creation mutations.
+    # Ensure text areas reflect latest session values
+    for sec in selected:
+        src = st.session_state.get(f"pb_section_{sec}")
+        if src is not None and st.session_state.get(f"pb_ta_{sec}", None) != src:
+            st.session_state[f"pb_ta_{sec}"] = src
+            st.rerun()
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
@@ -15681,6 +15614,181 @@ def _get_conn(db_path="samwatch.db"):
 
 # O4 wrapper disabled
 
+
+# === Proposal Builder: structured output mix (paragraphs + bullets + tables) ===
+def _pb_decide_structure(section: str) -> dict:
+    s = (section or "").strip().lower()
+    use = {"paragraphs": True, "bullets": True, "tables": []}
+    if any(k in s for k in ["technical", "approach", "methodology"]):
+        use["tables"] = ["traceability"]
+    elif any(k in s for k in ["management", "transition"]):
+        use["tables"] = ["traceability", "schedule"]
+    elif "quality" in s or "qc" in s or "qa" in s:
+        use["tables"] = ["traceability", "risks"]
+    elif "risk" in s:
+        use["tables"] = ["risks"]
+    elif "staff" in s or "key personnel" in s:
+        use["tables"] = ["staffing"]
+    elif any(k in s for k in ["price", "pricing", "clin", "cost"]):
+        use["tables"] = ["price"]
+        use["bullets"] = True
+    elif any(k in s for k in ["compliance", "crosswalk", "requirements"]):
+        use["tables"] = ["traceability"]
+    else:
+        use["tables"] = []
+    return use
+
+def _pb_extract_requirements_from_context(context: str, limit: int = 8):
+    reqs = []
+    try:
+        import re as _re
+        for ln in (context or "").splitlines():
+            l = ln.strip()
+            if not l or len(l) < 10:
+                continue
+            if _re.search(r"\b(shall|must|required|will provide|deliver|install|maintain|perform)\b", l, _re.I):
+                l = _re.sub(r"^\s*[\(\[\d\.\)-]+\s*", "", l)
+                reqs.append(l)
+            if len(reqs) >= limit:
+                break
+    except Exception:
+        pass
+    return reqs
+
+def _pb_paragraph_index_map(text_body: str):
+    paras = [p.strip() for p in (text_body or "").split("\n\n") if p.strip()]
+    return {i+1: p for i, p in enumerate(paras)}
+
+def _pb_build_markdown_table(headers, rows):
+    try:
+        import pandas as _pd
+        if not rows:
+            return ""
+        df = _pd.DataFrame(rows, columns=headers)
+        cols = list(df.columns)
+        header = "| " + " | ".join(cols) + " |\n"
+        sep = "| " + " | ".join(["---"] * len(cols)) + " |\n"
+        lines = []
+        for _, r in df.iterrows():
+            lines.append("| " + " | ".join(str(r[c]) if r[c] is not None else "" for c in cols) + " |")
+        return header + sep + "\n".join(lines)
+    except Exception:
+        return ""
+
+def _pb_bullets_from_text(section: str, draft: str, context: str) -> dict:
+    import re as _re
+    bullets = {"features": [], "compliance": [], "evidence": [], "benefits": []}
+    t = (draft or "")
+
+    for m in _re.finditer(r"\b(\d{1,3}(?:[,]\d{3})*|\d+)(\s?(?:%|days?|months?|hours?|FTEs?|SLA|ISO|CAGE|UEI))\b", t):
+        frag = m.group(0)
+        if frag not in bullets["evidence"]:
+            bullets["evidence"].append(frag)
+
+    for line in (context or "").splitlines():
+        l = line.strip()
+        if _re.search(r"\b(shall|must|required)\b", l, _re.I):
+            l = _re.sub(r"^\s*[\(\[\d\.\)-]+\s*", "", l)
+            bullets["compliance"].append(l[:180] + ('…' if len(l) > 180 else ""))
+            if len(bullets["compliance"]) >= 6:
+                break
+
+    for s in _re.split(r"[.\n]", t):
+        s2 = s.strip()
+        if not s2:
+            continue
+        if _re.search(r"\b(automate|validate|inspect|monitor|dispatch|staff|notify|report|train|transition|migrate)\b", s2, _re.I):
+            bullets["features"].append(s2[:120] + ('…' if len(s2) > 120 else ""))
+        if len(bullets["features"]) >= 6:
+            break
+
+    benefits_pool = [
+        "Reduces schedule risk through defined checkpoints",
+        "Improves accuracy with double-check QC steps",
+        "Cuts cycle time by removing rework loops",
+        "Keeps you compliant with L&M and clauses",
+        "Gives rapid status visibility for oversight"
+    ]
+    for b in benefits_pool:
+        if len(bullets["benefits"]) < 5:
+            bullets["benefits"].append(b)
+
+    return {k: v for k, v in bullets.items() if v}
+
+def _pb_tables_for_section(section: str, draft: str, context: str) -> list[str]:
+    use = _pb_decide_structure(section)
+    tables = []
+
+    if "traceability" in use.get("tables", []):
+        reqs = _pb_extract_requirements_from_context(context)
+        if reqs:
+            pmap = _pb_paragraph_index_map(draft)
+            rows = []
+            for i, r in enumerate(reqs, 1):
+                where = f"Paragraph {min(i, len(pmap))}" if pmap else ""
+                rows.append([r, where, "Yes"])
+            tables.append("**Requirements Traceability**\n" + _pb_build_markdown_table(["Requirement", "Where Addressed", "Meets?"], rows))
+
+    if "schedule" in use.get("tables", []):
+        import re as _re
+        days = None
+        m = _re.search(r"\b(\d{1,3})\s*(calendar\s*)?days?\b", context or "", flags=_re.I)
+        if m:
+            days = int(m.group(1))
+        rows = [["Kickoff", "Day 0", "Project start"],
+                ["Transition complete", f"Day {min(30, days or 30)}", "Core services live"],
+                ["Final acceptance", f"Day {days or 90}", "All deliverables accepted"]]
+        tables.append("**Schedule Milestones**\n" + _pb_build_markdown_table(["Milestone", "Target", "Notes"], rows))
+
+    if "risks" in use.get("tables", []):
+        rows = [["Late access to sites", "Medium", "Pre-coordination and backup crew", "PM"],
+                ["Spec ambiguity", "Medium", "RFI early, confirmation log", "PM"],
+                ["Sub availability", "Low", "Bench with surge SVs", "Vendor Lead"]]
+        tables.append("**Key Risks and Controls**\n" + _pb_build_markdown_table(["Risk", "Impact", "Control", "Owner"], rows))
+
+    if "staffing" in use.get("tables", []):
+        rows = [["Project Manager", "1", "PMP or equivalent", "Oversight, reporting"],
+                ["Lead Tech", "1", "5+ yrs domain exp", "Site coordination"],
+                ["Technicians", "2–6", "Certs per spec", "Execution"]]
+        tables.append("**Staffing Plan**\n" + _pb_build_markdown_table(["Role", "Qty", "Qualifications", "Responsibility"], rows))
+
+    if "price" in use.get("tables", []):
+        import re as _re
+        clin_lines = [ln.strip() for ln in (context or "").splitlines() if _re.search(r"\bCLIN\b|\b000\d\b", ln, _re.I)]
+        rows = []
+        for ln in clin_lines[:6]:
+            # Extract a CLIN token if possible
+            m = _re.search(r"(CLIN\s*\d+|000\d)", ln, _re.I)
+            token = m.group(1) if m else "CLIN"
+            rows.append([token, "See RFP", "", ""])
+        if rows:
+            tables.append("**CLIN Summary**\n" + _pb_build_markdown_table(["CLIN", "Description", "Qty", "Unit Price"], rows))
+
+    return [t for t in tables if t]
+
+def _assemble_section_output(section: str, draft: str, context: str) -> str:
+    use = _pb_decide_structure(section)
+    out = []
+    if use.get("paragraphs"):
+        out.append(draft.strip())
+    if use.get("bullets"):
+        b = _pb_bullets_from_text(section, draft, context)
+        order = [("Features", "features"), ("Compliance", "compliance"), ("Evidence", "evidence"), ("Benefits", "benefits")]
+        lines = []
+        for label, key in order:
+            items = b.get(key, [])
+            if not items:
+                continue
+            lines.append(f"**{label}**")
+            for x in items[:6]:
+                lines.append(f"- {x}")
+            lines.append("")
+        if lines:
+            out.append("\n".join(lines).strip())
+    for tbl in _pb_tables_for_section(section, draft, context):
+        out.append(tbl.strip())
+    return "\n\n".join([b for b in out if b]).strip()
+# === End structured output mix ===
 def _pb_word_count_section(text: str) -> int:
     try:
         import re as _re
