@@ -651,58 +651,89 @@ def _force_safe_pd_read():
         pass
 # === End helpers ===
 
+
 # === Shared helper: load all-file RFP text ===
 def _full_rfp_text(conn, rfp_id: int, limit: int = 20000) -> str:
     """
-    Return a single string containing the concatenated text of ALL files for this RFP.
-    Uses tenancy view rfp_files_t when available. Falls back to rfp_chunks or raw file bytes extraction.
-    Truncates to `limit` chars to keep prompts bounded.
+    Return a single string containing concatenated analyzer text for ALL files.
+    Priority:
+      1) rfp_context[_t] combined/context blobs
+      2) rfp_summaries[_t] combined summaries
+      3) rfp_sections[_t] aggregated section text
+      4) rfp_files[_t] raw parsed text
+      5) rfp_chunks text
+    Truncates to `limit` characters.
     """
-    try:
-        import pandas as _pd
-        # Prefer tenancy view if present
-        def _has_view(name: str) -> bool:
+    import pandas as _pd
+
+    def _has(name: str) -> bool:
+        try:
+            q = "SELECT name FROM sqlite_master WHERE name=?;"
+            return _pd.read_sql_query(q, conn, params=(name,)).shape[0] > 0
+        except Exception:
+            return False
+
+    def _coalesce_join(df, col) -> str:
+        if df is not None and not df.empty:
+            s = "
+
+".join([str(x or "") for x in df[col].tolist()]).strip()
+            if len(s) > int(limit): s = s[:int(limit)]
+            return s
+        return ""
+
+    # 1) rfp_context family
+    for tbl, col, where in [
+        ("rfp_context_t", "context", "rfp_id=?"),
+        ("rfp_context", "context", "rfp_id=?"),
+    ]:
+        if _has(tbl):
             try:
-                q = "SELECT name FROM sqlite_master WHERE name=?;"
-                return _pd.read_sql_query(q, conn, params=(name,)).shape[0] > 0
+                df = _pd.read_sql_query(f"SELECT {col} FROM {tbl} WHERE {where} ORDER BY id;", conn, params=(int(rfp_id),))
+                s = _coalesce_join(df, col)
+                if s: return s
             except Exception:
-                return False
-        use_view = _has_view("rfp_files_t")
-        if use_view:
-            df = _pd.read_sql_query(
-                "SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
-                conn, params=(int(rfp_id),)
-            )
-        else:
-            df = _pd.read_sql_query(
-                "SELECT COALESCE(text,'') AS t FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-                conn, params=(int(rfp_id),)
-            )
-        if df is not None and not df.empty:
-            blob = "\\n\\n".join([str(x or "") for x in df['t'].tolist()])
-            blob = (blob or "").strip()
-            if len(blob) > int(limit):
-                blob = blob[:int(limit)]
-            if blob:
-                return blob
-    except Exception:
-        pass
-    # Fallback to rfp_chunks if present
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query(
-            "SELECT text FROM rfp_chunks WHERE rfp_id=? ORDER BY id LIMIT 200;",
-            conn, params=(int(rfp_id),)
-        )
-        if df is not None and not df.empty:
-            blob = "\\n\\n".join([str(x or "") for x in df['text'].tolist()])
-            blob = (blob or "").strip()
-            if len(blob) > int(limit):
-                blob = blob[:int(limit)]
-            return blob
-    except Exception:
-        pass
-    # Final fallback: empty string
+                pass
+
+    # 2) rfp_summaries family
+    for tbl in ["rfp_summaries_t", "rfp_summaries"]:
+        if _has(tbl):
+            try:
+                df = _pd.read_sql_query(f"SELECT summary FROM {tbl} WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+                s = _coalesce_join(df, "summary")
+                if s: return s
+            except Exception:
+                pass
+
+    # 3) rfp_sections family
+    for tbl in ["rfp_sections_t", "rfp_sections"]:
+        if _has(tbl):
+            try:
+                df = _pd.read_sql_query(f"SELECT body FROM {tbl} WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+                s = _coalesce_join(df, "body")
+                if s: return s
+            except Exception:
+                pass
+
+    # 4) rfp_files family
+    for tbl in ["rfp_files_t", "rfp_files"]:
+        if _has(tbl):
+            try:
+                df = _pd.read_sql_query(f"SELECT COALESCE(text,'') AS text FROM {tbl} WHERE rfp_id=? ORDER BY id;", conn, params=(int(rfp_id),))
+                s = _coalesce_join(df, "text")
+                if s: return s
+            except Exception:
+                pass
+
+    # 5) rfp_chunks fallback
+    if _has("rfp_chunks"):
+        try:
+            df = _pd.read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=? ORDER BY id LIMIT 200;", conn, params=(int(rfp_id),))
+            s = _coalesce_join(df, "text")
+            if s: return s
+        except Exception:
+            pass
+
     return ""
 
 
