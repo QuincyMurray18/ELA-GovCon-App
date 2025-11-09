@@ -1,3 +1,9 @@
+# --- Global utility: sanitize Streamlit keys ---
+def _safe_key(name: str) -> str:
+    import re as _re
+    s = _re.sub(r'[^0-9a-zA-Z_]+', '_', str(name or ''))
+    return s.lower().strip('_')
+
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
@@ -348,10 +354,6 @@ def _auto_tables_for_section(conn, rfp_id: int, section_title: str) -> str:
 
 
 # --- Utilities: key sanitizer and section clipper ---
-def _safe_key(name: str) -> str:
-    import re as _re
-    return _re.sub(r'[^a-z0-9_]+', '_', str(name or '').lower()).strip('_')
-
 def _pb_clip_to_section(section_title: str, text: str) -> str:
     if not text:
         return text
@@ -9545,7 +9547,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                         final = _pb_clip_to_section(sec, drafted)
                     norm = _pb_normalize_text(final)
                     st.session_state[f"pb_section_{sec}"] = norm
-                    st.session_state[f"pb_ta_{_pb_safe_key(sec)}"] = norm
+                    st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
@@ -9570,10 +9572,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                         final = _pb_clip_to_section(sec, drafted)
                         norm = _pb_normalize_text(final)
                         st.session_state[f"pb_section_{sec}"] = norm
-                        st.session_state[f"pb_ta_{_pb_safe_key(sec)}"] = norm
+                        st.session_state[f"pb_ta_{_safe_key(sec)}"] = norm
 
 
-            ta_key = f"pb_ta_{_pb_safe_key(sec)}"
+            ta_key = f"pb_ta_{_safe_key(sec)}"
 
             if ta_key not in st.session_state:
 
