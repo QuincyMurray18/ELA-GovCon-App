@@ -16162,8 +16162,6 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
-
-
 # ======== Y2 ATTACHMENTS UPGRADE (drop-in) ========
 # Adds per-thread attachments for chat, history context, and delete controls.
 # Safe to include multiple times; guarded by function existence checks.
@@ -16532,9 +16530,6 @@ def y2_ui_threaded_chat(conn: "_sqlite3_y2a.Connection") -> None:
                         y5_save_snippet(conn, int(rfp_id), sec, ans, source="Y2 Chat")
                         st.success("Saved to drafts")
 # ======== END Y2 ATTACHMENTS UPGRADE ========
-
-
-
 # ======== Y2 GENERAL CHAT UPGRADE (no-RFP threads) ========
 # Enables chat without choosing an RFP. Uses separate tables y2g_* to avoid schema conflicts.
 # Safe to include once; guarded by function name checks.
@@ -16945,9 +16940,6 @@ def y2_mount_pages(conn):
         else:
             st.error("y2_ui_chat_general not found in module.")
 # ======== END Y2 CHAT MOUNT HELPER ========
-
-
-
 # ======== Y2 CHAT PAGE INJECTOR ========
 def y2_register_pages(conn, label: str = "Chat"):
     """
