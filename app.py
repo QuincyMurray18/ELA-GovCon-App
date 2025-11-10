@@ -3425,23 +3425,8 @@ def _resolve_openai_client():
     except Exception:
         return None
 
-
 def _resolve_model():
-    """Return preferred OpenAI chat model.
-    Priority: secrets['openai_model'] -> secrets['OPENAI_MODEL'] -> env OPENAI_MODEL -> default 'gpt-5-thinking' -> fallback 'gpt-4o-mini'.
-    """
     try:
-        import os as _os_m
-        import streamlit as _st_m
-        m = _st_m.secrets.get('openai_model') or _st_m.secrets.get('OPENAI_MODEL') or _os_m.environ.get('OPENAI_MODEL')
-        if not m:
-            # Prefer GPT-5 if available on the account. The OpenAI API will 404 if unavailable.
-            # Downstream call sites should handle exceptions; we also expose a UI selector.
-            m = 'gpt-5-thinking'
-        return m
-    except Exception:
-        return os.environ.get('OPENAI_MODEL', 'gpt-5-thinking') or 'gpt-4o-mini'
-
         import streamlit as st
         return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
     except Exception:
@@ -3942,23 +3927,8 @@ SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
 import os
 import tempfile
 
-
 def _resolve_model():
-    """Return preferred OpenAI chat model.
-    Priority: secrets['openai_model'] -> secrets['OPENAI_MODEL'] -> env OPENAI_MODEL -> default 'gpt-5-thinking' -> fallback 'gpt-4o-mini'.
-    """
     try:
-        import os as _os_m
-        import streamlit as _st_m
-        m = _st_m.secrets.get('openai_model') or _st_m.secrets.get('OPENAI_MODEL') or _os_m.environ.get('OPENAI_MODEL')
-        if not m:
-            # Prefer GPT-5 if available on the account. The OpenAI API will 404 if unavailable.
-            # Downstream call sites should handle exceptions; we also expose a UI selector.
-            m = 'gpt-5-thinking'
-        return m
-    except Exception:
-        return os.environ.get('OPENAI_MODEL', 'gpt-5-thinking') or 'gpt-4o-mini'
-
         import streamlit as st
         return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
     except Exception:
@@ -7462,8 +7432,7 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
     prompt = "\n\n".join(context + [f"Question: {question}"])
     try:
         client = get_ai()
-        import streamlit as _st_model
-        model = _st_model.session_state.get('openai_model_override') or _resolve_model()
+        model = _resolve_model()
         resp = client.chat.completions.create(model=model, messages=[
             {"role":"system","content": sys},
             {"role":"user","content": prompt}
@@ -15391,8 +15360,7 @@ REQUIREMENTS:
     try:
         from openai import OpenAI as _OpenAI
         client = _OpenAI()
-        import streamlit as _st_model
-        model = _st_model.session_state.get('openai_model_override') or _resolve_model()
+        model = _resolve_model()
         resp = client.chat.completions.create(
             model=model,
             temperature=float(temperature or 0.1),
@@ -16180,17 +16148,12 @@ def _pb_word_count_section(text: str) -> int:
             return 0
 
 
-
-# === Chat Assistant+ (OpenAI + per-thread memory + attachments) ===
-
+# === Chat Assistant+ (OpenAI + per-chat memory + attachments) ===
 import sqlite3 as _sqc
 from contextlib import closing as _closing
 import json as _json
-import io as _io
-import base64 as _b64
-import math as _math
 
-def _ychat_ensure_schema(conn: "sqlite3.Connection") -> None:
+def _ychat_ensure_schema(conn: "_sqc.Connection") -> None:
     with _closing(conn.cursor()) as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS ychat_threads(
             id INTEGER PRIMARY KEY,
@@ -16218,16 +16181,17 @@ def _ychat_ensure_schema(conn: "sqlite3.Connection") -> None:
             file_id INTEGER,
             page_no INTEGER,
             text TEXT,
-            emb TEXT  -- JSON-encoded list[float]
+            emb TEXT
         );""")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ychat_msgs_thread ON ychat_messages(thread_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ychat_pages_thread ON ychat_pages(thread_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ychat_pages_file ON ychat_pages(file_id);")
         conn.commit()
 
-def ychat_list_threads(conn: "sqlite3.Connection"):
+def ychat_list_threads(conn: "_sqc.Connection"):
     _ychat_ensure_schema(conn)
     try:
+        import pandas as pd
         df = pd.read_sql_query("SELECT id, title, created_at FROM ychat_threads ORDER BY id DESC;", conn, params=())
     except Exception:
         return []
@@ -16236,20 +16200,20 @@ def ychat_list_threads(conn: "sqlite3.Connection"):
     return [{"id": int(r["id"]), "title": r.get("title") or f"Chat #{int(r['id'])}", "created_at": r.get("created_at") or ""}
             for _, r in df.iterrows()]
 
-def ychat_new_thread(conn: "sqlite3.Connection", title: str = "New chat") -> int:
+def ychat_new_thread(conn: "_sqc.Connection", title: str = "New chat") -> int:
     _ychat_ensure_schema(conn)
     with _closing(conn.cursor()) as cur:
         cur.execute("INSERT INTO ychat_threads(title) VALUES(?);", ((title or "New chat").strip(),))
         conn.commit()
         return int(cur.lastrowid)
 
-def ychat_rename_thread(conn: "sqlite3.Connection", thread_id: int, title: str) -> None:
+def ychat_rename_thread(conn: "_sqc.Connection", thread_id: int, title: str) -> None:
     _ychat_ensure_schema(conn)
     with _closing(conn.cursor()) as cur:
         cur.execute("UPDATE ychat_threads SET title=? WHERE id=?;", ((title or "Untitled").strip(), int(thread_id)))
         conn.commit()
 
-def ychat_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
+def ychat_delete_thread(conn: "_sqc.Connection", thread_id: int) -> None:
     _ychat_ensure_schema(conn)
     with _closing(conn.cursor()) as cur:
         cur.execute("DELETE FROM ychat_messages WHERE thread_id=?;", (int(thread_id),))
@@ -16258,9 +16222,10 @@ def ychat_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
         cur.execute("DELETE FROM ychat_threads WHERE id=?;", (int(thread_id),))
         conn.commit()
 
-def ychat_get_messages(conn: "sqlite3.Connection", thread_id: int):
+def ychat_get_messages(conn: "_sqc.Connection", thread_id: int):
     _ychat_ensure_schema(conn)
     try:
+        import pandas as pd
         df = pd.read_sql_query("SELECT role, content FROM ychat_messages WHERE thread_id=? ORDER BY id;", conn, params=(int(thread_id),))
     except Exception:
         return []
@@ -16268,56 +16233,12 @@ def ychat_get_messages(conn: "sqlite3.Connection", thread_id: int):
         return []
     return [{"role": str(r["role"]), "content": str(r["content"])} for _, r in df.iterrows()]
 
-def ychat_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
+def ychat_append_message(conn: "_sqc.Connection", thread_id: int, role: str, content: str) -> None:
     _ychat_ensure_schema(conn)
     role = "assistant" if str(role).strip().lower() != "user" else "user"
     with _closing(conn.cursor()) as cur:
         cur.execute("INSERT INTO ychat_messages(thread_id, role, content) VALUES (?,?,?);", (int(thread_id), role, (content or "").strip()))
         conn.commit()
-
-# ---- Attachments: save + index pages with embeddings ----
-
-def _ychat_save_file(conn: "sqlite3.Connection", thread_id: int, filename: str, mime: str, data: bytes) -> int:
-    _ychat_ensure_schema(conn)
-    with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO ychat_files(thread_id, filename, mime, bytes) VALUES (?,?,?,?);",
-                    (int(thread_id), filename or "file", mime or "", data or b""))
-        conn.commit()
-        return int(cur.lastrowid)
-
-def _ychat_index_file(conn: "sqlite3.Connection", thread_id: int, file_id: int, mime: str, data: bytes) -> int:
-    """Extract text pages and store + embed them for retrieval."""
-    _ychat_ensure_schema(conn)
-    pages = []
-    try:
-        pages = extract_text_pages(data, mime) or []
-        # OCR fallback if available in build
-        try:
-            if not pages or all(not (p or "").strip() for p in pages):
-                pages = _ocr_pages_if_empty(data, mime, pages)  # optional function in some builds
-        except Exception:
-            pass
-    except Exception:
-        pages = []
-    n=0
-    with _closing(conn.cursor()) as cur:
-        for i, full in enumerate(pages or [], start=1):
-            # Chunk long pages for better retrieval
-            chunks = _ychat_split_chunks(full or "", 1400, 200)
-            if not chunks:
-                chunks = [full or ""]
-            embs = []
-            try:
-                embs = _embed_texts(chunks)
-            except Exception:
-                # Fall back to zeros
-                embs = [[0.0]*1536 for _ in chunks]
-            for ch, emb in zip(chunks, embs):
-                cur.execute("INSERT INTO ychat_pages(thread_id, file_id, page_no, text, emb) VALUES (?,?,?,?,?);",
-                            (int(thread_id), int(file_id), int(i), ch, _json.dumps(emb)))
-                n += 1
-        conn.commit()
-    return n
 
 def _ychat_split_chunks(text: str, max_len: int = 1400, overlap: int = 200):
     text = (text or "").strip()
@@ -16341,7 +16262,7 @@ def _ychat_cos(a, b):
     except Exception:
         return 0.0
 
-def ychat_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int = 8):
+def ychat_search(conn: "_sqc.Connection", thread_id: int, query: str, k: int = 8):
     _ychat_ensure_schema(conn)
     if not (query or "").strip():
         return []
@@ -16351,13 +16272,14 @@ def ychat_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int 
         q_emb = None
     rows = []
     try:
+        import pandas as pd
         df = pd.read_sql_query("SELECT id, file_id, page_no, text, emb FROM ychat_pages WHERE thread_id=?;", conn, params=(int(thread_id),))
     except Exception:
+        import pandas as pd
         df = pd.DataFrame(columns=["id","file_id","page_no","text","emb"])
     for _, r in df.iterrows():
-        emb = None
         try:
-            emb = _json.loads(r.get("emb") or "[]")
+            emb = json.loads(r.get("emb") or "[]")
         except Exception:
             emb = None
         score = _ychat_cos(q_emb, emb) if q_emb is not None and emb else 0.0
@@ -16366,9 +16288,9 @@ def ychat_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int 
             "text": str(r.get("text","")), "score": float(score)
         })
     rows.sort(key=lambda x: x["score"], reverse=True)
-    # Attach filenames
     files = {}
     try:
+        import pandas as pd
         dfF = pd.read_sql_query("SELECT id, filename FROM ychat_files WHERE thread_id=?;", conn, params=(int(thread_id),))
         for _, rr in dfF.iterrows():
             files[int(rr["id"])] = rr.get("filename") or "file"
@@ -16378,22 +16300,19 @@ def ychat_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int 
         r["filename"] = files.get(r["file_id"], "file")
     return rows[:max(1, int(k or 6))]
 
-# ---- Chat generation ----
-
 _SYSTEM_CHAT = ("You are ELA Chat Assistant for a government contracting firm. "
                 "Answer clearly and directly. Use any uploaded files as context. "
                 "If you cite files, use bracket format like [filename pX]. "
                 "If information is missing, say what is needed. Keep answers concise unless asked for detail.")
 
-def ychat_build_messages(conn: "sqlite3.Connection", thread_id: int, user_q: str, use_context: bool = True):
-    """Build message list for ask_ai including top-k context snippets."""
+def ychat_build_messages(conn: "_sqc.Connection", thread_id: int, user_q: str, use_context: bool = True):
     ctx = ""
     cites = []
     if use_context:
         hits = ychat_search(conn, int(thread_id), user_q, k=8)
         blocks = []
         for i, h in enumerate(hits, start=1):
-            snippet = (h["text"] or "").strip().replace("\n", " ")
+            snippet = (h["text"] or "").strip().replace("\\n", " ")
             if len(snippet) > 1200:
                 snippet = snippet[:1200] + " ..."
             blocks.append(f"[{i}] {h['filename']} p{h['page_no']}: {snippet}")
@@ -16406,16 +16325,14 @@ def ychat_build_messages(conn: "sqlite3.Connection", thread_id: int, user_q: str
     return [{"role": "system", "content": _SYSTEM_CHAT},
             {"role": "user", "content": user}], " ".join(cites)
 
-def ychat_stream_answer(conn: "sqlite3.Connection", thread_id: int, user_q: str, use_context: bool = True):
+def ychat_stream_answer(conn: "_sqc.Connection", thread_id: int, user_q: str, use_context: bool = True):
     msgs, _ = ychat_build_messages(conn, int(thread_id), user_q, use_context=use_context)
-    # Past messages to maintain continuity
     history = ychat_get_messages(conn, int(thread_id))
-    full_msgs = msgs[:1] + history[-20:] + msgs[1:]  # keep last 20 for brevity
+    full_msgs = msgs[:1] + history[-20:] + msgs[1:]
     try:
         for tok in ask_ai(full_msgs):
             yield tok
     except Exception as e:
-        # Fallback: return a concise error
         yield f"Model call failed: {e}"
 
 def _ychat_quick_prompt(kind: str) -> str:
@@ -16425,15 +16342,14 @@ def _ychat_quick_prompt(kind: str) -> str:
                 "safety, insurance, performance risks, and quote packaging requirements. Output bullets.")
     if kind == "sub_email":
         return ("Draft a concise email to request a firm, itemized quote from a subcontractor. "
-                "Include attachment list, CLIN or task mapping, performance period, site details, "
+                "Include attachment list, CLIN mapping or task mapping, performance period, site details, "
                 "wage determination references, due date and time, submission format, and contact info.")
     return ""
 
-def ychat_ui(conn: "sqlite3.Connection"):
+def ychat_ui(conn: "_sqc.Connection"):
     import streamlit as st
     _ychat_ensure_schema(conn)
     st.caption("Chat Assistant+ uses OpenAI and supports per-chat memory and attachments.")
-    # Thread picker
     threads = ychat_list_threads(conn)
     colA, colB, colC = st.columns([2,1,1])
     with colA:
@@ -16456,7 +16372,7 @@ def ychat_ui(conn: "sqlite3.Connection"):
     if not pick:
         st.info("Create a new chat to begin.")
         return
-    # Rename
+
     with st.expander("Chat settings", expanded=False):
         cur = next((t for t in threads if t["id"]==pick), {"title":"Untitled"})
         newt = st.text_input("Name", value=cur.get("title") or "Untitled")
@@ -16464,21 +16380,41 @@ def ychat_ui(conn: "sqlite3.Connection"):
             ychat_rename_thread(conn, int(pick), newt or "Untitled")
             st.success("Renamed")
 
-    # Model selector
     model_default = _resolve_model()
     mdl = st.selectbox("Model", options=[model_default, "gpt-5-thinking", "gpt-4o-mini", "gpt-4.1"], index=0)
     st.session_state["openai_model_override"] = mdl
 
-    # Attachments
     up = st.file_uploader("Attach files for this chat", type=["pdf","docx","txt","md","csv","xlsx","pptx"], accept_multiple_files=True)
     if up:
         for uf in up:
             data = uf.read()
-            fid = _ychat_save_file(conn, int(pick), uf.name, uf.type or "", data)
-            n = _ychat_index_file(conn, int(pick), fid, uf.type or "", data)
+            with _closing(conn.cursor()) as cur:
+                cur.execute("INSERT INTO ychat_files(thread_id, filename, mime, bytes) VALUES (?,?,?,?);",
+                            (int(pick), uf.name, uf.type or "", data))
+                conn.commit()
+                fid = int(cur.lastrowid)
+            pages = []
+            try:
+                pages = extract_text_pages(data, uf.type or "") or []
+            except Exception:
+                try:
+                    txt = data.decode("utf-8", errors="ignore")
+                    pages = [txt]
+                except Exception:
+                    pages = []
+            for i, full in enumerate(pages or [], start=1):
+                chunks = _ychat_split_chunks(full or "", 1400, 200) or [full or ""]
+                try:
+                    embs = _embed_texts(chunks)
+                except Exception:
+                    embs = [[0.0]*1536 for _ in chunks]
+                with _closing(conn.cursor()) as cur:
+                    for ch, emb in zip(chunks, embs):
+                        cur.execute("INSERT INTO ychat_pages(thread_id, file_id, page_no, text, emb) VALUES (?,?,?,?,?);",
+                                    (int(pick), fid, i, ch, json.dumps(emb)))
+                conn.commit()
         st.success("Files indexed.")
 
-    # Quick prompts
     c1, c2 = st.columns([1,1])
     with c1:
         if st.button("Subcontractor call questions"):
@@ -16493,13 +16429,11 @@ def ychat_ui(conn: "sqlite3.Connection"):
             st.session_state["ychat_prefill"] = qp
             st.rerun()
 
-    # History
     st.subheader("Conversation")
     for m in ychat_get_messages(conn, int(pick)):
         with st.chat_message("user" if m["role"]=="user" else "assistant"):
             st.markdown(m["content"])
 
-    # Input
     pre = st.session_state.pop("ychat_prefill", "")
     user_q = st.chat_input("Ask anything. Your attachments are used as context.", key="ychat_q", placeholder="e.g., Based on the files, what should I ask the subcontractor?")
     if user_q:
@@ -16514,29 +16448,6 @@ def ychat_ui(conn: "sqlite3.Connection"):
             ychat_append_message(conn, int(pick), "assistant", ans)
         st.rerun()
 
-# --- Wrapper to preserve legacy Chat Assistant and add Chat+ ---
-def _wrap_chat_assistant():
-    import streamlit as st
-    # Keep the original function if present
-    if "run_chat_assistant" in globals() and "__legacy_run_chat_assistant" not in globals():
-        globals()["__legacy_run_chat_assistant"] = globals()["run_chat_assistant"]
-    def run_chat_assistant_super(conn: "sqlite3.Connection"):
-        st.header("Chat Assistant")
-        tab1, tab2 = st.tabs(["Chat+ (OpenAI + Attachments)", "Legacy (DB-aware)"])
-        with tab1:
-            try:
-                ychat_ui(conn)
-            except Exception as e:
-                st.error(f"Chat+ error: {e}")
-        with tab2:
-            try:
-                globals()["__legacy_run_chat_assistant"](conn)
-            except Exception:
-                st.info("Legacy chat not available in this build.")
-    return run_chat_assistant_super
-
-
-# === Exported Chat Assistant: Chat+ only ===
 def run_chat_assistant(conn):
     import streamlit as st
     st.header("Chat Assistant · Chat+ OpenAI and Attachments")
