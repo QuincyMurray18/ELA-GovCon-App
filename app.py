@@ -4139,7 +4139,11 @@ def get_ai():
 
 def ask_ai(messages, tools=None, temperature=0.2):
     client = get_ai()
-    model_name = _resolve_model()
+    try:
+        import streamlit as _st_model
+        model_name = _st_model.session_state.get('openai_model_override') or _resolve_model()
+    except Exception:
+        model_name = _resolve_model()
     try:
         resp = client.chat.completions.create(
             model=model_name,
@@ -16531,5 +16535,12 @@ def _wrap_chat_assistant():
                 st.info("Legacy chat not available in this build.")
     return run_chat_assistant_super
 
-# Replace exported function
-run_chat_assistant = _wrap_chat_assistant()
+
+# === Exported Chat Assistant: Chat+ only ===
+def run_chat_assistant(conn):
+    import streamlit as st
+    st.header("Chat Assistant · Chat+ OpenAI and Attachments")
+    try:
+        ychat_ui(conn)
+    except Exception as e:
+        st.error(f"Chat Assistant error: {e}")
