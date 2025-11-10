@@ -4434,19 +4434,16 @@ if 'y1_search' not in globals():
             except Exception:
                 return []
 
-def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
+
+def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
     """
-    Streams a CO-style answer grounded in top-k page hits from the new One-Page Analyzer.
-    No Y1/Y2 dependency. Falls back to general answer if no hits.
+    Streams an answer grounded in top page hits from the One Page Analyzer.
+    No Y1 dependency. If no context matches, answer with best practice guidance.
     """
     import re as _re
     import pandas as _pd
-    try:
-        import streamlit as _st
-    except Exception:
-        _st = None
 
-    # Collect pages directly from rfp_files using the same extractor as One-Page Analyzer
+    # Collect pages from rfp_files using extract_text_pages
     pages = []
     try:
         df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
@@ -4464,7 +4461,7 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
             except Exception:
                 continue
 
-    # Simple keyword scoring over pages
+    # Score pages by keyword overlap
     q = (question or "").strip()
     norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
     terms = [w for w in norm_q.split() if len(w) > 1]
@@ -4480,38 +4477,63 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
                 pass
         if score > 0:
             scored.append((score, pg))
-
     scored.sort(key=lambda x: x[0], reverse=True)
     hits = [pg for _, pg in scored[: max(1, int(k))]]
 
-    if not hits:
-        # No evidence. Answer generally.
-        for tok in ask_ai([{"role":"user","content": q}], temperature=temperature):
-            yield tok
-        return
-
-    # Build evidence block and prompt
+    # Build citations
     ev_lines = []
     for i, h in enumerate(hits, start=1):
         tag = f"[C{i}]"
         src_line = f"{h.get('file','')} p.{h.get('page','')}"
-        snip = (h.get("text") or "").strip().replace("\n", " ")
+        snip = (h.get("text") or "").strip().replace("\\n", " ")
         snip = snip[:480]
         ev_lines.append(f"{tag} {src_line} — {snip}")
     evidence = "\\n".join(ev_lines)
 
+    # Format guidance
+    mname = (mode or "Auto").lower()
+    if mname.startswith("checklist"):
+        fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
+    elif mname.startswith("phone"):
+        fmt_rules = "Output a short phone call script with an opener, 6 to 10 targeted questions, and a closing commitment line."
+    elif mname.startswith("email"):
+        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
+    elif mname.startswith("action"):
+        fmt_rules = "Provide a step by step action plan with owners and due dates if present in context."
+    elif mname.startswith("table"):
+        fmt_rules = "Return a compact table when appropriate. Use Markdown table syntax."
+    else:
+        fmt_rules = "Choose the most efficient format to answer. Prefer lists for tasks. Use tables for verifications."
+
+    # Optional metadata from text
+    try:
+        due = _extract_due_date(" ".join([(h.get("text") or "") for h in hits])[:4000]) or ""
+    except Exception:
+        due = ""
+    try:
+        naics = _extract_naics(" ".join([(h.get("text") or "") for h in hits])[:4000]) or ""
+    except Exception:
+        naics = ""
+
+    # Build user prompt
+    if evidence.strip():
+        ctx = "CONTEXT\\n" + evidence + "\\n\\n"
+    else:
+        ctx = "CONTEXT\\n[no high confidence matches]\\n\\n"
+
     user = (
-        "QUESTION\\n" + q + "\\n\\n"
-        "CONTEXT\\n" + evidence + "\\n\\n"
+        "QUESTION\\n" + q + "\\n\\n" + ctx +
         "INSTRUCTIONS\\n"
-        "- Answer using only the CONTEXT when possible.\\n"
+        f"- {fmt_rules}\\n"
+        "- Answer using the CONTEXT when possible.\\n"
         "- When you rely on a snippet, cite it inline like [C1], [C2].\\n"
-        "- If the answer is not in context, say what is missing and proceed with best general guidance.\\n"
+        "- If the answer is not in context, say what is missing and proceed with best practice guidance.\\n"
+        "- If drafting outreach, use placeholders when unknown: {Solicitation}, {Due Date}, {NAICS}.\\n"
+        f"- If known, include NAICS {naics} and Due Date {due}.\\n"
     )
+
     for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
         yield tok
-
-
 
 def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
@@ -4672,13 +4694,14 @@ def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
         st.caption("No messages yet.")
     q = st.text_area("Your question", height=120, key="y2_q")
     k = y_auto_k(q)
+    fmt = st.selectbox("Answer format", options=["Auto","Checklist","Phone script","Email draft","Action plan","Table"], index=0, key="y2_fmt")
     if st.button("Ask (store to thread)", type="primary", key="y2_go"):
         if not (q or "").strip():
             st.warning("Enter a question")
         else:
             y2_append_message(conn, int(thread_id), "user", q.strip())
             ph = st.empty(); acc = []
-            for tok in y2_stream_answer(conn, int(rfp_id), int(thread_id), q.strip(), k=int(k)):
+            for tok in y2_stream_answer(conn, int(rfp_id), int(thread_id), q.strip(), k=int(k), mode=str(fmt or 'Auto')):
                 acc.append(tok); ph.markdown("".join(acc))
             ans = "".join(acc).strip()
             if ans:
@@ -10554,63 +10577,14 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     return res
 
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    st.header("Chat Assistant (DB-aware)")
-    st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
+    import streamlit as st
+    st.header("Chat Assistant — Y2")
+    st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
+    try:
+        y2_ui_threaded_chat(conn)
+    except Exception as _e:
+        st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
 
-    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
-    rfp_opt = None
-    if not df_rf.empty:
-        rfp_opt = st.selectbox("Context (optional)", options=[None] + df_rf["id"].tolist(),
-                               format_func=lambda rid: "All RFPs" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid, 'title'].values[0]}")
-
-    q = st.text_input("Ask a question (e.g., 'When are proposals due?', 'Show POCs', 'Which vendor is lowest?')")
-    ask = st.button("Ask", type="primary")
-    if not ask:
-        st.caption("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
-        return
-
-    res = _kb_search(conn, rfp_opt, q or "")
-    # Heuristic intents
-    ql = (q or "").lower()
-    if any(w in ql for w in ["due", "deadline", "close"]):
-        st.subheader("Key Dates")
-        df = res.get("dates", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["label","date_text"]], use_container_width=True, hide_index=True)
-    if any(w in ql for w in ["poc", "contact", "officer", "specialist"]):
-        st.subheader("Points of Contact")
-        df = res.get("pocs", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["name","role","email","phone"]], use_container_width=True, hide_index=True)
-    if "clin" in ql:
-        st.subheader("CLINs")
-        df = res.get("clins", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["clin","description","qty","unit"]], use_container_width=True, hide_index=True)
-    if any(w in ql for w in ["checklist", "compliance"]):
-        st.subheader("Checklist (top hits)")
-        df = res.get("checklist", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
-        meta = res.get("meta", {})
-        if meta:
-            st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
-    if any(w in ql for w in ["quote", "price", "vendor", "lowest"]):
-        st.subheader("Quote Totals by Vendor")
-        df = res.get("quotes", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df, use_container_width=True, hide_index=True)
-            st.caption("Lowest total appears at the top.")
-
-    # Generic best-matches
-    sec = res.get("sections", pd.DataFrame())
-    if sec is not None and not sec.empty:
-        st.subheader("Relevant RFP Sections (snippets)")
-        sh = sec.copy()
-        sh["snippet"] = sh["content"].str.slice(0, 400)
-        _styled_dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
-
-# ---------- Phase F: Capability Statement ----------
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
         from docx.shared import Pt, Inches  # type: ignore
@@ -12695,9 +12669,9 @@ def y1_search(conn, rfp_id: int, query: str, k: int = 6):
     return _y1_search_cached(db_path, int(rfp_id), query or "", int(k), snap)
 
 # Enable chunk-level streaming in Y2 and Y4
-def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2):
+def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2, mode: str = 'Auto'):
     try:
-        for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature):
+        for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature, mode=mode):
             yield tok
     except NameError:
         # fallback if dependencies were not merged
