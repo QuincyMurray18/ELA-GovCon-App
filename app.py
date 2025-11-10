@@ -4435,35 +4435,24 @@ if 'y1_search' not in globals():
                 return []
 
 
-def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, question: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
+
+def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
     """
-    Streams an answer grounded in One Page Analyzer pages and per-thread attachments.
-    No citations in output. Uses recent thread history to continue the conversation and avoid repetition.
+    Streams an answer grounded in top page hits from the One Page Analyzer.
+    No citations are included in the output.
     """
     import re as _re
     import pandas as _pd
 
+    # Gather pages from rfp_files using extract_text_pages
     pages = []
-
-    # RFP pages when available
     try:
-        if int(rfp_id) > 0:
-            df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
-        else:
-            df = _pd.DataFrame()
+        df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
     except Exception:
-        df = _pd.DataFrame()
+        df = _pd.DataFrame(columns=["filename","mime","bytes"])
 
-    # Thread attachments
-    try:
-        df2 = _pd.read_sql_query("SELECT filename, mime, bytes FROM y2_thread_files WHERE thread_id=?;", conn, params=(int(thread_id),))
-    except Exception:
-        df2 = _pd.DataFrame()
-
-    for d in [df, df2]:
-        if d is None or d.empty:
-            continue
-        for _, r in d.iterrows():
+    if not df.empty:
+        for _, r in df.iterrows():
             try:
                 b = bytes(r.get("bytes") or b"")
                 mime = str(r.get("mime") or "")
@@ -4472,23 +4461,6 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, thread_id: in
                     pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
             except Exception:
                 continue
-
-    # History from last 8 messages
-    try:
-        msgs = y2_get_messages(conn, int(thread_id)) or []
-    except Exception:
-        msgs = []
-    history = ""
-    if msgs:
-        tail = msgs[-8:]
-        parts = []
-        for m in tail:
-            role = m.get("role") or "user"
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            parts.append(f"{'User' if role=='user' else 'Assistant'}: {content}")
-        history = "\\n".join(parts)[-2000:]
 
     # Score pages by keyword overlap
     q = (question or "").strip()
@@ -4509,11 +4481,12 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, thread_id: in
     scored.sort(key=lambda x: x[0], reverse=True)
     hits = [pg for _, pg in scored[: max(1, int(k))]]
 
+    # Build a clean context block without tags or citations
     snippets = []
     for h in hits:
-        snip = (h.get("text") or "").strip().replace("\\n", " ")
+        snip = (h.get("text") or "").strip().replace("\n", " ")
         snippets.append(snip[:800])
-    context_text = "\\n\\n---\\n\\n".join(snippets) if snippets else ""
+    context_text = "\n\n---\n\n".join(snippets) if snippets else ""
 
     # Format guidance
     mname = (mode or "Auto").lower()
@@ -4540,18 +4513,16 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, thread_id: in
     except Exception:
         naics = ""
 
+    # Build user prompt without any citation instructions
     ctx = "CONTEXT\\n" + (context_text if context_text else "[no high confidence matches]") + "\\n\\n"
-    hist = ("PRIOR THREAD CONTEXT\\n" + history + "\\n\\n") if history else ""
 
     user = (
-        hist +
         "QUESTION\\n" + q + "\\n\\n" + ctx +
         "INSTRUCTIONS\\n"
         f"- {fmt_rules}\\n"
         "- Use the CONTEXT when possible.\\n"
-        "- Continue the thread. Avoid repeating prior responses. Build on what was said.\\n"
         "- Do not include citations or bracketed tags.\\n"
-        "- If the answer is not in context, say what is missing and proceed with best practice guidance.\\n"
+        "- If the answer is not in context, state what is missing and proceed with best practice guidance.\\n"
         "- If drafting outreach, use placeholders when unknown: {Solicitation}, {Due Date}, {NAICS}.\\n"
         f"- If known, include NAICS {naics} and Due Date {due}.\\n"
     )
@@ -4599,18 +4570,6 @@ def _ensure_y2_schema(conn: "sqlite3.Connection") -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_threads_rfp ON y2_threads(rfp_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_msgs_thread ON y2_messages(thread_id);")
             conn.commit()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS y2_thread_files(
-                    id INTEGER PRIMARY KEY,
-                    thread_id INTEGER NOT NULL,
-                    filename TEXT,
-                    mime TEXT,
-                    bytes BLOB,
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_thread_files_thread ON y2_thread_files(thread_id);")
-    
     except Exception:
         pass
 
@@ -4678,34 +4637,6 @@ def y2_rename_thread(conn: "sqlite3.Connection", thread_id: int, new_title: str)
 
 def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
     _ensure_y2_schema(conn)
-
-def y2_add_thread_file(conn: "sqlite3.Connection", thread_id: int, filename: str, mime: str, b: bytes) -> int:
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("INSERT INTO y2_thread_files(thread_id, filename, mime, bytes) VALUES(?,?,?,?);",
-                        (int(thread_id), filename or "upload", mime or "", b))
-            conn.commit()
-            return int(cur.lastrowid)
-    except Exception:
-        return 0
-
-def y2_list_thread_files(conn: "sqlite3.Connection", thread_id: int) -> list[dict]:
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query("SELECT id, filename, mime, length(bytes) AS size, created_at FROM y2_thread_files WHERE thread_id=? ORDER BY id DESC;",
-                                conn, params=(int(thread_id),))
-        return df.to_dict(orient="records")
-    except Exception:
-        return []
-
-def y2_delete_thread_file(conn: "sqlite3.Connection", file_id: int) -> None:
-    try:
-        with closing(conn.cursor()) as cur:
-            cur.execute("DELETE FROM y2_thread_files WHERE id=?;", (int(file_id),))
-            conn.commit()
-    except Exception:
-        pass
-
     with closing(conn.cursor()) as cur:
         cur.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
         cur.execute("DELETE FROM y2_threads WHERE id=?;", (int(thread_id),))
@@ -4715,9 +4646,10 @@ def y2_delete_thread_file(conn: "sqlite3.Connection", file_id: int) -> None:
 def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     st.caption("CO Chat with memory. Threads are stored per RFP.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-    opts = [("Ad hoc (no RFP)", 0)] + ([(f"{t} (#{i})", int(i)) for i,t in df_rf.values.tolist()] if df_rf is not None and not df_rf.empty else [])
-    label = st.selectbox("Context", options=[o[0] for o in opts], index=0, key="y2_ctx")
-    rfp_id = next(v for (l,v) in opts if l==label)
+    if df_rf is None or df_rf.empty:
+        st.info("No RFPs yet. Parse & save first.")
+        return
+    rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist(), format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}", key="y2_rfp_sel")
     threads = y2_list_threads(conn, int(rfp_id))
     create = st.button("New thread", key="y2_new")
     if create:
@@ -4727,28 +4659,9 @@ def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     if threads:
         pick = st.selectbox("Thread", options=[t["id"] for t in threads], format_func=lambda i: next((f"#{t['id']} — {t.get('title') or 'Untitled'}" for t in threads if t['id']==i), f"#{i}"), key="y2_pick")
         thread_id = int(pick)
-    with st.expander("Attachments for this chat", expanded=False):
-        up = st.file_uploader("Add files", accept_multiple_files=True, type=["pdf","docx","txt","xlsx","zip","csv","pptx","png","jpg","jpeg"], key="y2_files")
-        if up:
-            for f in up:
-                try:
-                    b = f.read()
-                except Exception:
-                    b = getattr(f, "getvalue", lambda: b"")()
-                y2_add_thread_file(conn, int(thread_id), getattr(f, "name", "upload"), getattr(f, "type", ""), b or b"")
-            st.success("Files saved to this chat")
-        files = y2_list_thread_files(conn, int(thread_id))
-        if files:
-            for row in files[:50]:
-                c1, c2, c3, c4 = st.columns([6,2,2,2])
-                with c1: st.caption(f"{row.get('filename','')} · {row.get('mime','')} · {row.get('size') or 0} bytes")
-                with c2:
-                    if st.button("Delete", key=f"y2_del_file_{row.get('id')}"):
-                        y2_delete_thread_file(conn, int(row.get('id')))
-                        st.rerun()
-        else:
-            st.info("No threads yet. Click New thread.")
-            return
+    else:
+        st.info("No threads yet. Click New thread.")
+        return
     with st.expander("Thread settings", expanded=False):
         cur_title = next((t.get("title") or "Untitled" for t in threads if t["id"]==thread_id), "Untitled")
         new_title = st.text_input("Rename", value=cur_title, key="y2_rename")
@@ -4775,8 +4688,8 @@ def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
     else:
         st.caption("No messages yet.")
     q = st.text_area("Your question", height=120, key="y2_q")
-    fmt = st.selectbox("Answer format", options=["Auto","Checklist","Phone script","Email draft","Action plan","Table"], index=0, key="y2_fmt")
     k = y_auto_k(q)
+    fmt = st.selectbox("Answer format", options=["Auto","Checklist","Phone script","Email draft","Action plan","Table"], index=0, key="y2_fmt")
     if st.button("Ask (store to thread)", type="primary", key="y2_go"):
         if not (q or "").strip():
             st.warning("Enter a question")
@@ -10659,63 +10572,14 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     return res
 
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    st.header("Chat Assistant (DB-aware)")
-    st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
+    import streamlit as st
+    st.header("Chat Assistant — Y2")
+    st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
+    try:
+        y2_ui_threaded_chat(conn)
+    except Exception as _e:
+        st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
 
-    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
-    rfp_opt = None
-    if not df_rf.empty:
-        rfp_opt = st.selectbox("Context (optional)", options=[None] + df_rf["id"].tolist(),
-                               format_func=lambda rid: "All RFPs" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid, 'title'].values[0]}")
-
-    q = st.text_input("Ask a question (e.g., 'When are proposals due?', 'Show POCs', 'Which vendor is lowest?')")
-    ask = st.button("Ask", type="primary")
-    if not ask:
-        st.caption("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
-        return
-
-    res = _kb_search(conn, rfp_opt, q or "")
-    # Heuristic intents
-    ql = (q or "").lower()
-    if any(w in ql for w in ["due", "deadline", "close"]):
-        st.subheader("Key Dates")
-        df = res.get("dates", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["label","date_text"]], use_container_width=True, hide_index=True)
-    if any(w in ql for w in ["poc", "contact", "officer", "specialist"]):
-        st.subheader("Points of Contact")
-        df = res.get("pocs", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["name","role","email","phone"]], use_container_width=True, hide_index=True)
-    if "clin" in ql:
-        st.subheader("CLINs")
-        df = res.get("clins", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["clin","description","qty","unit"]], use_container_width=True, hide_index=True)
-    if any(w in ql for w in ["checklist", "compliance"]):
-        st.subheader("Checklist (top hits)")
-        df = res.get("checklist", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
-        meta = res.get("meta", {})
-        if meta:
-            st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
-    if any(w in ql for w in ["quote", "price", "vendor", "lowest"]):
-        st.subheader("Quote Totals by Vendor")
-        df = res.get("quotes", pd.DataFrame())
-        if df is not None and not df.empty:
-            _styled_dataframe(df, use_container_width=True, hide_index=True)
-            st.caption("Lowest total appears at the top.")
-
-    # Generic best-matches
-    sec = res.get("sections", pd.DataFrame())
-    if sec is not None and not sec.empty:
-        st.subheader("Relevant RFP Sections (snippets)")
-        sh = sec.copy()
-        sh["snippet"] = sh["content"].str.slice(0, 400)
-        _styled_dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
-
-# ---------- Phase F: Capability Statement ----------
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
         from docx.shared import Pt, Inches  # type: ignore
@@ -12802,7 +12666,7 @@ def y1_search(conn, rfp_id: int, query: str, k: int = 6):
 # Enable chunk-level streaming in Y2 and Y4
 def y2_stream_answer(conn, rfp_id: int, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2, mode: str = 'Auto'):
     try:
-        for tok in ask_ai_with_citations(conn, int(rfp_id), int(thread_id), user_q or "", k=int(k), temperature=temperature, mode=mode):
+        for tok in ask_ai_with_citations(conn, int(rfp_id), user_q or "", k=int(k), temperature=temperature, mode=mode):
             yield tok
     except NameError:
         # fallback if dependencies were not merged
@@ -16298,3 +16162,377 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
+
+
+
+# === Chat Assistant+ Overrides (general attachments + thread memory + delete tools) ===
+
+def _y2_collect_thread_files(conn, thread_id: int) -> list[dict]:
+    """Return file rows for this chat thread from the generic files table."""
+    try:
+        import pandas as _pd
+    except Exception:
+        return []
+    try:
+        df = _pd.__p_read_sql_query(
+            "SELECT id, filename, path, mime FROM files WHERE owner_type=? AND owner_id=? ORDER BY id;",
+            conn, params=("ChatThread", int(thread_id))
+        )
+        if df is None or df.empty:
+            return []
+        return [dict(id=int(r["id"]), filename=str(r["filename"]), path=str(r["path"]), mime=str(r.get("mime") or "")) for _, r in df.iterrows()]
+    except Exception:
+        return []
+
+def _y2_collect_pages(conn, rfp_id: int | None, thread_id: int | None, max_pages: int = 120) -> list[dict]:
+    """
+    Build a list of {'file','page','text'} from: 
+      - RFP Analyzer files for rfp_id (if >0), and
+      - Chat-attached files for thread_id.
+    """
+    pages = []
+    # RFP-linked content
+    try:
+        if rfp_id and int(rfp_id) > 0:
+            import pandas as _pd
+            df = _pd.__p_read_sql_query(
+                "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                conn, params=(int(rfp_id),)
+            )
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    b = r.get("bytes"); mime = r.get("mime") or ""
+                    try:
+                        texts = extract_text_pages(b, mime) or []
+                    except Exception:
+                        texts = []
+                    for i, t in enumerate(texts[:max_pages - len(pages)], start=1):
+                        pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+                    if len(pages) >= max_pages:
+                        return pages
+    except Exception:
+        pass
+
+    # Chat-thread attachments via generic files table
+    try:
+        if thread_id:
+            for fr in _y2_collect_thread_files(conn, int(thread_id)):
+                try:
+                    with open(fr["path"], "rb") as fh:
+                        b = fh.read()
+                except Exception:
+                    b = b""
+                try:
+                    texts = extract_text_pages(b, fr.get("mime") or "") or []
+                except Exception:
+                    texts = []
+                for i, t in enumerate(texts[:max_pages - len(pages)], start=1):
+                    pages.append({"file": fr.get("filename") or "", "page": i, "text": t or ""})
+                if len(pages) >= max_pages:
+                    return pages
+    except Exception:
+        pass
+
+    return pages[:max_pages]
+
+def _y2_history_messages(conn, thread_id: int, limit_pairs: int = 4) -> list[dict]:
+    """Return last few user/assistant messages for conversational memory."""
+    try:
+        import pandas as _pd
+        df = _pd.__p_read_sql_query(
+            "SELECT role, content FROM y2_messages WHERE thread_id=? ORDER BY id DESC LIMIT ?;",
+            conn, params=(int(thread_id), int(limit_pairs*2))
+        )
+        if df is None or df.empty:
+            return []
+        rows = df.iloc[::-1]  # chronological
+        msgs = []
+        for _, r in rows.iterrows():
+            role = "user" if str(r["role"]).lower().startswith("user") else "assistant"
+            msgs.append({"role": role, "content": str(r["content"] or "")})
+        return msgs[-limit_pairs*2:]
+    except Exception:
+        return []
+
+def y2_stream_answer(conn, thread_id: int, rfp_id: int | None, user_q: str, fmt: str = "plain", temperature: float = 0.15):
+    """
+    Stream answer using:
+      - Chat history for this thread,
+      - Attachments on this thread, plus optional RFP context,
+      - No citations, no [Y1]/[C#] tags.
+    """
+    # Collect context
+    ctx_pages = _y2_collect_pages(conn, int(rfp_id) if rfp_id else 0, int(thread_id) if thread_id else 0, max_pages=120)
+    ctx_text = "\n\n".join([f"[{p['file']} p.{p['page']}] {p['text']}" for p in ctx_pages])[:24000]
+
+    # Conversation history
+    history = _y2_history_messages(conn, int(thread_id), limit_pairs=5)
+
+    # Build messages
+    sys = (
+        "You are a Contracting Officer/POC-grade reviewer and technical advisor. "
+        "Answer precisely. Use only the provided context and prior chat when relevant. "
+        "Do not fabricate. If unknown, state what input is required. "
+        "No citations. No [C#] or [Y1] tags. No footnotes. Plain text only."
+    )
+    # Guard against repetition
+    guard = (
+        "Do not repeat prior assistant answers verbatim. "
+        "If the user repeats a question, refine with new specifics or next steps."
+    )
+    ctx_block = f"<<CONTEXT START>>\n{ctx_text if ctx_text.strip() else '(no attachments context)'}\n<<CONTEXT END>>"
+    user = f"{guard}\n\nUse the context if helpful. Question:\n{user_q}\n\n{ctx_block}"
+
+    # Format hint
+    if fmt == "bullets":
+        user += "\n\nFormat: short bullets. No headings."
+    elif fmt == "steps":
+        user += "\n\nFormat: numbered steps that can be executed."
+    else:
+        user += "\n\nFormat: concise paragraphs."
+
+    try:
+        client = get_ai()
+        model_name = _resolve_model()
+        msgs = [{"role":"system","content": sys}]
+        if history:
+            msgs += history[-10:]
+        msgs.append({"role":"user","content": user})
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=msgs,
+            temperature=float(temperature),
+            stream=True
+        )
+    except Exception as _e:
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=msgs,
+                temperature=float(temperature),
+                stream=True
+            )
+        except Exception as __e:
+            yield f"AI unavailable: {type(__e).__name__}: {__e}"
+            return
+
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+
+def _y2_ensure_files_table(conn):
+    """Ensure generic files table exists for attachments. Compatible with existing Phase J schema."""
+    try:
+        with conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS files(
+                id INTEGER PRIMARY KEY,
+                owner_type TEXT,
+                owner_id INTEGER,
+                filename TEXT,
+                path TEXT,
+                size INTEGER,
+                mime TEXT,
+                tags TEXT,
+                notes TEXT,
+                uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );""")
+    except Exception:
+        pass
+
+def _y2_save_thread_uploads(conn, thread_id: int, uploaded_files: list):
+    """Persist uploaded files to disk and register in generic files table."""
+    import os as _os
+    import hashlib as _hashlib
+    _y2_ensure_files_table(conn)
+    saved = []
+    for f in uploaded_files or []:
+        try:
+            data = f.read()
+            name = f.name
+            mime = getattr(f, "type", None) or ""
+            # store under data/uploads/chat/<thread_id>/<sha>_<name>
+            sha = _hashlib.sha256(data).hexdigest()[:16]
+            subdir = f"chat/{int(thread_id)}"
+            path = save_uploaded_file(name=f"{sha}_{name}", data=data, subdir=subdir)
+            size = len(data)
+            with conn:
+                conn.execute("INSERT INTO files(owner_type, owner_id, filename, path, size, mime) VALUES(?,?,?,?,?,?);",
+                             ("ChatThread", int(thread_id), name, path, int(size), mime))
+            saved.append({"name": name, "path": path})
+        except Exception:
+            continue
+    return saved
+
+def y2_ui_threaded_chat(conn):
+    """
+    Replaces previous UI. Supports:
+      - General threads without RFP,
+      - Per-thread attachments,
+      - Deleting threads and purging old ones,
+      - Streaming answers with memory.
+    """
+    import streamlit as st
+    st.header(f"Chat Assistant+ · {_resolve_model()}")
+    # Select optional RFP context
+    try:
+        import pandas as _pd
+        df_rf = _pd.__p_read_sql_query("SELECT id, COALESCE(title,'(untitled)') AS title FROM rfps ORDER BY id DESC;", conn)
+    except Exception:
+        df_rf = None
+    opts = ["General (no RFP)"]
+    id_map = {"General (no RFP)": 0}
+    if df_rf is not None and not df_rf.empty:
+        for _, r in df_rf.iterrows():
+            label = f"RFP {int(r['id'])}: {str(r['title'])[:80]}"
+            opts.append(label)
+            id_map[label] = int(r["id"])
+    sel = st.selectbox("Context", opts, index=0, key="y2_ctx_sel")
+    rfp_sel = id_map.get(sel, 0)
+
+    # Threads list for selected RFP or general
+    try:
+        import pandas as _pd
+        df_threads = _pd.__p_read_sql_query(
+            "SELECT id, subject, created_at FROM y2_threads WHERE rfp_id=? ORDER BY id DESC;",
+            conn, params=(int(rfp_sel),)
+        )
+    except Exception:
+        df_threads = None
+    cols = st.columns([2,1,1,1])
+    with cols[0]:
+        new_subject = st.text_input("New chat title", value="", key="y2_new_subject", placeholder="e.g., Subcontractor questions for HVAC bid")
+    with cols[1]:
+        if st.button("Start new chat", key="y2_new_thread") and new_subject.strip():
+            try:
+                with conn:
+                    conn.execute("INSERT INTO y2_threads(rfp_id, subject) VALUES(?,?);", (int(rfp_sel), new_subject.strip()))
+                st.session_state.pop("y2_current_thread", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Create failed: {e}")
+    with cols[2]:
+        purge_days = st.selectbox("Purge older than", ["Never","30 days","60 days","90 days"], index=0, key="y2_purge_sel")
+    with cols[3]:
+        if st.button("Purge", key="y2_purge_btn") and purge_days != "Never":
+            days = int(purge_days.split()[0])
+            try:
+                with conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT id FROM y2_threads WHERE rfp_id=? AND created_at < datetime('now', ?);",
+                                (int(rfp_sel), f"-{days} days"))
+                    ids = [int(r[0]) for r in cur.fetchall()]
+                    if ids:
+                        cur.execute(f"DELETE FROM y2_messages WHERE thread_id IN ({','.join('?'*len(ids))});", ids)
+                        cur.execute(f"DELETE FROM files WHERE owner_type='ChatThread' AND owner_id IN ({','.join('?'*len(ids))});", ids)
+                        cur.execute(f"DELETE FROM y2_threads WHERE id IN ({','.join('?'*len(ids))});", ids)
+                st.success(f"Purged {len(ids)} chats.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Purge failed: {e}")
+
+    st.markdown("---")
+    # Pick a thread
+    thread_id = st.session_state.get("y2_current_thread")
+    thread_label = None
+    if df_threads is not None and not df_threads.empty:
+        labels = [f"#{int(r['id'])} — {str(r['subject'])[:80]}" for _, r in df_threads.iterrows()]
+        id_lookup = {labels[i]: int(df_threads.iloc[i]['id']) for i in range(len(labels))}
+        default_idx = 0
+        if thread_id and thread_id in df_threads["id"].values:
+            # Set default index to current thread
+            try:
+                default_idx = list(id_lookup.values()).index(int(thread_id))
+            except Exception:
+                default_idx = 0
+        thread_label = st.selectbox("Chat thread", labels, index=default_idx if labels else 0, key="y2_thread_picker")
+        if thread_label:
+            st.session_state["y2_current_thread"] = id_lookup[thread_label]
+            thread_id = id_lookup[thread_label]
+    else:
+        st.info("No chats yet. Create one above.")
+        return
+
+    # Show attachments for this thread and allow uploads
+    st.subheader("Attachments for this chat")
+    up = st.file_uploader("Add files", type=None, accept_multiple_files=True, key=f"y2_upload_{thread_id}")
+    c1, c2 = st.columns([1,1])
+    with c1:
+        if st.button("Attach to chat", key=f"y2_attach_{thread_id}") and up:
+            _y2_save_thread_uploads(conn, int(thread_id), up)
+            st.rerun()
+    with c2:
+        if st.button("Delete this chat", key=f"y2_del_{thread_id}"):
+            try:
+                with conn:
+                    conn.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
+                    conn.execute("DELETE FROM files WHERE owner_type='ChatThread' AND owner_id=?;", (int(thread_id),))
+                    conn.execute("DELETE FROM y2_threads WHERE id=?;", (int(thread_id),))
+                st.success("Deleted")
+                st.session_state.pop("y2_current_thread", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Delete failed: {e}")
+
+    files = _y2_collect_thread_files(conn, int(thread_id))
+    if files:
+        for fr in files:
+            st.markdown(f"- {fr.get('filename')}  \n  <small>{fr.get('mime','')} · {fr.get('path')}</small>", unsafe_allow_html=True)
+    else:
+        st.caption("No attachments yet.")
+
+    st.markdown("---")
+    # Messages UI
+    try:
+        import pandas as _pd
+        dfm = _pd.__p_read_sql_query(
+            "SELECT role, content, created_at FROM y2_messages WHERE thread_id=? ORDER BY id;",
+            conn, params=(int(thread_id),)
+        )
+    except Exception:
+        dfm = None
+
+    if dfm is not None and not dfm.empty:
+        for _, r in dfm.iterrows():
+            role = str(r["role"]).capitalize()
+            st.markdown(f"**{role}:** {str(r['content'])}")
+
+    # Input
+    q = st.text_area("Ask anything", key=f"y2_q_{thread_id}", placeholder="e.g., What should I ask the subcontractor on the call?")
+    fmt = st.selectbox("Format", ["plain","bullets","steps"], index=0, key=f"y2_fmt_{thread_id}")
+    go = st.button("Send ▶", key=f"y2_send_{thread_id}")
+
+    if go:
+        if not q.strip():
+            st.warning("Enter a question")
+            return
+        # Save user message
+        try:
+            with conn:
+                conn.execute("INSERT INTO y2_messages(thread_id, role, content) VALUES(?,?,?);", (int(thread_id), "user", q.strip()))
+        except Exception as e:
+            st.error(f"Save failed: {e}")
+            return
+        # Stream answer
+        ph = st.empty()
+        acc = []
+        for tok in y2_stream_answer(conn, int(thread_id), int(rfp_sel), q.strip(), fmt=fmt, temperature=0.15):
+            acc.append(tok)
+            ph.markdown("".join(acc))
+        ans = "".join(acc).strip()
+        # Save assistant message
+        try:
+            if ans:
+                with conn:
+                    conn.execute("INSERT INTO y2_messages(thread_id, role, content) VALUES(?,?,?);", (int(thread_id), "assistant", ans))
+        except Exception:
+            pass
+        st.rerun()
+
+def run_chat_assistant(conn):
+    """Route handler for 'Chat Assistant' page name. Uses the new Chat Assistant+ UI."""
+    y2_ui_threaded_chat(conn)
+# === End Chat Assistant+ Overrides ===
