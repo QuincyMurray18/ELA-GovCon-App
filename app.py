@@ -16532,3 +16532,383 @@ def y2_ui_threaded_chat(conn: "_sqlite3_y2a.Connection") -> None:
                         y5_save_snippet(conn, int(rfp_id), sec, ans, source="Y2 Chat")
                         st.success("Saved to drafts")
 # ======== END Y2 ATTACHMENTS UPGRADE ========
+
+
+
+# ======== Y2 GENERAL CHAT UPGRADE (no-RFP threads) ========
+# Enables chat without choosing an RFP. Uses separate tables y2g_* to avoid schema conflicts.
+# Safe to include once; guarded by function name checks.
+
+try:
+    import streamlit as st  # noqa: F401
+except Exception:
+    pass
+
+from contextlib import closing as _closing_y2g
+import sqlite3 as _sqlite3_y2g
+import pandas as pd
+import io as _io_y2g
+import mimetypes as _mtypes_y2g
+import re as _re_y2g
+
+def _ensure_y2g_schema(conn: "_sqlite3_y2g.Connection") -> None:
+    try:
+        with _closing_y2g(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS y2g_threads(
+                    id INTEGER PRIMARY KEY,
+                    title TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS y2g_messages(
+                    id INTEGER PRIMARY KEY,
+                    thread_id INTEGER NOT NULL REFERENCES y2g_threads(id) ON DELETE CASCADE,
+                    role TEXT CHECK(role IN ('user','assistant')) NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2g_msg_thread ON y2g_messages(thread_id);")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS y2g_thread_files(
+                    id INTEGER PRIMARY KEY,
+                    thread_id INTEGER NOT NULL REFERENCES y2g_threads(id) ON DELETE CASCADE,
+                    filename TEXT,
+                    mime TEXT,
+                    bytes BLOB,
+                    pages INTEGER,
+                    uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2g_tf_thread ON y2g_thread_files(thread_id);")
+            conn.commit()
+    except Exception:
+        pass
+
+def y2g_create_thread(conn: "_sqlite3_y2g.Connection", title: str = "General chat") -> int:
+    _ensure_y2g_schema(conn)
+    with _closing_y2g(conn.cursor()) as cur:
+        cur.execute("INSERT INTO y2g_threads(title) VALUES(?);", (title or "General chat",))
+        conn.commit()
+        return int(cur.lastrowid)
+
+def y2g_list_threads(conn: "_sqlite3_y2g.Connection") -> list[dict]:
+    _ensure_y2g_schema(conn)
+    try:
+        df = pd.read_sql_query("SELECT id, title, created_at FROM y2g_threads ORDER BY id DESC;", conn)
+        return df.to_dict(orient="records") if df is not None else []
+    except Exception:
+        return []
+
+def y2g_rename_thread(conn: "_sqlite3_y2g.Connection", thread_id: int, title: str) -> None:
+    _ensure_y2g_schema(conn)
+    with _closing_y2g(conn.cursor()) as cur:
+        cur.execute("UPDATE y2g_threads SET title=? WHERE id=?;", (title or "General chat", int(thread_id)))
+        conn.commit()
+
+def y2g_delete_thread(conn: "_sqlite3_y2g.Connection", thread_id: int) -> None:
+    _ensure_y2g_schema(conn)
+    with _closing_y2g(conn.cursor()) as cur:
+        cur.execute("DELETE FROM y2g_threads WHERE id=?;", (int(thread_id),))
+        conn.commit()
+
+def y2g_get_messages(conn: "_sqlite3_y2g.Connection", thread_id: int) -> list[dict]:
+    _ensure_y2g_schema(conn)
+    try:
+        df = pd.read_sql_query(
+            "SELECT role, content, created_at FROM y2g_messages WHERE thread_id=? ORDER BY id ASC;",
+            conn, params=(int(thread_id),)
+        )
+        return df.to_dict(orient="records") if df is not None else []
+    except Exception:
+        return []
+
+def y2g_append_message(conn: "_sqlite3_y2g.Connection", thread_id: int, role: str, content: str) -> None:
+    _ensure_y2g_schema(conn)
+    with _closing_y2g(conn.cursor()) as cur:
+        cur.execute("INSERT INTO y2g_messages(thread_id, role, content) VALUES(?,?,?);", (int(thread_id), str(role), str(content)))
+        conn.commit()
+
+def y2g_add_attachments(conn: "_sqlite3_y2g.Connection", thread_id: int, files) -> int:
+    _ensure_y2g_schema(conn)
+    if not files:
+        return 0
+    n = 0
+    with _closing_y2g(conn.cursor()) as cur:
+        for f in files:
+            try:
+                try:
+                    data = f.getbuffer().tobytes()
+                except Exception:
+                    data = f.read()
+                name = getattr(f, "name", "") or "upload.bin"
+                mime = getattr(f, "type", "") or _mtypes_y2g.guess_type(name)[0] or ""
+                cur.execute("""
+                    INSERT INTO y2g_thread_files(thread_id, filename, mime, bytes, pages)
+                    VALUES(?,?,?,?,?);
+                """, (int(thread_id), name, mime, _sqlite3_y2g.Binary(data), None))
+                n += 1
+            except Exception:
+                continue
+        conn.commit()
+    return n
+
+def y2g_list_attachments(conn: "_sqlite3_y2g.Connection", thread_id: int) -> list[dict]:
+    _ensure_y2g_schema(conn)
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, filename, mime, LENGTH(bytes) AS size, uploaded_at FROM y2g_thread_files WHERE thread_id=? ORDER BY id DESC;",
+            conn, params=(int(thread_id),)
+        )
+        return df.to_dict(orient="records") if df is not None else []
+    except Exception:
+        return []
+
+def y2g_delete_attachment(conn: "_sqlite3_y2g.Connection", attach_id: int) -> None:
+    _ensure_y2g_schema(conn)
+    with _closing_y2g(conn.cursor()) as cur:
+        cur.execute("DELETE FROM y2g_thread_files WHERE id=?;", (int(attach_id),))
+        conn.commit()
+
+def _y2g_extract_pages_from_bytes(data: bytes, mime: str, filename: str = "") -> list[str]:
+    # Reuse global extractor if present
+    try:
+        return _y2_extract_pages_from_bytes(data, mime, filename)  # from attachments upgrade
+    except Exception:
+        pass
+    # Minimal fallback
+    try:
+        if filename.lower().endswith(".txt"):
+            return [data.decode("utf-8", "ignore")]
+    except Exception:
+        pass
+    return []
+
+def _y2g_attachment_hits(conn: "_sqlite3_y2g.Connection", thread_id: int, query: str, k: int = 6) -> list[dict]:
+    _ensure_y2g_schema(conn)
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, filename, mime, bytes FROM y2g_thread_files WHERE thread_id=? ORDER BY id DESC;",
+            conn, params=(int(thread_id),)
+        )
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    q = (query or "").strip().lower()
+    toks = [t for t in _re_y2g.split(r"[^a-z0-9]+", q) if len(t) >= 3] or q.split()
+    hits = []
+    for _, r in df.iterrows():
+        try:
+            data = bytes(r.get("bytes") or b"")
+            name = r.get("filename") or ""
+            mime = r.get("mime") or ""
+            pages = _y2g_extract_pages_from_bytes(data, mime, name) or []
+            for idx, pg in enumerate(pages[:50]):
+                t = (pg or "").lower()
+                score = sum(1 for tok in toks if tok and tok in t)
+                if score > 0:
+                    hits.append({"file": name, "page": idx+1, "text": (pg or "")[:1200], "score": float(score)})
+        except Exception:
+            continue
+    hits.sort(key=lambda r: r["score"], reverse=True)
+    out, seen = [], set()
+    for h in hits:
+        key = (h["file"], h["page"])
+        if key in seen:
+            continue
+        seen.add(key); out.append(h)
+        if len(out) >= max(1, int(k)):
+            break
+    return out
+
+def ask_ai_with_citations_any(conn, user_q: str, k: int = 6, temperature: float = 0.2, mode: str = 'Auto', thread_id: int | None = None):
+    """
+    Same as ask_ai_with_citations but for general chat with no RFP.
+    Evidence only from thread attachments [A#].
+    Includes last 8 general chat turns as context.
+    """
+    fmt = str(mode or "Auto")
+    if "y_auto_k" in globals() and callable(globals()["y_auto_k"]):
+        try:
+            k = int(max(3, min(10, globals()["y_auto_k"](user_q))))
+        except Exception:
+            k = int(k)
+
+    # Attachment evidence
+    ev_lines = []
+    a_hits = []
+    if thread_id is not None:
+        try:
+            a_hits = _y2g_attachment_hits(conn, int(thread_id), user_q or "", k=max(1, int(k)))
+        except Exception:
+            a_hits = []
+    for j, h in enumerate(a_hits, start=1):
+        tag = f"[A{j}]"
+        src = f"{h.get('file','')} p.{h.get('page','')}"
+        snip = (h.get('text') or '').strip().replace("\\n", " ")
+        ev_lines.append(f"{tag} {src} — {snip}")
+    evidence = "\\n".join(ev_lines)
+
+    # Formatting rules
+    mname = fmt.lower().replace(" ", "_")
+    if mname.startswith("checklist"):
+        fmt_rules = "Return a clear checklist. Use bullets. No citations."
+    elif mname.startswith("phone"):
+        fmt_rules = "Return a concise phone script with call steps and prompts. No citations."
+    elif mname.startswith("email"):
+        fmt_rules = "Draft a short email. Subject line then body. Use placeholders when unknown. No citations."
+    elif mname.startswith("action"):
+        fmt_rules = "Return a prioritized action plan with owners and due-by hints. No citations."
+    elif mname.startswith("table"):
+        fmt_rules = "Return a small table when appropriate. Use Markdown table syntax. No citations."
+    else:
+        fmt_rules = "Answer directly. Use bullets when efficient. No citations."
+
+    # Chat memory: include last 8 stored turns
+    msgs = []
+    if thread_id is not None and "y2g_get_messages" in globals():
+        try:
+            hist = y2g_get_messages(conn, int(thread_id)) or []
+            for m in hist[-8:]:
+                role = "assistant" if m.get("role") != "user" else "user"
+                text = str(m.get("content") or "")
+                if text:
+                    msgs.append({"role": role, "content": text})
+        except Exception:
+            pass
+    q_in = (user_q or "").strip()
+    user = (
+        "QUESTION\\n" + (q_in or "Provide a CO readout.") + "\\n\\n" +
+        "EVIDENCE\\n" + (evidence or "(none)") + "\\n\\n" +
+        "INSTRUCTIONS\\n" +
+        f"- {fmt_rules}\\n" +
+        "- Build on prior turns. Avoid repeating prior answers verbatim.\\n" +
+        "- If evidence is empty, proceed with best-practice CO guidance and say what is missing.\\n"
+    )
+    msgs.append({"role": "user", "content": user})
+    for tok in ask_ai(msgs, temperature=temperature):
+        yield tok
+
+def y2_stream_answer_any(conn, thread_id: int, user_q: str, k: int = 6, temperature: float = 0.2, mode: str = 'Auto'):
+    try:
+        for tok in ask_ai_with_citations_any(conn, user_q or "", k=int(k), temperature=temperature, mode=mode, thread_id=int(thread_id)):
+            yield tok
+    except Exception as _e_y2sg:
+        yield f"[system] chat limited: {_e_y2sg}"
+
+def y2_ui_chat_general(conn: "_sqlite3_y2g.Connection") -> None:
+    """Standalone chat UI that does not require an RFP selection."""
+    _ensure_y2g_schema(conn)
+    st.caption("General Chat with memory and per-thread attachments. No RFP needed.")
+    threads = y2g_list_threads(conn)
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button("New general thread", key="y2g_new"):
+            tid = y2g_create_thread(conn, title="General chat")
+            st.session_state["y2g_thread_id"] = tid
+            st.rerun()
+    with col2:
+        if st.button("Delete all general threads", key="y2g_del_all"):
+            try:
+                with _closing_y2g(conn.cursor()) as cur:
+                    cur.execute("DELETE FROM y2g_messages;")
+                    cur.execute("DELETE FROM y2g_thread_files;")
+                    cur.execute("DELETE FROM y2g_threads;")
+                    conn.commit()
+                st.success("All general threads deleted")
+                st.rerun()
+            except Exception as _e:
+                st.warning(f"Delete failed: {_e}")
+    if not threads:
+        st.info("No general threads yet.")
+        return
+    pick = st.selectbox("Thread", options=[t["id"] for t in threads],
+                        format_func=lambda i: next((f"#{t['id']} — {t.get('title') or 'Untitled'}" for t in threads if t['id']==i), f"#{i}"),
+                        key="y2g_pick")
+    thread_id = int(pick)
+    with st.expander("Thread settings", expanded=False):
+        cur_title = next((t.get("title") or "Untitled" for t in threads if t["id"]==thread_id), "Untitled")
+        new_title = st.text_input("Rename", value=cur_title, key="y2g_rename")
+        colA, colB, colC = st.columns([2,1,2])
+        with colA:
+            if st.button("Save name", key="y2g_save_name"):
+                y2g_rename_thread(conn, int(thread_id), new_title or "Untitled")
+                st.success("Renamed")
+        with colB:
+            if st.button("Delete this thread", key="y2g_del"):
+                y2g_delete_thread(conn, int(thread_id))
+                st.success("Deleted")
+                st.rerun()
+        with colC:
+            if st.button("Delete general threads older than 60 days", key="y2g_del_old"):
+                try:
+                    with _closing_y2g(conn.cursor()) as cur:
+                        cur.execute("DELETE FROM y2g_messages WHERE thread_id IN (SELECT id FROM y2g_threads WHERE created_at < datetime('now','-60 days'));")
+                        cur.execute("DELETE FROM y2g_thread_files WHERE thread_id IN (SELECT id FROM y2g_threads WHERE created_at < datetime('now','-60 days'));")
+                        cur.execute("DELETE FROM y2g_threads WHERE created_at < datetime('now','-60 days');")
+                        conn.commit()
+                    st.success("Old general threads purged")
+                except Exception as _e:
+                    st.warning(f"Cleanup failed: {_e}")
+        st.markdown("---")
+        st.markdown("**Thread attachments**")
+        up = st.file_uploader("Attach any files for this chat context", type=None, accept_multiple_files=True, key="y2g_any_attach")
+        if up:
+            n = y2g_add_attachments(conn, int(thread_id), up)
+            st.success(f"Saved {n} file(s)")
+        items = y2g_list_attachments(conn, int(thread_id))
+        if items:
+            show = pd.DataFrame(items)
+            try:
+                show["size_kb"] = (show["size"].astype(float)/1024.0).round(1)
+            except Exception:
+                pass
+            st.dataframe(show[["id","filename","mime","size_kb","uploaded_at"]], use_container_width=True, hide_index=True)
+            del_id = st.number_input("Delete attachment by id", min_value=0, step=1, value=0, key="y2g_del_att")
+            if st.button("Delete attachment", key="y2g_do_del_att") and int(del_id) > 0:
+                y2g_delete_attachment(conn, int(del_id))
+                st.success("Attachment deleted")
+        else:
+            st.caption("No attachments yet.")
+    st.checkbox("Research mode (flex)", value=bool(st.session_state.get("y2g_flex", False)), key="y2g_flex")
+    st.subheader("History")
+    msgs = y2g_get_messages(conn, int(thread_id))
+    if msgs:
+        chat_md = []
+        for m in msgs:
+            if m["role"] == "user":
+                chat_md.append(f"**You:** {m['content']}")
+            elif m["role"] == "assistant":
+                chat_md.append(m["content"])
+        st.markdown("\\n\\n".join(chat_md))
+    else:
+        st.caption("No messages yet.")
+    q = st.text_area("Your question", height=120, key="y2g_q")
+    try:
+        y_auto = globals().get("y_auto_k")
+        k = int(max(3, min(10, y_auto(q)))) if callable(y_auto) else 6
+    except Exception:
+        k = 6
+    fmt = st.selectbox("Answer format", options=["Auto","Checklist","Phone script","Email draft","Action plan","Table"], index=0, key="y2g_fmt")
+    if st.button("Ask (store to thread)", type="primary", key="y2g_go"):
+        if not (q or "").strip():
+            st.warning("Enter a question")
+        else:
+            y2g_append_message(conn, int(thread_id), "user", q.strip())
+            ph = st.empty(); acc = []
+            for tok in y2_stream_answer_any(conn, int(thread_id), q.strip(), k=int(k), mode=str(fmt or 'Auto')):
+                acc.append(tok); ph.markdown("".join(acc))
+            ans = "".join(acc).strip()
+            if ans:
+                try:
+                    hist = y2g_get_messages(conn, int(thread_id)) or []
+                    last_ass = [m for m in hist if m.get("role")=="assistant"]
+                    if not last_ass or (last_ass and last_ass[-1].get("content","").strip() != ans):
+                        y2g_append_message(conn, int(thread_id), "assistant", ans)
+                except Exception:
+                    y2g_append_message(conn, int(thread_id), "assistant", ans)
+                st.success("Saved to thread")
+# ======== END Y2 GENERAL CHAT UPGRADE ========
