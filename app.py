@@ -16912,3 +16912,62 @@ def y2_ui_chat_general(conn: "_sqlite3_y2g.Connection") -> None:
                     y2g_append_message(conn, int(thread_id), "assistant", ans)
                 st.success("Saved to thread")
 # ======== END Y2 GENERAL CHAT UPGRADE ========
+\n\n
+# ======== Y2 CHAT MOUNT HELPER ========
+APPCHAT_TUNING_BUILD = "2025-11-10T20:34:35.045604Z"
+
+def y2_version_banner():
+    try:
+        import streamlit as st
+        st.caption(f"Y2 Build: {APPCHAT_TUNING_BUILD}")
+    except Exception:
+        pass
+
+def y2_mount_pages(conn):
+    """
+    Minimal sidebar router for quick integration.
+    Call this from your main app after you have a DB connection:
+        from appchattuning import y2_mount_pages
+        y2_mount_pages(conn)
+    """
+    import streamlit as st
+    y2_version_banner()
+    pages = ["Chat (RFP)", "Chat (No RFP)"]
+    page = st.sidebar.radio("Pages", pages, index=0, key="y2_router")
+    if page == "Chat (RFP)":
+        if "y2_ui_threaded_chat" in globals() and callable(globals()["y2_ui_threaded_chat"]):
+            y2_ui_threaded_chat(conn)
+        else:
+            st.error("y2_ui_threaded_chat not found in module.")
+    elif page == "Chat (No RFP)":
+        if "y2_ui_chat_general" in globals() and callable(globals()["y2_ui_chat_general"]):
+            y2_ui_chat_general(conn)
+        else:
+            st.error("y2_ui_chat_general not found in module.")
+# ======== END Y2 CHAT MOUNT HELPER ========
+
+
+
+# ======== Y2 CHAT PAGE INJECTOR ========
+def y2_register_pages(conn, label: str = "Chat"):
+    """
+    Drop-in menu for both chat modes. Call from your main app:
+        from appchattuning import y2_register_pages
+        y2_register_pages(conn)
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    tabs = st.sidebar.radio(label, ["Chat (RFP)", "Chat (No RFP)"], key="y2_menu")
+    if tabs == "Chat (RFP)":
+        try:
+            y2_ui_threaded_chat(conn)
+        except Exception as e:
+            st.error(f"RFP chat error: {e}")
+    else:
+        try:
+            y2_ui_chat_general(conn)
+        except Exception as e:
+            st.error(f"General chat error: {e}")
+# ======== END Y2 CHAT PAGE INJECTOR ========
