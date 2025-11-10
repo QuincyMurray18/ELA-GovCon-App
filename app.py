@@ -4436,31 +4436,82 @@ if 'y1_search' not in globals():
 
 def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2):
     """
-    Streams a CO-style answer grounded in top-k chunk hits with [C#] citations.
-    Falls back to general answer if no hits.
+    Streams a CO-style answer grounded in top-k page hits from the new One-Page Analyzer.
+    No Y1/Y2 dependency. Falls back to general answer if no hits.
     """
-    hits = y1_search(conn, int(rfp_id), question or "", k=int(k)) or []
-    if not hits:
-        try:
-            strict = EVIDENCE_GATE or CO_STRICT
-        except Exception:
-            strict = True
-        if strict:
-            yield "[system] Insufficient evidence in linked RFP files. Build or Update the search index for this RFP on 'Ask with citations (Y1)', then ask again. General answers are disabled in CO Chat."
+    import re as _re
+    import pandas as _pd
+    try:
+        import streamlit as _st
+    except Exception:
+        _st = None
 
-        for tok in ask_ai([{"role":"user","content": (question or "").strip()}], temperature=temperature):
+    # Collect pages directly from rfp_files using the same extractor as One-Page Analyzer
+    pages = []
+    try:
+        df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        df = _pd.DataFrame(columns=["filename","mime","bytes"])
+
+    if not df.empty:
+        for _, r in df.iterrows():
+            try:
+                b = bytes(r.get("bytes") or b"")
+                mime = str(r.get("mime") or "")
+                texts = extract_text_pages(b, mime) or []
+                for i, t in enumerate(texts[:100], start=1):
+                    pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+            except Exception:
+                continue
+
+    # Simple keyword scoring over pages
+    q = (question or "").strip()
+    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
+    terms = [w for w in norm_q.split() if len(w) > 1]
+    scored = []
+    for pg in pages:
+        txt = (pg.get("text") or "")
+        norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
+        score = 0
+        for w in terms:
+            try:
+                score += norm_t.count(" " + w + " ")
+            except Exception:
+                pass
+        if score > 0:
+            scored.append((score, pg))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    hits = [pg for _, pg in scored[: max(1, int(k))]]
+
+    if not hits:
+        # No evidence. Answer generally.
+        for tok in ask_ai([{"role":"user","content": q}], temperature=temperature):
             yield tok
         return
+
+    # Build evidence block and prompt
     ev_lines = []
     for i, h in enumerate(hits, start=1):
         tag = f"[C{i}]"
         src_line = f"{h.get('file','')} p.{h.get('page','')}"
         snip = (h.get("text") or "").strip().replace("\n", " ")
+        snip = snip[:480]
         ev_lines.append(f"{tag} {src_line} — {snip}")
-    evidence = "\n".join(ev_lines)
-    user = "QUESTION\n" + (question or "").strip() + "\n\nEVIDENCE\n" + evidence
+    evidence = "\\n".join(ev_lines)
+
+    user = (
+        "QUESTION\\n" + q + "\\n\\n"
+        "CONTEXT\\n" + evidence + "\\n\\n"
+        "INSTRUCTIONS\\n"
+        "- Answer using only the CONTEXT when possible.\\n"
+        "- When you rely on a snippet, cite it inline like [C1], [C2].\\n"
+        "- If the answer is not in context, say what is missing and proceed with best general guidance.\\n"
+    )
     for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
         yield tok
+
+
 
 def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
@@ -10503,16 +10554,63 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     return res
 
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
+    st.header("Chat Assistant (DB-aware)")
+    st.caption("Answers from your saved RFPs, checklist, CLINs, dates, POCs, quotes, and pricing — no external API.")
 
-    import streamlit as st
-    st.header("Chat Assistant — Y2")
-    st.caption("CO Chat with memory. Uses Y2 threaded chat and persists per RFP.")
-    try:
-        y2_ui_threaded_chat(conn)
-    except Exception as _e:
-        st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    rfp_opt = None
+    if not df_rf.empty:
+        rfp_opt = st.selectbox("Context (optional)", options=[None] + df_rf["id"].tolist(),
+                               format_func=lambda rid: "All RFPs" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid, 'title'].values[0]}")
 
+    q = st.text_input("Ask a question (e.g., 'When are proposals due?', 'Show POCs', 'Which vendor is lowest?')")
+    ask = st.button("Ask", type="primary")
+    if not ask:
+        st.caption("Quick picks: due date • POCs • open checklist • CLINs • quotes total • compliance")
+        return
 
+    res = _kb_search(conn, rfp_opt, q or "")
+    # Heuristic intents
+    ql = (q or "").lower()
+    if any(w in ql for w in ["due", "deadline", "close"]):
+        st.subheader("Key Dates")
+        df = res.get("dates", pd.DataFrame())
+        if df is not None and not df.empty:
+            _styled_dataframe(df[["label","date_text"]], use_container_width=True, hide_index=True)
+    if any(w in ql for w in ["poc", "contact", "officer", "specialist"]):
+        st.subheader("Points of Contact")
+        df = res.get("pocs", pd.DataFrame())
+        if df is not None and not df.empty:
+            _styled_dataframe(df[["name","role","email","phone"]], use_container_width=True, hide_index=True)
+    if "clin" in ql:
+        st.subheader("CLINs")
+        df = res.get("clins", pd.DataFrame())
+        if df is not None and not df.empty:
+            _styled_dataframe(df[["clin","description","qty","unit"]], use_container_width=True, hide_index=True)
+    if any(w in ql for w in ["checklist", "compliance"]):
+        st.subheader("Checklist (top hits)")
+        df = res.get("checklist", pd.DataFrame())
+        if df is not None and not df.empty:
+            _styled_dataframe(df[["item_text","status"]], use_container_width=True, hide_index=True)
+        meta = res.get("meta", {})
+        if meta:
+            st.info(f"Compliance completion: {meta.get('compliance_pct',0)}%")
+    if any(w in ql for w in ["quote", "price", "vendor", "lowest"]):
+        st.subheader("Quote Totals by Vendor")
+        df = res.get("quotes", pd.DataFrame())
+        if df is not None and not df.empty:
+            _styled_dataframe(df, use_container_width=True, hide_index=True)
+            st.caption("Lowest total appears at the top.")
+
+    # Generic best-matches
+    sec = res.get("sections", pd.DataFrame())
+    if sec is not None and not sec.empty:
+        st.subheader("Relevant RFP Sections (snippets)")
+        sh = sec.copy()
+        sh["snippet"] = sh["content"].str.slice(0, 400)
+        _styled_dataframe(sh[["section","snippet","score"]], use_container_width=True, hide_index=True)
+
+# ---------- Phase F: Capability Statement ----------
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
         from docx.shared import Pt, Inches  # type: ignore
