@@ -16408,7 +16408,7 @@ def ychat_stream_answer(conn: "sqlite3.Connection", thread_id: int, user_q: str,
     history = ychat_get_messages(conn, int(thread_id))
     full_msgs = msgs[:1] + history[-20:] + msgs[1:]  # keep last 20 for brevity
     try:
-        for tok in ask_ai(full_msgs, system=_SYSTEM_CHAT):
+        for tok in ask_ai(full_msgs):
             yield tok
     except Exception as e:
         # Fallback: return a concise error
