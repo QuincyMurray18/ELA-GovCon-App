@@ -4,7 +4,6 @@ except NameError:
     def _pb_psychology_framework() -> str:
         return ""
 
-
 def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
     try:
@@ -222,7 +221,6 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
 
 from html import escape as _esc
 
-
 # === One-paragraph-per-idea enforcement ===
 def _one_idea_per_paragraph(text: str) -> str:
     import re as _re
@@ -255,8 +253,6 @@ def _one_idea_per_paragraph(text: str) -> str:
     out = "\n\n".join(processed)
     out = _re.sub(r"\n{3,}", "\n\n", out).strip()
     return out
-
-
 
 # ===== Structure-aware drafting helpers =====
 def _normalize_section_name(name: str) -> str:
@@ -807,7 +803,6 @@ def _finalize_section(section_title: str, text: str) -> str:
         clipped = text
     return _finalize_draft(clipped)
 # ==================================
-
 
 # --- Phase 3 inline Analyzer (fallback if run_rfp_analyzer is missing) ---
 def _phase3_analyzer_inline(conn):
@@ -3432,7 +3427,6 @@ def _resolve_model():
     except Exception:
         return 'gpt-4o-mini'
 
-
 def _rfp_highlight_css():
     """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
     try:
@@ -3482,7 +3476,6 @@ def _rfp_highlight_css():
             _st.session_state["_rfp_hl_css"] = True
     except Exception:
         pass
-
 
 def _render_highlights_panel(conn, rid):
     import pandas as pd
@@ -3934,7 +3927,6 @@ def _resolve_model():
     except Exception:
         return 'gpt-4o-mini'
 
-
 def _rfp_highlight_css():
     """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
     try:
@@ -3984,7 +3976,6 @@ def _rfp_highlight_css():
             _st.session_state["_rfp_hl_css"] = True
     except Exception:
         pass
-
 
 def _rfp_highlight_html(txt: str) -> str:
     """Return HTML wrapping ORIGINAL Markdown with selective highlights. No escaping. GPT-like typography."""
@@ -4434,8 +4425,6 @@ if 'y1_search' not in globals():
             except Exception:
                 return []
 
-
-
 def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
     """
     Streams an answer grounded in top page hits from the One Page Analyzer.
@@ -4821,7 +4810,6 @@ def _y3_collect_ctx(conn: "sqlite3.Connection", rfp_id: int, max_items: int = 20
         ctx["title"] = ""; ctx["solnum"] = ""
     return ctx
 
-
 def _y3_build_messages_psych(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     import pandas as _pd
     # Collect context via existing helper if available
@@ -4923,7 +4911,6 @@ Checklist items:
 """.strip()
 
     return [{"role":"system","content": style}, {"role":"user","content": user}]
-
 
 def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: str, notes: str, k: int = 6, max_words: int | None = None) -> list[dict]:
     import pandas as _pd
@@ -5091,7 +5078,6 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
     except Exception:
         return _text
 
-
 def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
     def wc(t: str) -> int:
         try:
@@ -5154,7 +5140,6 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         else:
             break
     return text_acc.strip()
-
 
 def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
     """
@@ -12312,7 +12297,6 @@ def run_rfp_analyzer(conn) -> None:
             except Exception as e:
                 st.error(f"Create & ingest failed: {e}")
 
-
     # Selection
     current_id = st.session_state.get("current_rfp_id")
     try:
@@ -12433,7 +12417,6 @@ def ns(scope: str, key: str) -> str:
     """Generate stable, unique Streamlit widget keys."""
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
-
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
@@ -15067,7 +15050,6 @@ def __p_s1d_ui(conn):
         n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
         _st.success(f"Saved {n} new vendors")
 
-
 # Removed legacy monkeypatch block at load time
 
 # =========================
@@ -15078,7 +15060,6 @@ if __name__ == '__main__':
     except NameError:
         # fallback: run default entry if main() not defined in this build
         pass
-
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
@@ -15872,8 +15853,6 @@ def _style_guide() -> str:
             "14) Keep tone federal and precise."
         )
 
-
-
 # === Proposal Style + Finalizers ===
 PROPOSAL_STYLE_GUIDE = (
     "Follow these rules strictly:\n"
@@ -15936,8 +15915,6 @@ def _enforce_style_guide(text: str, max_words=10, max_sents_per_para=10) -> str:
             out.append(" ".join(fixed))
     return "\n\n".join(out).strip()
 
-
-
 def _pb_psychology_framework() -> str:
     """
     Psychology rules used to shape tone and trust. Not printed verbatim.
@@ -15953,8 +15930,6 @@ def _pb_psychology_framework() -> str:
         "- Smooth cadence: short sentences, one idea per paragraph, clean transitions.\n"
         "- No citations or snippet IDs. Self-contained answer.\n"
     ).strip()
-
-
 
 def _finalize_draft(text: str) -> str:
     return _one_idea_per_paragraph(_enforce_style_guide(_strip_citations(text)))
@@ -15976,7 +15951,6 @@ def _get_conn(db_path="samwatch.db"):
 # SIG+LOGO patch removed
 
 # O4 wrapper disabled
-
 
 # === Proposal Builder: structured output mix (paragraphs + bullets + tables) ===
 def _pb_decide_structure(section: str) -> dict:
@@ -16907,7 +16881,6 @@ def y2_ui_chat_general(conn: "_sqlite3_y2g.Connection") -> None:
                     y2g_append_message(conn, int(thread_id), "assistant", ans)
                 st.success("Saved to thread")
 # ======== END Y2 GENERAL CHAT UPGRADE ========
-\n\n
 # ======== Y2 CHAT MOUNT HELPER ========
 APPCHAT_TUNING_BUILD = "2025-11-10T20:34:35.045604Z"
 
