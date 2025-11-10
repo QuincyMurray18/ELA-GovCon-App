@@ -4872,10 +4872,20 @@ def _y3_build_messages(conn: "sqlite3.Connection", rfp_id: int, section_title: s
     except Exception:
         df_clin = _pd.DataFrame(columns=["clin","description","qty","unit"])
     try:
-        full_text = y5_extract_from_rfp(conn, int(rfp_id)) or ""
-        full_text = "\n".join([ln.strip() for ln in full_text.splitlines() if ln.strip()])[:20000]
+        _df_all = _pd.read_sql_query(
+            "SELECT COALESCE(text, '') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
+            conn, params=(int(rfp_id),),
+        )
+        if _df_all is not None and not _df_all.empty:
+            full_text = "\n\n".join([str(x or "") for x in _df_all['t'].tolist()])
+        else:
+            raise ValueError("rfp_files_t empty")
     except Exception:
-        full_text = ""
+        try:
+            full_text = y5_extract_from_rfp(conn, int(rfp_id)) or ""
+        except Exception:
+            full_text = ""
+    full_text = "\n".join([ln.strip() for ln in str(full_text or "").splitlines() if ln.strip()])[:20000]
     bullets = "\n".join([f"- {it}" for it in (ctx.get("lm") or [])])
     clins = "\n".join([f"- {r['clin']}: {r['desc']}" for r in (ctx.get("clins") or [])])
     dates_str = "\n".join([f"- {r['label']}: {r['date_text']}"] for _, r in df_dates.iterrows()) if not df_dates.empty else ""
@@ -15254,7 +15264,7 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
         meta = {}
     try:
         _df_all = _pd.read_sql_query(
-            "SELECT COALESCE(text,'') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
+            "SELECT COALESCE(text, '') AS t FROM rfp_files_t WHERE rfp_id=? ORDER BY id;",
             conn, params=(int(rfp_id),),
         )
         if _df_all is not None and not _df_all.empty:
@@ -15267,7 +15277,7 @@ def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "
         except Exception:
             full_text = ""
     full_text = "\n".join([ln.strip() for ln in str(full_text or "").splitlines() if ln.strip()])[:20000]
-try:
+    try:
         dfp = _pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
         profile = dfp.iloc[0].to_dict() if not dfp.empty else {}
     except Exception:
