@@ -3431,18 +3431,539 @@ def _resolve_model():
     Priority: secrets['openai_model'] -> secrets['OPENAI_MODEL'] -> env OPENAI_MODEL -> default 'gpt-5-thinking' -> fallback 'gpt-4o-mini'.
     """
     try:
-        import os
-        import streamlit as st
-        m = st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or os.environ.get('OPENAI_MODEL')
+        import os as _os_m
+        import streamlit as _st_m
+        m = _st_m.secrets.get('openai_model') or _st_m.secrets.get('OPENAI_MODEL') or _os_m.environ.get('OPENAI_MODEL')
         if not m:
+            # Prefer GPT-5 if available on the account. The OpenAI API will 404 if unavailable.
+            # Downstream call sites should handle exceptions; we also expose a UI selector.
             m = 'gpt-5-thinking'
         return m
     except Exception:
+        return os.environ.get('OPENAI_MODEL', 'gpt-5-thinking') or 'gpt-4o-mini'
+
+        import streamlit as st
+        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
+    except Exception:
+        return 'gpt-4o-mini'
+
+
+def _rfp_highlight_css():
+    """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
+    try:
+        import streamlit as _st
+        if not _st.session_state.get("_rfp_hl_css", False):
+            _st.markdown(
+                """
+                <style>
+                :root {
+                  --rfp-font-size: 0.98rem;
+                  --rfp-line: 1.7;
+                  --rfp-max: 72ch;
+                }
+                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 4px; }
+                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 4px; }
+                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 4px; }
+                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 4px; }
+                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 4px; }
+                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 4px; }
+                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 4px; }
+
+                .rfp-typo {
+                  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+                  font-size: var(--rfp-font-size);
+                  line-height: var(--rfp-line);
+                  letter-spacing: .005em;
+                  -webkit-font-smoothing: antialiased;
+                  text-rendering: optimizeLegibility;
+                  color: inherit;
+                  word-break: normal;
+                  hyphens: auto;
+                  max-width: var(--rfp-max);
+                }
+                .rfp-typo p { margin: 0 0 1rem; }
+                .rfp-typo p + p { margin-top: 0; }
+                .rfp-typo ul, .rfp-typo ol { margin: 0 0 1rem 1.25rem; padding: 0; }
+                .rfp-typo li { margin: .25rem 0; }
+                .rfp-typo a { color: inherit; text-decoration: underline; }
+                .rfp-typo code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .92em; }
+                @media (max-width: 640px) {
+                  .rfp-typo { font-size: 1rem; line-height: 1.8; max-width: 100%; }
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            _st.session_state["_rfp_hl_css"] = True
+    except Exception:
+        pass
+
+
+def _render_highlights_panel(conn, rid):
+    import pandas as pd
+    import streamlit as st
+    st.divider()
+    with st.expander("Highlights (auto)", expanded=True):
         try:
-            import os
-            return os.environ.get('OPENAI_MODEL', 'gpt-5-thinking') or 'gpt-4o-mini'
+            df_lm = pd.read_sql_query("SELECT item_text AS requirement, is_must FROM lm_items WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
         except Exception:
-            return 'gpt-4o-mini'
+            df_lm = pd.DataFrame(columns=["requirement","is_must"])
+        try:
+            df_clin = pd.read_sql_query("SELECT clin, description, qty, unit FROM clin_lines WHERE rfp_id=? ORDER BY id LIMIT 50;", conn, params=(int(rid),))
+        except Exception:
+            df_clin = pd.DataFrame(columns=["clin","description","qty","unit"])
+        try:
+            df_dates = pd.read_sql_query("SELECT label, date_text FROM key_dates WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+        except Exception:
+            df_dates = pd.DataFrame(columns=["label","date_text"])
+        try:
+            df_poc = pd.read_sql_query("SELECT name, role, email, phone FROM pocs WHERE rfp_id=? ORDER BY id LIMIT 20;", conn, params=(int(rid),))
+        except Exception:
+            df_poc = pd.DataFrame(columns=["name","role","email","phone"])
+        try:
+            full_txt = y5_extract_from_rfp(conn, int(rid))
+        except Exception:
+            full_txt = ""
+        pricing_hits = _extract_pricing_factors_text(full_txt, max_hits=20)
+        task_hits = _extract_task_lines(full_txt, max_hits=30)
+
+        c1, c2 = st.columns([1,1])
+        with c1:
+            st.markdown("**Requirements (L/M)**")
+            if df_lm is None or df_lm.empty:
+                st.caption("None detected yet.")
+            else:
+                _styled_dataframe(df_lm.rename(columns={"is_must":"Must?"}), use_container_width=True, hide_index=True)
+            st.markdown("**Due Dates**")
+            if df_dates is None or df_dates.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_dates, use_container_width=True, hide_index=True)
+        with c2:
+            st.markdown("**POCs**")
+            if df_poc is None or df_poc.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_poc, use_container_width=True, hide_index=True)
+            st.markdown("**CLINs / Pricing Inputs**")
+            if df_clin is None or df_clin.empty:
+                st.caption("None detected.")
+            else:
+                _styled_dataframe(df_clin, use_container_width=True, hide_index=True)
+
+        st.markdown("**Pricing Evaluation Mentions**")
+        if pricing_hits:
+            st.write("\\n".join([f"• {h}" for h in pricing_hits[:20]]))
+        else:
+            st.caption("None found.")
+
+        st.markdown("**Task / SOW Lines**")
+        if task_hits:
+            st.write("\\n".join([f"• {h}" for h in task_hits[:30]]))
+        else:
+            st.caption("None found.")
+def _rfp_render_summary(txt: str):
+    """Render a highlighted summary safely as HTML."""
+    import streamlit as _st
+    _rfp_highlight_css()
+    _st.markdown(_rfp_highlight_html(txt or ""), unsafe_allow_html=True)
+
+def _rfp_highlight_html(txt: str) -> str:
+    """Return HTML wrapping ORIGINAL Markdown with selective highlights. No escaping. GPT-like typography."""
+    import re
+    _rfp_highlight_css()  # ensure styles are present
+    if not txt:
+        return "<div class='rfp-typo'>(empty)</div>"
+    src = txt or ""  # do NOT escape; we want Markdown to render
+
+    # Priority: due > price > poc/email/phone > clin > req > task
+    patterns = [
+        ("due",   re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")),
+        ("price", re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")),
+        ("poc",   re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")),
+        ("poc",   re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")),
+        ("poc",   re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")),
+        ("clin",  re.compile(r"(?i)\bCLIN\s*[:#-]?\s*[0-9A-Z.-]+\b")),
+        ("req",   re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")),
+        ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
+    ]
+
+    out_lines = []
+    for line in src.splitlines(True):  # keep newline chars
+        # Leave blank lines untouched
+        if not line.strip():
+            out_lines.append(line)
+            continue
+
+        # Respect leading indentation/bullets so Markdown renders correctly
+        stripped = line.lstrip()
+        prefix = line[:len(line)-len(stripped)]
+        content = stripped
+
+        # One highlight max per visual line
+        best = None
+        for cls, pat in patterns:
+            m = pat.search(content)
+            if not m:
+                continue
+            st = m.start()
+            if best is None or st < best[0]:
+                best = (st, m.end(), cls)
+            if best and best[0] == 0:
+                break
+
+        if best is None:
+            out_lines.append(line)
+        else:
+            a, b, cls = best
+            highlighted = content[:a] + f"<span class='hl-{cls}'>" + content[a:b] + "</span>" + content[b:]
+            out_lines.append(prefix + highlighted)
+
+    result = "".join(out_lines)
+    return "<div class='rfp-typo'>\n" + result + "\n</div>"
+
+def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    keys = re.compile(r"(?i)\\b(price realism|price reasonableness|best value|tradeoff|lpta|basis of award|evaluation factors? for award|most advantageous|lowest price)\\b")
+    for ln in lines:
+        if keys.search(ln):
+            hits.append(ln)
+            if len(hits) >= max_hits:
+                break
+    return hits
+
+def _extract_task_lines(text: str, max_hits: int = 30) -> list[str]:
+    if not text:
+        return []
+    hits = []
+    lines = [l.strip() for l in text.splitlines()]
+    section = None
+    for ln in lines:
+        low = ln.lower()
+        if any(h in low for h in ["scope of work", "statement of work", "performance work statement", "pws", "sow", "tasks", "deliverables"]):
+            section = "task"
+        if section == "task":
+            # Collect bullets or numbered lines as tasks
+            if re.match(r"^\\s*(?:[-*•\\u2022]|\\(?[a-z0-9]\\)|\\d+\\.)\\s+", ln, re.IGNORECASE):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+            # Stop if a new all-caps section header appears
+            if re.match(r"^[A-Z][A-Z \\-/]{6,}$", ln.strip()):
+                section = None
+    # Fallback: catch "shall" sentences
+    if not hits:
+        for ln in lines:
+            if re.search(r"(?i)\\b(shall|must)\\b", ln):
+                hits.append(ln.strip())
+                if len(hits) >= max_hits:
+                    break
+    return hits
+
+    return st.secrets.get("openai_model") or st.secrets.get("OPENAI_MODEL") or "gpt-4o-mini"
+
+def _ai_chat(prompt: str) -> str:
+    client = _resolve_openai_client()
+    if not client:
+        return "AI response unavailable (no OpenAI key configured)."
+    try:
+        resp = client.chat.completions.create(
+            model=_resolve_model(),
+            messages=[
+                {"role": "system", "content": "You are a contracts analyst writing precise, concise outputs tailored for federal RFPs."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"AI response unavailable: {e}"
+
+# ---- Simple extractors (regex) ----
+def _extract_naics(text: str) -> str:
+    m = re.search(r"NAICS[^0-9]*([0-9]{6})", text, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+def _extract_due_date(text: str) -> str:
+    # crude; looks for "due" "closing" etc.
+    m = re.search(r"(?:due|closing|proposal (?:due|deadline))[:\s]+([A-Z][a-z]{2,9}\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+def _extract_pop_state(text: str) -> str:
+    m = re.search(r"\b(?:Place of Performance|POP)[:\s]+([A-Za-z ,]+)\b", text, re.IGNORECASE)
+    candidate = m.group(1) if m else ""
+    m2 = re.search(r"\b(AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b", candidate.upper())
+    return m2.group(1) if m2 else ""
+
+def _extract_evaluation_factors(text: str) -> str:
+    # naive pull of "Section M" content lines
+    m = re.search(r"SECTION\s*M[:\s\\-]+(.*?)(?:SECTION\s*[NQ]|ATTACHMENT|EVALUATION CRITERIA END)", text, re.IGNORECASE | re.DOTALL)
+    if m:
+        return re.sub(r"\s{3,}", "  ", m.group(1).strip())[:1200]
+    return ""
+
+def _sentences(text: str) -> List[str]:
+    # basic split by period/semicolon/newlines
+    chunks = re.split(r"(?<=[\.\?\!])\s+|\n+", text)
+    return [c.strip() for c in chunks if c.strip()]
+
+def _find_requirements(text: str) -> List[str]:
+    reqs = []
+    for s in _sentences(text):
+        if re.search(r"\b(shall|must)\b", s, re.IGNORECASE):
+            reqs.append(s)
+    # de-dup
+    seen = set()
+    out = []
+    for r in reqs:
+        k = r.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out[:400]
+
+# ---- Draft outline ----
+DEFAULT_SECTIONS = [
+    "Executive Summary",
+    "Technical Approach",
+    "Management & Staffing",
+    "Quality Assurance / QC",
+    "Past Performance",
+    "Risk & Mitigation",
+    "Pricing Narrative (non-cost)",
+    "Compliance Matrix Response Summary"
+]
+
+def _draft_section(section: str, context: str) -> str:
+    prompt = f"""
+You are a veteran federal proposal writer. Write ONLY the section titled '{section}'.
+{_style_guide()}
+Rules:
+- Stay strictly within the scope of '{section}'. Do not include Risk Mitigation, Quality, Staffing, Management, Past Performance, or Pricing.
+- One idea per paragraph. Sentences average 14–20 words.
+- Balance 'you' and 'we' near 1:1. Use present-tense commitments. Avoid hedges.
+- Include one proof point: a metric, artifact, or timeline relevant to the section.
+- Close with a promise line tied to risk control.
+
+RFP context (truncated):
+{context[:6000]}
+""".strip()
+    draft = _ai_chat(prompt)
+    mixed = _assemble_section_output(section, draft, context)
+    return _finalize_section(section, mixed)
+
+def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
+    st.title("RFP Analyzer — One‑Page View")
+    if not pages:
+        st.info("No parsed pages were provided.")
+        return
+
+    # Combine texts
+    by_file = {}
+    for p in pages:
+        by_file.setdefault(p.get("file") or "Unknown", []).append(p.get("text") or "")
+    combined = "\n\n".join(["\n".join(v) for v in by_file.values()])
+
+    # Header key facts
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("NAICS", _extract_naics(combined) or "—")
+    with c2: st.metric("Due Date", _extract_due_date(combined) or "—")
+    with c3: st.metric("POP (State)", _extract_pop_state(combined) or "—")
+    with c4: st.metric("# Files", str(len(by_file)))
+
+    # Summaries panel
+    st.subheader("Summaries")
+    if st.button("Summarize All Documents ▶", type="primary"):
+        sums = {}
+        for fname, texts in by_file.items():
+            t = "\n".join(texts)
+            prompt = f"Summarize the document '{fname}' for a federal proposal team. Use bullets and include key deliverables, dates, and Section L/M obligations.\n\n{t[:12000]}"
+            sums[fname] = _ai_chat(prompt)
+        st.session_state["onepage_summaries"] = sums
+    sums = st.session_state.get("onepage_summaries") or {}
+    if sums:
+        for fname, ss in sums.items():
+            with st.expander(f"Summary — {fname}", expanded=False):
+                _rfp_highlight_css()
+                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
+
+    # Compliance (auto-extracted)
+    st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
+    reqs = _find_requirements(combined)
+    if not reqs:
+        st.info("No clear 'shall/must' obligations detected. (Section L/M not found or documents are scanned.)")
+    else:
+        # If we have a draft, check light coverage
+        draft_map = st.session_state.get("onepage_draft") or {}
+        drafted_all = "\n\n".join(draft_map.values()) if draft_map else ""
+        covered = 0
+        for r in reqs[:100]:
+            hit = (len(r) > 20 and r[:20].lower() in drafted_all.lower())
+            st.checkbox(("✅ " if hit else "⬜️ ") + r, value=bool(hit), key=f"req_{abs(hash(r))}")
+            covered += int(bool(hit))
+        st.caption(f"Coverage (light heuristic): {covered} / {min(100, len(reqs))} shown.")
+
+    # Drafting panel
+    st.subheader("Proposal Draft")
+    sel = st.multiselect("Sections to draft", DEFAULT_SECTIONS, default=DEFAULT_SECTIONS)
+    if st.button("Draft All Sections ▶", type="primary", help="Generate a first-pass draft for the selected sections."):
+        draft = {}
+        for sec in sel:
+            draft[sec] = _draft_section(sec, combined)
+        st.session_state["onepage_draft"] = draft
+    draft = st.session_state.get("onepage_draft") or {}
+    if draft:
+        for sec, body in draft.items():
+            with st.expander(f"📝 {sec}", expanded=False):
+                st.text_area("Text", value=body, height=240, key=f"ta_{abs(hash(sec))}")
+    st.download_button(
+        "Download Full Draft (Markdown)",
+        data="\n\n".join([f"# {k}\n\n{v}" for k, v in (st.session_state.get('onepage_draft') or {}).items()]).encode("utf-8"),
+        file_name="proposal_draft.md",
+        mime="text/markdown",
+        disabled=not bool(st.session_state.get("onepage_draft"))
+    )
+
+    # Search panel (simple)
+    st.subheader("Quick Search (full text)")
+    q = st.text_input("Find", placeholder="evaluation factor, CLIN, deliverables...")
+    if q:
+        hits = [ (i, s) for i, s in enumerate(_sentences(combined), start=1) if q.lower() in s.lower() ]
+        if not hits:
+            st.info("No matches.")
+        else:
+            for i, s in hits[:100]:
+                st.write(f"**{i}.** {s}")
+
+# === END: inlined One-Page Analyzer ===
+# --- Optional PDF backends for Phase X1 ---
+try:
+    import pdfplumber as _pdfplumber  # type: ignore
+except Exception:
+    _pdfplumber = None
+try:
+    import PyPDF2 as _pypdf  # type: ignore
+except Exception:
+    try:
+        import pypdf as _pypdf  # type: ignore
+    except Exception:
+        _pypdf = None
+
+# --- hashing helper ---
+def compute_sha256(b: bytes) -> str:
+    try:
+        return hashlib.sha256(b or b"").hexdigest()
+    except Exception:
+        import hashlib as _h
+        return _h.sha256(b or b"").hexdigest()
+
+# Phase X unified settings
+from types import SimpleNamespace as _NS
+from openai import OpenAI
+
+def getenv_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except Exception:
+        return default
+
+SETTINGS = _NS(
+    APP_NAME=os.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
+    APP_VERSION=os.environ.get("ELA_APP_VERSION", "X-Base"),
+    DATA_DIR=os.environ.get("ELA_DATA_DIR", "data"),
+    UPLOADS_SUBDIR=os.environ.get("ELA_UPLOADS_SUBDIR", "uploads"),
+    DEFAULT_PAGE_SIZE=getenv_int("ELA_PAGE_SIZE", 50),
+)
+
+SETTINGS.UPLOADS_DIR = os.path.join(SETTINGS.DATA_DIR, SETTINGS.UPLOADS_SUBDIR)
+
+# Ensure directories exist
+try:
+    os.makedirs(SETTINGS.DATA_DIR, exist_ok=True)
+    os.makedirs(SETTINGS.UPLOADS_DIR, exist_ok=True)
+except Exception:
+    pass
+
+# Back-compat constants
+DATA_DIR = SETTINGS.DATA_DIR
+UPLOADS_DIR = SETTINGS.UPLOADS_DIR
+
+# Feature flag alias
+def flag(name: str, default: bool=False) -> bool:
+    return feature_flag(name, default)
+
+# External
+
+APP_TITLE = "ELA GovCon Suite"
+BUILD_LABEL = "Master A–F — SAM • RFP Analyzer • L&M • Proposal • Subs+Outreach • Quotes • Pricing • Win Prob • Chat • Capability"
+
+def apply_theme_phase1():
+    import streamlit as st
+
+    if st.session_state.get("_phase1_theme_applied"):
+        return
+    st.session_state["_phase1_theme_applied"] = True
+    st.markdown('''
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
+    h1, h2, h3 {margin-bottom: .4rem;}
+    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
+    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
+    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
+    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
+    [data-testid="stExpander"] summary {font-weight: 600;}
+    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
+    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,0.06);}
+    .ela-ok {background: rgba(0,200,83,0.12);} .ela-warn {background: rgba(251,140,0,0.12);} .ela-bad {background: rgba(229,57,53,0.12);}
+    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
+    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,0.08);}
+    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
+    </style>
+    ''', unsafe_allow_html=True)
+    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
+
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+apply_theme_phase1()
+
+# === Y0: GPT-5 Thinking CO assistant (streaming) ===
+try:
+    from openai import OpenAI as _Y0OpenAI
+except Exception:
+    _Y0OpenAI = None
+
+SYSTEM_CO = ("Act as a GS-1102 Contracting Officer. Cite exact pages. "
+             "Flag non-compliance. Be concise. If evidence is missing, say so.")
+
+# === helper: auto-select number of sources to cite (Y1–Y3) ===
+
+import os
+import tempfile
+
+
+def _resolve_model():
+    """Return preferred OpenAI chat model.
+    Priority: secrets['openai_model'] -> secrets['OPENAI_MODEL'] -> env OPENAI_MODEL -> default 'gpt-5-thinking' -> fallback 'gpt-4o-mini'.
+    """
+    try:
+        import os as _os_m
+        import streamlit as _st_m
+        m = _st_m.secrets.get('openai_model') or _st_m.secrets.get('OPENAI_MODEL') or _os_m.environ.get('OPENAI_MODEL')
+        if not m:
+            # Prefer GPT-5 if available on the account. The OpenAI API will 404 if unavailable.
+            # Downstream call sites should handle exceptions; we also expose a UI selector.
+            m = 'gpt-5-thinking'
+        return m
+    except Exception:
+        return os.environ.get('OPENAI_MODEL', 'gpt-5-thinking') or 'gpt-4o-mini'
+
+        import streamlit as st
+        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
+    except Exception:
+        return 'gpt-4o-mini'
+
 
 def _rfp_highlight_css():
     """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
@@ -15887,7 +16408,7 @@ def ychat_stream_answer(conn: "sqlite3.Connection", thread_id: int, user_q: str,
     history = ychat_get_messages(conn, int(thread_id))
     full_msgs = msgs[:1] + history[-20:] + msgs[1:]  # keep last 20 for brevity
     try:
-        for tok in ask_ai(full_msgs):
+        for tok in ask_ai(full_msgs, system=_SYSTEM_CHAT):
             yield tok
     except Exception as e:
         # Fallback: return a concise error
