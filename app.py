@@ -4435,15 +4435,16 @@ if 'y1_search' not in globals():
                 return []
 
 
+
 def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
     """
     Streams an answer grounded in top page hits from the One Page Analyzer.
-    No Y1 dependency. If no context matches, answer with best practice guidance.
+    No citations are included in the output.
     """
     import re as _re
     import pandas as _pd
 
-    # Collect pages from rfp_files using extract_text_pages
+    # Gather pages from rfp_files using extract_text_pages
     pages = []
     try:
         df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
@@ -4480,15 +4481,12 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     scored.sort(key=lambda x: x[0], reverse=True)
     hits = [pg for _, pg in scored[: max(1, int(k))]]
 
-    # Build citations
-    ev_lines = []
-    for i, h in enumerate(hits, start=1):
-        tag = f"[C{i}]"
-        src_line = f"{h.get('file','')} p.{h.get('page','')}"
-        snip = (h.get("text") or "").strip().replace("\\n", " ")
-        snip = snip[:480]
-        ev_lines.append(f"{tag} {src_line} — {snip}")
-    evidence = "\\n".join(ev_lines)
+    # Build a clean context block without tags or citations
+    snippets = []
+    for h in hits:
+        snip = (h.get("text") or "").strip().replace("\n", " ")
+        snippets.append(snip[:800])
+    context_text = "\n\n---\n\n".join(snippets) if snippets else ""
 
     # Format guidance
     mname = (mode or "Auto").lower()
@@ -4505,29 +4503,26 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     else:
         fmt_rules = "Choose the most efficient format to answer. Prefer lists for tasks. Use tables for verifications."
 
-    # Optional metadata from text
+    # Optional metadata
     try:
-        due = _extract_due_date(" ".join([(h.get("text") or "") for h in hits])[:4000]) or ""
+        due = _extract_due_date(context_text[:4000]) or ""
     except Exception:
         due = ""
     try:
-        naics = _extract_naics(" ".join([(h.get("text") or "") for h in hits])[:4000]) or ""
+        naics = _extract_naics(context_text[:4000]) or ""
     except Exception:
         naics = ""
 
-    # Build user prompt
-    if evidence.strip():
-        ctx = "CONTEXT\\n" + evidence + "\\n\\n"
-    else:
-        ctx = "CONTEXT\\n[no high confidence matches]\\n\\n"
+    # Build user prompt without any citation instructions
+    ctx = "CONTEXT\\n" + (context_text if context_text else "[no high confidence matches]") + "\\n\\n"
 
     user = (
         "QUESTION\\n" + q + "\\n\\n" + ctx +
         "INSTRUCTIONS\\n"
         f"- {fmt_rules}\\n"
-        "- Answer using the CONTEXT when possible.\\n"
-        "- When you rely on a snippet, cite it inline like [C1], [C2].\\n"
-        "- If the answer is not in context, say what is missing and proceed with best practice guidance.\\n"
+        "- Use the CONTEXT when possible.\\n"
+        "- Do not include citations or bracketed tags.\\n"
+        "- If the answer is not in context, state what is missing and proceed with best practice guidance.\\n"
         "- If drafting outreach, use placeholders when unknown: {Solicitation}, {Due Date}, {NAICS}.\\n"
         f"- If known, include NAICS {naics} and Due Date {due}.\\n"
     )
