@@ -15278,7 +15278,7 @@ def _score_snippets_by_query(snippets: list[str], query: str, top_k: int = 8) ->
     scored.sort(key=lambda x: x[0], reverse=True)
     return [s for _, s in scored[:max(1, int(top_k))]]
 
-def _chat_plus_compose_messages(context_text: str, history: list[dict], question: str, mode: str = "Auto") -> list[dict]:
+def _chat_plus_compose_messages(context_text: str, history: list[dict], question: str, mode: str = "Auto", thread_memory: str = "", anti_repeat_hint: str = "") -> list[dict]:
     rules = []
     m = (mode or "Auto").lower()
     if m.startswith("checklist"):
@@ -15299,6 +15299,10 @@ def _chat_plus_compose_messages(context_text: str, history: list[dict], question
         "No citations. No tags. Be precise. "
         "When asked for vendor outreach or subcontractor questions, output concrete, verifiable asks."
     )
+    if (thread_memory or "").strip():
+        system += "\nThread memory:\n" + thread_memory.strip()
+    if (anti_repeat_hint or "").strip():
+        system += "\nDo not repeat this content verbatim. If the user repeats the same ask, build on it: " + anti_repeat_hint[:1500]
     msgs = [{"role": "system", "content": system}]
     for h in history or []:
         if h.get("role") in ("user", "assistant") and (h.get("content") or "").strip():
@@ -15309,6 +15313,47 @@ def _chat_plus_compose_messages(context_text: str, history: list[dict], question
     return msgs
 
 def _chat_plus_call_openai(messages: list[dict], temperature: float = 0.2) -> str:
+    # placeholder to preserve location
+
+# ==== Chat+ memory helpers ====
+def _normalize_text_for_sim(s: str) -> set[str]:
+    import re as _re
+    t = _re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
+    words = [w for w in t.split() if len(w) > 2]
+    return set(words[:2000])
+
+def _too_similar(a: str, b: str, thresh: float = 0.80) -> bool:
+    A = _normalize_text_for_sim(a)
+    B = _normalize_text_for_sim(b)
+    if not A or not B:
+        return False
+    j = len(A & B) / max(1, len(A | B))
+    return j >= thresh
+
+def _chat_plus_summarize(history: list[dict], limit_chars: int = 1200) -> str:
+    """Summarize the thread for persistent memory within the session."""
+    # Build content
+    recent = []
+    for m in history[-12:]:  # last 12 turns window
+        role = m.get("role","")
+        content = (m.get("content") or "").strip()
+        if content:
+            recent.append(f"{role.upper()}: {content}")
+    prompt = (
+        "Summarize the key facts, decisions, constraints, and open questions from this chat. "
+        "Return 4 sections with concise bullets: Facts, Decisions, Constraints, To-Do. "
+        f"Limit to {limit_chars} characters.\n\n" + "\n\n".join(recent)
+    )
+    msgs = [{"role":"system","content":"You are a concise summarizer for an internal memory. Keep it factual."},
+            {"role":"user","content":prompt}]
+    try:
+        txt = _chat_plus_call_openai(msgs, temperature=0.0)
+        return (txt or "")[:limit_chars]
+    except Exception:
+        # fallback naive summary: last two user lines
+        users = [m.get("content","") for m in history if m.get("role")=="user"]
+        return ("\n".join(users[-2:]))[:limit_chars]
+
     client = _resolve_openai_client()
     if not client:
         return "AI unavailable. Configure OPENAI_API_KEY in Streamlit secrets."
@@ -15454,6 +15499,17 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key="chat_plus_mode")
     with c3:
         temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="chat_plus_temp")
+
+
+
+    # Memory toggles
+    c4, c5 = st.columns([2,2])
+    with c4:
+        build_on = st.toggle("Build on this chat", value=True, key="chat_plus_build_on")
+    with c5:
+        anti_repeat = st.toggle("Avoid repetition", value=True, key="chat_plus_anti_repeat")
+    if "chat_plus_memory" not in st.session_state:
+        st.session_state["chat_plus_memory"] = ""
 
 
     # Optional RFP selection
