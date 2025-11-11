@@ -17014,3 +17014,163 @@ except NameError:
         pass
 
 # ===================== END PATCH =====================
+
+
+# ===================== APPEND-ONLY PATCH • Force Chat Assistant to use Attachment-first UI =====================
+# Some builds register the first-defined run_chat_assistant() with the page router.
+# That older handler calls y2_ui_threaded_chat() which ignored attachments.
+# This patch replaces y2_ui_threaded_chat with an attachment-first UI that also supports optional RFP context.
+def _cp_chat_plus_ui(conn: "sqlite3.Connection") -> None:
+    import streamlit as st
+    st.header("Chat Assistant")
+    st.caption("Attachment-first. Optional RFP context. No citations.")
+
+    files_key = "chat_plus_files"
+    hist_key = "chat_plus_history"
+
+    if files_key not in st.session_state:
+        st.session_state[files_key] = []  # [{name,mime,size,text}]
+    if hist_key not in st.session_state:
+        st.session_state[hist_key] = []   # [{role,content}]
+
+    c0, c1, c2, c3 = st.columns([2,3,2,2])
+    with c0:
+        source = st.selectbox("Source", ["Attachments only","RFP context only","Both"], index=0, key="cp_src_sel")
+    with c1:
+        ups = st.file_uploader(
+            "Add attachments",
+            type=["pdf","docx","xlsx","pptx","csv","txt","md"],
+            accept_multiple_files=True,
+            key="cp_uploader",
+            help="Upload any files to use as context."
+        )
+    with c2:
+        mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key="cp_mode")
+    with c3:
+        temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="cp_temp")
+
+    # Ingest uploads
+    new_rows = []
+    if ups:
+        for i, f in enumerate(ups):
+            try:
+                try:
+                    data = f.getbuffer().tobytes()
+                except Exception:
+                    data = f.read()
+                txt = _extract_any_to_text(f.name, data)
+                # tag each file to enforce multi-doc retrieval downstream
+                if not txt.strip().startswith("<<<DOC:"):
+                    txt = f"<<<DOC:{f.name}>>>\\n" + (txt or "")
+                new_rows.append({
+                    "name": f.name,
+                    "mime": _detect_mime_light_plus(f.name),
+                    "size": len(data),
+                    "text": txt or "",
+                })
+            except Exception:
+                continue
+        if new_rows:
+            st.session_state[files_key].extend(new_rows)
+            st.success(f"Added {len(new_rows)} attachment(s).")
+
+    # Attachments table
+    files = st.session_state[files_key]
+    with st.expander(f"Attachments in this chat ({len(files)})", expanded=True):
+        if files:
+            st.dataframe(
+                [{"Name": r["name"], "Type": r["mime"], "KB": int((r["size"] or 0)/1024)} for r in files],
+                use_container_width=True
+            )
+        else:
+            st.caption("No attachments yet.")
+
+    # Optional RFP context
+    selected_rfp_id = None
+    if source in ("RFP context only","Both"):
+        st.divider()
+        st.subheader("RFP context")
+        options = _list_rfps(conn)
+        if options:
+            labels = [label for _, label in options]
+            idx = st.selectbox("Choose RFP", list(range(len(labels))), format_func=lambda i: labels[i], key="cp_rfp_idx") if labels else 0
+            if options:
+                selected_rfp_id = options[idx][0]
+        manual = st.text_input("Or enter RFP ID manually", value="", key="cp_rfp_manual")
+        if manual.strip():
+            selected_rfp_id = manual.strip()
+        if selected_rfp_id and st.button("Preview RFP context", key="cp_rfp_preview_btn"):
+            preview = _load_rfp_context(conn, selected_rfp_id, max_chars=5000)
+            st.text_area("RFP context preview", preview or "", height=220, key="cp_rfp_preview")
+
+    # Chat history render
+    history = st.session_state[hist_key]
+    for m in history[-20:]:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    # Input
+    q = st.chat_input("Ask based on your attachments and optional RFP")
+    if q:
+        # Build base texts
+        att_texts = [r.get("text","") for r in st.session_state[files_key] if (r.get("text") or "").strip()]
+        rfp_text = ""
+        if source in ("RFP context only","Both") and selected_rfp_id:
+            try:
+                rfp_text = _load_rfp_context(conn, selected_rfp_id, max_chars=24000) or ""
+            except Exception:
+                rfp_text = ""
+        if source == "Attachments only":
+            base_texts = att_texts
+        elif source == "RFP context only":
+            base_texts = [rfp_text] if rfp_text.strip() else []
+        else:
+            base_texts = att_texts + ([rfp_text] if rfp_text.strip() else [])
+
+        # Chunk and retrieve across all docs
+        try:
+            chunks = []
+            for t in base_texts:
+                for c in y5_chunk_text(t, target_chars=9000, overlap=500) or []:
+                    chunks.append(c)
+        except Exception:
+            chunks = base_texts
+        top = _score_snippets_by_query(chunks or base_texts or [""], q, top_k=12)
+        context_text = "\\n\\n---\\n\\n".join([s[:1800] for s in top])[:24000]
+
+        # Compose and answer
+        try:
+            messages = _chat_plus_compose_messages(context_text, history, q, mode=str(mode or "Auto"))
+        except Exception:
+            messages = [
+                {"role": "system", "content": "Answer using only the provided context. Be concise and concrete. No citations."},
+                {"role": "user", "content": f"Context:\\n{context_text}\\n\\nQuestion: {q}"}
+            ]
+
+        ans = ""
+        try:
+            if "_y6_chat" in globals():
+                ans = _y6_chat(messages)
+            elif "_chat_plus_call_openai" in globals():
+                ans = _chat_plus_call_openai(messages, temperature=float(temp or 0.2))
+            else:
+                ans = "AI response unavailable."
+        except Exception as _e:
+            ans = f"Answer error: {type(_e).__name__}: {_e}"
+
+        # Update history
+        history.append({"role": "user", "content": q})
+        history.append({"role": "assistant", "content": ans})
+        st.session_state[hist_key] = history
+
+        # Render last message
+        with st.chat_message("assistant"):
+            st.markdown(ans)
+
+# Monkey-patch the legacy entry to point at the new UI so routers bound early get the correct behavior.
+try:
+    y2_ui_threaded_chat  # exists
+    y2_ui_threaded_chat = _cp_chat_plus_ui  # type: ignore[assignment]
+except NameError:
+    pass
+# ===================== END PATCH =====================
