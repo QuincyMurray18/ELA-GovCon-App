@@ -1594,10 +1594,10 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
                 secs = extract_sections_L_M(txt)
             except Exception:
                 secs = {}
-            try:
-                lm = (derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))) if secs else []
-            except Exception:
-                lm = []
+                try:
+                    lm = (derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))) if secs else []
+                except Exception:
+                    lm = []
             # Persist LM items idempotently
             try:
                 with conn:
@@ -15495,7 +15495,7 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
                     "size": len(data),
                     "text": txt or "",
                 }
-                                try:
+                try:
                     import hashlib as _hl
                     rec["sha"] = _hl.sha256(data).hexdigest()
                 except Exception:
