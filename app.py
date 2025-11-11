@@ -16886,291 +16886,104 @@ def _pb_word_count_section(text: str) -> int:
         except Exception:
             return 0
 
+# ==== PATCH: Multi attachment reliability for Chat Assistant ====
+# Placed by ChatGPT on 2025 11 11
 
-# ===================== APPEND-ONLY PATCH • Chat+ Multi‑Attachment Diversification =====================
-# Goal: Ensure Chat Assistant uses ALL uploaded attachments, not just the first.
-# Tactics:
-# 1) Prefix each attachment's text with a stable doc marker "<<<DOC:{filename}>>>".
-# 2) Override y5_chunk_text to propagate the doc marker to every chunk.
-# 3) Override _score_snippets_by_query to diversify results across docs by round‑robin on score.
-# 4) Wrap run_chat_assistant again to apply markers to any existing session attachments before UI runs.
-
-import re as _cp_re
-
-def _cp_extract_doc_marker(s: str):
-    m = _cp_re.match(r"^<<<DOC:([^>]+)>>>\s*", s or "")
-    return m.group(1) if m else None
-
-# 2) Override y5_chunk_text to propagate markers
-try:
-    _Y5_CHUNK_ORIG
-except NameError:
+def _chat_plus__files_key():
+    """Single source of truth for the Chat+ attachments session key."""
     try:
-        _Y5_CHUNK_ORIG = y5_chunk_text  # keep original
-    except NameError:
-        _Y5_CHUNK_ORIG = None
-
-if _Y5_CHUNK_ORIG:
-    def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> list[str]:  # type: ignore[override]
-        marker = None
-        try:
-            marker = _cp_extract_doc_marker(text)
-        except Exception:
-            marker = None
-        chunks = _Y5_CHUNK_ORIG(text, target_chars=target_chars, overlap=overlap)
-        if marker:
-            pref = f"<<<DOC:{marker}>>>"
-            out = []
-            for c in chunks or []:
-                c2 = c if c.strip().startswith(pref) else (pref + "\\n" + c)
-                out.append(c2)
-            return out
-        return chunks
-
-# 3) Override scorer with diversification across DOC markers
-def _score_snippets_by_query(snippets: list[str], query: str, top_k: int = 10) -> list[str]:  # type: ignore[override]
-    import re as _re
-    q = (query or "").strip()
-    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
-    terms = [w for w in norm_q.split() if len(w) > 1]
-    # score all
-    scored: list[tuple[int,str,str]] = []  # (score, doc, snippet)
-    for s in snippets or [""]:
-        t = _re.sub(r"[^A-Za-z0-9 ]+", " ", s or "").lower()
-        score = 0
-        for w in terms:
-            try:
-                score += t.count(" " + w + " ")
-            except Exception:
-                pass
-        doc = None
-        m = _re.match(r"^<<<DOC:([^>]+)>>>\s*", s or "")
-        if m:
-            doc = m.group(1)
-        else:
-            doc = "__GLOBAL__"
-        scored.append((int(score), str(doc), s))
-    # group by doc and sort each
-    by_doc = {}
-    for sc, doc, s in scored:
-        by_doc.setdefault(doc, []).append((sc, s))
-    for doc in by_doc:
-        by_doc[doc].sort(key=lambda x: x[0], reverse=True)
-    # round‑robin pick to diversify
-    result = []
-    docs = [d for d in by_doc.keys()]
-    idx_map = {d:0 for d in docs}
-    while len(result) < max(1, int(top_k)) and any(idx_map[d] < len(by_doc[d]) for d in docs):
-        for d in docs:
-            i = idx_map[d]
-            if i < len(by_doc[d]):
-                sc, s = by_doc[d][i]
-                s_clean = _re.sub(r"^<<<DOC:[^>]+>>>\s*", "", s or "")
-                result.append(s_clean)
-                idx_map[d] += 1
-                if len(result) >= top_k:
-                    break
-    if len(result) < top_k:
-        all_sorted = sorted(((sc, s) for sc, _, s in scored), key=lambda x: x[0], reverse=True)
-        for sc, s in all_sorted:
-            s_clean = _re.sub(r"^<<<DOC:[^>]+>>>\s*", "", s or "")
-            if s_clean not in result:
-                result.append(s_clean)
-            if len(result) >= top_k:
-                break
-    return result[:top_k]
-
-# 4) Outer wrapper to inject markers into session files before the main Chat Assistant runs
-def _wrap_chat_assistant_diversify():
-    _orig = run_chat_assistant
-    def _wrapped(conn):
         import streamlit as st
-        try:
-            files = st.session_state.get("chat_plus_files") or []
-            changed = False
-            for i, rec in enumerate(files):
-                try:
-                    txt = rec.get("text") or ""
-                    name = str(rec.get("name") or f"file_{i}")
-                    if not txt.strip().startswith("<<<DOC:"):
-                        rec["text"] = f"<<<DOC:{name}>>>\\n" + txt
-                        changed = True
-                except Exception:
-                    continue
-            if changed:
-                st.session_state["chat_plus_files"] = files
-        except Exception:
-            pass
-        return _orig(conn)
-    return _wrapped
+        return st.session_state.get("chat_plus_files_key") or "chat_plus_files"
+    except Exception:
+        return "chat_plus_files"
 
-try:
-    _CHAT_ASSISTANT_DIVERSIFY  # sentinel
-except NameError:
+def _chat_plus_all_att_rows():
+    """Return all enabled attachment rows the UI has collected."""
+    import streamlit as st
+    key = _chat_plus__files_key()
+    rows = st.session_state.get(key) or []
+    out = []
+    for r in rows:
+        try:
+            if int(r.get("enabled", 1)) != 1:
+                continue
+            t = (r.get("text") or "").strip()
+            if not t:
+                continue
+            out.append(r)
+        except Exception:
+            t = (r.get("text") or "").strip()
+            if t:
+                out.append(r)
+    return out
+
+def chat_plus_all_texts():
+    """All attachment texts, normalized, for composing prompts or exports."""
+    return [ (r.get("text") or "").strip() for r in _chat_plus_all_att_rows() ]
+
+def y5_extract_from_uploads(files):
+    """
+    Robustly extract text from a list of Streamlit UploadedFile objects.
+    Guarantees multi file support and never silently returns a blank placeholder.
+    """
+    texts = []
+
+    def _read_one(f):
+        name = getattr(f, "name", "") or ""
+        mime = getattr(f, "type", "") or ""
+        bts = None
+        try:
+            if hasattr(f, "seek"):
+                f.seek(0)
+            bts = f.read()
+        except Exception:
+            try:
+                bts = f.getvalue()
+            except Exception:
+                bts = b""
+        bts = bts or b""
+        try:
+            # Use central extractor if present in your app
+            return "\n\n".join(extract_text_pages(bts, mime or "") or [])
+        except Exception:
+            lo = (name or mime).lower()
+            if lo.endswith(".txt") or lo.startswith("text/"):
+                try:
+                    return bts.decode("utf-8", errors="ignore")
+                except Exception:
+                    return ""
+            return ""
+
+    for f in files or []:
+        try:
+            t = (_read_one(f) or "").strip()
+            if t:
+                texts.append(t)
+        except Exception:
+            continue
+
+    return "\n\n".join(texts)
+
+def chat_plus_merged_context(rfp_text: "str | None" = None) -> str:
+    parts = []
+    atts = chat_plus_all_texts()
+    if atts:
+        parts.append("\n\n".join(atts))
+    if rfp_text:
+        parts.append(rfp_text.strip())
+    return "\n\n".join(p for p in parts if p)
+
+def _chat_plus_monkeypatch_export():
+    """
+    Add an export control that always merges all enabled attachments from session state.
+    """
     try:
-        run_chat_assistant = _wrap_chat_assistant_diversify()
-        _CHAT_ASSISTANT_DIVERSIFY = True
+        import streamlit as st
+        if st.button("Export merged context (all attachments)", key="chat_plus_export_all"):
+            merged = chat_plus_merged_context()
+            st.download_button("Download .txt", data=merged.encode("utf-8"), file_name="merged_context.txt")
     except Exception:
         pass
 
-# ===================== END PATCH =====================
-
-
-# ===================== APPEND-ONLY PATCH • Force Chat Assistant to use Attachment-first UI =====================
-# Some builds register the first-defined run_chat_assistant() with the page router.
-# That older handler calls y2_ui_threaded_chat() which ignored attachments.
-# This patch replaces y2_ui_threaded_chat with an attachment-first UI that also supports optional RFP context.
-def _cp_chat_plus_ui(conn: "sqlite3.Connection") -> None:
-    import streamlit as st
-    st.header("Chat Assistant")
-    st.caption("Attachment-first. Optional RFP context. No citations.")
-
-    files_key = "chat_plus_files"
-    hist_key = "chat_plus_history"
-
-    if files_key not in st.session_state:
-        st.session_state[files_key] = []  # [{name,mime,size,text}]
-    if hist_key not in st.session_state:
-        st.session_state[hist_key] = []   # [{role,content}]
-
-    c0, c1, c2, c3 = st.columns([2,3,2,2])
-    with c0:
-        source = st.selectbox("Source", ["Attachments only","RFP context only","Both"], index=0, key="cp_src_sel")
-    with c1:
-        ups = st.file_uploader(
-            "Add attachments",
-            type=["pdf","docx","xlsx","pptx","csv","txt","md"],
-            accept_multiple_files=True,
-            key="cp_uploader",
-            help="Upload any files to use as context."
-        )
-    with c2:
-        mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key="cp_mode")
-    with c3:
-        temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="cp_temp")
-
-    # Ingest uploads
-    new_rows = []
-    if ups:
-        for i, f in enumerate(ups):
-            try:
-                try:
-                    data = f.getbuffer().tobytes()
-                except Exception:
-                    data = f.read()
-                txt = _extract_any_to_text(f.name, data)
-                # tag each file to enforce multi-doc retrieval downstream
-                if not txt.strip().startswith("<<<DOC:"):
-                    txt = f"<<<DOC:{f.name}>>>\\n" + (txt or "")
-                new_rows.append({
-                    "name": f.name,
-                    "mime": _detect_mime_light_plus(f.name),
-                    "size": len(data),
-                    "text": txt or "",
-                })
-            except Exception:
-                continue
-        if new_rows:
-            st.session_state[files_key].extend(new_rows)
-            st.success(f"Added {len(new_rows)} attachment(s).")
-
-    # Attachments table
-    files = st.session_state[files_key]
-    with st.expander(f"Attachments in this chat ({len(files)})", expanded=True):
-        if files:
-            st.dataframe(
-                [{"Name": r["name"], "Type": r["mime"], "KB": int((r["size"] or 0)/1024)} for r in files],
-                use_container_width=True
-            )
-        else:
-            st.caption("No attachments yet.")
-
-    # Optional RFP context
-    selected_rfp_id = None
-    if source in ("RFP context only","Both"):
-        st.divider()
-        st.subheader("RFP context")
-        options = _list_rfps(conn)
-        if options:
-            labels = [label for _, label in options]
-            idx = st.selectbox("Choose RFP", list(range(len(labels))), format_func=lambda i: labels[i], key="cp_rfp_idx") if labels else 0
-            if options:
-                selected_rfp_id = options[idx][0]
-        manual = st.text_input("Or enter RFP ID manually", value="", key="cp_rfp_manual")
-        if manual.strip():
-            selected_rfp_id = manual.strip()
-        if selected_rfp_id and st.button("Preview RFP context", key="cp_rfp_preview_btn"):
-            preview = _load_rfp_context(conn, selected_rfp_id, max_chars=5000)
-            st.text_area("RFP context preview", preview or "", height=220, key="cp_rfp_preview")
-
-    # Chat history render
-    history = st.session_state[hist_key]
-    for m in history[-20:]:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-
-    # Input
-    q = st.chat_input("Ask based on your attachments and optional RFP")
-    if q:
-        # Build base texts
-        att_texts = [r.get("text","") for r in st.session_state[files_key] if (r.get("text") or "").strip()]
-        rfp_text = ""
-        if source in ("RFP context only","Both") and selected_rfp_id:
-            try:
-                rfp_text = _load_rfp_context(conn, selected_rfp_id, max_chars=24000) or ""
-            except Exception:
-                rfp_text = ""
-        if source == "Attachments only":
-            base_texts = att_texts
-        elif source == "RFP context only":
-            base_texts = [rfp_text] if rfp_text.strip() else []
-        else:
-            base_texts = att_texts + ([rfp_text] if rfp_text.strip() else [])
-
-        # Chunk and retrieve across all docs
-        try:
-            chunks = []
-            for t in base_texts:
-                for c in y5_chunk_text(t, target_chars=9000, overlap=500) or []:
-                    chunks.append(c)
-        except Exception:
-            chunks = base_texts
-        top = _score_snippets_by_query(chunks or base_texts or [""], q, top_k=12)
-        context_text = "\\n\\n---\\n\\n".join([s[:1800] for s in top])[:24000]
-
-        # Compose and answer
-        try:
-            messages = _chat_plus_compose_messages(context_text, history, q, mode=str(mode or "Auto"))
-        except Exception:
-            messages = [
-                {"role": "system", "content": "Answer using only the provided context. Be concise and concrete. No citations."},
-                {"role": "user", "content": f"Context:\\n{context_text}\\n\\nQuestion: {q}"}
-            ]
-
-        ans = ""
-        try:
-            if "_y6_chat" in globals():
-                ans = _y6_chat(messages)
-            elif "_chat_plus_call_openai" in globals():
-                ans = _chat_plus_call_openai(messages, temperature=float(temp or 0.2))
-            else:
-                ans = "AI response unavailable."
-        except Exception as _e:
-            ans = f"Answer error: {type(_e).__name__}: {_e}"
-
-        # Update history
-        history.append({"role": "user", "content": q})
-        history.append({"role": "assistant", "content": ans})
-        st.session_state[hist_key] = history
-
-        # Render last message
-        with st.chat_message("assistant"):
-            st.markdown(ans)
-
-# Monkey-patch the legacy entry to point at the new UI so routers bound early get the correct behavior.
-try:
-    y2_ui_threaded_chat  # exists
-    y2_ui_threaded_chat = _cp_chat_plus_ui  # type: ignore[assignment]
-except NameError:
-    pass
-# ===================== END PATCH =====================
+_chat_plus_monkeypatch_export()
+# ==== END PATCH ====
