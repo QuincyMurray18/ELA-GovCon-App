@@ -15542,11 +15542,13 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         # Build context: select top snippets by overlap
         # Gather attachment text
         att_texts = []
-        for _r in st.session_state[files_key]:
-            _txt = (_r.get('text') or '').strip()
-            if _txt:
-                _name = str(_r.get('name') or 'file')
-                att_texts.append('Source: ' + _name + '\n\n' + _txt)
+for _r in st.session_state[files_key]:
+    _txt = (_r.get('text') or '').strip()
+    if _txt:
+        _name = str(_r.get('name') or 'file')
+        att_texts.append('Source: ' + _name + '
+
+' + _txt)
 
         # Optionally add RFP context
         rfp_text = ""
@@ -16894,52 +16896,23 @@ def _pb_word_count_section(text: str) -> int:
 
 
 
-# === Append-only patch: Chat+ attachment manifest and robust composer ===
-def _chat_plus_attachment_manifest(files: list[dict]) -> str:
-    try:
-        lines = [f"ATTACHMENT MANIFEST: {len(files)} file(s) attached)."]
-        for i, r in enumerate(files, start=1):
-            try:
-                name = str(r.get('name') or f'file_{i}')
-                mime = str(r.get('mime') or '')
-                size = int(r.get('size') or 0)
-            except Exception:
-                name, mime, size = (str(r.get('name') or f'file_{i}'), '', 0)
-            kb = (size // 1024) if isinstance(size, int) and size >= 0 else 0
-            lines.append(f"{i}. {name} ({mime}, {kb} KB)")
-        return "\\n".join(lines)
-    except Exception as e:
-        return f"ATTACHMENT MANIFEST: error {e}"
+# === Spec Trace response schema for service-scope questions ===
+_SPEC_TRACE_SCHEMA = (
+    "When the user asks for required services, scope, work, or tasks, answer as follows:"
+    "\nSERVICES NEEDED:"
+    "\n• List every discrete task found in the attachments, one per line."
+    "\n• Use the exact subsection numbers or headings you see. If none, write n.a."
+    "\n• Prefix each line with the source filename in brackets."
+    "\nCONTROLS:"
+    "\n• Do not invent content that is not in the attachments."
+    "\n• Do not summarize into vague categories. Keep tasks granular."
+    "\n• No citations, no footnotes, no external sources."
+)
 
-def _chat_plus_compose_messages(context_text: str, history: list[dict], q: str, mode: str = 'Auto') -> list[dict]:
-    import streamlit as st  # local import safe in Streamlit env
-    files = st.session_state.get('chat_plus_files') or []
-    manifest = _chat_plus_attachment_manifest(files)
-    system = (
-        "You are the ELA Chat Assistant. Answer using ONLY the provided context or the attachment manifest. "
-        "If the user asks about attachments, count and list them from the manifest exactly. "
-        "Do not invent attachments. No citations. Be concise. "
-        "If information is missing, state the missing input."
-    )
-    tool_ctx = f"{manifest}\\n\\nCONTEXT SNIPPETS:\\n{context_text or '(no snippets)'}"
-    messages = [{"role": "system", "content": system},
-                {"role": "system", "content": tool_ctx}]
-    for m in history or []:
-        role = str(m.get('role') or 'user'); content = str(m.get('content') or '')
-        messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": q or ""})
-    return messages
-
-def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15) -> str:
-    try:
-        from openai import OpenAI as _OpenAI
-        client = _OpenAI()
-        model = _resolve_model()
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=float(temperature or 0.15),
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"[AI unavailable] {e}"
+def _should_use_spec_trace(q: str) -> bool:
+    ql = (q or "").lower()
+    triggers = [
+        "what services", "what wash and cleaning services", "scope of work",
+        "requirements", "what tasks", "work to perform", "services needed"
+    ]
+    return any(t in ql for t in triggers)
