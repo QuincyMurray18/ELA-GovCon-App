@@ -1,19 +1,3 @@
-# === Chat+ bootstrap to prevent NameError ===
-def chatp_ui(conn=None):
-    try:
-        # If a later definition overrides this, Streamlit will use that on rerun.
-        import streamlit as st
-        st.header("Chat Assistant — Chat+")
-        st.caption("Attachment-first. If the full UI isn't loaded yet, this minimal view will still work.")
-        q = st.text_area("Ask a question", key="chatp_boot_q")
-        if st.button("Send", key="chatp_boot_send") and q.strip():
-            st.write("Received. Chat+ is loading. Try again if you expected full features.")
-    except Exception:
-        pass
-# Backward alias some older routers expect
-ychat_ui = chatp_ui
-# === End bootstrap ===
-
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
@@ -2731,7 +2715,7 @@ def _safe_route_call(fn, *a, **kw):
             return fn(*a, **kw)
     except Exception as _e:
         import streamlit as _st
-        _st.error(f"Page failed: {type(_e).__name__}: {_e}")
+        _st.error(f"Page failed: {type(_e)
     return None
 
 # --- O3 helper: safe cursor context ---
@@ -4660,19 +4644,21 @@ def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
 # === end Y2 thread storage helpers ===
 
 def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
+    
     import streamlit as st, pandas as pd
-    # Fallback: no RFP needed. Route to Chat+ if no RFPs exist.
+    # Fallback: if there are no RFPs, route to Chat+ (attachment-first)
     try:
-        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        _df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     except Exception:
-        df_rf = None
-    if df_rf is None or df_rf.empty:
+        _df_rf = None
+    if _df_rf is None or _df_rf.empty:
         st.caption("Chat+ loaded. No RFP required.")
         try:
             return chatp_ui(conn)
         except TypeError:
             return chatp_ui()
-
+st.caption("CO Chat with memory. Threads are stored per RFP.")
+    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
         st.info("No RFPs yet. Parse & save first.")
         return
@@ -10600,13 +10586,17 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
 
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    # Always route to Chat+ (attachment-first)
+    """Attachment-first Chat+. Never requires an RFP."""
     try:
         return chatp_ui(conn)
     except TypeError:
         return chatp_ui()
+    except Exception:
+        import streamlit as st
+        st.error("Chat Assistant failed. See logs.")
 
-def _export_capability_docx(path: str, profile: dict[str, str]) -> str | None:
+
+def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
         from docx.shared import Pt, Inches  # type: ignore
     except Exception:
@@ -16501,9 +16491,12 @@ def chatp_ui(conn: "sqlite3.Connection") -> None:
                 for tok in ask_ai(msgs, temperature=float(temp)):
                     acc.append(tok); st.write(tok)
             except Exception as _e:
-                st.error(f"AI error: {type(_e).__name__}: {_e}")
+                st.error(f"AI error: {type(_e)
         ans = "".join(acc).strip()
         if ans:
             _chatp_append_message(conn, int(tid), "assistant", ans)
             st.success("Saved to thread.")
 # === end Chat+ ===
+
+# Legacy alias for older routers
+ychat_ui = chatp_ui
