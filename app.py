@@ -15421,7 +15421,7 @@ def _load_rfp_context(conn, rfp_id: str, max_chars: int = 200000) -> str:
     return (text or "\n\n---\n\n".join(chunks))[:max_chars]
 
 
-def run_chat_plus_attachments(conn: "sqlite3.Connection") -> None:
+def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     import streamlit as st
     import pandas as pd
     import os
@@ -16679,341 +16679,377 @@ def _pb_word_count_section(text: str) -> int:
         except Exception:
             return 0
 
+# =========================
+# APPEND-ONLY PATCH • C1 (Persistent Chat Memory for Chat Assistant)
+# Date: 2025-11-11T02:53:00
+# Notes:
+# - Stores chat threads, messages, and a rolling summary in SQLite (tables: c1_threads, c1_messages, c1_summaries).
+# - Reloads by thread id. Survives app restarts.
+# - Inserts "Conversation memory" summary into model context.
+# - Does NOT change Proposal Builder, Y1/Y2, or RFP analyzer.
+# =========================
 
-# === Y2-memory patch: persistent thread summaries and history-aware Chat Assistant ===
-import pandas as pd
+from contextlib import closing as _c1closing
+import sqlite3 as _c1sqlite3
+import time as _c1time
+try:
+    import pandas as pd
+except Exception:
+    pass
 
-from contextlib import closing as _closing
-import sqlite3 as _sqlite3
+def _c1_ensure_schema(conn: "_c1sqlite3.Connection") -> None:
+    with _c1closing(conn.cursor()) as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS c1_threads(
+              id INTEGER PRIMARY KEY,
+              title TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS c1_messages(
+              id INTEGER PRIMARY KEY,
+              thread_id INTEGER NOT NULL REFERENCES c1_threads(id) ON DELETE CASCADE,
+              role TEXT CHECK(role IN ('user','assistant')) NOT NULL,
+              content TEXT NOT NULL,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS c1_summaries(
+              thread_id INTEGER PRIMARY KEY REFERENCES c1_threads(id) ON DELETE CASCADE,
+              summary TEXT,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
 
-def _y2_mem_ensure_schema(conn: "_sqlite3.Connection") -> None:
+def _c1_list_threads(conn: "_c1sqlite3.Connection"):
+    _c1_ensure_schema(conn)
     try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS y2_summaries(
-                    thread_id INTEGER PRIMARY KEY,
-                    summary TEXT,
-                    last_message_id INTEGER DEFAULT 0,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_summaries_tid ON y2_summaries(thread_id);")
-            conn.commit()
-    except Exception:
-        pass
-
-def y2_get_summary(conn: "_sqlite3.Connection", thread_id: int) -> dict:
-    _y2_mem_ensure_schema(conn)
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT summary, last_message_id, updated_at FROM y2_summaries WHERE thread_id=?;", (int(thread_id),))
-            r = cur.fetchone()
-            if r:
-                return {"summary": r[0] or "", "last_message_id": int(r[1] or 0), "updated_at": str(r[2] or "")}
-            cur.execute("INSERT OR IGNORE INTO y2_summaries(thread_id, summary, last_message_id) VALUES(?, '', 0);", (int(thread_id),))
-            conn.commit()
-    except Exception:
-        pass
-    return {"summary": "", "last_message_id": 0, "updated_at": ""}
-
-def y2_set_summary(conn: "_sqlite3.Connection", thread_id: int, summary: str, last_message_id: int) -> None:
-    _y2_mem_ensure_schema(conn)
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute(
-                """
-                INSERT INTO y2_summaries(thread_id, summary, last_message_id, updated_at)
-                VALUES(?,?,?,CURRENT_TIMESTAMP)
-                ON CONFLICT(thread_id) DO UPDATE SET
-                    summary=excluded.summary,
-                    last_message_id=excluded.last_message_id,
-                    updated_at=CURRENT_TIMESTAMP;
-                """,
-                (int(thread_id), summary or "", int(last_message_id or 0)),
-            )
-            conn.commit()
-    except Exception:
-        pass
-
-def y2_get_messages_since(conn: "_sqlite3.Connection", thread_id: int, last_message_id: int) -> list:
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT id, role, content, created_at FROM y2_messages WHERE thread_id=? AND id>? ORDER BY id ASC;", (int(thread_id), int(last_message_id or 0)))
-            rows = cur.fetchall() or []
-            return [{"id": int(r[0]), "role": str(r[1] or ""), "content": str(r[2] or ""), "created_at": str(r[3] or "")} for r in rows]
+        df = pd.read_sql_query("SELECT id, title, created_at FROM c1_threads ORDER BY id DESC;", conn, params=())
+        return df.to_dict("records") if df is not None else []
     except Exception:
         return []
 
-def y2_last_message_id(conn: "_sqlite3.Connection", thread_id: int) -> int:
+def _c1_create_thread(conn: "_c1sqlite3.Connection", title: str="General"):
+    _c1_ensure_schema(conn)
+    with _c1closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO c1_threads(title) VALUES(?);", (title.strip() or "Untitled",))
+        conn.commit()
+        return cur.lastrowid
+
+def _c1_rename_thread(conn: "_c1sqlite3.Connection", thread_id: int, title: str):
+    with _c1closing(conn.cursor()) as cur:
+        cur.execute("UPDATE c1_threads SET title=? WHERE id=?;", (title.strip() or "Untitled", int(thread_id)))
+        conn.commit()
+
+def _c1_delete_thread(conn: "_c1sqlite3.Connection", thread_id: int):
+    with _c1closing(conn.cursor()) as cur:
+        cur.execute("DELETE FROM c1_messages WHERE thread_id=?;", (int(thread_id),))
+        cur.execute("DELETE FROM c1_summaries WHERE thread_id=?;", (int(thread_id),))
+        cur.execute("DELETE FROM c1_threads WHERE id=?;", (int(thread_id),))
+        conn.commit()
+
+def _c1_get_messages(conn: "_c1sqlite3.Connection", thread_id: int):
+    _c1_ensure_schema(conn)
     try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("SELECT COALESCE(MAX(id),0) FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
-            m = cur.fetchone()
-            return int((m[0] or 0)) if m else 0
+        df = pd.read_sql_query("SELECT role, content, created_at FROM c1_messages WHERE thread_id=? ORDER BY id;", conn, params=(int(thread_id),))
+        rows = [{"role": r["role"], "content": r["content"]} for _, r in df.fillna("").iterrows()] if df is not None and not df.empty else []
+        return rows
     except Exception:
-        return 0
+        return []
 
-def y2_append_message_returning_id(conn: "_sqlite3.Connection", thread_id: int, role: str, content: str) -> int:
+def _c1_append_message(conn: "_c1sqlite3.Connection", thread_id: int, role: str, content: str):
+    with _c1closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO c1_messages(thread_id, role, content) VALUES(?,?,?);", (int(thread_id), str(role), str(content)))
+        conn.commit()
+
+def _c1_get_summary(conn: "_c1sqlite3.Connection", thread_id: int) -> str:
     try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("INSERT INTO y2_messages(thread_id, role, content) VALUES (?,?,?);", (int(thread_id), str(role or ""), str(content or "")))
-            conn.commit()
-            return int(cur.lastrowid or 0)
+        df = pd.read_sql_query("SELECT summary FROM c1_summaries WHERE thread_id=?;", conn, params=(int(thread_id),))
+        if df is not None and not df.empty:
+            return str(df.iloc[0]["summary"] or "")
+        return ""
     except Exception:
-        return 0
+        return ""
 
-def _resolve_model_safe() -> str:
+def _c1_upsert_summary(conn: "_c1sqlite3.Connection", thread_id: int, summary: str):
+    with _c1closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO c1_summaries(thread_id, summary, updated_at) VALUES(?,?, datetime('now')) "
+                    "ON CONFLICT(thread_id) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at;",
+                    (int(thread_id), str(summary or "")))
+        conn.commit()
+
+def _c1_resolve_client_and_model():
+    # Reuse available helpers if present
+    client = None
+    model = None
     try:
-        return (_resolve_model() if '_resolve_model' in globals() else 'gpt-4o-mini')
+        if "get_ai" in globals():
+            client = get_ai()
     except Exception:
-        return 'gpt-4o-mini'
-
-def _resolve_openai_client():
-    try:
-        return get_ai()
-    except Exception:
-        try:
-            from openai import OpenAI as _OpenAI
-            return _OpenAI()
-        except Exception:
-            return None
-
-def ask_ai_with_citations_v2(conn: "_sqlite3.Connection", rfp_id: int, question: str, history: list, summary: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
-    """History-aware streaming answer grounded in top page hits. No citations."""
-    import re as _re
-
-    client = _resolve_openai_client()
+        client = None
     if client is None:
-        yield "AI unavailable. Configure OPENAI_API_KEY."
-        return
-
-    # Gather pages from rfp_files using extract_text_pages
-    pages = []
+        try:
+            if "_y6_resolve_openai_client" in globals():
+                client = _y6_resolve_openai_client()
+        except Exception:
+            client = None
+    if client is None:
+        try:
+            if "_resolve_openai_client" in globals():
+                client = _resolve_openai_client()
+        except Exception:
+            client = None
+    if client is None:
+        from openai import OpenAI as _OpenAI
+        client = _OpenAI()
     try:
-        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        if "_resolve_model" in globals():
+            model = _resolve_model()
+        elif "_y6_resolve_model" in globals():
+            model = _y6_resolve_model()
+        else:
+            model = "gpt-4o-mini"
     except Exception:
-        df = pd.DataFrame(columns=["filename","mime","bytes"])
+        model = "gpt-4o-mini"
+    return client, model
 
-    if not df.empty:
-        for _, r in df.iterrows():
+def _c1_summarize(conn: "_c1sqlite3.Connection", thread_id: int, messages: list[dict]) -> str:
+    """Rollup summary capped to ~700 words. Deterministic for stability."""
+    prior = (_c1_get_summary(conn, int(thread_id)) or "").strip()
+    # Use last 20 messages to keep prompt small
+    tail = messages[-20:] if len(messages) > 20 else messages
+    pieces = []
+    if prior:
+        pieces.append(f"Prior summary:\n{prior}")
+    for m in tail:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role in ("user","assistant") and content:
+            pieces.append(f"{role}: {content}")
+    prompt = "Summarize the conversation for persistent memory. Use neutral, factual bullets and brief paragraphs. "             "Capture user goals, decisions, open tasks, constraints, definitions, and file context. "             "Do not give advice. Do not address the reader. Max 700 words."
+    client, model = _c1_resolve_client_and_model()
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=0.0,
+            messages=[
+                {"role":"system","content":"You compress chats into accurate memory notes for later recall. Output plain text only."},
+                {"role":"user","content": prompt + "\n\n" + "\n\n".join(pieces)}
+            ]
+        )
+        out = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        out = prior  # keep old if summarizer fails
+    out = (out or prior or "").strip()
+    _c1_upsert_summary(conn, int(thread_id), out)
+    return out
+
+def run_chat_assistant(conn: "_c1sqlite3.Connection") -> None:
+    import streamlit as st
+    import pandas as pd
+    import re
+    st.header("Chat Assistant")
+    _c1_ensure_schema(conn)
+
+    # Thread controls
+    threads = _c1_list_threads(conn)
+    if not threads:
+        _c1_create_thread(conn, "General")
+        threads = _c1_list_threads(conn)
+    thread_ids = [int(r["id"]) for r in threads]
+    labels = [f"{r['id']} — {r.get('title') or 'Untitled'}" for r in threads]
+
+    # Persist selected thread in session
+    sess_key = "c1_thread_id_chat_assistant"
+    if sess_key not in st.session_state:
+        st.session_state[sess_key] = thread_ids[0]
+    col_t1, col_t2, col_t3, col_t4 = st.columns([3,1,1,1])
+    with col_t1:
+        idx = max(0, thread_ids.index(int(st.session_state[sess_key])) if int(st.session_state[sess_key]) in thread_ids else 0)
+        idx = st.selectbox("Thread", list(range(len(labels))), index=idx, format_func=lambda i: labels[i], key="c1_thread_select")
+        thread_id = thread_ids[idx]
+        st.session_state[sess_key] = thread_id
+    with col_t2:
+        if st.button("New", key="c1_new_thread"):
+            import time
+            nid = _c1_create_thread(conn, f"Thread {int(time.time())}")
+            st.session_state[sess_key] = int(nid)
+            thread_id = int(nid)
+            threads = _c1_list_threads(conn)
+            labels = [f"{r['id']} — {r.get('title') or 'Untitled'}" for r in threads]
+            thread_ids = [int(r["id"]) for r in threads]
+    with col_t3:
+        with st.popover("Rename", use_container_width=True):
+            cur_title = next((r.get("title") or "" for r in threads if int(r["id"])==int(st.session_state[sess_key])), "")
+            new_title = st.text_input("Title", value=cur_title, key="c1_rename_title")
+            if st.button("Save title", key="c1_rename_save"):
+                _c1_rename_thread(conn, int(st.session_state[sess_key]), new_title)
+                st.success("Renamed")
+    with col_t4:
+        if st.button("Delete", key="c1_delete_thread"):
+            _c1_delete_thread(conn, int(st.session_state[sess_key]))
+            threads = _c1_list_threads(conn)
+            if not threads:
+                _c1_create_thread(conn, "General")
+                threads = _c1_list_threads(conn)
+            st.session_state[sess_key] = int(threads[0]["id"])
+            st.success("Deleted")
+
+    thread_id = int(st.session_state[sess_key])
+
+    # Memory summary
+    with st.expander("Memory summary", expanded=False):
+        st.caption("Auto-updated after each answer. Stored in SQLite.")
+        st.text_area("Summary", value=_c1_get_summary(conn, thread_id), height=160, key=f"c1_summary_view_{thread_id}")
+
+    # Session-scoped attachments per thread
+    hist_key  = f"chat_plus_hist_{thread_id}"   # optional, for immediate on-screen rendering
+    files_key = f"chat_plus_files_{thread_id}"
+    st.session_state.setdefault(hist_key, [])
+    st.session_state.setdefault(files_key, [])
+
+    # Controls
+    c0, c1, c2, c3 = st.columns([2,3,2,2])
+    with c0:
+        source = st.selectbox("Source", ["Attachments only","RFP context only","Both"], index=0, key=f"chat_plus_source_{thread_id}")
+    with c1:
+        ups = st.file_uploader(
+            "Add attachments",
+            type=["pdf","docx","xlsx","pptx","csv","txt","md"],
+            accept_multiple_files=True,
+            key=f"chat_plus_uploader_{thread_id}",
+            help="Upload any files you want me to use. I will answer from these files only."
+        )
+    with c2:
+        mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key=f"chat_plus_mode_{thread_id}")
+    with c3:
+        temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key=f"chat_plus_temp_{thread_id}")
+
+    # Optional RFP selection
+    selected_rfp_id = None
+    if source in ("RFP context only","Both"):
+        st.divider()
+        st.subheader("RFP context")
+        options = _list_rfps(conn)
+        if options:
+            labels2 = [label for _, label in options]
+            idx2 = st.selectbox("Choose RFP", list(range(len(labels2))), format_func=lambda i: labels2[i], key=f"chat_plus_rfp_idx_{thread_id}") if labels2 else 0
+            if options:
+                selected_rfp_id = options[idx2][0]
+        manual = st.text_input("Or enter RFP ID manually", value="", key=f"chat_plus_rfp_manual_{thread_id}")
+        if manual.strip():
+            selected_rfp_id = manual.strip()
+        if selected_rfp_id:
+            if st.button("Preview RFP context", key=f"chat_plus_preview_rfp_{thread_id}"):
+                preview = _load_rfp_context(conn, selected_rfp_id, max_chars=5000)
+                if preview:
+                    st.text_area("RFP context preview", preview, height=200, key=f"chat_plus_rfp_preview_box_{thread_id}")
+                else:
+                    st.info("No RFP context found for that ID.")
+
+    # Ingest uploads into session
+    new_rows = []
+    if ups:
+        for f in ups:
             try:
-                b = bytes(r.get("bytes") or b"")
-                mime = str(r.get("mime") or "")
-                texts = extract_text_pages(b, mime) or []
-                for i, t in enumerate(texts[:100], start=1):
-                    pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+                try:
+                    data = f.getbuffer().tobytes()
+                except Exception:
+                    data = f.read()
+                txt = _extract_any_to_text(f.name, data)
+                rec = {"name": f.name, "mime": _detect_mime_light_plus(f.name), "size": len(data), "text": txt or ""}
+                new_rows.append(rec)
             except Exception:
                 continue
+        if new_rows:
+            st.session_state[files_key].extend(new_rows)
+            st.success(f"Added {len(new_rows)} attachment(s).")
 
-    # Score pages by keyword overlap
-    q = (question or "").strip()
-    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
-    terms = [w for w in norm_q.split() if len(w) > 1]
-    scored = []
-    for pg in pages:
-        txt = (pg.get("text") or "")
-        norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
-        score = 0
-        for w in terms:
+    # Attachment table
+    files = st.session_state[files_key]
+    if files:
+        with st.expander("Attachments in this chat", expanded=True):
+            df = pd.DataFrame([{"File": r["name"], "Bytes": r["size"], "Preview": (r["text"][:200] + ("." if len(r["text"])>200 else ""))} for r in files])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            colA, colB, colC = st.columns(3)
+            with colA:
+                if st.button("Clear attachments", key=f"chat_plus_clear_files_{thread_id}"):
+                    st.session_state[files_key] = []
+            with colB:
+                if st.button("Clear chat (screen only)", key=f"chat_plus_clear_chat_{thread_id}"):
+                    st.session_state[hist_key] = []
+            with colC:
+                if st.button("Export merged context", key=f"chat_plus_export_ctx_{thread_id}"):
+                    merged = "\n\n---\n\n".join([r["text"] for r in files if (r.get("text") or "").strip()])
+                    outp = os.path.join(DATA_DIR if 'DATA_DIR' in globals() else ".", f"chat_plus_context_{thread_id}.txt")
+                    try:
+                        with open(outp, "w", encoding="utf-8") as fh:
+                            fh.write(merged)
+                        st.markdown(f"[Download context]({outp})")
+                    except Exception as e:
+                        st.warning(f"Export failed: {e}")
+    else:
+        st.info("No attachments yet. You can still ask general questions.")
+
+    # Render prior messages from DB
+    history_db = _c1_get_messages(conn, thread_id)
+    for m in history_db:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    # Chat UI
+    st.subheader("Ask a question")
+    q = st.text_area("Your question", key=f"chat_plus_q_{thread_id}", height=100, placeholder="Ask about requirements, vendor emails, pricing inputs, etc.")
+    ask = st.button("Ask", type="primary", key=f"chat_plus_ask_{thread_id}")
+
+    if ask and (q or '').strip():
+        # Build context from attachments and optional RFP
+        att_texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
+        rfp_text = ""
+        if source in ("RFP context only","Both") and selected_rfp_id:
             try:
-                score += norm_t.count(" " + w + " ")
+                rfp_text = _load_rfp_context(conn, selected_rfp_id, max_chars=120000)
             except Exception:
-                pass
-        if score > 0:
-            scored.append((score, pg))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    hits = [pg for _, pg in scored[: max(1, int(k))]]
-
-    snippets = []
-    for h in hits:
-        snip = (h.get("text") or "").strip().replace("\n", " ")
-        snippets.append(snip[:800])
-    context_text = "\n\n---\n\n".join(snippets) if snippets else ""
-
-    # Format guidance
-    mname = (mode or "Auto").lower()
-    if mname.startswith("checklist"):
-        fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
-    elif mname.startswith("phone"):
-        fmt_rules = "Output a short phone call script with an opener, 6 to 10 targeted questions, and a closing commitment line."
-    elif mname.startswith("email"):
-        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
-    elif mname.startswith("action"):
-        fmt_rules = "Provide a numbered action plan with owners and due dates."
-    elif mname.startswith("table"):
-        fmt_rules = "Return a simple Markdown table with the requested fields. Keep columns minimal."
-    else:
-        fmt_rules = "Write a direct answer using short, declarative sentences. No citations."
-
-    # Build messages with summary and history
-    system = (
-        "You are a federal contracting chat assistant. "
-        "Use RFP context and the conversation history to answer precisely. "
-        "No citations. Do not repeat earlier assistant messages. Build upon prior answers. "
-        "If a fact is missing, state the dependency clearly."
-    )
-    msgs = [{"role": "system", "content": system}]
-    if (summary or "").strip():
-        msgs.append({"role": "system", "content": "Thread memory summary:\n" + (summary or "")[:12000]})
-    # include last 12 turns max
-    hist = history or []
-    trimmed = [{"role": h.get("role"), "content": h.get("content")} for h in hist if (h.get("role") in ("user","assistant") and (h.get("content") or "").strip())][-24:]
-    for h in trimmed:
-        msgs.append({"role": h["role"], "content": h["content"]})
-    if (context_text or "").strip():
-        msgs.append({"role": "system", "content": "RFP context snippets:\n" + context_text[:24000]})
-    msgs.append({"role": "user", "content": q + "\n\nRules: " + fmt_rules})
-
-    model = _resolve_model_safe()
-    try:
-        resp = client.chat.completions.create(model=model, messages=msgs, temperature=float(temperature), stream=True)
-    except Exception as _e:
+                rfp_text = ""
+        base_texts = att_texts if source == "Attachments only" else ([rfp_text] if source == "RFP context only" else att_texts + ([rfp_text] if (rfp_text or "").strip() else []))
+        # Chunk and score
         try:
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
-        except Exception as _e2:
-            yield f"AI unavailable: {type(_e2).__name__}: {_e2}"
-            return
-    for ch in resp:
-        try:
-            delta = ch.choices[0].delta
-            if hasattr(delta, "content") and delta.content:
-                yield delta.content
+            chunks = []
+            for t in base_texts:
+                cs = y5_chunk_text(t, target_chars=9000, overlap=500)
+                chunks.extend(cs or [])
         except Exception:
-            pass
+            chunks = []
+            for t in base_texts:
+                for i in range(0, len(t), 8000):
+                    chunks.append(t[i:i+8000])
+        top = _score_snippets_by_query(chunks or base_texts or [""], q, top_k=10)
+        context_text = "\n\n---\n\n".join([s[:1800] for s in top])[:24000]
 
-def y2_update_summary_with_delta(conn: "_sqlite3.Connection", thread_id: int, max_new_msgs: int = 20) -> None:
-    """Update per-thread summary using messages since last_message_id."""
-    _y2_mem_ensure_schema(conn)
-    meta = y2_get_summary(conn, int(thread_id))
-    last_id = int(meta.get("last_message_id") or 0)
-    new_msgs = y2_get_messages_since(conn, int(thread_id), last_id)
-    if not new_msgs:
-        return
-    client = _resolve_openai_client()
-    if client is None:
-        concat = (meta.get("summary") or "").strip()
-        for m in new_msgs[:max_new_msgs]:
-            role = m.get("role","user")
-            content = (m.get("content") or "").strip()
-            if content:
-                concat += f"\n[{role}] {content}"
-        y2_set_summary(conn, int(thread_id), concat[-12000:], int(new_msgs[-1]["id"]))
-        return
-    model = _resolve_model_safe()
-    old = meta.get("summary") or ""
-    delta_text = "\n".join(f"[{m['role']}] {m['content']}" for m in new_msgs[:max_new_msgs])
-    sys = (
-        "You maintain a running memory for a federal contracting chat thread. "
-        "Return a compact summary that preserves decisions, constraints, inputs, uploaded context, and open questions. "
-        "Use bullet points. Max 1800 characters. Present tense. No citations. No file IDs."
-    )
-    usr = f"""Previous summary:
-{old or '(empty)'}
+        # Compose messages with DB history
+        hist = _c1_get_messages(conn, thread_id)
+        msgs = _chat_plus_compose_messages(context_text, hist, q, mode=mode)
+        # Inject memory summary
+        _summary = _c1_get_summary(conn, thread_id)
+        if (_summary or "").strip():
+            msgs.insert(1, {"role":"system","content":"Conversation memory:\n" + _summary[:5000]})
+        # Call model
+        ans = _chat_plus_call_openai(msgs, temperature=float(temp))
 
-New messages:
-{delta_text}
+        # Persist into DB
+        _c1_append_message(conn, thread_id, "user", q.strip())
+        _c1_append_message(conn, thread_id, "assistant", ans)
 
-Task: Update the summary so it remains stand-alone and accurate. Replace obsolete items. Keep it concise."""
-    try:
-        resp = client.chat.completions.create(model=model, messages=[
-            {"role":"system","content": sys},
-            {"role":"user","content": usr},
-        ], temperature=0.1, stream=False)
-        new_sum = (resp.choices[0].message.content or "").strip()
-        y2_set_summary(conn, int(thread_id), new_sum, int(new_msgs[-1]["id"]))
-    except Exception:
-        concat = (old + "\n" + delta_text).strip()
-        y2_set_summary(conn, int(thread_id), concat[-1800:], int(new_msgs[-1]["id"]))
+        # Update session echo and memory summary
+        st.session_state[hist_key].append({"role":"user","content": q.strip()})
+        st.session_state[hist_key].append({"role":"assistant","content": ans})
+        _c1_summarize(conn, thread_id, _c1_get_messages(conn, thread_id))
 
-def y2_stream_answer(conn: "_sqlite3.Connection", rfp_id: int, thread_id: int, question: str, k: int = 6, mode: str = "Auto"):
-    """Stream answer using thread memory and history."""
-    try:
-        hist = y2_get_messages(conn, int(thread_id)) or []
-    except Exception:
-        hist = []
-    mem = y2_get_summary(conn, int(thread_id)) or {"summary":"","last_message_id":0}
-    summary_txt = mem.get("summary") or ""
-    temperature = 0.2 if not bool(st.session_state.get("y2_flex", False)) else 0.35
-    yield from ask_ai_with_citations_v2(conn, int(rfp_id), question, history=hist, summary=summary_txt, k=int(k), temperature=float(temperature), mode=str(mode or 'Auto'))
+        # Render last answer
+        with st.chat_message("assistant"):
+            st.markdown(ans)
 
-def y2_ui_threaded_chat(conn: "_sqlite3.Connection") -> None:
-    _y2_mem_ensure_schema(conn)
-    st.subheader("Chat threads (persistent)")
-    threads = y2_list_threads(conn)
-    cols = st.columns([1,1,2,2])
-    with cols[0]:
-        if st.button("New thread"):
-            new_id = y2_create_thread(conn, title="Untitled")
-            st.session_state["y2_thread_id"] = int(new_id)
-    with cols[1]:
-        st.button("Refresh", on_click=lambda: None)
-    with cols[2]:
-        thread_options = [t["id"] for t in threads] if threads else []
-        thread_id = st.selectbox("Thread", options=thread_options, format_func=lambda i: f"#{i} — {next((t.get('title') or 'Untitled' for t in threads if t['id']==i), 'Untitled')}", key="y2_thread_id") if thread_options else None
-    with cols[3]:
-        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-        rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist() if not df_rf.empty else [0], format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}" if not df_rf.empty and (i in df_rf['id'].tolist()) else "(none)", key="y2_rfp_sel") if not df_rf.empty else 0
-
-    if not thread_id:
-        st.info("No threads yet. Click New thread.")
-        return
-
-    with st.expander("Thread settings", expanded=False):
-        cur_title = next((t.get("title") or "Untitled" for t in threads if t["id"]==thread_id), "Untitled")
-        new_title = st.text_input("Rename", value=cur_title, key="y2_rename")
-        colA, colB, colC = st.columns([1,1,2])
-        with colA:
-            if st.button("Save name", key="y2_save_name"):
-                y2_rename_thread(conn, int(thread_id), new_title or "Untitled")
-                st.success("Renamed")
-        with colB:
-            if st.button("Delete thread", key="y2_del"):
-                y2_delete_thread(conn, int(thread_id))
-                st.success("Deleted")
-        with colC:
-            meta = y2_get_summary(conn, int(thread_id))
-            st.caption("Memory summary (auto-updates after replies):")
-            st.text_area("Summary", value=meta.get("summary") or "", height=140, key="y2_sum_view", disabled=True)
-    st.checkbox("Research mode (flex)", value=bool(st.session_state.get("y2_flex", False)), key="y2_flex")
-
-    st.subheader("History")
-    msgs = y2_get_messages(conn, int(thread_id))
-    if msgs:
-        chat_md = []
-        for m in msgs:
-            if m["role"] == "user":
-                chat_md.append(f"**You:** {m['content']}")
-            elif m["role"] == "assistant":
-                chat_md.append(m["content"])
-        st.markdown("\n\n".join(chat_md))
-    else:
-        st.caption("No messages yet.")
-
-    q = st.text_area("Your question", height=120, key="y2_q")
-    k = y_auto_k(q)
-    fmt = st.selectbox("Answer format", options=["Auto","Checklist","Phone script","Email draft","Action plan","Table"], index=0, key="y2_fmt")
-
-    if st.button("Ask (store to thread)", type="primary", key="y2_go"):
-        if not (q or "").strip():
-            st.warning("Enter a question")
-        else:
-            uid = y2_append_message_returning_id(conn, int(thread_id), "user", q.strip())
-            ph = st.empty(); acc = []
-            for tok in y2_stream_answer(conn, int(rfp_id) if rfp_id else 0, int(thread_id), q.strip(), k=int(k), mode=str(fmt or 'Auto')):
-                acc.append(tok); ph.markdown("".join(acc))
-            ans = "".join(acc).strip()
-            if ans:
-                aid = y2_append_message_returning_id(conn, int(thread_id), "assistant", ans)
-                st.success("Saved to thread")
-                y2_update_summary_with_delta(conn, int(thread_id))
-                with st.expander("Add to Proposal Drafts", expanded=False):
-                    sec = st.text_input("Section label", value="CO Chat Notes", key="y5_sec_y2_new")
-                    if st.button("Add to drafts", key="y5_add_y2_new"):
-                        try:
-                            y5_save_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y2 Chat")
-                            st.success("Saved to drafts")
-                        except Exception:
-                            st.info("Drafts saver not available in this build.")
-# === end Y2-memory patch ===
+# ===== END PATCH C1 =====
