@@ -5139,7 +5139,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         try:
             resp = client.chat.completions.create(
                 model=model_name,
-                messages=[{"role":"system","content": system}, {"role":"user","content": user}] + [{\"role\": \"system\", \"content\": _GLOBAL_STRUCTURE_SCHEMA}],
+                messages=[{"role":"system","content": system}, {"role":"user","content": user}] + [{"role": "system", "content": _GLOBAL_STRUCTURE_SCHEMA}],
                 temperature=0.15,
                 stream=False,
             )
