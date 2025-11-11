@@ -15278,7 +15278,7 @@ def _score_snippets_by_query(snippets: list[str], query: str, top_k: int = 8) ->
     scored.sort(key=lambda x: x[0], reverse=True)
     return [s for _, s in scored[:max(1, int(top_k))]]
 
-def _chat_plus_compose_messages(context_text: str, history: list[dict], question: str, mode: str = "Auto", thread_memory: str = "", anti_repeat_hint: str = "") -> list[dict]:
+def _chat_plus_compose_messages(context_text: str, history: list[dict], question: str, mode: str = "Auto") -> list[dict]:
     rules = []
     m = (mode or "Auto").lower()
     if m.startswith("checklist"):
@@ -15299,10 +15299,6 @@ def _chat_plus_compose_messages(context_text: str, history: list[dict], question
         "No citations. No tags. Be precise. "
         "When asked for vendor outreach or subcontractor questions, output concrete, verifiable asks."
     )
-    if (thread_memory or "").strip():
-        system += "\nThread memory:\n" + thread_memory.strip()
-    if (anti_repeat_hint or "").strip():
-        system += "\nDo not repeat this content verbatim. If the user repeats the same ask, build on it: " + anti_repeat_hint[:1500]
     msgs = [{"role": "system", "content": system}]
     for h in history or []:
         if h.get("role") in ("user", "assistant") and (h.get("content") or "").strip():
@@ -15313,47 +15309,6 @@ def _chat_plus_compose_messages(context_text: str, history: list[dict], question
     return msgs
 
 def _chat_plus_call_openai(messages: list[dict], temperature: float = 0.2) -> str:
-    # placeholder to preserve location
-
-# ==== Chat+ memory helpers ====
-def _normalize_text_for_sim(s: str) -> set[str]:
-    import re as _re
-    t = _re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
-    words = [w for w in t.split() if len(w) > 2]
-    return set(words[:2000])
-
-def _too_similar(a: str, b: str, thresh: float = 0.80) -> bool:
-    A = _normalize_text_for_sim(a)
-    B = _normalize_text_for_sim(b)
-    if not A or not B:
-        return False
-    j = len(A & B) / max(1, len(A | B))
-    return j >= thresh
-
-def _chat_plus_summarize(history: list[dict], limit_chars: int = 1200) -> str:
-    """Summarize the thread for persistent memory within the session."""
-    # Build content
-    recent = []
-    for m in history[-12:]:  # last 12 turns window
-        role = m.get("role","")
-        content = (m.get("content") or "").strip()
-        if content:
-            recent.append(f"{role.upper()}: {content}")
-    prompt = (
-        "Summarize the key facts, decisions, constraints, and open questions from this chat. "
-        "Return 4 sections with concise bullets: Facts, Decisions, Constraints, To-Do. "
-        f"Limit to {limit_chars} characters.\n\n" + "\n\n".join(recent)
-    )
-    msgs = [{"role":"system","content":"You are a concise summarizer for an internal memory. Keep it factual."},
-            {"role":"user","content":prompt}]
-    try:
-        txt = _chat_plus_call_openai(msgs, temperature=0.0)
-        return (txt or "")[:limit_chars]
-    except Exception:
-        # fallback naive summary: last two user lines
-        users = [m.get("content","") for m in history if m.get("role")=="user"]
-        return ("\n".join(users[-2:]))[:limit_chars]
-
     client = _resolve_openai_client()
     if not client:
         return "AI unavailable. Configure OPENAI_API_KEY in Streamlit secrets."
@@ -15499,17 +15454,6 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key="chat_plus_mode")
     with c3:
         temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="chat_plus_temp")
-
-
-
-    # Memory toggles
-    c4, c5 = st.columns([2,2])
-    with c4:
-        build_on = st.toggle("Build on this chat", value=True, key="chat_plus_build_on")
-    with c5:
-        anti_repeat = st.toggle("Avoid repetition", value=True, key="chat_plus_anti_repeat")
-    if "chat_plus_memory" not in st.session_state:
-        st.session_state["chat_plus_memory"] = ""
 
 
     # Optional RFP selection
@@ -16734,3 +16678,342 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
+
+
+# === Y2-memory patch: persistent thread summaries and history-aware Chat Assistant ===
+import pandas as pd
+
+from contextlib import closing as _closing
+import sqlite3 as _sqlite3
+
+def _y2_mem_ensure_schema(conn: "_sqlite3.Connection") -> None:
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS y2_summaries(
+                    thread_id INTEGER PRIMARY KEY,
+                    summary TEXT,
+                    last_message_id INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_y2_summaries_tid ON y2_summaries(thread_id);")
+            conn.commit()
+    except Exception:
+        pass
+
+def y2_get_summary(conn: "_sqlite3.Connection", thread_id: int) -> dict:
+    _y2_mem_ensure_schema(conn)
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT summary, last_message_id, updated_at FROM y2_summaries WHERE thread_id=?;", (int(thread_id),))
+            r = cur.fetchone()
+            if r:
+                return {"summary": r[0] or "", "last_message_id": int(r[1] or 0), "updated_at": str(r[2] or "")}
+            cur.execute("INSERT OR IGNORE INTO y2_summaries(thread_id, summary, last_message_id) VALUES(?, '', 0);", (int(thread_id),))
+            conn.commit()
+    except Exception:
+        pass
+    return {"summary": "", "last_message_id": 0, "updated_at": ""}
+
+def y2_set_summary(conn: "_sqlite3.Connection", thread_id: int, summary: str, last_message_id: int) -> None:
+    _y2_mem_ensure_schema(conn)
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                INSERT INTO y2_summaries(thread_id, summary, last_message_id, updated_at)
+                VALUES(?,?,?,CURRENT_TIMESTAMP)
+                ON CONFLICT(thread_id) DO UPDATE SET
+                    summary=excluded.summary,
+                    last_message_id=excluded.last_message_id,
+                    updated_at=CURRENT_TIMESTAMP;
+                """,
+                (int(thread_id), summary or "", int(last_message_id or 0)),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+def y2_get_messages_since(conn: "_sqlite3.Connection", thread_id: int, last_message_id: int) -> list:
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT id, role, content, created_at FROM y2_messages WHERE thread_id=? AND id>? ORDER BY id ASC;", (int(thread_id), int(last_message_id or 0)))
+            rows = cur.fetchall() or []
+            return [{"id": int(r[0]), "role": str(r[1] or ""), "content": str(r[2] or ""), "created_at": str(r[3] or "")} for r in rows]
+    except Exception:
+        return []
+
+def y2_last_message_id(conn: "_sqlite3.Connection", thread_id: int) -> int:
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT COALESCE(MAX(id),0) FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
+            m = cur.fetchone()
+            return int((m[0] or 0)) if m else 0
+    except Exception:
+        return 0
+
+def y2_append_message_returning_id(conn: "_sqlite3.Connection", thread_id: int, role: str, content: str) -> int:
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("INSERT INTO y2_messages(thread_id, role, content) VALUES (?,?,?);", (int(thread_id), str(role or ""), str(content or "")))
+            conn.commit()
+            return int(cur.lastrowid or 0)
+    except Exception:
+        return 0
+
+def _resolve_model_safe() -> str:
+    try:
+        return (_resolve_model() if '_resolve_model' in globals() else 'gpt-4o-mini')
+    except Exception:
+        return 'gpt-4o-mini'
+
+def _resolve_openai_client():
+    try:
+        return get_ai()
+    except Exception:
+        try:
+            from openai import OpenAI as _OpenAI
+            return _OpenAI()
+        except Exception:
+            return None
+
+def ask_ai_with_citations_v2(conn: "_sqlite3.Connection", rfp_id: int, question: str, history: list, summary: str, k: int = 6, temperature: float = 0.2, mode: str = "Auto"):
+    """History-aware streaming answer grounded in top page hits. No citations."""
+    import re as _re
+
+    client = _resolve_openai_client()
+    if client is None:
+        yield "AI unavailable. Configure OPENAI_API_KEY."
+        return
+
+    # Gather pages from rfp_files using extract_text_pages
+    pages = []
+    try:
+        df = pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+    except Exception:
+        df = pd.DataFrame(columns=["filename","mime","bytes"])
+
+    if not df.empty:
+        for _, r in df.iterrows():
+            try:
+                b = bytes(r.get("bytes") or b"")
+                mime = str(r.get("mime") or "")
+                texts = extract_text_pages(b, mime) or []
+                for i, t in enumerate(texts[:100], start=1):
+                    pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+            except Exception:
+                continue
+
+    # Score pages by keyword overlap
+    q = (question or "").strip()
+    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
+    terms = [w for w in norm_q.split() if len(w) > 1]
+    scored = []
+    for pg in pages:
+        txt = (pg.get("text") or "")
+        norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
+        score = 0
+        for w in terms:
+            try:
+                score += norm_t.count(" " + w + " ")
+            except Exception:
+                pass
+        if score > 0:
+            scored.append((score, pg))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    hits = [pg for _, pg in scored[: max(1, int(k))]]
+
+    snippets = []
+    for h in hits:
+        snip = (h.get("text") or "").strip().replace("\n", " ")
+        snippets.append(snip[:800])
+    context_text = "\n\n---\n\n".join(snippets) if snippets else ""
+
+    # Format guidance
+    mname = (mode or "Auto").lower()
+    if mname.startswith("checklist"):
+        fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
+    elif mname.startswith("phone"):
+        fmt_rules = "Output a short phone call script with an opener, 6 to 10 targeted questions, and a closing commitment line."
+    elif mname.startswith("email"):
+        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
+    elif mname.startswith("action"):
+        fmt_rules = "Provide a numbered action plan with owners and due dates."
+    elif mname.startswith("table"):
+        fmt_rules = "Return a simple Markdown table with the requested fields. Keep columns minimal."
+    else:
+        fmt_rules = "Write a direct answer using short, declarative sentences. No citations."
+
+    # Build messages with summary and history
+    system = (
+        "You are a federal contracting chat assistant. "
+        "Use RFP context and the conversation history to answer precisely. "
+        "No citations. Do not repeat earlier assistant messages. Build upon prior answers. "
+        "If a fact is missing, state the dependency clearly."
+    )
+    msgs = [{"role": "system", "content": system}]
+    if (summary or "").strip():
+        msgs.append({"role": "system", "content": "Thread memory summary:\n" + (summary or "")[:12000]})
+    # include last 12 turns max
+    hist = history or []
+    trimmed = [{"role": h.get("role"), "content": h.get("content")} for h in hist if (h.get("role") in ("user","assistant") and (h.get("content") or "").strip())][-24:]
+    for h in trimmed:
+        msgs.append({"role": h["role"], "content": h["content"]})
+    if (context_text or "").strip():
+        msgs.append({"role": "system", "content": "RFP context snippets:\n" + context_text[:24000]})
+    msgs.append({"role": "user", "content": q + "\n\nRules: " + fmt_rules})
+
+    model = _resolve_model_safe()
+    try:
+        resp = client.chat.completions.create(model=model, messages=msgs, temperature=float(temperature), stream=True)
+    except Exception as _e:
+        try:
+            resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=float(temperature), stream=True)
+        except Exception as _e2:
+            yield f"AI unavailable: {type(_e2).__name__}: {_e2}"
+            return
+    for ch in resp:
+        try:
+            delta = ch.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                yield delta.content
+        except Exception:
+            pass
+
+def y2_update_summary_with_delta(conn: "_sqlite3.Connection", thread_id: int, max_new_msgs: int = 20) -> None:
+    """Update per-thread summary using messages since last_message_id."""
+    _y2_mem_ensure_schema(conn)
+    meta = y2_get_summary(conn, int(thread_id))
+    last_id = int(meta.get("last_message_id") or 0)
+    new_msgs = y2_get_messages_since(conn, int(thread_id), last_id)
+    if not new_msgs:
+        return
+    client = _resolve_openai_client()
+    if client is None:
+        concat = (meta.get("summary") or "").strip()
+        for m in new_msgs[:max_new_msgs]:
+            role = m.get("role","user")
+            content = (m.get("content") or "").strip()
+            if content:
+                concat += f"\n[{role}] {content}"
+        y2_set_summary(conn, int(thread_id), concat[-12000:], int(new_msgs[-1]["id"]))
+        return
+    model = _resolve_model_safe()
+    old = meta.get("summary") or ""
+    delta_text = "\n".join(f"[{m['role']}] {m['content']}" for m in new_msgs[:max_new_msgs])
+    sys = (
+        "You maintain a running memory for a federal contracting chat thread. "
+        "Return a compact summary that preserves decisions, constraints, inputs, uploaded context, and open questions. "
+        "Use bullet points. Max 1800 characters. Present tense. No citations. No file IDs."
+    )
+    usr = f"""Previous summary:
+{old or '(empty)'}
+
+New messages:
+{delta_text}
+
+Task: Update the summary so it remains stand-alone and accurate. Replace obsolete items. Keep it concise."""
+    try:
+        resp = client.chat.completions.create(model=model, messages=[
+            {"role":"system","content": sys},
+            {"role":"user","content": usr},
+        ], temperature=0.1, stream=False)
+        new_sum = (resp.choices[0].message.content or "").strip()
+        y2_set_summary(conn, int(thread_id), new_sum, int(new_msgs[-1]["id"]))
+    except Exception:
+        concat = (old + "\n" + delta_text).strip()
+        y2_set_summary(conn, int(thread_id), concat[-1800:], int(new_msgs[-1]["id"]))
+
+def y2_stream_answer(conn: "_sqlite3.Connection", rfp_id: int, thread_id: int, question: str, k: int = 6, mode: str = "Auto"):
+    """Stream answer using thread memory and history."""
+    try:
+        hist = y2_get_messages(conn, int(thread_id)) or []
+    except Exception:
+        hist = []
+    mem = y2_get_summary(conn, int(thread_id)) or {"summary":"","last_message_id":0}
+    summary_txt = mem.get("summary") or ""
+    temperature = 0.2 if not bool(st.session_state.get("y2_flex", False)) else 0.35
+    yield from ask_ai_with_citations_v2(conn, int(rfp_id), question, history=hist, summary=summary_txt, k=int(k), temperature=float(temperature), mode=str(mode or 'Auto'))
+
+def y2_ui_threaded_chat(conn: "_sqlite3.Connection") -> None:
+    _y2_mem_ensure_schema(conn)
+    st.subheader("Chat threads (persistent)")
+    threads = y2_list_threads(conn)
+    cols = st.columns([1,1,2,2])
+    with cols[0]:
+        if st.button("New thread"):
+            new_id = y2_create_thread(conn, title="Untitled")
+            st.session_state["y2_thread_id"] = int(new_id)
+    with cols[1]:
+        st.button("Refresh", on_click=lambda: None)
+    with cols[2]:
+        thread_options = [t["id"] for t in threads] if threads else []
+        thread_id = st.selectbox("Thread", options=thread_options, format_func=lambda i: f"#{i} — {next((t.get('title') or 'Untitled' for t in threads if t['id']==i), 'Untitled')}", key="y2_thread_id") if thread_options else None
+    with cols[3]:
+        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        rfp_id = st.selectbox("RFP context", options=df_rf["id"].tolist() if not df_rf.empty else [0], format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i,'title'].values[0]}" if not df_rf.empty and (i in df_rf['id'].tolist()) else "(none)", key="y2_rfp_sel") if not df_rf.empty else 0
+
+    if not thread_id:
+        st.info("No threads yet. Click New thread.")
+        return
+
+    with st.expander("Thread settings", expanded=False):
+        cur_title = next((t.get("title") or "Untitled" for t in threads if t["id"]==thread_id), "Untitled")
+        new_title = st.text_input("Rename", value=cur_title, key="y2_rename")
+        colA, colB, colC = st.columns([1,1,2])
+        with colA:
+            if st.button("Save name", key="y2_save_name"):
+                y2_rename_thread(conn, int(thread_id), new_title or "Untitled")
+                st.success("Renamed")
+        with colB:
+            if st.button("Delete thread", key="y2_del"):
+                y2_delete_thread(conn, int(thread_id))
+                st.success("Deleted")
+        with colC:
+            meta = y2_get_summary(conn, int(thread_id))
+            st.caption("Memory summary (auto-updates after replies):")
+            st.text_area("Summary", value=meta.get("summary") or "", height=140, key="y2_sum_view", disabled=True)
+    st.checkbox("Research mode (flex)", value=bool(st.session_state.get("y2_flex", False)), key="y2_flex")
+
+    st.subheader("History")
+    msgs = y2_get_messages(conn, int(thread_id))
+    if msgs:
+        chat_md = []
+        for m in msgs:
+            if m["role"] == "user":
+                chat_md.append(f"**You:** {m['content']}")
+            elif m["role"] == "assistant":
+                chat_md.append(m["content"])
+        st.markdown("\n\n".join(chat_md))
+    else:
+        st.caption("No messages yet.")
+
+    q = st.text_area("Your question", height=120, key="y2_q")
+    k = y_auto_k(q)
+    fmt = st.selectbox("Answer format", options=["Auto","Checklist","Phone script","Email draft","Action plan","Table"], index=0, key="y2_fmt")
+
+    if st.button("Ask (store to thread)", type="primary", key="y2_go"):
+        if not (q or "").strip():
+            st.warning("Enter a question")
+        else:
+            uid = y2_append_message_returning_id(conn, int(thread_id), "user", q.strip())
+            ph = st.empty(); acc = []
+            for tok in y2_stream_answer(conn, int(rfp_id) if rfp_id else 0, int(thread_id), q.strip(), k=int(k), mode=str(fmt or 'Auto')):
+                acc.append(tok); ph.markdown("".join(acc))
+            ans = "".join(acc).strip()
+            if ans:
+                aid = y2_append_message_returning_id(conn, int(thread_id), "assistant", ans)
+                st.success("Saved to thread")
+                y2_update_summary_with_delta(conn, int(thread_id))
+                with st.expander("Add to Proposal Drafts", expanded=False):
+                    sec = st.text_input("Section label", value="CO Chat Notes", key="y5_sec_y2_new")
+                    if st.button("Add to drafts", key="y5_add_y2_new"):
+                        try:
+                            y5_save_snippet(conn, int(rfp_id) if rfp_id else 0, sec, ans, source="Y2 Chat")
+                            st.success("Saved to drafts")
+                        except Exception:
+                            st.info("Drafts saver not available in this build.")
+# === end Y2-memory patch ===
