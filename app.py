@@ -10571,12 +10571,11 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
     return res
 
+
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     import streamlit as st
-    st.header("Chat Assistant — Y2")
-    st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
     try:
-        y2_ui_threaded_chat(conn)
+        chatp_ui(conn)
     except Exception as _e:
         st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
 
@@ -16163,428 +16162,321 @@ def _pb_word_count_section(text: str) -> int:
         except Exception:
             return 0
 
-# =========================
-# Phase G: Global Chat Assistant (no RFP required)
-# Append-only module. Safe to paste at end of appgelpwr.py.
-# =========================
-from contextlib import closing as _closing
-import json as _json
-import io as _io
-import os as _os
-import hashlib as _hashlib
-import mimetypes as _mtypes
-import streamlit as st
-import pandas as pd
 
-# --- light mime detector (reuse if already defined) ---
-def _g_detect_mime(name: str, default: str = "application/octet-stream") -> str:
+
+# === Chat+ (independent attachments) ===
+def _chatp_ensure_schema(conn: "sqlite3.Connection") -> None:
+    from contextlib import closing as _closing
     try:
-        m, _ = _mtypes.guess_type(name or "")
-        return m or default
-    except Exception:
-        return default
-
-# --- schema ---
-def _ensure_g_schema(conn: "sqlite3.Connection") -> None:
-    with _closing(conn.cursor()) as cur:
-        # threads and messages
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS g_threads(
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL DEFAULT 'Chat',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS g_messages(
-            id INTEGER PRIMARY KEY,
-            thread_id INTEGER NOT NULL REFERENCES g_threads(id) ON DELETE CASCADE,
-            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
-            content TEXT NOT NULL DEFAULT '',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        # file blobs attached to a thread
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS g_files(
-            id INTEGER PRIMARY KEY,
-            thread_id INTEGER NOT NULL REFERENCES g_threads(id) ON DELETE CASCADE,
-            name TEXT NOT NULL,
-            mime TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            pages INTEGER,
-            bytes BLOB,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(thread_id, sha256)
-        );
-        """)
-        # retrieval chunks
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS g_chunks(
-            id INTEGER PRIMARY KEY,
-            thread_id INTEGER NOT NULL,
-            file_id INTEGER,
-            file_name TEXT,
-            page INTEGER,
-            chunk_idx INTEGER,
-            text TEXT,
-            emb TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(thread_id, file_id, page, chunk_idx)
-        );
-        """)
-        # helpful indices
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_g_messages_thread ON g_messages(thread_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_g_files_thread ON g_files(thread_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_g_chunks_thread ON g_chunks(thread_id);")
-        conn.commit()
-
-# --- helpers ---
-def g_list_threads(conn: "sqlite3.Connection") -> list[dict]:
-    _ensure_g_schema(conn)
-    try:
-        df = pd.read_sql_query("SELECT id, title, created_at FROM g_threads ORDER BY id DESC;", conn, params=())
-    except Exception:
-        return []
-    if df is None or df.empty:
-        return []
-    out = []
-    for _, r in df.iterrows():
-        out.append({"id": int(r["id"]), "title": r.get("title") or f"Thread #{int(r['id'])}", "created_at": r.get("created_at") or ""})
-    return out
-
-def g_create_thread(conn: "sqlite3.Connection", title: str = "New chat") -> int:
-    _ensure_g_schema(conn)
-    with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO g_threads(title) VALUES(?);", ((title or "New chat").strip(),))
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def g_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
-    _ensure_g_schema(conn)
-    with _closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM g_messages WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM g_files WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM g_chunks WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM g_threads WHERE id=?;", (int(thread_id),))
-        conn.commit()
-
-
-def g_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
-    _ensure_g_schema(conn)
-    role = "assistant" if str(role).strip().lower() != "user" else "user"
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT INTO g_messages(thread_id, role, content) VALUES(?,?,?);",
-            (int(thread_id), role, (content or "").strip())
-        )
-        conn.commit()
-
-
-def g_get_messages(conn: "sqlite3.Connection", thread_id: int) -> list[dict]:
-    _ensure_g_schema(conn)
-    try:
-        df = pd.read_sql_query("SELECT role, content FROM g_messages WHERE thread_id=? ORDER BY id;", conn, params=(int(thread_id),))
-    except Exception:
-        return []
-    if df is None or df.empty:
-        return []
-    return [{"role": str(r["role"]).lower(), "content": str(r["content"])} for _, r in df.iterrows()]
-
-
-# --- file ingest ---
-
-def _g_sha256(b: bytes) -> str:
-    try:
-        return _hashlib.sha256(b or b"").hexdigest()
-    except Exception:
-        import hashlib as _h
-        return _h.sha256(b or b"").hexdigest()
-
-
-def g_save_file(conn: "sqlite3.Connection", thread_id: int, name: str, data: bytes) -> dict:
-    """Dedup by sha256 across the thread. Extract text pages and count. Store bytes."""
-    _ensure_g_schema(conn)
-    name = name or "upload"
-    mime = _g_detect_mime(name)
-    sha = _g_sha256(data)
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT id, pages FROM g_files WHERE thread_id=? AND sha256=?;", (int(thread_id), sha))
-        row = cur.fetchone()
-        if row:
-            return {"id": int(row[0]), "name": name, "mime": mime, "sha256": sha, "pages": int(row[1] or 0), "dedup": True}
-        # new insert
-        try:
-            pages_text = extract_text_pages(data, mime) or []
-        except Exception:
-            pages_text = []
-        try:
-            pages_text, _ = ocr_pages_if_empty(data, mime, pages_text)
-        except Exception:
-            pass
-        pages = len(pages_text) if pages_text else None
-        cur.execute(
-            "INSERT INTO g_files(thread_id, name, mime, sha256, pages, bytes) VALUES(?,?,?,?,?,?);",
-            (int(thread_id), name, mime, sha, pages, data)
-        )
-        conn.commit()
-        return {"id": int(cur.lastrowid), "name": name, "mime": mime, "sha256": sha, "pages": pages or 0, "dedup": False}
-
-
-# --- indexing & search ---
-def _g_iter_pages(conn: "sqlite3.Connection", file_id: int) -> list[tuple[int, str]]:
-    """Return list of (page_num, text) for a g_file."""
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT name, mime, bytes FROM g_files WHERE id=?;", (int(file_id),))
-        row = cur.fetchone()
-    if not row:
-        return []
-    name, mime, bts = row[0] or "", row[1] or "", bytes(row[2] or b"")
-    try:
-        pages = extract_text_pages(bts, mime) or []
-    except Exception:
-        pages = []
-    try:
-        pages, _ = ocr_pages_if_empty(bts, mime, pages)
+        with _closing(conn.cursor()) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_threads(
+                    id INTEGER PRIMARY KEY,
+                    title TEXT,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_messages(
+                    id INTEGER PRIMARY KEY,
+                    thread_id INTEGER NOT NULL,
+                    role TEXT CHECK(role in ('user','assistant')),
+                    content TEXT,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_files(
+                    id INTEGER PRIMARY KEY,
+                    thread_id INTEGER NOT NULL,
+                    filename TEXT,
+                    mime TEXT,
+                    bytes BLOB,
+                    pages INTEGER,
+                    created_at TEXT
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_chunks(
+                    id INTEGER PRIMARY KEY,
+                    file_id INTEGER NOT NULL,
+                    chunk_index INTEGER,
+                    page INTEGER,
+                    text TEXT,
+                    embedding BLOB
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_msgs_thr ON chat_messages(thread_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_files_thr ON chat_files(thread_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_chunks_file ON chat_chunks(file_id);")
+            conn.commit()
     except Exception:
         pass
-    out = []
-    for i, t in enumerate(pages[:200], start=1):
-        out.append((i, t or ""))
-    return out
 
+def _chatp_list_threads(conn: "sqlite3.Connection") -> list[dict]:
+    _chatp_ensure_schema(conn)
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query("SELECT id, title, created_at FROM chat_threads ORDER BY id DESC;", conn, params=())
+        return [{"id": int(r["id"]), "title": r.get("title") or "Untitled", "created_at": r.get("created_at")} for _, r in df.fillna("").iterrows()]
+    except Exception:
+        return []
 
-def g_index_thread(conn: "sqlite3.Connection", thread_id: int, rebuild: bool = False) -> int:
-    """Embed pages into g_chunks. Returns chunks added."""
-    _ensure_g_schema(conn)
-    added = 0
+def _chatp_create_thread(conn: "sqlite3.Connection", title: str = "New Chat") -> int:
+    _chatp_ensure_schema(conn)
+    from contextlib import closing as _closing
     with _closing(conn.cursor()) as cur:
-        if rebuild:
-            cur.execute("DELETE FROM g_chunks WHERE thread_id=?;", (int(thread_id),))
-            conn.commit()
-        cur.execute("SELECT id, name FROM g_files WHERE thread_id=? ORDER BY id;", (int(thread_id),))
-        files = cur.fetchall() or []
-    for fid, fname in files:
-        pages = _g_iter_pages(conn, int(fid))
-        if not pages:
-            continue
-        chunks = []
-        for pg, text in pages:
-            for ci, chunk in enumerate(_split_chunks(text) or []):
-                chunks.append((int(pg), int(ci), chunk))
-        if not chunks:
-            continue
-        # embed in small batches
-        texts = [c[2] for c in chunks]
+        cur.execute("INSERT INTO chat_threads(title, created_at) VALUES(?, datetime('now'));", ((title or "New Chat").strip(),))
+        tid = int(cur.lastrowid)
+        conn.commit()
+        return tid
+
+def _chatp_rename_thread(conn: "sqlite3.Connection", thread_id: int, title: str) -> None:
+    _chatp_ensure_schema(conn)
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("UPDATE chat_threads SET title=? WHERE id=?;", ((title or "Untitled").strip(), int(thread_id)))
+        conn.commit()
+
+def _chatp_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
+    _chatp_ensure_schema(conn)
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("DELETE FROM chat_chunks WHERE file_id IN (SELECT id FROM chat_files WHERE thread_id=?);", (int(thread_id),))
+        cur.execute("DELETE FROM chat_files WHERE thread_id=?;", (int(thread_id),))
+        cur.execute("DELETE FROM chat_messages WHERE thread_id=?;", (int(thread_id),))
+        cur.execute("DELETE FROM chat_threads WHERE id=?;", (int(thread_id),))
+        conn.commit()
+
+def _chatp_get_messages(conn: "sqlite3.Connection", thread_id: int) -> list[dict]:
+    _chatp_ensure_schema(conn)
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query(
+            "SELECT role, content, created_at FROM chat_messages WHERE thread_id=? ORDER BY id;",
+            conn, params=(int(thread_id),)
+        )
+        return [{"role": r["role"], "content": r["content"], "created_at": r.get("created_at")} for _, r in df.fillna("").iterrows()]
+    except Exception:
+        return []
+
+def _chatp_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
+    _chatp_ensure_schema(conn)
+    from contextlib import closing as _closing
+    with _closing(conn.cursor()) as cur:
+        cur.execute("INSERT INTO chat_messages(thread_id, role, content, created_at) VALUES(?,?,?, datetime('now'));",
+                    (int(thread_id), role, content))
+        conn.commit()
+
+def _chatp_ingest_uploads(conn: "sqlite3.Connection", thread_id: int, uploads: list) -> tuple[int,int]:
+    """
+    Save uploads, extract text, chunk, and embed.
+    Returns (files_ingested, chunks_indexed).
+    """
+    _chatp_ensure_schema(conn)
+    from contextlib import closing as _closing
+    import pandas as _pd
+    files_ing = 0; chunks_idx = 0
+    for up in uploads or []:
         try:
-            vecs = _embed_texts(texts)
+            b = up.read()
+            name = getattr(up, "name", "upload")
+            mime = getattr(up, "type", None) or _detect_mime_light(name)
+            pages = 0
+            pages_text = extract_text_pages(b, mime) or []
+            if pages_text:
+                pages_text, ocrn = ocr_pages_if_empty(b, mime, pages_text)
+            pages = len(pages_text) if pages_text else 0
+            with _closing(conn.cursor()) as cur:
+                cur.execute("INSERT INTO chat_files(thread_id, filename, mime, bytes, pages, created_at) VALUES(?,?,?,?,?, datetime('now'));",
+                            (int(thread_id), name, mime, sqlite3.Binary(b), int(pages)))
+                fid = int(cur.lastrowid)
+                conn.commit()
+            files_ing += 1
+            # Build chunks and embeddings
+            chunks: list[tuple[int,int,str]] = []  # (page, idx, text)
+            for pi, txt in enumerate(pages_text[:100], start=1):
+                for ci, ch in enumerate(_split_chunks(txt or "", max_chars=1600, overlap=200)):
+                    chunks.append((pi, ci, ch))
+            texts = [t for _,_,t in chunks]
+            vecs = _embed_texts(texts) if texts else []
+            with _closing(conn.cursor()) as cur:
+                for (pg, ci, t), v in zip(chunks, vecs):
+                    try:
+                        cur.execute("INSERT INTO chat_chunks(file_id, chunk_index, page, text, embedding) VALUES(?,?,?,?,?);",
+                                    (int(fid), int(ci), int(pg), t, json.dumps(v)))
+                        chunks_idx += 1
+                    except Exception:
+                        pass
+                conn.commit()
         except Exception:
-            vecs = [[0.0] for _ in texts]
-        with _closing(conn.cursor()) as cur:
-            for (pg, ci, chunk), emb in zip(chunks, vecs):
-                try:
-                    cur.execute(
-                        "INSERT OR IGNORE INTO g_chunks(thread_id, file_id, file_name, page, chunk_idx, text, emb)"
-                        " VALUES(?,?,?,?,?,?,?);",
-                        (int(thread_id), int(fid), fname or "", int(pg), int(ci), chunk, _json.dumps(emb))
-                    )
-                    added += 1
-                except Exception:
-                    pass
-            conn.commit()
-    return int(added)
+            continue
+    return files_ing, chunks_idx
 
-
-def g_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int = 6) -> list[dict]:
-    _ensure_g_schema(conn)
+def _chatp_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int = 6) -> list[dict]:
+    """
+    Return top-k chunk hits across this thread's attachments using embedding cosine similarity.
+    """
+    _chatp_ensure_schema(conn)
+    import pandas as _pd
     q = (query or "").strip()
     if not q:
         return []
-    with _closing(conn.cursor()) as cur:
-        cur.execute("SELECT id, file_name, page, chunk_idx, text, emb FROM g_chunks WHERE thread_id=?;", (int(thread_id),))
-        rows = cur.fetchall() or []
-    if not rows:
+    qvec = _embed_texts([q])[0]
+    if not qvec:
         return []
-    texts = [r[4] or "" for r in rows]
-    embs = []
-    for r in rows:
-        try:
-            embs.append(_json.loads(r[5] or "[]"))
-        except Exception:
-            embs.append([0.0])
     try:
-        qv = _embed_texts([q])[0]
+        df = _pd.read_sql_query(
+            "SELECT chat_chunks.text as text, chat_chunks.page as page, chat_files.filename as file "
+            "FROM chat_chunks JOIN chat_files ON chat_chunks.file_id = chat_files.id "
+            "WHERE chat_files.thread_id=?;",
+            conn, params=(int(thread_id),)
+        )
     except Exception:
-        qv = [0.0]
-    scored = []
-    for (rid, fname, pg, ci, txt, _), e in zip(rows, embs):
+        return []
+    rows = []
+    for _, r in df.iterrows():
+        txt = str(r.get("text") or "")
         try:
-            s = _cos_sim(qv, e)
+            v = json.loads(txt)  # Avoid accidental JSON misread
+            if isinstance(v, list) and all(isinstance(x, (float,int)) for x in v):
+                # rare case where text was vector; skip
+                continue
         except Exception:
-            s = 0.0
-        scored.append({
-            "chunk_id": int(rid),
-            "file": fname or "",
-            "page": int(pg or 0),
-            "text": txt or "",
-            "score": float(s)
-        })
+            pass
+        try:
+            # embedding stored alongside row
+            # compute on the fly via cache to reduce memory
+            pass
+        except Exception:
+            pass
+    # Fetch embeddings in a single query and compute sim
+    try:
+        df2 = _pd.read_sql_query(
+            "SELECT chat_chunks.text as text, chat_chunks.page as page, chat_files.filename as file, chat_chunks.embedding as emb "
+            "FROM chat_chunks JOIN chat_files ON chat_chunks.file_id = chat_files.id "
+            "WHERE chat_files.thread_id=?;",
+            conn, params=(int(thread_id),)
+        )
+    except Exception:
+        return []
+    scored = []
+    for _, r in df2.iterrows():
+        text = str(r.get("text") or "")
+        try:
+            emb = json.loads(r.get("emb") or "[]")
+        except Exception:
+            emb = []
+        score = _cos_sim(qvec, emb) if emb else 0.0
+        scored.append({"file": r.get("file"), "page": int(r.get("page") or 0), "text": text, "score": float(score)})
     scored.sort(key=lambda x: x["score"], reverse=True)
-    # de-dup by page
-    seen = set()
-    out = []
-    for h in scored:
-        key = (h.get("file"), h.get("page"))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(h)
-        if len(out) >= max(1, int(k)):
-            break
-    return out
+    return scored[:max(1, int(k))]
 
-
-# --- chat generation ---
-def _g_build_messages(conn: "sqlite3.Connection", thread_id: int, question: str, k: int = 6) -> list[dict]:
-    prior = g_get_messages(conn, int(thread_id))[-12:]  # last turns only
-    hits = g_search(conn, int(thread_id), question or "", k=k) or []
-    ctx_blocks = []
+def _chatp_build_messages(thread_id: int, question: str, hits: list[dict]) -> list[dict]:
+    # Compose a user message with embedded evidence. No citations in output.
+    ev_lines = []
     for i, h in enumerate(hits, start=1):
-        tag = f"[DOC:{h.get('file')} p.{h.get('page')}]"
-        ctx_blocks.append(f"{tag} {h.get('text')}")
-    ctx = "\\n\\n".join(ctx_blocks)
-    sys = (
-        "You are a federal contracting assistant."
-        " Use the EVIDENCE block when present."
-        " Never repeat earlier assistant messages verbatim in this thread."
-        " If the user asks the same question, provide only incremental insight or say 'No new findings'."
+        src = f"{h.get('file','')} p.{h.get('page','')}"
+        snip = (h.get('text') or '').strip().replace("\\n", " ")
+        ev_lines.append(f"{src} — {snip}")
+    evidence = "\\n".join(ev_lines)
+    prompt = (
+        "You are a senior U.S. federal Contracting Officer (CO) and Source Selection advisor. "
+        "Answer using short, precise sentences or numbered bullets. "
+        "Use the CONTEXT when it helps. Do not include citations, bracket tags, or raw JSON. "
+        "If context lacks facts, say what is missing then proceed with best-practice guidance. "
+        "If asked to contact vendors or subs, draft a concise email or call script with a clear ask and due date. "
+        "Keep answers self-contained."
     )
-    msgs = [{"role": "system", "content": sys}]
-    msgs.extend(prior)
-    if ctx:
-        msgs.append({"role": "user", "content": f"EVIDENCE:\\n{ctx}"})
-    msgs.append({"role": "user", "content": question or ""})
+    user = f"QUESTION\\n{(question or '').strip()}\\n\\nCONTEXT\\n{evidence or '(none)'}"
+    msgs = [{"role":"system","content": prompt}, {"role":"user","content": user}]
     return msgs
 
-def g_stream_answer(conn: "sqlite3.Connection", thread_id: int, question: str, k: int = 6, temperature: float = 0.2):
-    client = _y6_resolve_openai_client()
-    model = _y6_resolve_model()
-    msgs = _g_build_messages(conn, int(thread_id), question or "", k=k)
-    try:
-        stream = client.chat.completions.create(model=model, messages=msgs, temperature=float(temperature), stream=True)
-        collected = []
-        for part in stream:
-            ch = (getattr(part.choices[0].delta, "content", None) or "")
-            if ch:
-                collected.append(ch)
-                yield ch
-        final = "".join(collected).strip()
-    except Exception as e:
-        final = f"AI error: {e}"
-        yield final
-    # store turn
-    try:
-        g_append_message(conn, int(thread_id), "user", question or "")
-        g_append_message(conn, int(thread_id), "assistant", final)
-    except Exception:
-        pass
-
-
-# --- UI page ---
-def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    """Global chat with attachments. Not tied to an RFP."""
-    st.header("Chat Assistant")
-    st.caption("Attach files. Ask questions. Continues the conversation. Works without selecting an RFP.")
-
-    _ensure_g_schema(conn)
-
-    # sidebar: threads
-    with st.sidebar.expander("Chats", expanded=True):
-        threads = g_list_threads(conn)
-        names = [f"{t['id']}: {t['title']}" for t in threads]
-        cur = st.selectbox("Thread", options=["<new>"] + names, index=0, key="g_sel")
-        if cur == "<new>":
-            title = st.text_input("Title", value="General chat", key="g_new_title")
-            if st.button("Create", key="g_new_btn"):
-                tid = g_create_thread(conn, title or "General chat")
-                st.session_state["g_thread_id"] = int(tid)
+def chatp_ui(conn: "sqlite3.Connection") -> None:
+    import streamlit as st
+    import pandas as _pd
+    _chatp_ensure_schema(conn)
+    st.header("Chat Assistant — Chat+")
+    st.caption("Attach any file. Ask anything. Works without an RFP.")
+    threads = _chatp_list_threads(conn)
+    colA, colB, colC = st.columns([2,1,1])
+    with colA:
+        if not threads:
+            st.info("No chats yet.")
+        sel = st.selectbox("Thread", options=[t["id"] for t in threads] if threads else [], 
+                           format_func=lambda i: next((t["title"] for t in threads if t["id"]==i), f"#{i}"),
+                           key="chatp_sel")
+    with colB:
+        if st.button("New chat", key="chatp_new"):
+            tid = _chatp_create_thread(conn, "Chat+")
+            st.session_state["chatp_sel"] = tid
+            st.rerun()
+    with colC:
+        if threads and st.button("Delete", key="chatp_del", help="Delete selected thread"):
+            tid = st.session_state.get("chatp_sel")
+            if tid:
+                _chatp_delete_thread(conn, int(tid))
+                st.session_state.pop("chatp_sel", None)
                 st.rerun()
-        else:
-            tid = int(cur.split(":",1)[0])
-            st.session_state["g_thread_id"] = tid
-            if st.button("Delete this chat", key=f"g_del_{tid}"):
-                g_delete_thread(conn, tid)
-                st.success("Deleted")
-                st.session_state.pop("g_thread_id", None)
-                st.rerun()
-
-    thread_id = int(st.session_state.get("g_thread_id") or 0)
-    if not thread_id:
-        st.info("Create a chat on the left.")
+    tid = st.session_state.get("chatp_sel")
+    if not tid and threads:
+        tid = threads[0]["id"]
+        st.session_state["chatp_sel"] = tid
+    if not tid:
         return
-
-    # attachments
-    with st.expander("Attachments", expanded=True):
-        up = st.file_uploader("Add files", type=["pdf","docx","doc","txt","rtf","xlsx","xls","csv","zip"], accept_multiple_files=True, key=f"g_up_{thread_id}")
-        if up:
-            saved = 0
-            for f in up:
+    # Rename
+    trow = next((t for t in threads if t["id"]==tid), None)
+    new_title = st.text_input("Title", value=(trow.get("title") if trow else "Chat+"), key="chatp_title")
+    if new_title and trow and new_title.strip() != (trow.get("title") or "").strip():
+        _chatp_rename_thread(conn, int(tid), new_title.strip())
+    st.divider()
+    # Uploads
+    ups = st.file_uploader("➕ Attach files", type=["pdf","docx","xlsx","csv","txt","png","jpg","jpeg"], 
+                           accept_multiple_files=True, key=f"chatp_up_{tid}")
+    if ups:
+        with st.spinner("Indexing attachments"):
+            nf, nc = _chatp_ingest_uploads(conn, int(tid), ups)
+        st.success(f"Imported {nf} file(s). Indexed {nc} chunk(s).")
+    # Show files
+    try:
+        df_files = _pd.read_sql_query("SELECT id, filename, mime, pages, created_at FROM chat_files WHERE thread_id=? ORDER BY id DESC;", conn, params=(int(tid),))
+    except Exception:
+        df_files = _pd.DataFrame(columns=["id","filename","mime","pages","created_at"])
+    if not df_files.empty:
+        st.caption("Attachments")
+        _styled_dataframe(df_files.rename(columns={"filename":"File","mime":"MIME","pages":"Pages","created_at":"Added"}), use_container_width=True, hide_index=True)
+    st.divider()
+    # Chat history
+    for m in _chatp_get_messages(conn, int(tid))[-50:]:
+        st.markdown(f"**{m['role'].title()}**: {m['content']}")
+    # Input
+    q = st.text_area("Ask a question", key=f"chatp_q_{tid}", height=120)
+    c1, c2 = st.columns([1,3])
+    with c1:
+        temp = st.number_input("Temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.1, key=f"chatp_temp_{tid}")
+    with c2:
+        k = int(st.slider("Context breadth (top-k chunks)", min_value=0, max_value=12, value=6, step=1, key=f"chatp_k_{tid}"))
+    if st.button("Ask", key=f"chatp_ask_{tid}") and (q or "").strip():
+        _chatp_append_message(conn, int(tid), "user", q.strip())
+        hits = _chatp_search(conn, int(tid), q or "", k=k) if k>0 else []
+        # Show sources to user for transparency but not as citations in output
+        if hits:
+            with st.expander("Context used", expanded=False):
                 try:
-                    b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                    g_save_file(conn, thread_id, getattr(f, "name", "upload"), b)
-                    saved += 1
+                    dfh = _pd.DataFrame([{"File": h.get("file",""), "Page": h.get("page",""), "Score": round(float(h.get("score") or 0.0),3)} for h in hits])
+                    _styled_dataframe(dfh, use_container_width=True, hide_index=True)
                 except Exception:
                     pass
-            if saved:
-                try:
-                    g_index_thread(conn, thread_id, rebuild=False)
-                except Exception:
-                    pass
-                st.success(f"Added {saved} file(s) and updated index.")
-        # list
-        try:
-            df = pd.read_sql_query("SELECT id, name, mime, pages, created_at FROM g_files WHERE thread_id=? ORDER BY id DESC;", conn, params=(int(thread_id),))
-        except Exception:
-            df = pd.DataFrame(columns=["id","name","mime","pages","created_at"])
-        if not df.empty:
-            _styled_dataframe(df[["name","mime","pages","created_at"]].rename(columns={"name":"File","mime":"Type","pages":"Pages"}), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No attachments yet.")
-
-    # chat history
-    hist = g_get_messages(conn, thread_id)
-    for m in hist:
-        with st.chat_message(m.get("role") == "user" and "user" or "assistant"):
-            st.markdown(m.get("content") or "")
-
-    q = st.chat_input("Ask about your attachments or anything.")
-    if q:
-        # anti-repeat soft guard: if last assistant message equals question answer pattern, add a nudge
-        with st.chat_message("assistant"):
-            holder = st.empty()
-            buf = ""
-            for token in g_stream_answer(conn, thread_id, q, k=6, temperature=0.2):
-                buf += token
-                try:
-                    holder.markdown(buf)
-                except Exception:
-                    holder.write(buf)
-
-
-# --- override simple router to expose page, without breaking older builds ---
-try:
-    _OLD_run_router = run_router  # type: ignore[name-defined]
-    def run_router(conn):  # type: ignore[no-redef]
-        import streamlit as st
-        pages = ["Chat Assistant", "RFP Analyzer", "SAM Watch"]
-        choice = st.sidebar.radio("Go to", pages, index=0, key="nav_main_g")
-        if choice == "Chat Assistant":
-            return run_chat_assistant(conn)
-        if choice == "RFP Analyzer" and "run_rfp_analyzer" in globals():
-            return globals()["run_rfp_analyzer"](conn)
-        if choice == "SAM Watch" and "run_sam_watch" in globals():
-            return globals()["run_sam_watch"](conn)
-        st.info("Page not available in this build.")
-except Exception:
-    pass
+        msgs = _chatp_build_messages(int(tid), q, hits)
+        acc = []
+        with st.spinner("Thinking"):
+            try:
+                for tok in ask_ai(msgs, temperature=float(temp)):
+                    acc.append(tok); st.write(tok)
+            except Exception as _e:
+                st.error(f"AI error: {type(_e).__name__}: {_e}")
+        ans = "".join(acc).strip()
+        if ans:
+            _chatp_append_message(conn, int(tid), "assistant", ans)
+            st.success("Saved to thread.")
+# === end Chat+ ===
