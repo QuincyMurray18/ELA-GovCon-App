@@ -10589,9 +10589,8 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         return chatp_ui(conn)
     except TypeError:
         return chatp_ui()
-.__name__}: {_e}")
 
-def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
+def _export_capability_docx(path: str, profile: dict[str, str]) -> str | None:
     try:
         from docx.shared import Pt, Inches  # type: ignore
     except Exception:
