@@ -15542,7 +15542,7 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         # Build context: select top snippets by overlap
         # Gather attachment text
         att_texts = []
-for _r in st.session_state[files_key]:
+        for _r in st.session_state[files_key]:
     _txt = (_r.get('text') or '').strip()
     if _txt:
         _name = str(_r.get('name') or 'file')
