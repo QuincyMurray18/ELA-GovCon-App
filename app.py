@@ -10,32 +10,27 @@ def _ensure_selected_rfp_id(conn):
     try:
         
 
-# === Chat+ session key + dedupe guards (idempotent) ===
-try:
-    _chat_plus_keys
-except NameError:
-    def _chat_plus_keys():
-        import streamlit as st
-        tid = st.session_state.get("cp_thread_id") or st.session_state.get("chat_plus_tid") or "default"
-        return f"chat_plus_history_{tid}", f"chat_plus_files_{tid}"
+# === Chat+ session key + dedupe helpers ===
+def _chat_plus_keys():
+    import streamlit as st
+    tid = st.session_state.get("cp_thread_id") or st.session_state.get("chat_plus_tid") or "default"
+    return f"chat_plus_history_{tid}", f"chat_plus_files_{tid}"
 
-try:
-    _dedupe_chat_plus_files
-except NameError:
-    def _dedupe_chat_plus_files(rows):
-        out, seen = [], set()
-        for r in rows or []:
-            try:
-                name = str(r.get("name") or "")
-                sha  = str(r.get("sha") or "")
-                txt  = str(r.get("text") or "")
-                key = (name, sha) if sha else (name, len(txt))
-                if key in seen:
-                    continue
-                out.append(r); seen.add(key)
-            except Exception:
+def _dedupe_chat_plus_files(rows):
+    out, seen = [], set()
+    for r in rows or []:
+        try:
+            name = str((r or {}).get("name") or "")
+            sha  = str((r or {}).get("sha") or "")
+            txt  = str((r or {}).get("text") or "")
+            key = (name, sha) if sha else (name, len(txt))
+            if key in seen:
                 continue
-        return out
+            seen.add(key)
+            out.append(dict(r))
+        except Exception:
+            continue
+    return out
 
 import streamlit as st, pandas as pd
     except Exception:
@@ -12476,15 +12471,7 @@ def run_rfp_analyzer(conn) -> None:
 
     # Stable per-thread Chat+ keys
 
-    try:
-
-        hist_key, files_key = _chat_plus_keys()
-
-    except Exception:
-
-        # Fallback to global keys if helper missing
-
-        hist_key, files_key = "chat_plus_history", "chat_plus_files"
+    hist_key, files_key = _chat_plus_keys()
 
     import streamlit as _st_guard
 
