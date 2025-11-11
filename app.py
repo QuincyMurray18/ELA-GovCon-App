@@ -2715,8 +2715,9 @@ def _safe_route_call(fn, *a, **kw):
             return fn(*a, **kw)
     except Exception as _e:
         import streamlit as _st
-        _st.error(f"Page failed: {type(_e)
+        _st.error(f"Page failed: {type(_e).__name__}: {_e}")
     return None
+# --- O3 helper: safe cursor context ---
 
 # --- O3 helper: safe cursor context ---
 from contextlib import contextmanager
@@ -4657,7 +4658,7 @@ def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
             return chatp_ui(conn)
         except TypeError:
             return chatp_ui()
-st.caption("CO Chat with memory. Threads are stored per RFP.")
+    st.caption("CO Chat with memory. Threads are stored per RFP.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
         st.info("No RFPs yet. Parse & save first.")
@@ -16491,7 +16492,7 @@ def chatp_ui(conn: "sqlite3.Connection") -> None:
                 for tok in ask_ai(msgs, temperature=float(temp)):
                     acc.append(tok); st.write(tok)
             except Exception as _e:
-                st.error(f"AI error: {type(_e)
+                st.error(f"AI error: {type(_e).__name__}: {_e}")
         ans = "".join(acc).strip()
         if ans:
             _chatp_append_message(conn, int(tid), "assistant", ans)
