@@ -16885,3 +16885,132 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
+
+
+# ===================== APPEND-ONLY PATCH • Chat+ Multi‑Attachment Diversification =====================
+# Goal: Ensure Chat Assistant uses ALL uploaded attachments, not just the first.
+# Tactics:
+# 1) Prefix each attachment's text with a stable doc marker "<<<DOC:{filename}>>>".
+# 2) Override y5_chunk_text to propagate the doc marker to every chunk.
+# 3) Override _score_snippets_by_query to diversify results across docs by round‑robin on score.
+# 4) Wrap run_chat_assistant again to apply markers to any existing session attachments before UI runs.
+
+import re as _cp_re
+
+def _cp_extract_doc_marker(s: str):
+    m = _cp_re.match(r"^<<<DOC:([^>]+)>>>\s*", s or "")
+    return m.group(1) if m else None
+
+# 2) Override y5_chunk_text to propagate markers
+try:
+    _Y5_CHUNK_ORIG
+except NameError:
+    try:
+        _Y5_CHUNK_ORIG = y5_chunk_text  # keep original
+    except NameError:
+        _Y5_CHUNK_ORIG = None
+
+if _Y5_CHUNK_ORIG:
+    def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> list[str]:  # type: ignore[override]
+        marker = None
+        try:
+            marker = _cp_extract_doc_marker(text)
+        except Exception:
+            marker = None
+        chunks = _Y5_CHUNK_ORIG(text, target_chars=target_chars, overlap=overlap)
+        if marker:
+            pref = f"<<<DOC:{marker}>>>"
+            out = []
+            for c in chunks or []:
+                c2 = c if c.strip().startswith(pref) else (pref + "\\n" + c)
+                out.append(c2)
+            return out
+        return chunks
+
+# 3) Override scorer with diversification across DOC markers
+def _score_snippets_by_query(snippets: list[str], query: str, top_k: int = 10) -> list[str]:  # type: ignore[override]
+    import re as _re
+    q = (query or "").strip()
+    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
+    terms = [w for w in norm_q.split() if len(w) > 1]
+    # score all
+    scored: list[tuple[int,str,str]] = []  # (score, doc, snippet)
+    for s in snippets or [""]:
+        t = _re.sub(r"[^A-Za-z0-9 ]+", " ", s or "").lower()
+        score = 0
+        for w in terms:
+            try:
+                score += t.count(" " + w + " ")
+            except Exception:
+                pass
+        doc = None
+        m = _re.match(r"^<<<DOC:([^>]+)>>>\s*", s or "")
+        if m:
+            doc = m.group(1)
+        else:
+            doc = "__GLOBAL__"
+        scored.append((int(score), str(doc), s))
+    # group by doc and sort each
+    by_doc = {}
+    for sc, doc, s in scored:
+        by_doc.setdefault(doc, []).append((sc, s))
+    for doc in by_doc:
+        by_doc[doc].sort(key=lambda x: x[0], reverse=True)
+    # round‑robin pick to diversify
+    result = []
+    docs = [d for d in by_doc.keys()]
+    idx_map = {d:0 for d in docs}
+    while len(result) < max(1, int(top_k)) and any(idx_map[d] < len(by_doc[d]) for d in docs):
+        for d in docs:
+            i = idx_map[d]
+            if i < len(by_doc[d]):
+                sc, s = by_doc[d][i]
+                s_clean = _re.sub(r"^<<<DOC:[^>]+>>>\s*", "", s or "")
+                result.append(s_clean)
+                idx_map[d] += 1
+                if len(result) >= top_k:
+                    break
+    if len(result) < top_k:
+        all_sorted = sorted(((sc, s) for sc, _, s in scored), key=lambda x: x[0], reverse=True)
+        for sc, s in all_sorted:
+            s_clean = _re.sub(r"^<<<DOC:[^>]+>>>\s*", "", s or "")
+            if s_clean not in result:
+                result.append(s_clean)
+            if len(result) >= top_k:
+                break
+    return result[:top_k]
+
+# 4) Outer wrapper to inject markers into session files before the main Chat Assistant runs
+def _wrap_chat_assistant_diversify():
+    _orig = run_chat_assistant
+    def _wrapped(conn):
+        import streamlit as st
+        try:
+            files = st.session_state.get("chat_plus_files") or []
+            changed = False
+            for i, rec in enumerate(files):
+                try:
+                    txt = rec.get("text") or ""
+                    name = str(rec.get("name") or f"file_{i}")
+                    if not txt.strip().startswith("<<<DOC:"):
+                        rec["text"] = f"<<<DOC:{name}>>>\\n" + txt
+                        changed = True
+                except Exception:
+                    continue
+            if changed:
+                st.session_state["chat_plus_files"] = files
+        except Exception:
+            pass
+        return _orig(conn)
+    return _wrapped
+
+try:
+    _CHAT_ASSISTANT_DIVERSIFY  # sentinel
+except NameError:
+    try:
+        run_chat_assistant = _wrap_chat_assistant_diversify()
+        _CHAT_ASSISTANT_DIVERSIFY = True
+    except Exception:
+        pass
+
+# ===================== END PATCH =====================
