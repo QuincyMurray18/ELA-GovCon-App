@@ -2717,7 +2717,6 @@ def _safe_route_call(fn, *a, **kw):
         import streamlit as _st
         _st.error(f"Page failed: {type(_e).__name__}: {_e}")
     return None
-# --- O3 helper: safe cursor context ---
 
 # --- O3 helper: safe cursor context ---
 from contextlib import contextmanager
@@ -4645,19 +4644,6 @@ def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
 # === end Y2 thread storage helpers ===
 
 def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
-    
-    import streamlit as st, pandas as pd
-    # Fallback: if there are no RFPs, route to Chat+ (attachment-first)
-    try:
-        _df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
-    except Exception:
-        _df_rf = None
-    if _df_rf is None or _df_rf.empty:
-        st.caption("Chat+ loaded. No RFP required.")
-        try:
-            return chatp_ui(conn)
-        except TypeError:
-            return chatp_ui()
     st.caption("CO Chat with memory. Threads are stored per RFP.")
     df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
     if df_rf is None or df_rf.empty:
@@ -10585,22 +10571,14 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
     return res
 
-
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    """Attachment-first Chat+. Detailed error reporting."""
-    import streamlit as st, traceback, sys
+    import streamlit as st
+    st.header("Chat Assistant — Y2")
+    st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
     try:
-        try:
-            return chatp_ui(conn)
-        except TypeError:
-            return chatp_ui()
+        y2_ui_threaded_chat(conn)
     except Exception as _e:
         st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
-        st.exception(_e)
-        st.code(''.join(traceback.format_exception(_e.__class__, _e, _e.__traceback__)))
-        return
-
-
 
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
@@ -15094,6 +15072,282 @@ def __p_s1d_ui(conn):
 
 # =========================
 
+
+
+# =========================
+# Chat+ Assistant (Attachment-first, no-RFP dependency)
+# =========================
+def _detect_mime_light_plus(name: str) -> str:
+    n = (name or "").lower()
+    if n.endswith(".pdf"): return "application/pdf"
+    if n.endswith(".docx"): return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if n.endswith(".xlsx"): return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if n.endswith(".pptx"): return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    if n.endswith(".csv"): return "text/csv"
+    if n.endswith(".md"): return "text/markdown"
+    if n.endswith(".txt"): return "text/plain"
+    return "application/octet-stream"
+
+def _extract_any_to_text(name: str, data: bytes) -> str:
+    """Best-effort text extractor that does NOT require an RFP record.
+       Uses existing extract_text_pages() for pdf/docx/xlsx and safe fallbacks for others.
+    """
+    try:
+        mime = _detect_mime_light_plus(name)
+    except Exception:
+        mime = "application/octet-stream"
+    low = (mime or "").lower()
+    # Prefer existing multi-backend for common types
+    if any(k in low for k in ["pdf", "wordprocessingml", "spreadsheetml", "text/plain"]):
+        try:
+            pages = extract_text_pages(data, mime) or []
+        except Exception:
+            pages = []
+        if pages:
+            return "\\n\\n".join(pages)
+        # fallback to raw decode if needed
+        try:
+            return data.decode("utf-8", errors="ignore")
+        except Exception:
+            try:
+                return data.decode("latin-1", errors="ignore")
+            except Exception:
+                return ""
+    # CSV
+    if "text/csv" in low or (name or "").lower().endswith(".csv"):
+        try:
+            import pandas as _pd  # type: ignore
+            import io as _io
+            df = _pd.read_csv(_io.BytesIO(data))
+            return df.fillna("").astype(str).to_csv(sep="\\t", index=False)
+        except Exception:
+            try:
+                return data.decode("utf-8", errors="ignore")
+            except Exception:
+                return data.decode("latin-1", errors="ignore")
+    # Markdown
+    if "text/markdown" in low or (name or "").lower().endswith(".md"):
+        try:
+            return data.decode("utf-8", errors="ignore")
+        except Exception:
+            return data.decode("latin-1", errors="ignore")
+    # PPTX (optional)
+    if "presentationml.presentation" in low or (name or "").lower().endswith(".pptx"):
+        try:
+            from pptx import Presentation  # type: ignore
+            import io as _io
+            prs = Presentation(_io.BytesIO(data))
+            texts = []
+            for slide in prs.slides[:100]:
+                for shape in slide.shapes:
+                    try:
+                        if hasattr(shape, "text") and shape.text:
+                            texts.append(shape.text)
+                    except Exception:
+                        pass
+            return "\\n".join(texts)
+        except Exception:
+            # graceful degrade
+            try:
+                return data.decode("utf-8", errors="ignore")
+            except Exception:
+                return ""
+    # Default fallback
+    try:
+        return data.decode("utf-8", errors="ignore")
+    except Exception:
+        try:
+            return data.decode("latin-1", errors="ignore")
+        except Exception:
+            return ""
+
+def _score_snippets_by_query(snippets: list[str], query: str, top_k: int = 8) -> list[str]:
+    import re as _re
+    q = (query or "").strip()
+    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
+    terms = [w for w in norm_q.split() if len(w) > 1]
+    scored = []
+    for s in snippets:
+        t = _re.sub(r"[^A-Za-z0-9 ]+", " ", s or "").lower()
+        score = 0
+        for w in terms:
+            try:
+                score += t.count(" " + w + " ")
+            except Exception:
+                pass
+        scored.append((score, s))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [s for _, s in scored[:max(1, int(top_k))]]
+
+def _chat_plus_compose_messages(context_text: str, history: list[dict], question: str, mode: str = "Auto") -> list[dict]:
+    rules = []
+    m = (mode or "Auto").lower()
+    if m.startswith("checklist"):
+        rules.append("Format as a concise checklist with imperative items and short sub-bullets.")
+    elif m.startswith("phone"):
+        rules.append("Return a phone call script with opener, 6-10 targeted questions, and a closing commitment line.")
+    elif m.startswith("email"):
+        rules.append("Draft a succinct business email with Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date.")
+    elif m.startswith("pricing"):
+        rules.append("List the exact pricing inputs you need, clarify unit drivers, and note risk flags or missing data.")
+    else:
+        rules.append("Write a direct answer. Use short, declarative sentences. No citations.")
+
+    system = (
+        "You are a federal contracting chat assistant. "
+        "Use only the user's attachments and chat history as your source. "
+        "If a fact is not present, say what is missing. "
+        "No citations. No tags. Be precise. "
+        "When asked for vendor outreach or subcontractor questions, output concrete, verifiable asks."
+    )
+    msgs = [{"role": "system", "content": system}]
+    for h in history or []:
+        if h.get("role") in ("user", "assistant") and (h.get("content") or "").strip():
+            msgs.append({"role": h["role"], "content": h["content"]})
+    if (context_text or "").strip():
+        msgs.append({"role": "system", "content": "Attachment context:\n" + context_text[:24000]})
+    msgs.append({"role": "user", "content": question.strip() + "\\n\\nRules: " + " ".join(rules)})
+    return msgs
+
+def _chat_plus_call_openai(messages: list[dict], temperature: float = 0.2) -> str:
+    client = _resolve_openai_client()
+    if not client:
+        return "AI unavailable. Configure OPENAI_API_KEY in Streamlit secrets."
+    try:
+        resp = client.chat.completions.create(
+            model=_resolve_model(),
+            messages=messages,
+            temperature=float(temperature),
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"AI error: {e}"
+
+def run_chat_assistant(conn: "sqlite3.Connection") -> None:
+    import streamlit as st
+    import pandas as pd
+    import os
+    st.header("Chat Assistant")
+    st.caption("Attachment-first. Works without an RFP. No citations.")
+
+    # Session state
+    files_key = "chat_plus_files"
+    hist_key = "chat_plus_history"
+    tmp_key = "chat_plus_tmp"
+
+    if files_key not in st.session_state:
+        st.session_state[files_key] = []  # list of dicts: {name, mime, text, size}
+    if hist_key not in st.session_state:
+        st.session_state[hist_key] = []   # list of chat messages
+
+    # Controls
+    c1, c2, c3 = st.columns([3,2,2])
+    with c1:
+        ups = st.file_uploader(
+            "Add attachments",
+            type=["pdf","docx","xlsx","pptx","csv","txt","md"],
+            accept_multiple_files=True,
+            key="chat_plus_uploader",
+            help="Upload any files you want me to use. I will answer from these files only."
+        )
+    with c2:
+        mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key="chat_plus_mode")
+    with c3:
+        temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="chat_plus_temp")
+
+    # Ingest uploads into session
+    new_rows = []
+    if ups:
+        for f in ups:
+            try:
+                try:
+                    data = f.getbuffer().tobytes()
+                except Exception:
+                    data = f.read()
+                txt = _extract_any_to_text(f.name, data)
+                rec = {
+                    "name": f.name,
+                    "mime": _detect_mime_light_plus(f.name),
+                    "size": len(data),
+                    "text": txt or "",
+                }
+                new_rows.append(rec)
+            except Exception:
+                continue
+        if new_rows:
+            st.session_state[files_key].extend(new_rows)
+            st.success(f"Added {len(new_rows)} attachment(s).")
+
+    # Attachment table
+    files = st.session_state[files_key]
+    if files:
+        with st.expander("Attachments in this chat", expanded=True):
+            df = pd.DataFrame([{"File": r["name"], "Bytes": r["size"], "Preview": (r["text"][:200] + ("..." if len(r["text"])>200 else ""))} for r in files])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            colA, colB, colC = st.columns(3)
+            with colA:
+                if st.button("Clear attachments", key="chat_plus_clear_files"):
+                    st.session_state[files_key] = []
+            with colB:
+                if st.button("Clear chat", key="chat_plus_clear_chat"):
+                    st.session_state[hist_key] = []
+            with colC:
+                # small helper to save a merged text file for inspection if needed
+                if st.button("Export merged context", key="chat_plus_export_ctx"):
+                    merged = "\\n\\n---\\n\\n".join([r["text"] for r in files if (r.get("text") or "").strip()])
+                    outp = os.path.join(DATA_DIR if 'DATA_DIR' in globals() else ".", "chat_plus_context.txt")
+                    try:
+                        with open(outp, "w", encoding="utf-8") as fh:
+                            fh.write(merged)
+                        st.markdown(f"[Download context]({outp})")
+                    except Exception as e:
+                        st.warning(f"Export failed: {e}")
+    else:
+        st.info("No attachments yet. You can still ask general questions.")
+
+    # Chat UI
+    st.subheader("Ask a question")
+    q = st.text_area("Your question", key="chat_plus_q", height=100, placeholder="Ask about requirements, draft an email to a subcontractor, list pricing inputs, etc.")
+    ask = st.button("Ask", type="primary", key="chat_plus_ask")
+    # render prior messages
+    for m in st.session_state[hist_key]:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    if ask and (q or "").strip():
+        # Build context: select top snippets by overlap
+        texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
+        # chunk long texts
+        try:
+            chunks = []
+            for t in texts:
+                cs = y5_chunk_text(t, target_chars=9000, overlap=500)  # reuse existing chunker if present
+                chunks.extend(cs or [])
+        except Exception:
+            # fallback chunk
+            chunks = []
+            for t in texts:
+                for i in range(0, len(t), 8000):
+                    chunks.append(t[i:i+8000])
+        top = _score_snippets_by_query(chunks or texts or [""], q, top_k=10)
+        context_text = "\\n\\n---\\n\\n".join([s[:1800] for s in top])[:24000]
+
+        # Compose and call model
+        history = st.session_state[hist_key]
+        messages = _chat_plus_compose_messages(context_text, history, q, mode=mode)
+        ans = _chat_plus_call_openai(messages, temperature=temp)
+
+        # Append to history
+        history.append({"role": "user", "content": q})
+        history.append({"role": "assistant", "content": ans})
+        st.session_state[hist_key] = history
+
+        # Render last assistant message immediately
+        with st.chat_message("assistant"):
+            st.markdown(ans)
+
+
+
 if __name__ == '__main__':
     try:
         main()
@@ -16184,330 +16438,3 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
-
-
-
-# === Chat+ (independent attachments) ===
-def _chatp_ensure_schema(conn: "sqlite3.Connection") -> None:
-    from contextlib import closing as _closing
-    try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_threads(
-                    id INTEGER PRIMARY KEY,
-                    title TEXT,
-                    created_at TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages(
-                    id INTEGER PRIMARY KEY,
-                    thread_id INTEGER NOT NULL,
-                    role TEXT CHECK(role in ('user','assistant')),
-                    content TEXT,
-                    created_at TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_files(
-                    id INTEGER PRIMARY KEY,
-                    thread_id INTEGER NOT NULL,
-                    filename TEXT,
-                    mime TEXT,
-                    bytes BLOB,
-                    pages INTEGER,
-                    created_at TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_chunks(
-                    id INTEGER PRIMARY KEY,
-                    file_id INTEGER NOT NULL,
-                    chunk_index INTEGER,
-                    page INTEGER,
-                    text TEXT,
-                    embedding BLOB
-                );
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_msgs_thr ON chat_messages(thread_id);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_files_thr ON chat_files(thread_id);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_chunks_file ON chat_chunks(file_id);")
-            conn.commit()
-    except Exception:
-        pass
-
-def _chatp_list_threads(conn: "sqlite3.Connection") -> list[dict]:
-    _chatp_ensure_schema(conn)
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query("SELECT id, title, created_at FROM chat_threads ORDER BY id DESC;", conn, params=())
-        return [{"id": int(r["id"]), "title": r.get("title") or "Untitled", "created_at": r.get("created_at")} for _, r in df.fillna("").iterrows()]
-    except Exception:
-        return []
-
-def _chatp_create_thread(conn: "sqlite3.Connection", title: str = "New Chat") -> int:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO chat_threads(title, created_at) VALUES(?, datetime('now'));", ((title or "New Chat").strip(),))
-        tid = int(cur.lastrowid)
-        conn.commit()
-        return tid
-
-def _chatp_rename_thread(conn: "sqlite3.Connection", thread_id: int, title: str) -> None:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("UPDATE chat_threads SET title=? WHERE id=?;", ((title or "Untitled").strip(), int(thread_id)))
-        conn.commit()
-
-def _chatp_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM chat_chunks WHERE file_id IN (SELECT id FROM chat_files WHERE thread_id=?);", (int(thread_id),))
-        cur.execute("DELETE FROM chat_files WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM chat_messages WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM chat_threads WHERE id=?;", (int(thread_id),))
-        conn.commit()
-
-def _chatp_get_messages(conn: "sqlite3.Connection", thread_id: int) -> list[dict]:
-    _chatp_ensure_schema(conn)
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query(
-            "SELECT role, content, created_at FROM chat_messages WHERE thread_id=? ORDER BY id;",
-            conn, params=(int(thread_id),)
-        )
-        return [{"role": r["role"], "content": r["content"], "created_at": r.get("created_at")} for _, r in df.fillna("").iterrows()]
-    except Exception:
-        return []
-
-def _chatp_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO chat_messages(thread_id, role, content, created_at) VALUES(?,?,?, datetime('now'));",
-                    (int(thread_id), role, content))
-        conn.commit()
-
-def _chatp_ingest_uploads(conn: "sqlite3.Connection", thread_id: int, uploads: list) -> tuple[int,int]:
-    """
-    Save uploads, extract text, chunk, and embed.
-    Returns (files_ingested, chunks_indexed).
-    """
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    import pandas as _pd
-    files_ing = 0; chunks_idx = 0
-    for up in uploads or []:
-        try:
-            b = up.read()
-            name = getattr(up, "name", "upload")
-            mime = getattr(up, "type", None) or _detect_mime_light(name)
-            pages = 0
-            pages_text = extract_text_pages(b, mime) or []
-            if pages_text:
-                pages_text, ocrn = ocr_pages_if_empty(b, mime, pages_text)
-            pages = len(pages_text) if pages_text else 0
-            with _closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO chat_files(thread_id, filename, mime, bytes, pages, created_at) VALUES(?,?,?,?,?, datetime('now'));",
-                            (int(thread_id), name, mime, sqlite3.Binary(b), int(pages)))
-                fid = int(cur.lastrowid)
-                conn.commit()
-            files_ing += 1
-            # Build chunks and embeddings
-            chunks: list[tuple[int,int,str]] = []  # (page, idx, text)
-            for pi, txt in enumerate(pages_text[:100], start=1):
-                for ci, ch in enumerate(_split_chunks(txt or "", max_chars=1600, overlap=200)):
-                    chunks.append((pi, ci, ch))
-            texts = [t for _,_,t in chunks]
-            vecs = _embed_texts(texts) if texts else []
-            with _closing(conn.cursor()) as cur:
-                for (pg, ci, t), v in zip(chunks, vecs):
-                    try:
-                        cur.execute("INSERT INTO chat_chunks(file_id, chunk_index, page, text, embedding) VALUES(?,?,?,?,?);",
-                                    (int(fid), int(ci), int(pg), t, json.dumps(v)))
-                        chunks_idx += 1
-                    except Exception:
-                        pass
-                conn.commit()
-        except Exception:
-            continue
-    return files_ing, chunks_idx
-
-def _chatp_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int = 6) -> list[dict]:
-    """
-    Return top-k chunk hits across this thread's attachments using embedding cosine similarity.
-    """
-    _chatp_ensure_schema(conn)
-    import pandas as _pd
-    q = (query or "").strip()
-    if not q:
-        return []
-    qvec = _embed_texts([q])[0]
-    if not qvec:
-        return []
-    try:
-        df = _pd.read_sql_query(
-            "SELECT chat_chunks.text as text, chat_chunks.page as page, chat_files.filename as file "
-            "FROM chat_chunks JOIN chat_files ON chat_chunks.file_id = chat_files.id "
-            "WHERE chat_files.thread_id=?;",
-            conn, params=(int(thread_id),)
-        )
-    except Exception:
-        return []
-    rows = []
-    for _, r in df.iterrows():
-        txt = str(r.get("text") or "")
-        try:
-            v = json.loads(txt)  # Avoid accidental JSON misread
-            if isinstance(v, list) and all(isinstance(x, (float,int)) for x in v):
-                # rare case where text was vector; skip
-                continue
-        except Exception:
-            pass
-        try:
-            # embedding stored alongside row
-            # compute on the fly via cache to reduce memory
-            pass
-        except Exception:
-            pass
-    # Fetch embeddings in a single query and compute sim
-    try:
-        df2 = _pd.read_sql_query(
-            "SELECT chat_chunks.text as text, chat_chunks.page as page, chat_files.filename as file, chat_chunks.embedding as emb "
-            "FROM chat_chunks JOIN chat_files ON chat_chunks.file_id = chat_files.id "
-            "WHERE chat_files.thread_id=?;",
-            conn, params=(int(thread_id),)
-        )
-    except Exception:
-        return []
-    scored = []
-    for _, r in df2.iterrows():
-        text = str(r.get("text") or "")
-        try:
-            emb = json.loads(r.get("emb") or "[]")
-        except Exception:
-            emb = []
-        score = _cos_sim(qvec, emb) if emb else 0.0
-        scored.append({"file": r.get("file"), "page": int(r.get("page") or 0), "text": text, "score": float(score)})
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:max(1, int(k))]
-
-def _chatp_build_messages(thread_id: int, question: str, hits: list[dict]) -> list[dict]:
-    # Compose a user message with embedded evidence. No citations in output.
-    ev_lines = []
-    for i, h in enumerate(hits, start=1):
-        src = f"{h.get('file','')} p.{h.get('page','')}"
-        snip = (h.get('text') or '').strip().replace("\\n", " ")
-        ev_lines.append(f"{src} — {snip}")
-    evidence = "\\n".join(ev_lines)
-    prompt = (
-        "You are a senior U.S. federal Contracting Officer (CO) and Source Selection advisor. "
-        "Answer using short, precise sentences or numbered bullets. "
-        "Use the CONTEXT when it helps. Do not include citations, bracket tags, or raw JSON. "
-        "If context lacks facts, say what is missing then proceed with best-practice guidance. "
-        "If asked to contact vendors or subs, draft a concise email or call script with a clear ask and due date. "
-        "Keep answers self-contained."
-    )
-    user = f"QUESTION\\n{(question or '').strip()}\\n\\nCONTEXT\\n{evidence or '(none)'}"
-    msgs = [{"role":"system","content": prompt}, {"role":"user","content": user}]
-    return msgs
-
-def chatp_ui(conn: "sqlite3.Connection") -> None:
-    import os, streamlit as st
-    # Quick environment check
-    _has_key = bool(os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_api_key"))
-    if not _has_key:
-        st.warning("OPENAI_API_KEY is not set. Set it in environment or Streamlit secrets.")
-    import streamlit as st
-    import pandas as _pd
-    _chatp_ensure_schema(conn)
-    st.header("Chat Assistant — Chat+")
-    st.caption("Attach any file. Ask anything. Works without an RFP.")
-    threads = _chatp_list_threads(conn)
-    colA, colB, colC = st.columns([2,1,1])
-    with colA:
-        if not threads:
-            st.info("No chats yet.")
-        sel = st.selectbox("Thread", options=[t["id"] for t in threads] if threads else [], 
-                           format_func=lambda i: next((t["title"] for t in threads if t["id"]==i), f"#{i}"),
-                           key="chatp_sel")
-    with colB:
-        if st.button("New chat", key="chatp_new"):
-            tid = _chatp_create_thread(conn, "Chat+")
-            st.session_state["chatp_sel"] = tid
-            st.rerun()
-    with colC:
-        if threads and st.button("Delete", key="chatp_del", help="Delete selected thread"):
-            tid = st.session_state.get("chatp_sel")
-            if tid:
-                _chatp_delete_thread(conn, int(tid))
-                st.session_state.pop("chatp_sel", None)
-                st.rerun()
-    tid = st.session_state.get("chatp_sel")
-    if not tid and threads:
-        tid = threads[0]["id"]
-        st.session_state["chatp_sel"] = tid
-    if not tid:
-        return
-    # Rename
-    trow = next((t for t in threads if t["id"]==tid), None)
-    new_title = st.text_input("Title", value=(trow.get("title") if trow else "Chat+"), key="chatp_title")
-    if new_title and trow and new_title.strip() != (trow.get("title") or "").strip():
-        _chatp_rename_thread(conn, int(tid), new_title.strip())
-    st.divider()
-    # Uploads
-    ups = st.file_uploader("➕ Attach files", type=["pdf","docx","xlsx","csv","txt","png","jpg","jpeg"], 
-                           accept_multiple_files=True, key=f"chatp_up_{tid}")
-    if ups:
-        with st.spinner("Indexing attachments"):
-            nf, nc = _chatp_ingest_uploads(conn, int(tid), ups)
-        st.success(f"Imported {nf} file(s). Indexed {nc} chunk(s).")
-    # Show files
-    try:
-        df_files = _pd.read_sql_query("SELECT id, filename, mime, pages, created_at FROM chat_files WHERE thread_id=? ORDER BY id DESC;", conn, params=(int(tid),))
-    except Exception:
-        df_files = _pd.DataFrame(columns=["id","filename","mime","pages","created_at"])
-    if not df_files.empty:
-        st.caption("Attachments")
-        _styled_dataframe(df_files.rename(columns={"filename":"File","mime":"MIME","pages":"Pages","created_at":"Added"}), use_container_width=True, hide_index=True)
-    st.divider()
-    # Chat history
-    for m in _chatp_get_messages(conn, int(tid))[-50:]:
-        st.markdown(f"**{m['role'].title()}**: {m['content']}")
-    # Input
-    q = st.text_area("Ask a question", key=f"chatp_q_{tid}", height=120)
-    c1, c2 = st.columns([1,3])
-    with c1:
-        temp = st.number_input("Temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.1, key=f"chatp_temp_{tid}")
-    with c2:
-        k = int(st.slider("Context breadth (top-k chunks)", min_value=0, max_value=12, value=6, step=1, key=f"chatp_k_{tid}"))
-    if st.button("Ask", key=f"chatp_ask_{tid}") and (q or "").strip():
-        _chatp_append_message(conn, int(tid), "user", q.strip())
-        hits = _chatp_search(conn, int(tid), q or "", k=k) if k>0 else []
-        # Show sources to user for transparency but not as citations in output
-        if hits:
-            with st.expander("Context used", expanded=False):
-                try:
-                    dfh = _pd.DataFrame([{"File": h.get("file",""), "Page": h.get("page",""), "Score": round(float(h.get("score") or 0.0),3)} for h in hits])
-                    _styled_dataframe(dfh, use_container_width=True, hide_index=True)
-                except Exception:
-                    pass
-        msgs = _chatp_build_messages(int(tid), q, hits)
-        acc = []
-        with st.spinner("Thinking"):
-            try:
-                for tok in ask_ai(msgs, temperature=float(temp)):
-                    acc.append(tok); st.write(tok)
-            except Exception as _e:
-                st.error(f"AI error: {type(_e).__name__}: {_e}")
-        ans = "".join(acc).strip()
-        if ans:
-            _chatp_append_message(conn, int(tid), "assistant", ans)
-            st.success("Saved to thread.")
-# === end Chat+ ===
-
-# Legacy alias for older routers
-ychat_ui = chatp_ui
