@@ -4113,7 +4113,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
     try:
         resp = client.chat.completions.create(
             model=model_name,
-            messages=[{"role":"system","content": SYSTEM_CO}, *messages],
+            messages=(messages if (messages and isinstance(messages, list) and isinstance(messages[0], dict) and messages[0].get('role')=='system') else [{"role":"system","content": SYSTEM_CO}, *messages]),
             tools=tools or [],
             temperature=float(temperature),
             stream=True
@@ -4466,12 +4466,20 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     q = (question or "").strip()
     norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
     terms = [w for w in norm_q.split() if len(w) > 1]
+    # Domain boosts for aircraft wash
+    domain_kw = [
+        "wash","washing","clean","cleaning","rinse","rinsing","underfloor","lubrication","lube",
+        "wheel","wheel wells","landing gear","flight control","thrust reverser","flap","spoiler",
+        "bogie","strut","cargo","ramp","de-panel","depanel","mil-prf-87937","type iv","eesoh",
+        "hazardous","hangar","water","nozzle","degrees","hours","maximum","elapsed","time","pws","1.2"
+    ]
     scored = []
     for pg in pages:
         txt = (pg.get("text") or "")
         norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
         score = 0
-        for w in terms:
+        # Weight query terms and domain keywords
+        for w in terms + domain_kw:
             try:
                 score += norm_t.count(" " + w + " ")
             except Exception:
@@ -4486,9 +4494,37 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     for h in hits:
         snip = (h.get("text") or "").strip().replace("\n", " ")
         snippets.append(snip[:800])
-    context_text = "\n\n---\n\n".join(snippets) if snippets else ""
+    context_text = context_text
 
-    # Format guidance
+    # Structured system prompt for wash/cleaning
+    _intent_wash = bool(_re.search(r"\b(wash|clean|cleaning|rinse|rinsing)\b", (q or ""), _re.I))
+    _sys = (
+        "You are a federal Contracting Officer technical reviewer. "
+        "Answer only from the provided CONTEXT. No citations. "
+        "Use short, direct sentences. "
+        "Enumerate required services with PWS subsection numbers when present. "
+        "If a data point is not found in CONTEXT, write 'Not specified in PWS'. "
+        "Output sections in this exact order:\n"
+        "1) Required services\n"
+        "2) Time standards\n"
+        "3) Methods and constraints\n"
+        "4) Materials and documents\n"
+        "5) Environmental and housekeeping\n"
+        "6) Acceptance notes\n"
+    )
+
+    # Expand fmt_rules for wash
+    if _intent_wash:
+        fmt_rules = (
+            "List services as numbered items. For each, include: PWS ref, title, and a one-line requirement. "
+            "Then list time standards, methods, materials, environmental controls, and acceptance exactly as bullets."
+        )
+        # Increase recall depth when washing intent detected
+        try:
+            k = max(int(k), 12)
+        except Exception:
+            k = 12
+    
     mname = (mode or "Auto").lower()
     if mname.startswith("checklist"):
         fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
@@ -4527,7 +4563,10 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
         f"- If known, include NAICS {naics} and Due Date {due}.\\n"
     )
 
-    for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
+    for tok in ask_ai([
+        {"role":"system","content": _sys},
+        {"role":"user","content": user}
+    ], temperature=temperature):
         yield tok
 
 def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
@@ -15543,12 +15582,10 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         # Gather attachment text
         att_texts = []
         for _r in st.session_state[files_key]:
-    _txt = (_r.get('text') or '').strip()
-    if _txt:
-        _name = str(_r.get('name') or 'file')
-        att_texts.append('Source: ' + _name + '
-
-' + _txt)
+            _txt = (_r.get('text') or '').strip()
+            if _txt:
+                _name = str(_r.get('name') or 'file')
+                att_texts.append('Source: ' + _name + '\n\n' + _txt)
 
         # Optionally add RFP context
         rfp_text = ""
@@ -16896,23 +16933,52 @@ def _pb_word_count_section(text: str) -> int:
 
 
 
-# === Spec Trace response schema for service-scope questions ===
-_SPEC_TRACE_SCHEMA = (
-    "When the user asks for required services, scope, work, or tasks, answer as follows:"
-    "\nSERVICES NEEDED:"
-    "\n• List every discrete task found in the attachments, one per line."
-    "\n• Use the exact subsection numbers or headings you see. If none, write n.a."
-    "\n• Prefix each line with the source filename in brackets."
-    "\nCONTROLS:"
-    "\n• Do not invent content that is not in the attachments."
-    "\n• Do not summarize into vague categories. Keep tasks granular."
-    "\n• No citations, no footnotes, no external sources."
-)
+# === Append-only patch: Chat+ attachment manifest and robust composer ===
+def _chat_plus_attachment_manifest(files: list[dict]) -> str:
+    try:
+        lines = [f"ATTACHMENT MANIFEST: {len(files)} file(s) attached)."]
+        for i, r in enumerate(files, start=1):
+            try:
+                name = str(r.get('name') or f'file_{i}')
+                mime = str(r.get('mime') or '')
+                size = int(r.get('size') or 0)
+            except Exception:
+                name, mime, size = (str(r.get('name') or f'file_{i}'), '', 0)
+            kb = (size // 1024) if isinstance(size, int) and size >= 0 else 0
+            lines.append(f"{i}. {name} ({mime}, {kb} KB)")
+        return "\\n".join(lines)
+    except Exception as e:
+        return f"ATTACHMENT MANIFEST: error {e}"
 
-def _should_use_spec_trace(q: str) -> bool:
-    ql = (q or "").lower()
-    triggers = [
-        "what services", "what wash and cleaning services", "scope of work",
-        "requirements", "what tasks", "work to perform", "services needed"
-    ]
-    return any(t in ql for t in triggers)
+def _chat_plus_compose_messages(context_text: str, history: list[dict], q: str, mode: str = 'Auto') -> list[dict]:
+    import streamlit as st  # local import safe in Streamlit env
+    files = st.session_state.get('chat_plus_files') or []
+    manifest = _chat_plus_attachment_manifest(files)
+    system = (
+        "You are the ELA Chat Assistant. Answer using ONLY the provided context or the attachment manifest. "
+        "If the user asks about attachments, count and list them from the manifest exactly. "
+        "Do not invent attachments. No citations. Be concise. "
+        "If information is missing, state the missing input."
+    )
+    tool_ctx = f"{manifest}\\n\\nCONTEXT SNIPPETS:\\n{context_text or '(no snippets)'}"
+    messages = [{"role": "system", "content": system},
+                {"role": "system", "content": tool_ctx}]
+    for m in history or []:
+        role = str(m.get('role') or 'user'); content = str(m.get('content') or '')
+        messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": q or ""})
+    return messages
+
+def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15) -> str:
+    try:
+        from openai import OpenAI as _OpenAI
+        client = _OpenAI()
+        model = _resolve_model()
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=float(temperature or 0.15),
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"[AI unavailable] {e}"
