@@ -15588,6 +15588,213 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
 
 
 
+# ===================== APPEND-ONLY PATCH • Chat+ Memory (Threads + Summaries) =====================
+# This wraps run_chat_assistant(conn) to add persistent threads and rolling summaries in SQLite.
+# It syncs st.session_state["chat_plus_history"] to cp_messages and reloads by thread id.
+# Safe to import repeatedly; guarded by _CHAT_ASSISTANT_WRAPPED.
+
+def _cp_db_exec(conn, sql, params=()):
+    from contextlib import closing
+    with closing(conn.cursor()) as cur:
+        cur.execute(sql, params)
+    conn.commit()
+
+def _cp_db_query(conn, sql, params=()):
+    from contextlib import closing
+    with closing(conn.cursor()) as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return rows
+
+def _cp_ensure_schema(conn):
+    _cp_db_exec(conn, """
+    CREATE TABLE IF NOT EXISTS cp_threads(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );""")
+    _cp_db_exec(conn, """
+    CREATE TABLE IF NOT EXISTS cp_messages(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );""")
+    _cp_db_exec(conn, """
+    CREATE TABLE IF NOT EXISTS cp_summaries(
+      thread_id INTEGER PRIMARY KEY,
+      summary TEXT NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );""")
+    _cp_db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_cp_messages_thread ON cp_messages(thread_id);")
+
+def _cp_list_threads(conn):
+    rows = _cp_db_query(conn, "SELECT id, COALESCE(title,'') FROM cp_threads ORDER BY id DESC;")
+    return [(int(r[0]), str(r[1])) for r in rows]
+
+def _cp_create_thread(conn, title="General"):
+    _cp_db_exec(conn, "INSERT INTO cp_threads(title) VALUES(?);", (title or "Untitled",))
+    tid = _cp_db_query(conn, "SELECT last_insert_rowid();")[0][0]
+    return int(tid)
+
+def _cp_rename_thread(conn, thread_id, new_title):
+    _cp_db_exec(conn, "UPDATE cp_threads SET title=? WHERE id=?;", (new_title or "Untitled", int(thread_id)))
+
+def _cp_delete_thread(conn, thread_id):
+    tid = int(thread_id)
+    _cp_db_exec(conn, "DELETE FROM cp_messages WHERE thread_id=?;", (tid,))
+    _cp_db_exec(conn, "DELETE FROM cp_summaries WHERE thread_id=?;", (tid,))
+    _cp_db_exec(conn, "DELETE FROM cp_threads WHERE id=?;", (tid,))
+
+def _cp_get_messages(conn, thread_id):
+    rows = _cp_db_query(conn, "SELECT role, content FROM cp_messages WHERE thread_id=? ORDER BY id ASC;", (int(thread_id),))
+    return [{"role": str(r[0]), "content": str(r[1])} for r in rows]
+
+def _cp_append_message(conn, thread_id, role, content):
+    _cp_db_exec(conn, "INSERT INTO cp_messages(thread_id, role, content) VALUES(?,?,?);",
+                (int(thread_id), str(role), str(content)))
+
+def _cp_get_summary(conn, thread_id):
+    rows = _cp_db_query(conn, "SELECT summary FROM cp_summaries WHERE thread_id=?;", (int(thread_id),))
+    return (rows[0][0] if rows else "").strip()
+
+def _cp_upsert_summary(conn, thread_id, summary):
+    if _cp_get_summary(conn, thread_id):
+        _cp_db_exec(conn, "UPDATE cp_summaries SET summary=?, updated_at=CURRENT_TIMESTAMP WHERE thread_id=?;",
+                    (str(summary), int(thread_id)))
+    else:
+        _cp_db_exec(conn, "INSERT INTO cp_summaries(thread_id, summary) VALUES(?,?);",
+                    (int(thread_id), str(summary)))
+
+def _cp_maybe_autosummarize(conn, thread_id, every_n=6, max_chars=9000):
+    """Every N total messages or when history grows large, refresh a compact summary."""
+    import textwrap
+    msgs = _cp_get_messages(conn, thread_id)
+    if not msgs:
+        return
+    n_total = len([m for m in msgs if m["role"] in ("user","assistant")])
+    do = (n_total % every_n == 0) or (len("\\n".join(m["content"] for m in msgs)) > max_chars)
+    if not do:
+        return
+    try:
+        if "_y6_chat" in globals():
+            prompt = [
+                {"role": "system", "content": "Summarize the thread for recall. Keep under 220 words. List decisions, next steps, and unresolved questions."},
+                {"role": "user", "content": "\\n\\n".join([f"{m['role'].upper()}: {m['content']}" for m in msgs][-30:])[:12000]},
+            ]
+            s = _y6_chat(prompt, temperature=0.0)
+        elif "_chat_plus_call_openai" in globals():
+            prompt = [
+                {"role": "system", "content": "Summarize the thread for recall. Keep under 220 words. List decisions, next steps, and unresolved questions."},
+                {"role": "user", "content": "\\n\\n".join([f"{m['role'].upper()}: {m['content']}" for m in msgs][-30:])[:12000]},
+            ]
+            s = _chat_plus_call_openai(prompt, temperature=0.0)
+        else:
+            last = msgs[-10:]
+            s = "Recent points:\\n" + "\\n".join(["- " + textwrap.shorten(m["content"], width=140, placeholder="…") for m in last])
+    except Exception:
+        last = msgs[-10:]
+        s = "Recent points:\\n" + "\\n".join(["- " + textwrap.shorten(m["content"], width=140, placeholder="…") for m in last])
+    _cp_upsert_summary(conn, thread_id, s)
+
+def _cp_load_into_session(conn, thread_id):
+    import streamlit as st
+    hist = _cp_get_messages(conn, thread_id)
+    hist = [m for m in hist if m["role"] in ("user","assistant")]
+    st.session_state["chat_plus_history"] = hist
+
+def _cp_sync_from_session(conn, thread_id, before_len):
+    import streamlit as st
+    after = st.session_state.get("chat_plus_history") or []
+    if before_len is None:
+        return
+    if len(after) <= int(before_len):
+        return
+    for m in after[int(before_len):]:
+        role = str(m.get("role") or "")
+        content = str(m.get("content") or "")
+        if role in ("user","assistant") and content.strip():
+            _cp_append_message(conn, thread_id, role, content)
+    _cp_maybe_autosummarize(conn, thread_id)
+
+def _wrap_chat_assistant():
+    """Wrap existing run_chat_assistant(conn) with thread picker and memory sync."""
+    _orig = run_chat_assistant
+
+    def _wrapped(conn):
+        import streamlit as st
+        _cp_ensure_schema(conn)
+
+        st.subheader("Threads")
+        threads = _cp_list_threads(conn)
+        if not threads:
+            tid = _cp_create_thread(conn, "General")
+            threads = _cp_list_threads(conn)
+
+        cur_tid = st.session_state.get("cp_thread_id") or (threads[0][0] if threads else None)
+
+        cols = st.columns([3,1,1,1])
+        with cols[0]:
+            labels = [f"#{tid}  {title or 'Untitled'}" for tid, title in threads]
+            index_map = {i: tid for i, (tid, _) in enumerate(threads)}
+            sel_idx = st.selectbox("Thread", list(range(len(labels))) or [0], format_func=lambda i: labels[i] if labels else "0", key="cp_thread_idx")
+            sel_tid = index_map.get(sel_idx, cur_tid)
+        with cols[1]:
+            if st.button("New", key="cp_new_thread"):
+                sel_tid = _cp_create_thread(conn, f"Thread {max(1, len(threads)+1)}")
+        with cols[2]:
+            current_title = dict(threads).get(sel_tid, "Untitled") if sel_tid else "Untitled"
+            rn = st.text_input("Rename", value=current_title, key="cp_rename_input")
+            if st.button("Apply", key="cp_rename_apply") and sel_tid:
+                _cp_rename_thread(conn, sel_tid, rn or "Untitled")
+        with cols[3]:
+            if st.button("Delete", key="cp_delete_thread") and sel_tid:
+                _cp_delete_thread(conn, sel_tid)
+                sel_tid = _cp_create_thread(conn, "General")
+
+        st.session_state["cp_thread_id"] = sel_tid
+
+        with st.expander("Memory summary", expanded=False):
+            cur_sum = _cp_get_summary(conn, sel_tid) or "No summary yet. It will auto update as you chat."
+            st.text_area("Summary", cur_sum, height=160, key="cp_sum_view")
+            if st.button("Regenerate summary", key="cp_force_sum"):
+                _cp_maybe_autosummarize(conn, sel_tid, every_n=1)
+                st.rerun()
+
+        if "chat_plus_history" not in st.session_state or not isinstance(st.session_state["chat_plus_history"], list):
+            _cp_load_into_session(conn, sel_tid)
+        before_len = len(st.session_state.get("chat_plus_history") or [])
+
+        _orig(conn)
+
+        _cp_sync_from_session(conn, sel_tid, before_len)
+
+    return _wrapped
+
+# Install the wrapper before any main() dispatch if possible
+try:
+    _CHAT_ASSISTANT_WRAPPED  # sentinel
+except NameError:
+    try:
+        run_chat_assistant = _wrap_chat_assistant()
+        _CHAT_ASSISTANT_WRAPPED = True
+    except Exception:
+        # If run_chat_assistant is not defined yet, defer by setting a flag.
+        _DEFER_WRAP_CHAT_ASSISTANT = True
+
+# If the definition appears later, wrap on first import after it's defined
+try:
+    _DEFER_WRAP_CHAT_ASSISTANT
+    # If run_chat_assistant exists now, wrap and clear flag
+    if callable(globals().get("run_chat_assistant", None)):
+        run_chat_assistant = _wrap_chat_assistant()
+        _CHAT_ASSISTANT_WRAPPED = True
+        del _DEFER_WRAP_CHAT_ASSISTANT
+except NameError:
+    pass
+# ===================== END PATCH =====================
+
 if __name__ == '__main__':
     try:
         main()
@@ -16678,424 +16885,3 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
-
-# =========================
-# APPEND-ONLY PATCH • C1 (Persistent Chat Memory for Chat Assistant)
-# Date: 2025-11-11T02:53:00
-# Notes:
-# - Stores chat threads, messages, and a rolling summary in SQLite (tables: c1_threads, c1_messages, c1_summaries).
-# - Reloads by thread id. Survives app restarts.
-# - Inserts "Conversation memory" summary into model context.
-# - Does NOT change Proposal Builder, Y1/Y2, or RFP analyzer.
-# =========================
-
-from contextlib import closing as _c1closing
-import sqlite3 as _c1sqlite3
-import time as _c1time
-try:
-    import pandas as pd
-except Exception:
-    pass
-
-def _c1_ensure_schema(conn: "_c1sqlite3.Connection") -> None:
-    with _c1closing(conn.cursor()) as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS c1_threads(
-              id INTEGER PRIMARY KEY,
-              title TEXT,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS c1_messages(
-              id INTEGER PRIMARY KEY,
-              thread_id INTEGER NOT NULL REFERENCES c1_threads(id) ON DELETE CASCADE,
-              role TEXT CHECK(role IN ('user','assistant')) NOT NULL,
-              content TEXT NOT NULL,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS c1_summaries(
-              thread_id INTEGER PRIMARY KEY REFERENCES c1_threads(id) ON DELETE CASCADE,
-              summary TEXT,
-              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-
-def _c1_list_threads(conn: "_c1sqlite3.Connection"):
-    _c1_ensure_schema(conn)
-    try:
-        df = pd.read_sql_query("SELECT id, title, created_at FROM c1_threads ORDER BY id DESC;", conn, params=())
-        return df.to_dict("records") if df is not None else []
-    except Exception:
-        return []
-
-def _c1_create_thread(conn: "_c1sqlite3.Connection", title: str="General"):
-    _c1_ensure_schema(conn)
-    with _c1closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO c1_threads(title) VALUES(?);", (title.strip() or "Untitled",))
-        conn.commit()
-        return cur.lastrowid
-
-def _c1_rename_thread(conn: "_c1sqlite3.Connection", thread_id: int, title: str):
-    with _c1closing(conn.cursor()) as cur:
-        cur.execute("UPDATE c1_threads SET title=? WHERE id=?;", (title.strip() or "Untitled", int(thread_id)))
-        conn.commit()
-
-def _c1_delete_thread(conn: "_c1sqlite3.Connection", thread_id: int):
-    with _c1closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM c1_messages WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM c1_summaries WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM c1_threads WHERE id=?;", (int(thread_id),))
-        conn.commit()
-
-def _c1_get_messages(conn: "_c1sqlite3.Connection", thread_id: int):
-    _c1_ensure_schema(conn)
-    try:
-        df = pd.read_sql_query("SELECT role, content, created_at FROM c1_messages WHERE thread_id=? ORDER BY id;", conn, params=(int(thread_id),))
-        rows = [{"role": r["role"], "content": r["content"]} for _, r in df.fillna("").iterrows()] if df is not None and not df.empty else []
-        return rows
-    except Exception:
-        return []
-
-def _c1_append_message(conn: "_c1sqlite3.Connection", thread_id: int, role: str, content: str):
-    with _c1closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO c1_messages(thread_id, role, content) VALUES(?,?,?);", (int(thread_id), str(role), str(content)))
-        conn.commit()
-
-def _c1_get_summary(conn: "_c1sqlite3.Connection", thread_id: int) -> str:
-    try:
-        df = pd.read_sql_query("SELECT summary FROM c1_summaries WHERE thread_id=?;", conn, params=(int(thread_id),))
-        if df is not None and not df.empty:
-            return str(df.iloc[0]["summary"] or "")
-        return ""
-    except Exception:
-        return ""
-
-def _c1_upsert_summary(conn: "_c1sqlite3.Connection", thread_id: int, summary: str):
-    with _c1closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO c1_summaries(thread_id, summary, updated_at) VALUES(?,?, datetime('now')) "
-                    "ON CONFLICT(thread_id) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at;",
-                    (int(thread_id), str(summary or "")))
-        conn.commit()
-
-def _c1_resolve_client_and_model():
-    # Reuse available helpers if present
-    client = None
-    model = None
-    try:
-        if "get_ai" in globals():
-            client = get_ai()
-    except Exception:
-        client = None
-    if client is None:
-        try:
-            if "_y6_resolve_openai_client" in globals():
-                client = _y6_resolve_openai_client()
-        except Exception:
-            client = None
-    if client is None:
-        try:
-            if "_resolve_openai_client" in globals():
-                client = _resolve_openai_client()
-        except Exception:
-            client = None
-    if client is None:
-        from openai import OpenAI as _OpenAI
-        client = _OpenAI()
-    try:
-        if "_resolve_model" in globals():
-            model = _resolve_model()
-        elif "_y6_resolve_model" in globals():
-            model = _y6_resolve_model()
-        else:
-            model = "gpt-4o-mini"
-    except Exception:
-        model = "gpt-4o-mini"
-    return client, model
-
-def _c1_summarize(conn: "_c1sqlite3.Connection", thread_id: int, messages: list[dict]) -> str:
-    """Rollup summary capped to ~700 words. Deterministic for stability."""
-    prior = (_c1_get_summary(conn, int(thread_id)) or "").strip()
-    # Use last 20 messages to keep prompt small
-    tail = messages[-20:] if len(messages) > 20 else messages
-    pieces = []
-    if prior:
-        pieces.append(f"Prior summary:\n{prior}")
-    for m in tail:
-        role = m.get("role")
-        content = (m.get("content") or "").strip()
-        if role in ("user","assistant") and content:
-            pieces.append(f"{role}: {content}")
-    prompt = "Summarize the conversation for persistent memory. Use neutral, factual bullets and brief paragraphs. "             "Capture user goals, decisions, open tasks, constraints, definitions, and file context. "             "Do not give advice. Do not address the reader. Max 700 words."
-    client, model = _c1_resolve_client_and_model()
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0.0,
-            messages=[
-                {"role":"system","content":"You compress chats into accurate memory notes for later recall. Output plain text only."},
-                {"role":"user","content": prompt + "\n\n" + "\n\n".join(pieces)}
-            ]
-        )
-        out = (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        out = prior  # keep old if summarizer fails
-    out = (out or prior or "").strip()
-    _c1_upsert_summary(conn, int(thread_id), out)
-    return out
-
-def run_chat_assistant(conn: "_c1sqlite3.Connection") -> None:
-    import streamlit as st
-    import pandas as pd
-    import re
-    st.header("Chat Assistant")
-    _c1_ensure_schema(conn)
-
-    # Thread controls
-    threads = _c1_list_threads(conn)
-    if not threads:
-        _c1_create_thread(conn, "General")
-        threads = _c1_list_threads(conn)
-    thread_ids = [int(r["id"]) for r in threads]
-    labels = [f"{r['id']} — {r.get('title') or 'Untitled'}" for r in threads]
-
-    # Persist selected thread in session
-    sess_key = "c1_thread_id_chat_assistant"
-    if sess_key not in st.session_state:
-        st.session_state[sess_key] = thread_ids[0]
-    col_t1, col_t2, col_t3, col_t4 = st.columns([3,1,1,1])
-    with col_t1:
-        idx = max(0, thread_ids.index(int(st.session_state[sess_key])) if int(st.session_state[sess_key]) in thread_ids else 0)
-        idx = st.selectbox("Thread", list(range(len(labels))), index=idx, format_func=lambda i: labels[i], key="c1_thread_select")
-        thread_id = thread_ids[idx]
-        st.session_state[sess_key] = thread_id
-    with col_t2:
-        if st.button("New", key="c1_new_thread"):
-            import time
-            nid = _c1_create_thread(conn, f"Thread {int(time.time())}")
-            st.session_state[sess_key] = int(nid)
-            thread_id = int(nid)
-            threads = _c1_list_threads(conn)
-            labels = [f"{r['id']} — {r.get('title') or 'Untitled'}" for r in threads]
-            thread_ids = [int(r["id"]) for r in threads]
-    with col_t3:
-        with st.popover("Rename", use_container_width=True):
-            cur_title = next((r.get("title") or "" for r in threads if int(r["id"])==int(st.session_state[sess_key])), "")
-            new_title = st.text_input("Title", value=cur_title, key="c1_rename_title")
-            if st.button("Save title", key="c1_rename_save"):
-                _c1_rename_thread(conn, int(st.session_state[sess_key]), new_title)
-                st.success("Renamed")
-    with col_t4:
-        if st.button("Delete", key="c1_delete_thread"):
-            _c1_delete_thread(conn, int(st.session_state[sess_key]))
-            threads = _c1_list_threads(conn)
-            if not threads:
-                _c1_create_thread(conn, "General")
-                threads = _c1_list_threads(conn)
-            st.session_state[sess_key] = int(threads[0]["id"])
-            st.success("Deleted")
-
-    thread_id = int(st.session_state[sess_key])
-
-    # Memory summary
-    with st.expander("Memory summary", expanded=False):
-        st.caption("Auto-updated after each answer. Stored in SQLite.")
-        st.text_area("Summary", value=_c1_get_summary(conn, thread_id), height=160, key=f"c1_summary_view_{thread_id}")
-
-    # Session-scoped attachments per thread
-    hist_key  = f"chat_plus_hist_{thread_id}"   # optional, for immediate on-screen rendering
-    files_key = f"chat_plus_files_{thread_id}"
-    st.session_state.setdefault(hist_key, [])
-    st.session_state.setdefault(files_key, [])
-
-    # Controls
-    c0, c1, c2, c3 = st.columns([2,3,2,2])
-    with c0:
-        source = st.selectbox("Source", ["Attachments only","RFP context only","Both"], index=0, key=f"chat_plus_source_{thread_id}")
-    with c1:
-        ups = st.file_uploader(
-            "Add attachments",
-            type=["pdf","docx","xlsx","pptx","csv","txt","md"],
-            accept_multiple_files=True,
-            key=f"chat_plus_uploader_{thread_id}",
-            help="Upload any files you want me to use. I will answer from these files only."
-        )
-    with c2:
-        mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key=f"chat_plus_mode_{thread_id}")
-    with c3:
-        temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key=f"chat_plus_temp_{thread_id}")
-
-    # Optional RFP selection
-    selected_rfp_id = None
-    if source in ("RFP context only","Both"):
-        st.divider()
-        st.subheader("RFP context")
-        options = _list_rfps(conn)
-        if options:
-            labels2 = [label for _, label in options]
-            idx2 = st.selectbox("Choose RFP", list(range(len(labels2))), format_func=lambda i: labels2[i], key=f"chat_plus_rfp_idx_{thread_id}") if labels2 else 0
-            if options:
-                selected_rfp_id = options[idx2][0]
-        manual = st.text_input("Or enter RFP ID manually", value="", key=f"chat_plus_rfp_manual_{thread_id}")
-        if manual.strip():
-            selected_rfp_id = manual.strip()
-        if selected_rfp_id:
-            if st.button("Preview RFP context", key=f"chat_plus_preview_rfp_{thread_id}"):
-                preview = _load_rfp_context(conn, selected_rfp_id, max_chars=5000)
-                if preview:
-                    st.text_area("RFP context preview", preview, height=200, key=f"chat_plus_rfp_preview_box_{thread_id}")
-                else:
-                    st.info("No RFP context found for that ID.")
-
-    # Ingest uploads into session
-    new_rows = []
-    if ups:
-        for f in ups:
-            try:
-                try:
-                    data = f.getbuffer().tobytes()
-                except Exception:
-                    data = f.read()
-                txt = _extract_any_to_text(f.name, data)
-                rec = {"name": f.name, "mime": _detect_mime_light_plus(f.name), "size": len(data), "text": txt or ""}
-                new_rows.append(rec)
-            except Exception:
-                continue
-        if new_rows:
-            st.session_state[files_key].extend(new_rows)
-            st.success(f"Added {len(new_rows)} attachment(s).")
-
-    # Attachment table
-    files = st.session_state[files_key]
-    if files:
-        with st.expander("Attachments in this chat", expanded=True):
-            df = pd.DataFrame([{"File": r["name"], "Bytes": r["size"], "Preview": (r["text"][:200] + ("." if len(r["text"])>200 else ""))} for r in files])
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            colA, colB, colC = st.columns(3)
-            with colA:
-                if st.button("Clear attachments", key=f"chat_plus_clear_files_{thread_id}"):
-                    st.session_state[files_key] = []
-            with colB:
-                if st.button("Clear chat (screen only)", key=f"chat_plus_clear_chat_{thread_id}"):
-                    st.session_state[hist_key] = []
-            with colC:
-                if st.button("Export merged context", key=f"chat_plus_export_ctx_{thread_id}"):
-                    merged = "\n\n---\n\n".join([r["text"] for r in files if (r.get("text") or "").strip()])
-                    outp = os.path.join(DATA_DIR if 'DATA_DIR' in globals() else ".", f"chat_plus_context_{thread_id}.txt")
-                    try:
-                        with open(outp, "w", encoding="utf-8") as fh:
-                            fh.write(merged)
-                        st.markdown(f"[Download context]({outp})")
-                    except Exception as e:
-                        st.warning(f"Export failed: {e}")
-    else:
-        st.info("No attachments yet. You can still ask general questions.")
-
-    # Render prior messages from DB
-    history_db = _c1_get_messages(conn, thread_id)
-    for m in history_db:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-
-    # Chat UI
-    st.subheader("Ask a question")
-    q = st.text_area("Your question", key=f"chat_plus_q_{thread_id}", height=100, placeholder="Ask about requirements, vendor emails, pricing inputs, etc.")
-    ask = st.button("Ask", type="primary", key=f"chat_plus_ask_{thread_id}")
-
-    if ask and (q or '').strip():
-        # Build context from attachments and optional RFP
-        att_texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
-        rfp_text = ""
-        if source in ("RFP context only","Both") and selected_rfp_id:
-            try:
-                rfp_text = _load_rfp_context(conn, selected_rfp_id, max_chars=120000)
-            except Exception:
-                rfp_text = ""
-        base_texts = att_texts if source == "Attachments only" else ([rfp_text] if source == "RFP context only" else att_texts + ([rfp_text] if (rfp_text or "").strip() else []))
-
-        # Chunk and score across ALL sources so each file contributes
-        def _c1_chunk_text(t: str, size: int = 8000, overlap: int = 400):
-            t = t or ""
-            if 'y5_chunk_text' in globals():
-                try:
-                    return y5_chunk_text(t, target_chars=size, overlap=overlap) or []
-                except Exception:
-                    pass
-            chunks = []
-            for i in range(0, len(t), size - overlap):
-                chunks.append(t[i:i+size])
-            return chunks or [t]
-
-        def _c1_keyword_score(q: str, s: str) -> float:
-            # Simple token overlap score, case-insensitive
-            q_tokens = [w for w in re.findall(r"[A-Za-z0-9]{3,}", q.lower())]
-            if not q_tokens:
-                return 0.0
-            text = s.lower()
-            score = 0.0
-            for w in q_tokens:
-                score += text.count(w)
-            # phrase boost
-            if q.strip() and q.lower() in text:
-                score += 3.0
-            return score
-
-        # Prepare documents list [(label, text)]
-        docs = []
-        for r in (st.session_state[files_key] or []):
-            if (r.get("text") or "").strip():
-                docs.append((r.get("name") or "Attachment", r["text"]))
-        if source in ("RFP context only","Both") and (rfp_text or "").strip():
-            docs.append(("RFP Context", rfp_text))
-
-        # Select top chunks per doc so every doc is represented
-        per_doc_limit = 2  # tune if needed
-        selections = []
-        for label, text in docs:
-            chunks = _c1_chunk_text(text, size=6000, overlap=400)
-            scored = [(c, _c1_keyword_score(q, c)) for c in chunks]
-            scored.sort(key=lambda x: x[1], reverse=True)
-            chosen = [c for c, _ in scored[:per_doc_limit]] if scored else [text[:1500]]
-            if not chosen and text:
-                chosen = [text[:1500]]
-            for c in chosen:
-                selections.append((label, c[:1800]))
-
-        # If no query or all scores zero, still include a slice from each doc
-        if not selections and docs:
-            for label, text in docs:
-                selections.append((label, (text or "")[:1200]))
-
-        # Compose context with clear separators
-        parts = []
-        for label, c in selections:
-            parts.append(f"### {label}\n{c.strip()}")
-        context_text = "\n\n---\n\n".join(parts)[:24000]
-
-        # Compose messages with DB history
-        hist = _c1_get_messages(conn, thread_id)
-        msgs = _chat_plus_compose_messages(context_text, hist, q, mode=mode)
-        # Inject memory summary
-        _summary = _c1_get_summary(conn, thread_id)
-        if (_summary or "").strip():
-            msgs.insert(1, {"role":"system","content":"Conversation memory:\n" + _summary[:5000]})
-        # Call model
-        ans = _chat_plus_call_openai(msgs, temperature=float(temp))
-
-        # Persist into DB
-        _c1_append_message(conn, thread_id, "user", q.strip())
-        _c1_append_message(conn, thread_id, "assistant", ans)
-
-        # Update session echo and memory summary
-        st.session_state[hist_key].append({"role":"user","content": q.strip()})
-        st.session_state[hist_key].append({"role":"assistant","content": ans})
-        _c1_summarize(conn, thread_id, _c1_get_messages(conn, thread_id))
-
-        # Render last answer
-        with st.chat_message("assistant"):
-            st.markdown(ans)
-
-# ===== END PATCH C1 =====
