@@ -4644,8 +4644,19 @@ def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
 # === end Y2 thread storage helpers ===
 
 def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
-    st.caption("CO Chat with memory. Threads are stored per RFP.")
-    df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    import streamlit as st, pandas as pd
+    # Fallback: no RFP needed. Route to Chat+ if no RFPs exist.
+    try:
+        df_rf = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+    except Exception:
+        df_rf = None
+    if df_rf is None or df_rf.empty:
+        st.caption("Chat+ loaded. No RFP required.")
+        try:
+            return chatp_ui(conn)
+        except TypeError:
+            return chatp_ui()
+
     if df_rf is None or df_rf.empty:
         st.info("No RFPs yet. Parse & save first.")
         return
@@ -10572,35 +10583,15 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     return res
 
 
-
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    import streamlit as st
-    # Resolve preferred UI lazily to avoid NameError
-    ui = globals().get("chatp_ui") or globals().get("y2_ui_threaded_chat")
-    if callable(ui):
-        try:
-            # Some UIs expect only (conn)
-            return ui(conn)
-        except TypeError:
-            # Fallback: call with no args if signature differs
-            return ui()
-    # Minimal fallback UI so the page never crashes
-    st.header("Chat Assistant — Minimal")
-    st.caption("Temporary fallback UI because Chat+ was not loaded.")
-    q = st.chat_input("Ask a question")
-    if q:
-        with st.chat_message("assistant"):
-            try:
-                # Use lightweight chat if available
-                msg = [{"role": "system", "content": "You are a senior federal CO. Short, precise answers."},
-                       {"role": "user", "content": q}]
-                if "y6_render_co_box" in globals() and callable(globals().get("_y6_chat")):
-                    st.markdown(globals()["_y6_chat"](msg))
-                else:
-                    st.markdown("Answer: " + q)
-            except Exception as _e:
-                st.error(f"Fallback chat failed: {type(_e).__name__}: {_e}")
-def _export_capability_docx(path: str, profile: dict[str, str]) -> str | None:
+    # Always route to Chat+ (attachment-first)
+    try:
+        return chatp_ui(conn)
+    except TypeError:
+        return chatp_ui()
+.__name__}: {_e}")
+
+def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
         from docx.shared import Pt, Inches  # type: ignore
     except Exception:
@@ -10640,7 +10631,7 @@ def _export_capability_docx(path: str, profile: dict[str, str]) -> str | None:
                 doc.add_paragraph(re.sub(r"^[-*•]\s+", "", _line).strip(), style="List Bullet")
             else:
                 doc.add_paragraph(_line.strip())
-
+            paragraph(line, style="List Bullet")
 
     # Content blocks
     add_bullets("Core Competencies", "core_competencies")
