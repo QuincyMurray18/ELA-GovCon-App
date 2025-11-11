@@ -10587,14 +10587,19 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
 
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    """Attachment-first Chat+. Never requires an RFP."""
+    """Attachment-first Chat+. Detailed error reporting."""
+    import streamlit as st, traceback, sys
     try:
-        return chatp_ui(conn)
-    except TypeError:
-        return chatp_ui()
-    except Exception:
-        import streamlit as st
-        st.error("Chat Assistant failed. See logs.")
+        try:
+            return chatp_ui(conn)
+        except TypeError:
+            return chatp_ui()
+    except Exception as _e:
+        st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
+        st.exception(_e)
+        st.code(''.join(traceback.format_exception(_e.__class__, _e, _e.__traceback__)))
+        return
+
 
 
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
@@ -16411,6 +16416,11 @@ def _chatp_build_messages(thread_id: int, question: str, hits: list[dict]) -> li
     return msgs
 
 def chatp_ui(conn: "sqlite3.Connection") -> None:
+    import os, streamlit as st
+    # Quick environment check
+    _has_key = bool(os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_api_key"))
+    if not _has_key:
+        st.warning("OPENAI_API_KEY is not set. Set it in environment or Streamlit secrets.")
     import streamlit as st
     import pandas as _pd
     _chatp_ensure_schema(conn)
