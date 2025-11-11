@@ -15421,7 +15421,7 @@ def _load_rfp_context(conn, rfp_id: str, max_chars: int = 200000) -> str:
     return (text or "\n\n---\n\n".join(chunks))[:max_chars]
 
 
-def run_chat_assistant(conn: "sqlite3.Connection") -> None:
+def run_chat_plus_attachments(conn: "sqlite3.Connection") -> None:
     import streamlit as st
     import pandas as pd
     import os
