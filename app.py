@@ -3151,6 +3151,28 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Any, Dict, List, Tuple
+
+
+
+# --- Early guard to ensure helper exists before any usage ---
+if "_dedupe_chat_plus_files" not in globals():
+    def _dedupe_chat_plus_files(rows):
+        out = []
+        seen = set()
+        for r in rows or []:
+            try:
+                name = str((r or {}).get("name") or "")
+                sha = str((r or {}).get("sha") or "")
+                txt = str((r or {}).get("text") or "")
+                key = (name, sha) if sha else (name, len(txt))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(dict(r))
+            except Exception:
+                continue
+        return out
+
 import io
 import json
 import os
