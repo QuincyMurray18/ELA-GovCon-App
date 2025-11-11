@@ -17015,19 +17015,65 @@ def run_chat_assistant(conn: "_c1sqlite3.Connection") -> None:
             except Exception:
                 rfp_text = ""
         base_texts = att_texts if source == "Attachments only" else ([rfp_text] if source == "RFP context only" else att_texts + ([rfp_text] if (rfp_text or "").strip() else []))
-        # Chunk and score
-        try:
+
+        # Chunk and score across ALL sources so each file contributes
+        def _c1_chunk_text(t: str, size: int = 8000, overlap: int = 400):
+            t = t or ""
+            if 'y5_chunk_text' in globals():
+                try:
+                    return y5_chunk_text(t, target_chars=size, overlap=overlap) or []
+                except Exception:
+                    pass
             chunks = []
-            for t in base_texts:
-                cs = y5_chunk_text(t, target_chars=9000, overlap=500)
-                chunks.extend(cs or [])
-        except Exception:
-            chunks = []
-            for t in base_texts:
-                for i in range(0, len(t), 8000):
-                    chunks.append(t[i:i+8000])
-        top = _score_snippets_by_query(chunks or base_texts or [""], q, top_k=10)
-        context_text = "\n\n---\n\n".join([s[:1800] for s in top])[:24000]
+            for i in range(0, len(t), size - overlap):
+                chunks.append(t[i:i+size])
+            return chunks or [t]
+
+        def _c1_keyword_score(q: str, s: str) -> float:
+            # Simple token overlap score, case-insensitive
+            q_tokens = [w for w in re.findall(r"[A-Za-z0-9]{3,}", q.lower())]
+            if not q_tokens:
+                return 0.0
+            text = s.lower()
+            score = 0.0
+            for w in q_tokens:
+                score += text.count(w)
+            # phrase boost
+            if q.strip() and q.lower() in text:
+                score += 3.0
+            return score
+
+        # Prepare documents list [(label, text)]
+        docs = []
+        for r in (st.session_state[files_key] or []):
+            if (r.get("text") or "").strip():
+                docs.append((r.get("name") or "Attachment", r["text"]))
+        if source in ("RFP context only","Both") and (rfp_text or "").strip():
+            docs.append(("RFP Context", rfp_text))
+
+        # Select top chunks per doc so every doc is represented
+        per_doc_limit = 2  # tune if needed
+        selections = []
+        for label, text in docs:
+            chunks = _c1_chunk_text(text, size=6000, overlap=400)
+            scored = [(c, _c1_keyword_score(q, c)) for c in chunks]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            chosen = [c for c, _ in scored[:per_doc_limit]] if scored else [text[:1500]]
+            if not chosen and text:
+                chosen = [text[:1500]]
+            for c in chosen:
+                selections.append((label, c[:1800]))
+
+        # If no query or all scores zero, still include a slice from each doc
+        if not selections and docs:
+            for label, text in docs:
+                selections.append((label, (text or "")[:1200]))
+
+        # Compose context with clear separators
+        parts = []
+        for label, c in selections:
+            parts.append(f"### {label}\n{c.strip()}")
+        context_text = "\n\n---\n\n".join(parts)[:24000]
 
         # Compose messages with DB history
         hist = _c1_get_messages(conn, thread_id)
