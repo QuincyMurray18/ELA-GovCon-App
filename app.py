@@ -1,3 +1,19 @@
+# === Chat+ bootstrap to prevent NameError ===
+def chatp_ui(conn=None):
+    try:
+        # If a later definition overrides this, Streamlit will use that on rerun.
+        import streamlit as st
+        st.header("Chat Assistant — Chat+")
+        st.caption("Attachment-first. If the full UI isn't loaded yet, this minimal view will still work.")
+        q = st.text_area("Ask a question", key="chatp_boot_q")
+        if st.button("Send", key="chatp_boot_send") and q.strip():
+            st.write("Received. Chat+ is loading. Try again if you expected full features.")
+    except Exception:
+        pass
+# Backward alias some older routers expect
+ychat_ui = chatp_ui
+# === End bootstrap ===
+
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
