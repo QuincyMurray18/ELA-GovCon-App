@@ -10571,6 +10571,105 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
     return res
 
+
+def _list_rfps(conn) -> list[tuple[str, str]]:
+    """Return list of (rfp_id, label). Defensive over possible schemas."""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+    except Exception:
+        return []
+    # candidate tables likely to hold RFP metadata
+    candidates = [t for t in tables if re.search(r"rfp", t, re.I)]
+    results = []
+    for t in candidates:
+        # probe common id/title columns
+        id_cols = ["id","rfp_id","rid"]
+        title_cols = ["title","name","subject","rfp_title"]
+        for idc in id_cols:
+            for tc in title_cols:
+                try:
+                    cur.execute(f"SELECT {idc}, {tc} FROM {t} ORDER BY 1 DESC LIMIT 50")
+                    for rid, title in cur.fetchall():
+                        rid_s = str(rid)
+                        title_s = str(title) if title is not None else ""
+                        label = f"{rid_s} — {title_s} [{t}]"
+                        results.append((rid_s, label))
+                    if results:
+                        return results
+                except Exception:
+                    pass
+        # fallback: only id
+        for idc in id_cols:
+            try:
+                cur.execute(f"SELECT {idc} FROM {t} ORDER BY 1 DESC LIMIT 50")
+                for (rid,) in cur.fetchall():
+                    rid_s = str(rid)
+                    label = f"{rid_s} [{t}]"
+                    results.append((rid_s, label))
+                if results:
+                    return results
+            except Exception:
+                pass
+    return results
+
+def _load_rfp_context(conn, rfp_id: str, max_chars: int = 200000) -> str:
+    """Try multiple table/column patterns to get joined text for a given rfp_id."""
+    if not conn or not rfp_id:
+        return ""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+    except Exception:
+        return ""
+    candidates = [t for t in tables if re.search(r"rfp", t, re.I)]
+    text_cols = ["text","content","full_text","page_text","body"]
+    id_cols = ["rfp_id","id","rid"]
+    chunks = []
+    for t in candidates:
+        for idc in id_cols:
+            for tc in text_cols:
+                try:
+                    cur.execute(f"SELECT {tc} FROM {t} WHERE {idc}=? LIMIT 500", (rfp_id,))
+                    rows = cur.fetchall()
+                    if rows:
+                        for (val,) in rows:
+                            if isinstance(val, (bytes, bytearray)):
+                                try:
+                                    val = val.decode("utf-8", errors="ignore")
+                                except Exception:
+                                    val = val.decode("latin-1", errors="ignore")
+                            if val:
+                                chunks.append(str(val))
+                except Exception:
+                    pass
+    text = "\n\n---\n\n".join(chunks)
+    if not text and candidates:
+        # last resort: any rows from 'context' tables
+        for t in candidates:
+            if re.search(r"context|pages|docs", t, re.I):
+                for tc in text_cols:
+                    try:
+                        cur.execute(f"SELECT {tc} FROM {t} LIMIT 200")
+                        rows = cur.fetchall()
+                        if rows:
+                            for (val,) in rows[:50]:
+                                if isinstance(val, (bytes, bytearray)):
+                                    try:
+                                        val = val.decode("utf-8", errors="ignore")
+                                    except Exception:
+                                        val = val.decode("latin-1", errors="ignore")
+                                if val:
+                                    chunks.append(str(val))
+                    except Exception:
+                        pass
+                if chunks:
+                    break
+    return (text or "\n\n---\n\n".join(chunks))[:max_chars]
+
+
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     import streamlit as st
     st.header("Chat Assistant — Y2")
@@ -15223,6 +15322,105 @@ def _chat_plus_call_openai(messages: list[dict], temperature: float = 0.2) -> st
     except Exception as e:
         return f"AI error: {e}"
 
+
+def _list_rfps(conn) -> list[tuple[str, str]]:
+    """Return list of (rfp_id, label). Defensive over possible schemas."""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+    except Exception:
+        return []
+    # candidate tables likely to hold RFP metadata
+    candidates = [t for t in tables if re.search(r"rfp", t, re.I)]
+    results = []
+    for t in candidates:
+        # probe common id/title columns
+        id_cols = ["id","rfp_id","rid"]
+        title_cols = ["title","name","subject","rfp_title"]
+        for idc in id_cols:
+            for tc in title_cols:
+                try:
+                    cur.execute(f"SELECT {idc}, {tc} FROM {t} ORDER BY 1 DESC LIMIT 50")
+                    for rid, title in cur.fetchall():
+                        rid_s = str(rid)
+                        title_s = str(title) if title is not None else ""
+                        label = f"{rid_s} — {title_s} [{t}]"
+                        results.append((rid_s, label))
+                    if results:
+                        return results
+                except Exception:
+                    pass
+        # fallback: only id
+        for idc in id_cols:
+            try:
+                cur.execute(f"SELECT {idc} FROM {t} ORDER BY 1 DESC LIMIT 50")
+                for (rid,) in cur.fetchall():
+                    rid_s = str(rid)
+                    label = f"{rid_s} [{t}]"
+                    results.append((rid_s, label))
+                if results:
+                    return results
+            except Exception:
+                pass
+    return results
+
+def _load_rfp_context(conn, rfp_id: str, max_chars: int = 200000) -> str:
+    """Try multiple table/column patterns to get joined text for a given rfp_id."""
+    if not conn or not rfp_id:
+        return ""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+    except Exception:
+        return ""
+    candidates = [t for t in tables if re.search(r"rfp", t, re.I)]
+    text_cols = ["text","content","full_text","page_text","body"]
+    id_cols = ["rfp_id","id","rid"]
+    chunks = []
+    for t in candidates:
+        for idc in id_cols:
+            for tc in text_cols:
+                try:
+                    cur.execute(f"SELECT {tc} FROM {t} WHERE {idc}=? LIMIT 500", (rfp_id,))
+                    rows = cur.fetchall()
+                    if rows:
+                        for (val,) in rows:
+                            if isinstance(val, (bytes, bytearray)):
+                                try:
+                                    val = val.decode("utf-8", errors="ignore")
+                                except Exception:
+                                    val = val.decode("latin-1", errors="ignore")
+                            if val:
+                                chunks.append(str(val))
+                except Exception:
+                    pass
+    text = "\n\n---\n\n".join(chunks)
+    if not text and candidates:
+        # last resort: any rows from 'context' tables
+        for t in candidates:
+            if re.search(r"context|pages|docs", t, re.I):
+                for tc in text_cols:
+                    try:
+                        cur.execute(f"SELECT {tc} FROM {t} LIMIT 200")
+                        rows = cur.fetchall()
+                        if rows:
+                            for (val,) in rows[:50]:
+                                if isinstance(val, (bytes, bytearray)):
+                                    try:
+                                        val = val.decode("utf-8", errors="ignore")
+                                    except Exception:
+                                        val = val.decode("latin-1", errors="ignore")
+                                if val:
+                                    chunks.append(str(val))
+                    except Exception:
+                        pass
+                if chunks:
+                    break
+    return (text or "\n\n---\n\n".join(chunks))[:max_chars]
+
+
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     import streamlit as st
     import pandas as pd
@@ -15241,7 +15439,9 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         st.session_state[hist_key] = []   # list of chat messages
 
     # Controls
-    c1, c2, c3 = st.columns([3,2,2])
+    c0, c1, c2, c3 = st.columns([2,3,2,2])
+    with c0:
+        source = st.selectbox("Source", ["Attachments only","RFP context only","Both"], index=0, key="chat_plus_source")
     with c1:
         ups = st.file_uploader(
             "Add attachments",
@@ -15254,6 +15454,30 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
         mode = st.selectbox("Output mode", ["Auto","Checklist","Phone script","Email to vendor","Pricing inputs"], index=0, key="chat_plus_mode")
     with c3:
         temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="chat_plus_temp")
+
+
+    # Optional RFP selection
+    selected_rfp_id = None
+    if source in ("RFP context only","Both"):
+        st.divider()
+        st.subheader("RFP context")
+        options = _list_rfps(conn)
+        if options:
+            labels = [label for _, label in options]
+            idx = st.selectbox("Choose RFP", list(range(len(labels))), format_func=lambda i: labels[i], key="chat_plus_rfp_idx") if labels else 0
+            if options:
+                selected_rfp_id = options[idx][0]
+        manual = st.text_input("Or enter RFP ID manually", value="", key="chat_plus_rfp_manual")
+        if manual.strip():
+            selected_rfp_id = manual.strip()
+        if selected_rfp_id:
+            if st.button("Preview RFP context", key="chat_plus_preview_rfp"):
+                preview = _load_rfp_context(conn, selected_rfp_id, max_chars=5000)
+                if preview:
+                    st.text_area("RFP context preview", preview, height=200, key="chat_plus_rfp_preview_box")
+                else:
+                    st.info("No RFP context found for that ID.")
+
 
     # Ingest uploads into session
     new_rows = []
@@ -15316,20 +15540,36 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
 
     if ask and (q or "").strip():
         # Build context: select top snippets by overlap
-        texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
+        # Gather attachment text
+        att_texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
+        # Optionally add RFP context
+        rfp_text = ""
+        if source in ("RFP context only","Both") and selected_rfp_id:
+            try:
+                rfp_text = _load_rfp_context(conn, selected_rfp_id, max_chars=120000)
+            except Exception:
+                rfp_text = ""
+        # Build candidate texts per source
+        base_texts = []
+        if source == "Attachments only":
+            base_texts = att_texts
+        elif source == "RFP context only":
+            base_texts = [rfp_text] if (rfp_text or "").strip() else []
+        else:
+            base_texts = att_texts + ([rfp_text] if (rfp_text or "").strip() else [])
         # chunk long texts
         try:
             chunks = []
-            for t in texts:
-                cs = y5_chunk_text(t, target_chars=9000, overlap=500)  # reuse existing chunker if present
+            for t in base_texts:
+                cs = y5_chunk_text(t, target_chars=9000, overlap=500)  # reuse chunker if present
                 chunks.extend(cs or [])
         except Exception:
             # fallback chunk
             chunks = []
-            for t in texts:
+            for t in base_texts:
                 for i in range(0, len(t), 8000):
                     chunks.append(t[i:i+8000])
-        top = _score_snippets_by_query(chunks or texts or [""], q, top_k=10)
+        top = _score_snippets_by_query(chunks or base_texts or [""], q, top_k=10)
         context_text = "\\n\\n---\\n\\n".join([s[:1800] for s in top])[:24000]
 
         # Compose and call model
