@@ -15541,9 +15541,13 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     if ask and (q or "").strip():
         # Build context: select top snippets by overlap
         # Gather attachment text
-        att_texts = [f"Source: {r.get('name','file')}
+        att_texts = []
+        for _r in st.session_state[files_key]:
+            _txt = (_r.get('text') or '').strip()
+            if _txt:
+                _name = str(_r.get('name') or 'file')
+                att_texts.append('Source: ' + _name + '\n\n' + _txt)
 
-{r.get('text','')}" for r in st.session_state[files_key] if (r.get('text') or '').strip()]
         # Optionally add RFP context
         rfp_text = ""
         if source in ("RFP context only","Both") and selected_rfp_id:
