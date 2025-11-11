@@ -4113,7 +4113,7 @@ def ask_ai(messages, tools=None, temperature=0.2):
     try:
         resp = client.chat.completions.create(
             model=model_name,
-            messages=(messages if (messages and isinstance(messages, list) and isinstance(messages[0], dict) and messages[0].get('role')=='system') else [{"role":"system","content": SYSTEM_CO}, *messages]),
+            messages=[{"role":"system","content": SYSTEM_CO}, *messages],
             tools=tools or [],
             temperature=float(temperature),
             stream=True
@@ -4466,20 +4466,12 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     q = (question or "").strip()
     norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
     terms = [w for w in norm_q.split() if len(w) > 1]
-    # Domain boosts for aircraft wash
-    domain_kw = [
-        "wash","washing","clean","cleaning","rinse","rinsing","underfloor","lubrication","lube",
-        "wheel","wheel wells","landing gear","flight control","thrust reverser","flap","spoiler",
-        "bogie","strut","cargo","ramp","de-panel","depanel","mil-prf-87937","type iv","eesoh",
-        "hazardous","hangar","water","nozzle","degrees","hours","maximum","elapsed","time","pws","1.2"
-    ]
     scored = []
     for pg in pages:
         txt = (pg.get("text") or "")
         norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
         score = 0
-        # Weight query terms and domain keywords
-        for w in terms + domain_kw:
+        for w in terms:
             try:
                 score += norm_t.count(" " + w + " ")
             except Exception:
@@ -4494,37 +4486,9 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     for h in hits:
         snip = (h.get("text") or "").strip().replace("\n", " ")
         snippets.append(snip[:800])
-    context_text = context_text
+    context_text = "\n\n---\n\n".join(snippets) if snippets else ""
 
-    # Structured system prompt for wash/cleaning
-    _intent_wash = bool(_re.search(r"\b(wash|clean|cleaning|rinse|rinsing)\b", (q or ""), _re.I))
-    _sys = (
-        "You are a federal Contracting Officer technical reviewer. "
-        "Answer only from the provided CONTEXT. No citations. "
-        "Use short, direct sentences. "
-        "Enumerate required services with PWS subsection numbers when present. "
-        "If a data point is not found in CONTEXT, write 'Not specified in PWS'. "
-        "Output sections in this exact order:\n"
-        "1) Required services\n"
-        "2) Time standards\n"
-        "3) Methods and constraints\n"
-        "4) Materials and documents\n"
-        "5) Environmental and housekeeping\n"
-        "6) Acceptance notes\n"
-    )
-
-    # Expand fmt_rules for wash
-    if _intent_wash:
-        fmt_rules = (
-            "List services as numbered items. For each, include: PWS ref, title, and a one-line requirement. "
-            "Then list time standards, methods, materials, environmental controls, and acceptance exactly as bullets."
-        )
-        # Increase recall depth when washing intent detected
-        try:
-            k = max(int(k), 12)
-        except Exception:
-            k = 12
-    
+    # Format guidance
     mname = (mode or "Auto").lower()
     if mname.startswith("checklist"):
         fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
@@ -4563,10 +4527,7 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
         f"- If known, include NAICS {naics} and Due Date {due}.\\n"
     )
 
-    for tok in ask_ai([
-        {"role":"system","content": _sys},
-        {"role":"user","content": user}
-    ], temperature=temperature):
+    for tok in ask_ai([{"role":"user","content": user}], temperature=temperature):
         yield tok
 
 def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
@@ -5178,7 +5139,7 @@ def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, draft
         try:
             resp = client.chat.completions.create(
                 model=model_name,
-                messages=[{"role":"system","content": system}, {"role":"user","content": user}],
+                messages=[{"role":"system","content": system}, {"role":"user","content": user}] + [{\"role\": \"system\", \"content\": _GLOBAL_STRUCTURE_SCHEMA}],
                 temperature=0.15,
                 stream=False,
             )
@@ -15580,13 +15541,7 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     if ask and (q or "").strip():
         # Build context: select top snippets by overlap
         # Gather attachment text
-        att_texts = []
-        for _r in st.session_state[files_key]:
-            _txt = (_r.get('text') or '').strip()
-            if _txt:
-                _name = str(_r.get('name') or 'file')
-                att_texts.append('Source: ' + _name + '\n\n' + _txt)
-
+        att_texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
         # Optionally add RFP context
         rfp_text = ""
         if source in ("RFP context only","Both") and selected_rfp_id:
@@ -16932,53 +16887,20 @@ def _pb_word_count_section(text: str) -> int:
             return 0
 
 
-
-# === Append-only patch: Chat+ attachment manifest and robust composer ===
+# === Chat+ helpers ===
 def _chat_plus_attachment_manifest(files: list[dict]) -> str:
     try:
         lines = [f"ATTACHMENT MANIFEST: {len(files)} file(s) attached)."]
         for i, r in enumerate(files, start=1):
-            try:
-                name = str(r.get('name') or f'file_{i}')
-                mime = str(r.get('mime') or '')
-                size = int(r.get('size') or 0)
-            except Exception:
-                name, mime, size = (str(r.get('name') or f'file_{i}'), '', 0)
+            name = str(r.get('name') or f'file_{i}')
+            mime = str(r.get('mime') or '')
+            size = int(r.get('size') or 0)
             kb = (size // 1024) if isinstance(size, int) and size >= 0 else 0
             lines.append(f"{i}. {name} ({mime}, {kb} KB)")
-        return "\\n".join(lines)
+        return "\n".join(lines)
     except Exception as e:
         return f"ATTACHMENT MANIFEST: error {e}"
 
-def _chat_plus_compose_messages(context_text: str, history: list[dict], q: str, mode: str = 'Auto') -> list[dict]:
-    import streamlit as st  # local import safe in Streamlit env
-    files = st.session_state.get('chat_plus_files') or []
-    manifest = _chat_plus_attachment_manifest(files)
-    system = (
-        "You are the ELA Chat Assistant. Answer using ONLY the provided context or the attachment manifest. "
-        "If the user asks about attachments, count and list them from the manifest exactly. "
-        "Do not invent attachments. No citations. Be concise. "
-        "If information is missing, state the missing input."
-    )
-    tool_ctx = f"{manifest}\\n\\nCONTEXT SNIPPETS:\\n{context_text or '(no snippets)'}"
-    messages = [{"role": "system", "content": system},
-                {"role": "system", "content": tool_ctx}]
-    for m in history or []:
-        role = str(m.get('role') or 'user'); content = str(m.get('content') or '')
-        messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": q or ""})
-    return messages
 
-def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15) -> str:
-    try:
-        from openai import OpenAI as _OpenAI
-        client = _OpenAI()
-        model = _resolve_model()
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=float(temperature or 0.15),
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"[AI unavailable] {e}"
+# === Global Structured Answer Schema (always-on) ===
+_GLOBAL_STRUCTURE_SCHEMA = ("STRUCTURE ALL ANSWERS USING THIS TEMPLATE:""\nSUMMARY:""\n• A 2–4 sentence executive summary answering the user’s question directly.""\nSCOPE AND SECTIONS:""\n• Identify the governing sections or sources relevant to the question. If none, write n.a.""\nSERVICES OR REQUIREMENTS:""\n• List the discrete tasks or requirements. Use exact headings or numbers when present. If none, write n.a.""\nMANAGEMENT AND CONTROLS:""\n• Oversight, staffing, tool control, notifications, and records required. If none, write n.a.""\nENVIRONMENTAL AND SAFETY:""\n• HAZMAT, environmental rules, PPE, and spill response. If none, write n.a.""\nFACILITIES AND HOUSEKEEPING:""\n• Facility duties, cleanup, and maintenance. If none, write n.a.""\nGOVERNMENT-FURNISHED VS CONTRACTOR-FURNISHED:""\n• What the government provides and what the contractor must provide. If none, write n.a.""\nTRAINING:""\n• Training topics, frequency, and records. If none, write n.a.""\nQUALITY AND PERFORMANCE:""\n• QA/acceptance thresholds and how success is measured. If none, write n.a.""\nEXECUTION FLOW:""\n• A concise step-by-step sequence to perform the work. If none, write n.a.""\nMATERIALS AND REFERENCES:""\n• Materials, chemicals, and technical references. If none, write n.a.""\nCONTROLS:""\n• Use ONLY provided context and the attachment manifest. Do not invent sources. No citations. No external URLs.")
