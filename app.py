@@ -8,31 +8,7 @@ except NameError:
 def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
     try:
-        
-
-# === Chat+ session key + dedupe helpers ===
-def _chat_plus_keys():
-    import streamlit as st
-    tid = st.session_state.get("cp_thread_id") or st.session_state.get("chat_plus_tid") or "default"
-    return f"chat_plus_history_{tid}", f"chat_plus_files_{tid}"
-
-def _dedupe_chat_plus_files(rows):
-    out, seen = [], set()
-    for r in rows or []:
-        try:
-            name = str((r or {}).get("name") or "")
-            sha  = str((r or {}).get("sha") or "")
-            txt  = str((r or {}).get("text") or "")
-            key = (name, sha) if sha else (name, len(txt))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(dict(r))
-        except Exception:
-            continue
-    return out
-
-import streamlit as st, pandas as pd
+        import streamlit as st, pandas as pd
     except Exception:
         st = None; pd = None
     rid = None
@@ -1618,10 +1594,10 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
                 secs = extract_sections_L_M(txt)
             except Exception:
                 secs = {}
-                try:
-                    lm = (derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))) if secs else []
-                except Exception:
-                    lm = []
+            try:
+                lm = (derive_lm_items(secs.get('L','')) + derive_lm_items(secs.get('M',''))) if secs else []
+            except Exception:
+                lm = []
             # Persist LM items idempotently
             try:
                 with conn:
@@ -3175,28 +3151,6 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Any, Dict, List, Tuple
-
-
-
-# --- Early guard to ensure helper exists before any usage ---
-if "_dedupe_chat_plus_files" not in globals():
-    def _dedupe_chat_plus_files(rows):
-        out = []
-        seen = set()
-        for r in rows or []:
-            try:
-                name = str((r or {}).get("name") or "")
-                sha = str((r or {}).get("sha") or "")
-                txt = str((r or {}).get("text") or "")
-                key = (name, sha) if sha else (name, len(txt))
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(dict(r))
-            except Exception:
-                continue
-        return out
-
 import io
 import json
 import os
@@ -12468,22 +12422,6 @@ def run_rfp_analyzer(conn) -> None:
                        format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0], key="onepage_rfp_default")
     st.session_state["current_rfp_id"] = int(_ensure_selected_rfp_id(conn))
 
-
-    # Stable per-thread Chat+ keys
-
-    hist_key, files_key = _chat_plus_keys()
-
-    import streamlit as _st_guard
-
-    if hist_key not in _st_guard.session_state or not isinstance(_st_guard.session_state.get(hist_key), list):
-
-        _st_guard.session_state[hist_key] = []
-
-    if files_key not in _st_guard.session_state or not isinstance(_st_guard.session_state.get(files_key), list):
-
-        _st_guard.session_state[files_key] = []
-
-
     # Controls
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
@@ -15557,16 +15495,11 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
                     "size": len(data),
                     "text": txt or "",
                 }
-                try:
-                    import hashlib as _hl
-                    rec["sha"] = _hl.sha256(data).hexdigest()
-                except Exception:
-                    rec["sha"] = ""
                 new_rows.append(rec)
             except Exception:
                 continue
         if new_rows:
-            st.session_state[files_key] = _dedupe_chat_plus_files((st.session_state.get(files_key) or []) + new_rows)
+            st.session_state[files_key].extend(new_rows)
             st.success(f"Added {len(new_rows)} attachment(s).")
 
     # Attachment table
@@ -15608,7 +15541,9 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     if ask and (q or "").strip():
         # Build context: select top snippets by overlap
         # Gather attachment text
-        att_texts = [r["text"] for r in st.session_state[files_key] if (r.get("text") or "").strip()]
+        att_texts = [f"Source: {r.get('name','file')}
+
+{r.get('text','')}" for r in st.session_state[files_key] if (r.get('text') or '').strip()]
         # Optionally add RFP context
         rfp_text = ""
         if source in ("RFP context only","Both") and selected_rfp_id:
@@ -16952,3 +16887,55 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
+
+
+
+# === Append-only patch: Chat+ attachment manifest and robust composer ===
+def _chat_plus_attachment_manifest(files: list[dict]) -> str:
+    try:
+        lines = [f"ATTACHMENT MANIFEST: {len(files)} file(s) attached)."]
+        for i, r in enumerate(files, start=1):
+            try:
+                name = str(r.get('name') or f'file_{i}')
+                mime = str(r.get('mime') or '')
+                size = int(r.get('size') or 0)
+            except Exception:
+                name, mime, size = (str(r.get('name') or f'file_{i}'), '', 0)
+            kb = (size // 1024) if isinstance(size, int) and size >= 0 else 0
+            lines.append(f"{i}. {name} ({mime}, {kb} KB)")
+        return "\\n".join(lines)
+    except Exception as e:
+        return f"ATTACHMENT MANIFEST: error {e}"
+
+def _chat_plus_compose_messages(context_text: str, history: list[dict], q: str, mode: str = 'Auto') -> list[dict]:
+    import streamlit as st  # local import safe in Streamlit env
+    files = st.session_state.get('chat_plus_files') or []
+    manifest = _chat_plus_attachment_manifest(files)
+    system = (
+        "You are the ELA Chat Assistant. Answer using ONLY the provided context or the attachment manifest. "
+        "If the user asks about attachments, count and list them from the manifest exactly. "
+        "Do not invent attachments. No citations. Be concise. "
+        "If information is missing, state the missing input."
+    )
+    tool_ctx = f"{manifest}\\n\\nCONTEXT SNIPPETS:\\n{context_text or '(no snippets)'}"
+    messages = [{"role": "system", "content": system},
+                {"role": "system", "content": tool_ctx}]
+    for m in history or []:
+        role = str(m.get('role') or 'user'); content = str(m.get('content') or '')
+        messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": q or ""})
+    return messages
+
+def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15) -> str:
+    try:
+        from openai import OpenAI as _OpenAI
+        client = _OpenAI()
+        model = _resolve_model()
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=float(temperature or 0.15),
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"[AI unavailable] {e}"
