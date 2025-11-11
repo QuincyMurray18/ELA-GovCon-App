@@ -10571,11 +10571,12 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
 
     return res
 
-
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     import streamlit as st
+    st.header("Chat Assistant — Y2")
+    st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
     try:
-        chatp_ui(conn)
+        y2_ui_threaded_chat(conn)
     except Exception as _e:
         st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
 
@@ -16163,320 +16164,205 @@ def _pb_word_count_section(text: str) -> int:
             return 0
 
 
-
-# === Chat+ (independent attachments) ===
-def _chatp_ensure_schema(conn: "sqlite3.Connection") -> None:
-    from contextlib import closing as _closing
+# === Chat Assistant — Chat+ (attachment-first, RFP-independent) ===
+def _cplus_ensure_schema(conn):
     try:
-        with _closing(conn.cursor()) as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_threads(
-                    id INTEGER PRIMARY KEY,
-                    title TEXT,
-                    created_at TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages(
-                    id INTEGER PRIMARY KEY,
-                    thread_id INTEGER NOT NULL,
-                    role TEXT CHECK(role in ('user','assistant')),
-                    content TEXT,
-                    created_at TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_files(
-                    id INTEGER PRIMARY KEY,
-                    thread_id INTEGER NOT NULL,
-                    filename TEXT,
-                    mime TEXT,
-                    bytes BLOB,
-                    pages INTEGER,
-                    created_at TEXT
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_chunks(
-                    id INTEGER PRIMARY KEY,
-                    file_id INTEGER NOT NULL,
-                    chunk_index INTEGER,
-                    page INTEGER,
-                    text TEXT,
-                    embedding BLOB
-                );
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_msgs_thr ON chat_messages(thread_id);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_files_thr ON chat_files(thread_id);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ch_chunks_file ON chat_chunks(file_id);")
-            conn.commit()
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS cplus_threads(
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            created_at INTEGER
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS cplus_messages(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT,
+            role TEXT,
+            content TEXT,
+            created_at INTEGER
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS cplus_files(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT,
+            filename TEXT,
+            bytes BLOB,
+            created_at INTEGER
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS cplus_chunks(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT,
+            file_id INTEGER,
+            chunk TEXT,
+            embedding TEXT
+        );""")
+        conn.commit()
     except Exception:
         pass
 
-def _chatp_list_threads(conn: "sqlite3.Connection") -> list[dict]:
-    _chatp_ensure_schema(conn)
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query("SELECT id, title, created_at FROM chat_threads ORDER BY id DESC;", conn, params=())
-        return [{"id": int(r["id"]), "title": r.get("title") or "Untitled", "created_at": r.get("created_at")} for _, r in df.fillna("").iterrows()]
-    except Exception:
-        return []
+def _cplus_create_thread(conn, name: str) -> str:
+    import time, uuid
+    _cplus_ensure_schema(conn)
+    tid = str(uuid.uuid4())
+    with conn:
+        conn.execute("INSERT INTO cplus_threads(id,name,created_at) VALUES(?,?,?)",
+                     (tid, name, int(time.time())))
+    return tid
 
-def _chatp_create_thread(conn: "sqlite3.Connection", title: str = "New Chat") -> int:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO chat_threads(title, created_at) VALUES(?, datetime('now'));", ((title or "New Chat").strip(),))
-        tid = int(cur.lastrowid)
-        conn.commit()
-        return tid
+def _cplus_list_threads(conn) -> list[dict]:
+    _cplus_ensure_schema(conn)
+    rows = conn.execute("SELECT id,name,created_at FROM cplus_threads ORDER BY created_at DESC").fetchall()
+    return [{"id": r[0], "name": r[1], "created_at": r[2]} for r in rows]
 
-def _chatp_rename_thread(conn: "sqlite3.Connection", thread_id: int, title: str) -> None:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("UPDATE chat_threads SET title=? WHERE id=?;", ((title or "Untitled").strip(), int(thread_id)))
-        conn.commit()
+def _cplus_save_message(conn, thread_id: str, role: str, content: str):
+    import time
+    _cplus_ensure_schema(conn)
+    with conn:
+        conn.execute("INSERT INTO cplus_messages(thread_id,role,content,created_at) VALUES(?,?,?,?)",
+                     (thread_id, role, content, int(time.time())))
 
-def _chatp_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("DELETE FROM chat_chunks WHERE file_id IN (SELECT id FROM chat_files WHERE thread_id=?);", (int(thread_id),))
-        cur.execute("DELETE FROM chat_files WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM chat_messages WHERE thread_id=?;", (int(thread_id),))
-        cur.execute("DELETE FROM chat_threads WHERE id=?;", (int(thread_id),))
-        conn.commit()
+def _cplus_get_messages(conn, thread_id: str) -> list[tuple[str,str]]:
+    _cplus_ensure_schema(conn)
+    rows = conn.execute("SELECT role,content FROM cplus_messages WHERE thread_id=? ORDER BY id ASC", (thread_id,)).fetchall()
+    return [(r[0], r[1]) for r in rows]
 
-def _chatp_get_messages(conn: "sqlite3.Connection", thread_id: int) -> list[dict]:
-    _chatp_ensure_schema(conn)
-    try:
-        import pandas as _pd
-        df = _pd.read_sql_query(
-            "SELECT role, content, created_at FROM chat_messages WHERE thread_id=? ORDER BY id;",
-            conn, params=(int(thread_id),)
-        )
-        return [{"role": r["role"], "content": r["content"], "created_at": r.get("created_at")} for _, r in df.fillna("").iterrows()]
-    except Exception:
-        return []
+def _cplus_save_file(conn, thread_id: str, filename: str, b: bytes) -> int:
+    _cplus_ensure_schema(conn)
+    with conn:
+        cur = conn.execute("INSERT INTO cplus_files(thread_id,filename,bytes,created_at) VALUES(?,?,?,strftime('%s','now'))",
+                           (thread_id, filename, b))
+        return int(cur.lastrowid)
 
-def _chatp_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, content: str) -> None:
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO chat_messages(thread_id, role, content, created_at) VALUES(?,?,?, datetime('now'));",
-                    (int(thread_id), role, content))
-        conn.commit()
+def _cplus_add_chunks(conn, thread_id: str, file_id: int, chunks: list[str]):
+    _cplus_ensure_schema(conn)
+    if not chunks:
+        return
+    vecs = _embed_texts(chunks)
+    rows = [(thread_id, file_id, c, json.dumps(v)) for c, v in zip(chunks, vecs)]
+    with conn:
+        conn.executemany("INSERT INTO cplus_chunks(thread_id,file_id,chunk,embedding) VALUES(?,?,?,?)", rows)
 
-def _chatp_ingest_uploads(conn: "sqlite3.Connection", thread_id: int, uploads: list) -> tuple[int,int]:
-    """
-    Save uploads, extract text, chunk, and embed.
-    Returns (files_ingested, chunks_indexed).
-    """
-    _chatp_ensure_schema(conn)
-    from contextlib import closing as _closing
-    import pandas as _pd
-    files_ing = 0; chunks_idx = 0
-    for up in uploads or []:
+def _cplus_get_chunks(conn, thread_id: str) -> list[tuple[str, list[float]]]:
+    _cplus_ensure_schema(conn)
+    rows = conn.execute("SELECT chunk, embedding FROM cplus_chunks WHERE thread_id=?", (thread_id,)).fetchall()
+    out = []
+    for chunk, ejson in rows:
         try:
-            b = up.read()
-            name = getattr(up, "name", "upload")
-            mime = getattr(up, "type", None) or _detect_mime_light(name)
-            pages = 0
-            pages_text = extract_text_pages(b, mime) or []
-            if pages_text:
-                pages_text, ocrn = ocr_pages_if_empty(b, mime, pages_text)
-            pages = len(pages_text) if pages_text else 0
-            with _closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO chat_files(thread_id, filename, mime, bytes, pages, created_at) VALUES(?,?,?,?,?, datetime('now'));",
-                            (int(thread_id), name, mime, sqlite3.Binary(b), int(pages)))
-                fid = int(cur.lastrowid)
-                conn.commit()
-            files_ing += 1
-            # Build chunks and embeddings
-            chunks: list[tuple[int,int,str]] = []  # (page, idx, text)
-            for pi, txt in enumerate(pages_text[:100], start=1):
-                for ci, ch in enumerate(_split_chunks(txt or "", max_chars=1600, overlap=200)):
-                    chunks.append((pi, ci, ch))
-            texts = [t for _,_,t in chunks]
-            vecs = _embed_texts(texts) if texts else []
-            with _closing(conn.cursor()) as cur:
-                for (pg, ci, t), v in zip(chunks, vecs):
-                    try:
-                        cur.execute("INSERT INTO chat_chunks(file_id, chunk_index, page, text, embedding) VALUES(?,?,?,?,?);",
-                                    (int(fid), int(ci), int(pg), t, json.dumps(v)))
-                        chunks_idx += 1
-                    except Exception:
-                        pass
-                conn.commit()
+            out.append((chunk, json.loads(ejson)))
         except Exception:
-            continue
-    return files_ing, chunks_idx
+            out.append((chunk, []))
+    return out
 
-def _chatp_search(conn: "sqlite3.Connection", thread_id: int, query: str, k: int = 6) -> list[dict]:
-    """
-    Return top-k chunk hits across this thread's attachments using embedding cosine similarity.
-    """
-    _chatp_ensure_schema(conn)
-    import pandas as _pd
-    q = (query or "").strip()
-    if not q:
-        return []
-    qvec = _embed_texts([q])[0]
-    if not qvec:
-        return []
-    try:
-        df = _pd.read_sql_query(
-            "SELECT chat_chunks.text as text, chat_chunks.page as page, chat_files.filename as file "
-            "FROM chat_chunks JOIN chat_files ON chat_chunks.file_id = chat_files.id "
-            "WHERE chat_files.thread_id=?;",
-            conn, params=(int(thread_id),)
-        )
-    except Exception:
-        return []
-    rows = []
-    for _, r in df.iterrows():
-        txt = str(r.get("text") or "")
-        try:
-            v = json.loads(txt)  # Avoid accidental JSON misread
-            if isinstance(v, list) and all(isinstance(x, (float,int)) for x in v):
-                # rare case where text was vector; skip
-                continue
-        except Exception:
-            pass
-        try:
-            # embedding stored alongside row
-            # compute on the fly via cache to reduce memory
-            pass
-        except Exception:
-            pass
-    # Fetch embeddings in a single query and compute sim
-    try:
-        df2 = _pd.read_sql_query(
-            "SELECT chat_chunks.text as text, chat_chunks.page as page, chat_files.filename as file, chat_chunks.embedding as emb "
-            "FROM chat_chunks JOIN chat_files ON chat_chunks.file_id = chat_files.id "
-            "WHERE chat_files.thread_id=?;",
-            conn, params=(int(thread_id),)
-        )
-    except Exception:
-        return []
-    scored = []
-    for _, r in df2.iterrows():
-        text = str(r.get("text") or "")
-        try:
-            emb = json.loads(r.get("emb") or "[]")
-        except Exception:
-            emb = []
-        score = _cos_sim(qvec, emb) if emb else 0.0
-        scored.append({"file": r.get("file"), "page": int(r.get("page") or 0), "text": text, "score": float(score)})
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:max(1, int(k))]
+def _cplus_extract_texts(file_bytes: bytes, filename: str) -> str:
+    # reuse Phase X1 extractors if available
+    mime = _detect_mime_light(filename)
+    pages = extract_text_pages(file_bytes, mime)
+    if not pages:
+        return ""
+    return "\\n".join([p for p in pages if p and p.strip()])
 
-def _chatp_build_messages(thread_id: int, question: str, hits: list[dict]) -> list[dict]:
-    # Compose a user message with embedded evidence. No citations in output.
-    ev_lines = []
-    for i, h in enumerate(hits, start=1):
-        src = f"{h.get('file','')} p.{h.get('page','')}"
-        snip = (h.get('text') or '').strip().replace("\\n", " ")
-        ev_lines.append(f"{src} — {snip}")
-    evidence = "\\n".join(ev_lines)
-    prompt = (
-        "You are a senior U.S. federal Contracting Officer (CO) and Source Selection advisor. "
-        "Answer using short, precise sentences or numbered bullets. "
-        "Use the CONTEXT when it helps. Do not include citations, bracket tags, or raw JSON. "
-        "If context lacks facts, say what is missing then proceed with best-practice guidance. "
-        "If asked to contact vendors or subs, draft a concise email or call script with a clear ask and due date. "
-        "Keep answers self-contained."
+def _cplus_retrieve(conn, thread_id: str, question: str, k: int = 6) -> list[str]:
+    chunks = _cplus_get_chunks(conn, thread_id)
+    if not chunks:
+        return []
+    qv = _embed_texts([question])[0]
+    scored = [(c, _cos_sim(qv, v)) for c, v in chunks]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [c for c, _ in scored[:max(1, k)]]
+
+def _cplus_build_messages(question: str, ctx: list[str]) -> list[dict]:
+    sys = (
+        "You are Chat+, a proposal-savvy assistant for federal contracting. "
+        "Use the provided context when relevant. No citations. No Y1/Y2 tags. "
+        "Write precise, concise answers. If context is insufficient, say so briefly and suggest a next step."
     )
-    user = f"QUESTION\\n{(question or '').strip()}\\n\\nCONTEXT\\n{evidence or '(none)'}"
-    msgs = [{"role":"system","content": prompt}, {"role":"user","content": user}]
-    return msgs
+    if ctx:
+        block = "\\n\\n".join([f"[Context {i+1}]\\n{c}" for i, c in enumerate(ctx)])
+        user = f"Context:\\n{block}\\n\\nQuestion:\\n{question}"
+    else:
+        user = f"Question:\\n{question}"
+    return [{"role":"system","content":sys},{"role":"user","content":user}]
 
 def chatp_ui(conn: "sqlite3.Connection") -> None:
     import streamlit as st
-    import pandas as _pd
-    _chatp_ensure_schema(conn)
+    _cplus_ensure_schema(conn)
     st.header("Chat Assistant — Chat+")
-    st.caption("Attach any file. Ask anything. Works without an RFP.")
-    threads = _chatp_list_threads(conn)
-    colA, colB, colC = st.columns([2,1,1])
-    with colA:
-        if not threads:
-            st.info("No chats yet.")
-        sel = st.selectbox("Thread", options=[t["id"] for t in threads] if threads else [], 
-                           format_func=lambda i: next((t["title"] for t in threads if t["id"]==i), f"#{i}"),
-                           key="chatp_sel")
-    with colB:
-        if st.button("New chat", key="chatp_new"):
-            tid = _chatp_create_thread(conn, "Chat+")
-            st.session_state["chatp_sel"] = tid
-            st.rerun()
-    with colC:
-        if threads and st.button("Delete", key="chatp_del", help="Delete selected thread"):
-            tid = st.session_state.get("chatp_sel")
-            if tid:
-                _chatp_delete_thread(conn, int(tid))
-                st.session_state.pop("chatp_sel", None)
-                st.rerun()
-    tid = st.session_state.get("chatp_sel")
-    if not tid and threads:
-        tid = threads[0]["id"]
-        st.session_state["chatp_sel"] = tid
-    if not tid:
-        return
-    # Rename
-    trow = next((t for t in threads if t["id"]==tid), None)
-    new_title = st.text_input("Title", value=(trow.get("title") if trow else "Chat+"), key="chatp_title")
-    if new_title and trow and new_title.strip() != (trow.get("title") or "").strip():
-        _chatp_rename_thread(conn, int(tid), new_title.strip())
-    st.divider()
-    # Uploads
-    ups = st.file_uploader("➕ Attach files", type=["pdf","docx","xlsx","csv","txt","png","jpg","jpeg"], 
-                           accept_multiple_files=True, key=f"chatp_up_{tid}")
-    if ups:
-        with st.spinner("Indexing attachments"):
-            nf, nc = _chatp_ingest_uploads(conn, int(tid), ups)
-        st.success(f"Imported {nf} file(s). Indexed {nc} chunk(s).")
-    # Show files
-    try:
-        df_files = _pd.read_sql_query("SELECT id, filename, mime, pages, created_at FROM chat_files WHERE thread_id=? ORDER BY id DESC;", conn, params=(int(tid),))
-    except Exception:
-        df_files = _pd.DataFrame(columns=["id","filename","mime","pages","created_at"])
-    if not df_files.empty:
-        st.caption("Attachments")
-        _styled_dataframe(df_files.rename(columns={"filename":"File","mime":"MIME","pages":"Pages","created_at":"Added"}), use_container_width=True, hide_index=True)
-    st.divider()
-    # Chat history
-    for m in _chatp_get_messages(conn, int(tid))[-50:]:
-        st.markdown(f"**{m['role'].title()}**: {m['content']}")
-    # Input
-    q = st.text_area("Ask a question", key=f"chatp_q_{tid}", height=120)
-    c1, c2 = st.columns([1,3])
+    if "cplus_thread_id" not in st.session_state:
+        threads = _cplus_list_threads(conn)
+        st.session_state["cplus_thread_id"] = threads[0]["id"] if threads else _cplus_create_thread(conn, "New chat")
+
+    c1, c2 = st.columns([1,1])
     with c1:
-        temp = st.number_input("Temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.1, key=f"chatp_temp_{tid}")
+        if st.button("New chat", use_container_width=True, key="cplus_new"):
+            st.session_state["cplus_thread_id"] = _cplus_create_thread(conn, "New chat")
+            st.rerun()
     with c2:
-        k = int(st.slider("Context breadth (top-k chunks)", min_value=0, max_value=12, value=6, step=1, key=f"chatp_k_{tid}"))
-    if st.button("Ask", key=f"chatp_ask_{tid}") and (q or "").strip():
-        _chatp_append_message(conn, int(tid), "user", q.strip())
-        hits = _chatp_search(conn, int(tid), q or "", k=k) if k>0 else []
-        # Show sources to user for transparency but not as citations in output
-        if hits:
-            with st.expander("Context used", expanded=False):
-                try:
-                    dfh = _pd.DataFrame([{"File": h.get("file",""), "Page": h.get("page",""), "Score": round(float(h.get("score") or 0.0),3)} for h in hits])
-                    _styled_dataframe(dfh, use_container_width=True, hide_index=True)
-                except Exception:
-                    pass
-        msgs = _chatp_build_messages(int(tid), q, hits)
-        acc = []
-        with st.spinner("Thinking"):
-            try:
-                for tok in ask_ai(msgs, temperature=float(temp)):
-                    acc.append(tok); st.write(tok)
-            except Exception as _e:
-                st.error(f"AI error: {type(_e).__name__}: {_e}")
-        ans = "".join(acc).strip()
-        if ans:
-            _chatp_append_message(conn, int(tid), "assistant", ans)
-            st.success("Saved to thread.")
-# === end Chat+ ===
+        threads = _cplus_list_threads(conn)
+        if threads:
+            opts = {f"{t['name']} · {t['id'][:8]}": t["id"] for t in threads}
+            pick = st.selectbox("Thread", list(opts.keys()), index=0, key="cplus_pick")
+            st.session_state["cplus_thread_id"] = opts[pick]
+    tid = st.session_state["cplus_thread_id"]
+
+    st.subheader("Attachments")
+    files = st.file_uploader(
+        "Add files. PDF, DOCX, XLSX, CSV, TXT, PNG, JPG.",
+        type=["pdf","docx","xlsx","xls","csv","txt","md","png","jpg","jpeg"],
+        accept_multiple_files=True,
+        key="cplus_upl",
+    )
+    if files:
+        with st.spinner("Indexing attachments"):
+            for f in files:
+                data = f.read()
+                fid = _cplus_save_file(conn, tid, f.name, data)
+                text = _cplus_extract_texts(data, f.name)
+                chunks = _split_chunks(text, max_chars=1200, overlap=180)
+                _cplus_add_chunks(conn, tid, fid, chunks)
+        st.success("Files indexed.")
+
+    st.divider()
+    st.subheader("Chat")
+    with st.expander("Options"):
+        k = st.slider("Context breadth (k)", 1, 15, 6, key="cplus_k")
+        temperature = st.slider("Temperature", 0.0, 1.0, 0.2, key="cplus_temp")
+    prompt = st.text_area("Your question", "", height=120, key="cplus_q")
+    if st.button("Send", type="primary", key="cplus_send") and (prompt or "").strip():
+        q = prompt.strip()
+        _cplus_save_message(conn, tid, "user", q)
+        ctx = _cplus_retrieve(conn, tid, q, k=int(k))
+        msgs = _cplus_build_messages(q, ctx)
+        # Use existing ask_ai() for consistency
+        try:
+            ans = ask_ai(msgs, tools=None, temperature=float(temperature)) or ""
+        except Exception:
+            client = get_ai()
+            model_name = _resolve_model()
+            resp = client.chat.completions.create(model=model_name, messages=msgs, temperature=float(temperature))
+            ans = (getattr(resp.choices[0].message, "content", None) or "").strip()
+        _cplus_save_message(conn, tid, "assistant", ans)
+
+        # render last few
+        for role, content in _cplus_get_messages(conn, tid)[-10:]:
+            if role == "user":
+                st.markdown(f"**You:** {content}")
+            else:
+                st.markdown(content)
+        with st.expander("Context used"):
+            if ctx:
+                for i, c in enumerate(ctx, 1):
+                    st.markdown(f"**Chunk {i}**")
+                    st.write((c or "")[:1200] + ("..." if len(c or "") > 1200 else ""))
+            else:
+                st.caption("No matching chunks. Answered from general knowledge.")
+    else:
+        # show recent
+        for role, content in _cplus_get_messages(conn, tid)[-10:]:
+            if role == "user":
+                st.markdown(f"**You:** {content}")
+            else:
+                st.markdown(content)
+
+# Override legacy entrypoint
+def run_chat_assistant(conn: "sqlite3.Connection") -> None:
+    """Attachment-first Chat+. No RFP dependency."""
+    chatp_ui(conn)
+# === End Chat+ ===
