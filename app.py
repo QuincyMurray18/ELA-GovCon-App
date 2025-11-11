@@ -15495,11 +15495,16 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
                     "size": len(data),
                     "text": txt or "",
                 }
+                                try:
+                    import hashlib as _hl
+                    rec["sha"] = _hl.sha256(data).hexdigest()
+                except Exception:
+                    rec["sha"] = ""
                 new_rows.append(rec)
             except Exception:
                 continue
         if new_rows:
-            st.session_state[files_key].extend(new_rows)
+            st.session_state[files_key] = _dedupe_chat_plus_files((st.session_state.get(files_key) or []) + new_rows)
             st.success(f"Added {len(new_rows)} attachment(s).")
 
     # Attachment table
@@ -16885,105 +16890,3 @@ def _pb_word_count_section(text: str) -> int:
             return len((text or "").split())
         except Exception:
             return 0
-
-# ==== PATCH: Multi attachment reliability for Chat Assistant ====
-# Placed by ChatGPT on 2025 11 11
-
-def _chat_plus__files_key():
-    """Single source of truth for the Chat+ attachments session key."""
-    try:
-        import streamlit as st
-        return st.session_state.get("chat_plus_files_key") or "chat_plus_files"
-    except Exception:
-        return "chat_plus_files"
-
-def _chat_plus_all_att_rows():
-    """Return all enabled attachment rows the UI has collected."""
-    import streamlit as st
-    key = _chat_plus__files_key()
-    rows = st.session_state.get(key) or []
-    out = []
-    for r in rows:
-        try:
-            if int(r.get("enabled", 1)) != 1:
-                continue
-            t = (r.get("text") or "").strip()
-            if not t:
-                continue
-            out.append(r)
-        except Exception:
-            t = (r.get("text") or "").strip()
-            if t:
-                out.append(r)
-    return out
-
-def chat_plus_all_texts():
-    """All attachment texts, normalized, for composing prompts or exports."""
-    return [ (r.get("text") or "").strip() for r in _chat_plus_all_att_rows() ]
-
-def y5_extract_from_uploads(files):
-    """
-    Robustly extract text from a list of Streamlit UploadedFile objects.
-    Guarantees multi file support and never silently returns a blank placeholder.
-    """
-    texts = []
-
-    def _read_one(f):
-        name = getattr(f, "name", "") or ""
-        mime = getattr(f, "type", "") or ""
-        bts = None
-        try:
-            if hasattr(f, "seek"):
-                f.seek(0)
-            bts = f.read()
-        except Exception:
-            try:
-                bts = f.getvalue()
-            except Exception:
-                bts = b""
-        bts = bts or b""
-        try:
-            # Use central extractor if present in your app
-            return "\n\n".join(extract_text_pages(bts, mime or "") or [])
-        except Exception:
-            lo = (name or mime).lower()
-            if lo.endswith(".txt") or lo.startswith("text/"):
-                try:
-                    return bts.decode("utf-8", errors="ignore")
-                except Exception:
-                    return ""
-            return ""
-
-    for f in files or []:
-        try:
-            t = (_read_one(f) or "").strip()
-            if t:
-                texts.append(t)
-        except Exception:
-            continue
-
-    return "\n\n".join(texts)
-
-def chat_plus_merged_context(rfp_text: "str | None" = None) -> str:
-    parts = []
-    atts = chat_plus_all_texts()
-    if atts:
-        parts.append("\n\n".join(atts))
-    if rfp_text:
-        parts.append(rfp_text.strip())
-    return "\n\n".join(p for p in parts if p)
-
-def _chat_plus_monkeypatch_export():
-    """
-    Add an export control that always merges all enabled attachments from session state.
-    """
-    try:
-        import streamlit as st
-        if st.button("Export merged context (all attachments)", key="chat_plus_export_all"):
-            merged = chat_plus_merged_context()
-            st.download_button("Download .txt", data=merged.encode("utf-8"), file_name="merged_context.txt")
-    except Exception:
-        pass
-
-_chat_plus_monkeypatch_export()
-# ==== END PATCH ====
