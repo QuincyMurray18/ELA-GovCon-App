@@ -17200,3 +17200,12 @@ def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return f"[AI unavailable] {e}"
+
+def __coerce_deadline_date(df):
+    try:
+        import pandas as _pd
+        if 'rfp_deadline' in df.columns:
+            df['rfp_deadline'] = _pd.to_datetime(df['rfp_deadline'], errors='coerce').dt.date
+    except Exception:
+        pass
+    return df
