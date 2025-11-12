@@ -7339,51 +7339,6 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             _styled_dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
-def _render_deals_board(conn: "sqlite3.Connection") -> None:
-    import streamlit as st, pandas as pd
-    st.subheader("Board")
-    stages = _deal_stages()
-    try:
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
-    except Exception:
-        st.info("No deals yet")
-        return
-    cols = st.columns(len(stages), gap="small")
-    for i, stage in enumerate(stages):
-        with cols[i]:
-            st.markdown(f"**{stage}**")
-            try:
-                stage_df = df[df["status"] == stage]
-            except Exception:
-                stage_df = pd.DataFrame(columns=["id","title","agency","status","value"])
-            st.caption(f"{len(stage_df)}")
-            for _, r in stage_df.iterrows():
-                did = int(r["id"])
-                with st.container(border=True):
-                    st.markdown(f"**#{did} {r['title']}**")
-                    st.caption(r.get("agency") or "")
-                    try:
-                        val = float(r.get("value") or 0.0)
-                    except Exception:
-                        val = 0.0
-                    st.write(f"${val:,.0f}")
-                    key_sel = f"deal_stage_sel_{did}"
-                    # initialize previous value in session to avoid repeated updates
-                    st.session_state.setdefault(f"{key_sel}_prev", stage)
-                    new_stage = st.selectbox("Stage", stages, index=stages.index(stage), key=key_sel)
-                    if new_stage != st.session_state.get(f"{key_sel}_prev"):
-                        from contextlib import closing as _closing
-                        with _closing(conn.cursor()) as cur:
-                            cur.execute("UPDATE deals SET status=?, stage=? WHERE id=?;", (new_stage, new_stage, did))
-                            try:
-                                cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?,?, datetime('now'));", (did, new_stage))
-                            except Exception:
-                                pass
-                            conn.commit()
-                        st.session_state[f"{key_sel}_prev"] = new_stage
-                        st.rerun()
-
-
 
 def run_deals(conn: "sqlite3.Connection") -> None:
     st.header("Deals")
@@ -7437,10 +7392,6 @@ def run_deals(conn: "sqlite3.Connection") -> None:
             params=(),
         )
         st.subheader("Pipeline")
-        st.caption("Edit inline below. Use Board for HubSpot-style cards.")
-        st.divider()
-        _render_deals_board(conn)
-        st.divider()
         if df.empty:
             st.write("No deals yet")
             return
@@ -7449,7 +7400,7 @@ def run_deals(conn: "sqlite3.Connection") -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "status": st.column_config.SelectboxColumn(options=_deal_stages())
+                "status": st.column_config.SelectboxColumn(options=["New","Qualifying","Bidding","Submitted","Awarded","Lost"])
             },
             key="deals_editor",
         )
@@ -11368,9 +11319,67 @@ def _stage_probability(stage: str) -> int:
 
 def run_crm(conn: "sqlite3.Connection") -> None:
     st.header("CRM")
-    tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
+    tabs = st.tabs(["Activities","Tasks","Pipeline","Settings"])
 
-    # --- Activities
+    
+
+# Settings tab for probabilities
+with tabs[3]:
+    st.subheader("Stage probabilities")
+    _ensure_stage_probability_map(conn)
+    dfp = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn)
+    current = {r["stage"]: float(r["probability"]) for _, r in dfp.iterrows()} if not dfp.empty else {}
+    cols = st.columns(3)
+    edited_probs = {}
+    for i, sname in enumerate(STAGES_ORDERED):
+        with cols[i % 3]:
+            edited_probs[sname] = st.number_input(sname, min_value=0.0, max_value=1.0, step=0.05, value=float(current.get(sname, DEFAULT_STAGE_PROB.get(sname, 0.0))))
+
+
+def _ensure_deals_prob_columns(conn):
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info('deals')").fetchall()}
+        if 'probability' not in cols:
+            conn.execute("ALTER TABLE deals ADD COLUMN probability REAL DEFAULT 0")
+        if 'weighted_value' not in cols:
+            conn.execute("ALTER TABLE deals ADD COLUMN weighted_value REAL DEFAULT 0")
+    except Exception:
+        pass
+
+def _ensure_stage_probability_map(conn):
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS stage_probability_map (stage TEXT PRIMARY KEY, probability REAL NOT NULL)")
+        existing = {r[0] for r in conn.execute("SELECT stage FROM stage_probability_map").fetchall()}
+        for s in STAGES_ORDERED:
+            if s not in existing:
+                conn.execute("INSERT OR REPLACE INTO stage_probability_map(stage, probability) VALUES(?,?)", (s, DEFAULT_STAGE_PROB.get(s, 0.0)))
+    except Exception:
+        pass
+
+def _recompute_deal_weighted(conn):
+    try:
+        prob_map = dict(conn.execute("SELECT stage, probability FROM stage_probability_map").fetchall())
+        rows = conn.execute("SELECT id, COALESCE(amount, 0.0), COALESCE(stage, status) FROM deals").fetchall()
+        for rid, amt, stg in rows:
+            p = float(prob_map.get(stg, 0.0))
+            wv = round(float(amt or 0.0) * p, 2)
+            conn.execute("UPDATE deals SET probability=?, weighted_value=? WHERE id=?", (p, wv, rid))
+    except Exception:
+        pass
+
+def merge_crm_deals_upgrade(conn):
+    _ensure_deals_prob_columns(conn)
+    _ensure_stage_probability_map(conn)
+    _recompute_deal_weighted(conn)
+
+    if st.button("Save probabilities"):
+        with conn:
+            for sname, p in edited_probs.items():
+                conn.execute("INSERT OR REPLACE INTO stage_probability_map(stage, probability) VALUES(?,?)", (sname, float(p)))
+        merge_crm_deals_upgrade(conn)
+        st.success("Saved")
+
+# --- Activities
     with tabs[0]:
         st.subheader("Log Activity")
         df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
@@ -11501,7 +11510,20 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     # --- Pipeline
     with tabs[2]:
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=()
+try:
+    _ensure_stage_probability_map(conn)
+    prob_map_df = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn)
+    _pmap = {r["stage"]: float(r["probability"]) for _, r in prob_map_df.iterrows()} if not prob_map_df.empty else {}
+    if "value" in df.columns:
+        df["probability"] = df["status"].map(_pmap).fillna(0.0)
+        df["weighted_value"] = (df["value"].fillna(0.0) * df["probability"]).round(2)
+    elif "amount" in df.columns:
+        df["probability"] = df["status"].map(_pmap).fillna(0.0)
+        df["weighted_value"] = (df["amount"].fillna(0.0) * df["probability"]).round(2)
+except Exception:
+    pass
+)
         if df.empty:
             st.info("No deals")
         else:
