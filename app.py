@@ -8,7 +8,8 @@ except NameError:
 def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
     try:
-        import streamlit as st, pandas as pd
+        import streamlit as st
+        import pandas as pd
     except Exception:
         st = None; pd = None
     rid = None
@@ -37,6 +38,32 @@ def _ensure_selected_rfp_id(conn):
     return rid
 
 # === Proposal Builder normalization helpers ===
+
+
+# --- CRM stage ladder and probabilities ---
+STAGES_ORDERED = [
+    "No contact made",
+    "CO contacted",
+    "Quote",
+    "Multiple quotes",
+    "Proposal started",
+    "Proposal finished",
+    "Submitted",
+    "Awarded",
+    "Proposal lost",
+]
+DEFAULT_STAGE_PROB = {
+    "No contact made": 0.05,
+    "CO contacted": 0.10,
+    "Quote": 0.20,
+    "Multiple quotes": 0.30,
+    "Proposal started": 0.45,
+    "Proposal finished": 0.60,
+    "Submitted": 0.75,
+    "Awarded": 1.00,
+    "Proposal lost": 0.00,
+}
+
 def _pb_try_json(text: str):
     try:
         import json as _json
