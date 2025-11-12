@@ -7482,6 +7482,18 @@ def run_sam_watch(conn) -> None:
 
     st.header("SAM Watch")
 
+
+    # If pagination was clicked, scroll viewport to top on rerun
+
+    if st.session_state.get('sam_scroll_to_top'):
+
+        import streamlit.components.v1 as components
+
+        components.html('<script>window.scrollTo(0,0);</script>', height=0)
+
+        st.session_state['sam_scroll_to_top'] = False
+
+
     # Ensure Phase 2 DB schema (saved_searches.nl_query, alerts tables)
     try:
         _ensure_phase2_schema(conn)
@@ -7716,12 +7728,16 @@ def run_sam_watch(conn) -> None:
             with p1:
                 if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
                     st.session_state["sam_page"] = cur_page - 1
+                    st.session_state['sam_scroll_to_top'] = True
+st.session_state["sam_page"] = cur_page - 1
                     st.rerun()
             with p2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with p3:
                 if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
                     st.session_state["sam_page"] = cur_page + 1
+                    st.session_state['sam_scroll_to_top'] = True
+st.session_state["sam_page"] = cur_page + 1
                     st.rerun()
 
             start_i = (cur_page - 1) * page_size
@@ -7865,12 +7881,16 @@ def run_sam_watch(conn) -> None:
             with bp1:
                 if st.button("◀ Prev", key="sam_prev_btn_bottom", disabled=(cur_page <= 1)):
                     st.session_state["sam_page"] = cur_page - 1
+                    st.session_state['sam_scroll_to_top'] = True
+st.session_state["sam_page"] = cur_page - 1
                     st.rerun()
             with bp2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with bp3:
                 if st.button("Next ▶", key="sam_next_btn_bottom", disabled=(cur_page >= total_pages)):
                     st.session_state["sam_page"] = cur_page + 1
+                    st.session_state['sam_scroll_to_top'] = True
+st.session_state["sam_page"] = cur_page + 1
                     st.rerun()
 
             st.divider()
