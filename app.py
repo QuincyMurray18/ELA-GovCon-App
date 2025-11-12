@@ -612,7 +612,7 @@ def ensure_unified_schemas(conn):
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(rfp_id, vendor))""" )
         except Exception as e: _debug_log(conn, "quotes", e)
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def safe_read_sql(conn, sql: str, params: tuple = ()):
     """Bypass pandas for simple SELECT to avoid recursion from monkey-patching."""
@@ -634,7 +634,7 @@ def _recompute_quote_totals(conn, rfp_id:int):
                            FROM quotes q LEFT JOIN quote_lines l ON q.id=l.quote_id
                            WHERE q.rfp_id=? GROUP BY q.rfp_id, q.vendor""", (int(rfp_id),))
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
     except Exception as e:
         _debug_log(conn, f"recompute_totals({rfp_id})", e)
 
@@ -1709,7 +1709,7 @@ if "_ensure_x6_schema" not in globals():
             );
             """ )
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 # === end guards ===
 
 ## ELA Phase3 hybrid_api
@@ -2145,7 +2145,7 @@ def _ensure_x6_schema(conn: "sqlite3.Connection") -> None:
         );
         """ )
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def x6_sections_suggestions(rfp_id: int) -> list:
     # prefer user outline from session, else defaults
@@ -2203,7 +2203,7 @@ def x6_extract_requirements(conn: "sqlite3.Connection", rfp_id: int, limit_per_f
                             )
                             added += 1
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 except Exception:
                     pass
                 found += 1
@@ -2791,7 +2791,7 @@ def _render_ask_rfp_button(opportunity=None):
                 with closing(conn.cursor()) as _c:
                     _c.execute(f"ALTER TABLE deals ADD COLUMN {ddl};")
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             except Exception:
                 pass
 
@@ -2892,7 +2892,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
         if inserted >= max_rows:
             break
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
     return inserted
 
 def rtm_metrics(conn: "sqlite3.Connection", rfp_id: int) -> dict:
@@ -2978,7 +2978,7 @@ def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
                     );
                 """, (_now_iso(), int(rfp_id)))
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
 
     # Metrics
     m = rtm_metrics(conn, int(rfp_id))
@@ -3030,7 +3030,7 @@ def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
                 cur.execute("INSERT INTO rtm_links(rtm_id, link_type, target, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?,?,?);",
                             (rid, lt, tg, "", now, now))
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def _parse_sam_text_to_facts(txt: str) -> dict:
     d = {}
@@ -3074,7 +3074,7 @@ def sam_snapshot(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: i
             val = json.dumps(v) if not isinstance(v, str) else v
             cur.execute("INSERT INTO sam_extracts(sam_version_id, key, value) VALUES(?,?,?);", (vid, k, val))
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
     return out
 
 def _facts_diff(old: dict, new: dict) -> dict:
@@ -3225,7 +3225,7 @@ def _update_rfp_meta(conn, rfp_id, title=None, solnum=None, sam_url=None):
         vals.append(int(rfp_id))
         conn.execute(f'UPDATE rfps SET {", ".join(sets)} WHERE id=?', vals)
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
         return True
     return False
 
@@ -4384,7 +4384,7 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
                         VALUES (?, ?, ?, ?, ?,?,?,?);
                     """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 added += 1
     return {"ok": True, "added": added, "skipped": skipped}
 def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: int = 6) -> list[dict]:
@@ -4673,7 +4673,7 @@ def y2_create_thread(conn: "sqlite3.Connection", rfp_id: int, title: str = "CO g
         cur.execute("INSERT INTO y2_threads(rfp_id, title, created_at) VALUES(?,?,?);",
                     (int(rfp_id), (title or "Untitled").strip(), now))
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
         return int(cur.lastrowid)
 
 def y2_get_messages(conn: "sqlite3.Connection", thread_id: int):
@@ -4700,14 +4700,14 @@ def y2_append_message(conn: "sqlite3.Connection", thread_id: int, role: str, con
             (int(thread_id), role, (content or "").strip(), now)
         )
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 
 def y2_rename_thread(conn: "sqlite3.Connection", thread_id: int, new_title: str) -> None:
     _ensure_y2_schema(conn)
     with closing(conn.cursor()) as cur:
         cur.execute("UPDATE y2_threads SET title=? WHERE id=?;", ((new_title or "Untitled").strip(), int(thread_id)))
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 
 def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
     _ensure_y2_schema(conn)
@@ -4715,7 +4715,7 @@ def y2_delete_thread(conn: "sqlite3.Connection", thread_id: int) -> None:
         cur.execute("DELETE FROM y2_messages WHERE thread_id=?;", (int(thread_id),))
         cur.execute("DELETE FROM y2_threads WHERE id=?;", (int(thread_id),))
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 # === end Y2 thread storage helpers ===
 
 def y2_ui_threaded_chat(conn: "sqlite3.Connection") -> None:
@@ -5631,7 +5631,7 @@ def _upsert_meta(conn, rfp_id: int, key: str, value: str):
         cur.execute("DELETE FROM rfp_meta WHERE rfp_id=? AND key=?;", (int(rfp_id), key))
         cur.execute("INSERT INTO rfp_meta(rfp_id, key, value) VALUES(?,?,?);", (int(rfp_id), key, value))
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 
 def find_due_date(conn: "sqlite3.Connection", rfp_id: int) -> str:
     # Check SAM facts first
@@ -5685,7 +5685,7 @@ def find_section_M(conn: "sqlite3.Connection", rfp_id: int) -> int:
             cur.execute("INSERT INTO rfp_sections(rfp_id, section, content) VALUES(?,?,?);", (int(rfp_id), "M", sec["M"][:200000]))
             cnt += 1
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
     return cnt
 
 def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
@@ -5706,7 +5706,7 @@ def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
                         (int(rfp_id), r.get("clin"), r.get("description"), r.get("qty"), r.get("unit"), r.get("unit_price"), r.get("extended_price")))
             added += 1
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
     return added
 
 def _parse_money(x):
@@ -6453,7 +6453,7 @@ def get_db() -> sqlite3.Connection:
         """)
         cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
     try:
         ensure_y5_tables(conn)
     except Exception:
@@ -6815,7 +6815,7 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                     try:
                         cur.execute("UPDATE rfp_files SET rfp_id=? WHERE id=?;", (int(rfp_id), rid))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                         return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
                     except Exception:
                         pass
@@ -6828,7 +6828,7 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                         )
                         new_rid = cur.lastrowid
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                         return {"id": int(new_rid), "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
                     except Exception:
                         pass
@@ -6844,7 +6844,7 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
         )
         rid = cur.lastrowid
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
         return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
 
 def extract_sections_L_M(text: str) -> dict:
@@ -7369,7 +7369,7 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
                     (name.strip(), email.strip(), org.strip()),
                 )
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             st.success(f"Added contact {name}")
         except Exception as e:
             st.error(f"Error saving contact {e}")
@@ -7406,7 +7406,7 @@ def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
         )
         rid = int(cur.lastrowid)
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
         return rid
 
 def _fetch_and_save_now(conn, notice_id: str, rfp_id: int) -> int:
@@ -7980,7 +7980,7 @@ def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime:
             (int(rfp_id), filename, mime or "application/octet-stream", sha, blob)
         )
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 
 def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
     try:
@@ -8004,7 +8004,7 @@ def _p3_rfp_meta_set(conn, rfp_id: int, key: str, value: str):
         except Exception:
             pass
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 
 def _p3_parse_notice_id(s: str) -> str:
     if not s: return ""
@@ -8096,7 +8096,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
                         (str(name), str(email), str(phone), str(job), str(agency))
                     )
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
             except Exception:
                 pass
 
@@ -8176,7 +8176,7 @@ def _p3_auto_stage_for_rfp(conn, rfp_id: int):
                     with _closing(conn.cursor()) as cur:
                         cur.execute("INSERT INTO tasks(title, due_date, status, deal_id) VALUES(?,?,?,?);", ("Proposal due", str(df_due.iloc[0]['d'] or ''), "Open", int(deal_id)))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
     except Exception:
         pass
 
@@ -8684,7 +8684,7 @@ def _run_rfp_analyzer_phase3(conn):
                             except Exception:
                                 pass
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                             # X2: auto-link any pending ingested files to this new RFP
                             try:
                                 if st.session_state.get("x1_pending_link_after_create") and st.session_state.get("x1_last_ingested_ids"):
@@ -8694,7 +8694,7 @@ def _run_rfp_analyzer_phase3(conn):
                                         with closing(conn.cursor()) as _cur2:
                                             _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(rfp_id), *ids))
                                             conn.commit()
-            _ensure_stage_defaults(conn)
+                                            _ensure_stage_defaults(conn)
                                     st.session_state["x1_pending_link_after_create"] = False
                             except Exception:
                                 pass
@@ -8748,7 +8748,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         last_rfp_id = rfp_id
                         saved += 1
                     # X2: if pending, link last created RFP to recently ingested files
@@ -8760,7 +8760,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 with closing(conn.cursor()) as _cur3:
                                     _cur3.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(last_rfp_id), *ids))
                                     conn.commit()
-            _ensure_stage_defaults(conn)
+                                    _ensure_stage_defaults(conn)
                             st.session_state["x1_pending_link_after_create"] = False
                     except Exception:
                         pass
@@ -8867,7 +8867,7 @@ def _run_rfp_analyzer_phase3(conn):
                         cur.execute("INSERT INTO rfp_chat(rfp_id, ts, q, a) VALUES(?,?,?,?);",
                                     (int(_ensure_selected_rfp_id(conn)), datetime.utcnow().isoformat(), q.strip(), a))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Stored Q&A.")
                 except Exception as e:
                     st.error(f"Q&A failed: {e}")
@@ -8886,7 +8886,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(_ensure_selected_rfp_id(conn)),))
                                     conn.commit()
-            _ensure_stage_defaults(conn)
+                                    _ensure_stage_defaults(conn)
                                 st.success("Cleared.")
                                 st.rerun()
                             except Exception as e:
@@ -8925,7 +8925,7 @@ def _run_rfp_analyzer_phase3(conn):
                         with closing(conn.cursor()) as cur:
                             cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
             # Export
@@ -9049,7 +9049,7 @@ def _run_rfp_analyzer_phase3(conn):
                         with closing(conn.cursor()) as _cur:
                             _cur.execute(f"UPDATE rfp_files SET rfp_id=NULL WHERE id IN ({ph});", tuple(int(i) for i in to_unlink))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Unlink failed: {e}")
@@ -9081,7 +9081,7 @@ def _run_rfp_analyzer_phase3(conn):
                         with closing(conn.cursor()) as _cur2:
                             _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(_ensure_selected_rfp_id(conn)), *[int(i) for i in to_link]))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Link failed: {e}")
@@ -9184,7 +9184,7 @@ def _run_rfp_analyzer_phase3(conn):
                             if not txt: continue
                             cur.execute('INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), txt, int(r.get('is_must') or 0), str(r.get('status') or 'Open')))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success('L/M saved.')
             with tab_clin:
                 try:
@@ -9201,7 +9201,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 continue
                             cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success('CLINs saved.')
             with tab_dates:
                 try:
@@ -9218,7 +9218,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 continue
                             cur.execute('INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('label','')), str(r.get('date_text','')), str(r.get('date_iso',''))))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success('Dates saved.')
             with tab_pocs:
                 try:
@@ -9235,7 +9235,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 continue
                             cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success('POCs saved.')
             with tab_meta:
                 try:
@@ -9252,7 +9252,7 @@ def _run_rfp_analyzer_phase3(conn):
                             if not k and not v: continue
                             cur.execute('INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);', (int(_ensure_selected_rfp_id(conn)), k, v))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success('Meta saved.')
         # === End Phase S ===
         col1, col2, col3 = st.columns(3)
@@ -9468,7 +9468,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("UPDATE lm_items SET status='Complete' WHERE rfp_id=?;", (rfp_id,))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("All items marked Complete")
             except Exception as e:
                 st.error(f"Update failed: {e}")
@@ -9478,7 +9478,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("UPDATE lm_items SET status='Open' WHERE rfp_id=?;", (rfp_id,))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("All items reset")
             except Exception as e:
                 st.error(f"Update failed: {e}")
@@ -9488,7 +9488,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("UPDATE lm_items SET status='Open' WHERE rfp_id=? AND is_must=1;", (rfp_id,))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("All MUST items set to Open")
             except Exception as e:
                 st.error(f"Update failed: {e}")
@@ -9504,7 +9504,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("UPDATE lm_items SET status=? WHERE id=?;", (new_status, int(row['id'])))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
             except Exception as e:
                 st.error(f"Failed to update item {row['id']}: {e}")
 
@@ -9555,7 +9555,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                             evidence=excluded.evidence, risk=excluded.risk, notes=excluded.notes;
                     """, (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip()))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Saved"); st.rerun()
             except Exception as e2:
                 st.error(f"Save failed: {e2}")
@@ -10064,7 +10064,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                             )
                             n+=1
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                     st.success(f"Imported {n} vendors")
             except Exception as e:
                 st.error(f"Import failed: {e}")
@@ -10099,7 +10099,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                             (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
                         )
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Vendor saved")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
@@ -10264,7 +10264,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                                 )
                                 total_rows += 1
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     _recompute_quote_totals(conn, int(rfp_id))
                     st.success(f"Imported {len(by_vendor)} quotes / {total_rows} lines.")
             except Exception as e:
@@ -10281,7 +10281,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                             (int(rfp_id), vendor.strip(), date.isoformat(), notes.strip()))
                 qid = cur.lastrowid
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
                 st.success(f"Created quote for {vendor}. Now add lines below (Quote ID {qid}).")
                 st.session_state["current_quote_id"] = qid
 
@@ -10308,7 +10308,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                     (qid, clin.strip(), desc.strip(), float(qty), float(price), float(ext))
                 )
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             _recompute_quote_totals(conn, int(rfp_id))
             st.success("Line added.")
 
@@ -10406,7 +10406,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
                     VALUES (?, ?, ?, ?, ?,?,?,?);
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             st.success("Scenario created.")
             st.rerun()
         return
@@ -10849,7 +10849,7 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
                     VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
                 """, (company_name, tagline, address, phone, email, website, uei, cage, naics, core_competencies, differentiators, certifications, past_performance, primary_poc))
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             st.success("Profile saved.")
         except Exception as e:
             st.error(f"Save failed: {e}")
@@ -10979,7 +10979,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                             ))
                             n+=1
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                     st.success(f"Imported {n} projects.")
             except Exception as e:
                 st.error(f"Import failed: {e}")
@@ -11018,7 +11018,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                         VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?,?);
                     """, (project_title.strip(), customer.strip(), contract_no.strip(), naics.strip(), role.strip(), pop_start.strip(), pop_end.strip(), v, scope.strip(), results.strip(), cpars_rating.strip(), contact_name.strip(), contact_email.strip(), contact_phone.strip(), keywords.strip(), notes.strip()))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Saved project.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
@@ -11172,7 +11172,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                     with closing(conn.cursor()) as cur:
                         cur.execute("INSERT INTO white_templates(name, description, created_at) VALUES(?,?,datetime('now'));", (t_name.strip(), t_desc.strip()))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Template saved"); st.rerun()
         with t_col2:
             if df_t.empty:
@@ -11191,7 +11191,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                         cur.execute("INSERT INTO white_template_sections(template_id, position, title, body) VALUES(?,?,?,?);",
                                     (int(t_sel), pos, ts_title.strip(), ts_body.strip()))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Section added"); st.rerun()
                 # Reorder / delete (simple)
                 if not df_ts.empty:
@@ -11205,14 +11205,14 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("UPDATE white_template_sections SET position=? WHERE id=?;", (int(new_pos), int(r["id"])))
                                     conn.commit()
-            _ensure_stage_defaults(conn)
+                                    _ensure_stage_defaults(conn)
                                 st.success("Updated position"); st.rerun()
                         with c3:
                             if st.button("Delete", key=f"wp_ts_del_{int(r['id'])}"):
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("DELETE FROM white_template_sections WHERE id=?;", (int(r["id"]),))
                                     conn.commit()
-            _ensure_stage_defaults(conn)
+                                    _ensure_stage_defaults(conn)
                                 st.success("Deleted"); st.rerun()
 
     st.divider()
@@ -11247,7 +11247,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                             cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body) VALUES(?,?,?,?);",
                                         (int(pid), int(r["position"]), r.get("title"), r.get("body")))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Draft created"); st.rerun()
     with c2:
         if df_p.empty:
@@ -11275,7 +11275,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                             (int(p_sel), pos, ns_title.strip(), ns_body.strip(), img_path))
                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             st.success("Section added"); st.rerun()
 
         # Section list
@@ -11296,7 +11296,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                         (new_title.strip(), new_body.strip(), int(new_pos), int(r["id"])))
                             cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         st.success("Updated"); st.rerun()
                 with e3:
                     up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
@@ -11309,7 +11309,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                 cur.execute("UPDATE white_paper_sections SET image_path=? WHERE id=?;", (img_path, int(r["id"])))
                                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                                 conn.commit()
-            _ensure_stage_defaults(conn)
+                                _ensure_stage_defaults(conn)
                             st.success("Image saved"); st.rerun()
                 with e4:
                     if st.button("Delete", key=f"wp_sec_del_{int(r['id'])}"):
@@ -11317,7 +11317,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                             cur.execute("DELETE FROM white_paper_sections WHERE id=?;", (int(r["id"]),))
                             cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         st.success("Deleted"); st.rerun()
                 st.divider()
 
@@ -11454,7 +11454,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         INSERT INTO activities(ts, type, subject, notes, deal_id, contact_id) VALUES(datetime('now'),?,?,?,?,?);
                     """, (a_type, a_subject.strip(), a_notes.strip(), a_deal if a_deal else None, a_contact if a_contact else None))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Saved")
 
         st.subheader("Activity Log")
@@ -11543,7 +11543,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 (new_status, new_pri, new_status, int(r["id"])),
                             )
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         st.success("Updated")
     # --- Pipeline
     with tabs[2]:
@@ -11576,7 +11576,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         )
                         cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
             except Exception as e:
                 st.error(f"Error saving deal {e}")
     
@@ -11666,7 +11666,7 @@ v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), 
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
                                         cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
                                         conn.commit()
-            _ensure_stage_defaults(conn)
+                                        _ensure_stage_defaults(conn)
                                     st.rerun()
                             with c2:
                                 if st.button("Save", key=f"k_save_{did}"):
@@ -11676,7 +11676,7 @@ v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), 
                                         if ns != stage:
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
                                         conn.commit()
-            _ensure_stage_defaults(conn)
+                                        _ensure_stage_defaults(conn)
                                     st.rerun()
                             with c3:
                                 if st.button("▶", key=f"k_next_{did}"):
@@ -11688,7 +11688,7 @@ v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), 
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
                                         cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
                                         conn.commit()
-            _ensure_stage_defaults(conn)
+                                        _ensure_stage_defaults(conn)
                                     st.rerun()
 
     
@@ -11748,7 +11748,7 @@ v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), 
                                 if new_status != old_status:
                                     cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                         st.success("Pipeline updated")
                     except Exception as e:
                         st.error(f"Save failed: {e}")
@@ -11845,7 +11845,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                                 tags.strip(), notes.strip()
                             ))
                             conn.commit()
-            _ensure_stage_defaults(conn)
+                            _ensure_stage_defaults(conn)
                             saved += 1
                     except Exception as e:
                         st.error(f"DB save failed: {e}")
@@ -11899,14 +11899,14 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                             with closing(conn.cursor()) as cur:
                                 cur.execute("UPDATE files SET tags=?, notes=? WHERE id=?;", (new_tags.strip(), new_notes.strip(), int(r["id"])))
                                 conn.commit()
-            _ensure_stage_defaults(conn)
+                                _ensure_stage_defaults(conn)
                             st.success("Updated")
                     with b2:
                         if st.button("Delete", key=f"fm_row_del_{int(r['id'])}"):
                             with closing(conn.cursor()) as cur:
                                 cur.execute("DELETE FROM files_t WHERE id=?;", (int(r["id"]),))
                                 conn.commit()
-            _ensure_stage_defaults(conn)
+                                _ensure_stage_defaults(conn)
                             try:
                                 if r.get("path") and os.path.exists(r["path"]):
                                     os.remove(r["path"])
@@ -12104,7 +12104,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                         VALUES (?, ?, ?, ?, ?,?,datetime('now'),datetime('now'));
                     """, (rf_opt if rf_opt else None, None, title.strip(), instr.strip(), str(due)))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Created"); st.rerun()
     with right:
         st.subheader("Open")
@@ -12162,7 +12162,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                         cur.execute("UPDATE rfq_lines SET description=?, qty=?, unit=? WHERE id=?;",
                                     (nd.strip(), float(nq or 0), nu.strip(), int(r["id"])))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Updated"); st.rerun()
 
     st.divider()
@@ -12196,7 +12196,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     cur.execute("INSERT INTO rfq_attach(pack_id, file_id, name, path) VALUES(?,?,?,?);",
                                 (int(pk_sel), int(add_file), df_one.iloc[0]["filename"], df_one.iloc[0]["path"]))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Added"); st.rerun()
 
     if not df_att.empty:
@@ -12209,7 +12209,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     with closing(conn.cursor()) as cur:
                         cur.execute("DELETE FROM rfq_attach_t WHERE id=?;", (int(r["id"]),))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Removed"); st.rerun()
 
     st.divider()
@@ -12248,7 +12248,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     with closing(conn.cursor()) as cur:
                         cur.execute("DELETE FROM rfq_vendors_t WHERE id=?;", (int(r["id"]),))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Removed"); st.rerun()
 
     st.divider()
@@ -12656,7 +12656,7 @@ def run_rfp_analyzer(conn) -> None:
                     )
                     new_id = cur.lastrowid
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 # Save uploads (ZIPs expanded)
                 import io as _io, zipfile as _zip
                 saved = 0
@@ -12718,7 +12718,7 @@ def run_rfp_analyzer(conn) -> None:
                     )
                     new_id = cur.lastrowid
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 # Save uploads (ZIPs expanded)
                 import io as _io, zipfile as _zip
                 saved = 0
@@ -12860,7 +12860,7 @@ def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
             with closing(conn.cursor()) as cur:
                 cur.execute("UPDATE current_tenant SET ctid=? WHERE id=1;", (int(opt),))
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
             st.session_state['tenant_id'] = int(opt)
             st.success("Workspace switched"); st.rerun()
 
@@ -12871,7 +12871,7 @@ def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("INSERT OR IGNORE INTO tenants(name, created_at) VALUES(?, datetime('now'));", (new_name.strip(),))
                     conn.commit()
-            _ensure_stage_defaults(conn)
+                    _ensure_stage_defaults(conn)
                 st.success("Workspace created"); st.rerun()
             else:
                 st.warning("Enter a name")
@@ -13048,7 +13048,7 @@ if "_o3_render_sender_picker" not in globals():
                 conn.execute("INSERT OR REPLACE INTO email_accounts(user_email, display_name, app_password) VALUES(?,?,?)",
                              (email.strip().lower(), display.strip(), pw.strip()))
                 conn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
                 rows = _get_senders(conn)
         if not rows:
             st.error("No sender accounts configured")
@@ -13190,7 +13190,7 @@ def test_seed_cases():
     with _closing(conn.cursor()) as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS rfp_chunks(rfp_id INTEGER, rfp_file_id INTEGER, file_name TEXT, page INTEGER, chunk_idx INTEGER, text TEXT, emb TEXT);")
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
     try:
         gen = ask_ai_with_citations(conn, 1, "What is the due date?", k=6, temperature=0.0)
         first = next(gen, "")
@@ -13316,7 +13316,7 @@ RFP Context (optional, may be empty):
                         cur.execute("UPDATE org_profile SET tagline=?, core_competencies=?, differentiators=? WHERE id=1;",
                                     (st.session_state.get("x161_tagline",""), st.session_state.get("x161_core",""), st.session_state.get("x161_diff","")))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     st.success("Saved to org_profile")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
@@ -13563,7 +13563,7 @@ def o4_sender_accounts_ui(conn):
                         cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
                                     (label.strip() or "Default", host.strip(), int(port), username.strip(), password.strip(), 1 if use_tls else 0))
                         conn.commit()
-            _ensure_stage_defaults(conn)
+                        _ensure_stage_defaults(conn)
                     _st.success("Sender saved")
                 except Exception as e:
                     _st.error(f"Save failed: {e}")
@@ -13706,7 +13706,7 @@ def _o3_ensure_schema(conn):
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );""")
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
 
 def _o3_wrap_email_html(sig_html: str) -> str:
     # Basic, client-safe wrapper to ensure readable default font size.
@@ -13875,7 +13875,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
         cur.execute("INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
                     (blast_title, st.session_state.get("tpl_sel",""), sender.get("email","")))
         conn.commit()
-            _ensure_stage_defaults(conn)
+        _ensure_stage_defaults(conn)
         blast_id = cur.lastrowid
     try:
         opt = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
@@ -15142,7 +15142,7 @@ def __p_ensure_core(conn):
     c.execute("CREATE TABLE IF NOT EXISTS outreach_schedules(id INTEGER PRIMARY KEY, seq_id INTEGER NOT NULL, step_no INTEGER NOT NULL, to_email TEXT NOT NULL, send_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', last_error TEXT DEFAULT '', subject TEXT DEFAULT '', body_html TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     c.execute("CREATE TABLE IF NOT EXISTS vendors_t(id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT, website TEXT, city TEXT, state TEXT, naics TEXT, place_id TEXT)")
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def __p_active_sender(conn):
     r = __p_db(conn, "SELECT label,email,app_password,smtp_host,smtp_port,use_tls FROM outreach_sender_accounts WHERE is_active=1 ORDER BY id DESC LIMIT 1").fetchone()
@@ -15974,7 +15974,7 @@ def _cp_db_exec(conn, sql, params=()):
     with closing(conn.cursor()) as cur:
         cur.execute(sql, params)
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def _cp_db_query(conn, sql, params=()):
     from contextlib import closing
@@ -16279,7 +16279,7 @@ def x6_save_links(conn: "sqlite3.Connection", rfp_id: int, mapping: list[tuple[i
             )
             saved += 1
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
     return int(saved)
 
 # ==== X.7 Proposal Builder v1 ====
@@ -16308,7 +16308,7 @@ def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
         );
         """)
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, title: str | None = None) -> int:
     from contextlib import closing as _closing
@@ -16337,7 +16337,7 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
                 (int(pid), i, ln, "", json.dumps({"font":"Times New Roman","size":11}))
             )
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
     return int(pid)
 
 def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
@@ -16361,7 +16361,7 @@ def x7_save_section(conn: "sqlite3.Connection", section_id: int, content: str | 
     with _closing(conn.cursor()) as cur:
         cur.execute("UPDATE proposal_sections SET content=?, settings_json=COALESCE(?, settings_json), updated_at=datetime('now') WHERE id=?", (content or "", settings_json, int(section_id)))
     conn.commit()
-            _ensure_stage_defaults(conn)
+    _ensure_stage_defaults(conn)
 
 def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "", temperature: float = 0.1) -> str:
     import pandas as _pd, json
