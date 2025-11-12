@@ -9,6 +9,20 @@ def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
     try:
         import streamlit as st, pandas as pd
+
+# --- Company sidebar helper (auto-injected) ---
+def render_company_sidebar():
+    with st.sidebar:
+        st.markdown("## Company")
+        st.markdown(
+            "**ELA Management LLC**  \n"
+            "999 Fortino Blvd Lot 246  \n"
+            "Pueblo, CO 81008, US\n\n"
+            "**CAGE Code:** 14ZP6  \n"
+            "**UEI:** U32LBVK3DDF7  \n"
+            "**DUNS:** 14-483-4790"
+        )
+# --- End helper ---
     except Exception:
         st = None; pd = None
     rid = None
