@@ -1,3 +1,12 @@
+# ---- Global owner context guard ----
+try:
+    import streamlit as _st
+    if "deal_owner_ctx" not in _st.session_state:
+        _st.session_state["deal_owner_ctx"] = "All"
+    deal_owner_ctx = _st.session_state.get("deal_owner_ctx", "All")
+except Exception:
+    deal_owner_ctx = "All"
+# ------------------------------------
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
@@ -400,6 +409,7 @@ except NameError:
         Otherwise provides a minimal, working editor.
         """
         import streamlit as st
+
         # If a later, full implementation is available, delegate.
         for name in ("__p_o4_signature_ui", "__p_signature_ui", "__p_call_sig_ui_full"):
             fn = globals().get(name)
