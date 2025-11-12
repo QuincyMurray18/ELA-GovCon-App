@@ -11563,8 +11563,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 _ctx_owner = st.session_state.get("deal_owner_ctx")
                 _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
                 owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
-        d_due = st.date_input("Due date (optional)", key="deal_due_date")
-            submitted = st.form_submit_button("Add Deal")
+                d_due = st.date_input("Due date (optional)", key="deal_due_date")
+                submitted = st.form_submit_button("Add Deal")
         if submitted and title:
             try:
                 from contextlib import closing as _closing
