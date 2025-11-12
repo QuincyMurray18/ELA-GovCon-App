@@ -1,12 +1,16 @@
 
-# === ELA Company Sidebar (auto-injected) ===
+# === ELA Company Sidebar (single render) ===
 try:
-    import streamlit as st  # safe re-import
+    import streamlit as st
 except Exception:
     st = None
 
 def render_company_sidebar():
     if st is None:
+        return
+    # Guard to ensure one-time render per session
+    key = "_ela_sidebar_rendered"
+    if getattr(st.session_state, key, False):
         return
     try:
         with st.sidebar:
@@ -19,11 +23,12 @@ def render_company_sidebar():
                 "**UEI:** U32LBVK3DDF7  \n"
                 "**DUNS:** 14-483-4790"
             )
+        st.session_state[key] = True
     except Exception:
         pass
 
-# Patch st.set_page_config so the sidebar renders right after page config.
-if st is not None:
+# Wrap set_page_config once to inject rendering after layout is set.
+if st is not None and not getattr(st.session_state, "_ela_spc_wrapped", False):
     try:
         _ela__orig_spc = st.set_page_config
         def _ela__patched_spc(*args, **kwargs):
@@ -34,9 +39,12 @@ if st is not None:
                 pass
             return rv
         st.set_page_config = _ela__patched_spc  # type: ignore[attr-defined]
+        st.session_state["_ela_spc_wrapped"] = True
     except Exception:
         pass
 # === End ELA Company Sidebar ===
+
+
 
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
