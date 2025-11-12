@@ -7397,12 +7397,16 @@ def run_deals(conn: "sqlite3.Connection") -> None:
         if df.empty:
             st.write("No deals yet")
             return
+        df["prob_%"] = df["status"].apply(_stage_probability)
+        df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
         edited = st.data_editor(
             df,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "status": st.column_config.SelectboxColumn(options=["New","Qualifying","Bidding","Submitted","Awarded","Lost"])
+                "status": st.column_config.SelectboxColumn(options=["New","Qualifying","Bidding","Submitted","Awarded","Lost"]),
+                "prob_%": st.column_config.NumberColumn(disabled=True),
+                "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability")
             },
             key="deals_editor",
         )
