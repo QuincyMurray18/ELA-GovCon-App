@@ -1,3 +1,43 @@
+
+# === ELA Company Sidebar (auto-injected) ===
+try:
+    import streamlit as st  # safe re-import
+except Exception:
+    st = None
+
+def render_company_sidebar():
+    if st is None:
+        return
+    try:
+        with st.sidebar:
+            st.markdown("## Company")
+            st.markdown(
+                "**ELA Management LLC**  \n"
+                "999 Fortino Blvd Lot 246  \n"
+                "Pueblo, CO 81008, US\n\n"
+                "**CAGE Code:** 14ZP6  \n"
+                "**UEI:** U32LBVK3DDF7  \n"
+                "**DUNS:** 14-483-4790"
+            )
+    except Exception:
+        pass
+
+# Patch st.set_page_config so the sidebar renders right after page config.
+if st is not None:
+    try:
+        _ela__orig_spc = st.set_page_config
+        def _ela__patched_spc(*args, **kwargs):
+            rv = _ela__orig_spc(*args, **kwargs)
+            try:
+                render_company_sidebar()
+            except Exception:
+                pass
+            return rv
+        st.set_page_config = _ela__patched_spc  # type: ignore[attr-defined]
+    except Exception:
+        pass
+# === End ELA Company Sidebar ===
+
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
@@ -10,19 +50,6 @@ def _ensure_selected_rfp_id(conn):
     try:
         import streamlit as st, pandas as pd
 
-# --- Company sidebar helper (auto-injected) ---
-def render_company_sidebar():
-    with st.sidebar:
-        st.markdown("## Company")
-        st.markdown(
-            "**ELA Management LLC**  \n"
-            "999 Fortino Blvd Lot 246  \n"
-            "Pueblo, CO 81008, US\n\n"
-            "**CAGE Code:** 14ZP6  \n"
-            "**UEI:** U32LBVK3DDF7  \n"
-            "**DUNS:** 14-483-4790"
-        )
-# --- End helper ---
     except Exception:
         st = None; pd = None
     rid = None
