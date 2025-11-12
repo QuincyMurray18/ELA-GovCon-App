@@ -11441,13 +11441,13 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             try:
                 from contextlib import closing as _closing
                 with _closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "INSERT INTO deals(title, agency, status, stage, value, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
-                        (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value))
-                    )
-                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (status,))
-                    conn.commit()
-                st.success(f"Added deal {title}")
+
+                        cur.execute(
+                            "INSERT INTO deals(title, agency, status, stage, value, owner, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
+                            (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val)
+                        )
+                        cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
+                        conn.commit()
             except Exception as e:
                 st.error(f"Error saving deal {e}")
     
