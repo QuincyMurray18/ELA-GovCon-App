@@ -7755,30 +7755,34 @@ def run_sam_watch(conn) -> None:
                                     _db = _sqlite3.connect(DB_PATH, check_same_thread=False)
                                 with _closing(_db.cursor()) as cur:
                                     cur.execute(
-                                        "INSERT INTO deals(title, agency, status, stage, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                                        """
+                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                        """,
                                         (
-                                            str(row.get('Title') or ""),
-                                            str(row.get('Agency Path') or ""),
-                                            STAGES_ORDERED[0],
-                                            STAGES_ORDERED[0],
-                                            float(row.get('Est. Value') or 0) if 'Est. Value' in row else None,
-                                            str(row.get('Notice ID') or ""),
-                                            str(row.get('Solicitation') or ""),
-                                            str(row.get('Posted') or ""),
-                                            str(row.get('Response Due') or ""),
-                                            str(row.get('NAICS') or ""),
-                                            str(row.get('PSC') or ""),
-                                            str(row.get('SAM Link') or ""),
+                                            row.get('Title') or "",
+                                            row.get('Agency Path') or "",
+                                            "Bidding",
+                                            None,
+                                            row.get('Notice ID') or "",
+                                            row.get('Solicitation') or "",
+                                            row.get('Posted') or "",
+                                            row.get('Response Due') or "",
+                                            row.get('NAICS') or "",
+                                            row.get('PSC') or "",
+                                            row.get('SAM Link') or "",
                                         ),
                                     )
                                     deal_id = cur.lastrowid
-                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
+                                    try:
+                                        cur.execute("UPDATE deals SET status=?, stage=? WHERE id=?", (STAGES_ORDERED[0], STAGES_ORDERED[0], deal_id))
+                                        cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
+                                    except Exception:
+                                        pass
                                     _db.commit()
-                            except Exception:
-                                pass
                                 try:
                                     with _closing(_db.cursor()) as cur:
-                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
+                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
                                         rfp_id = cur.lastrowid
                                         _db.commit()
                                     att_saved = 0
@@ -11272,7 +11276,20 @@ def _stage_prev(stage: str) -> str:
         return stage
 
 
+def _ensure_deal_owner_schema(conn: "sqlite3.Connection") -> None:
+    try:
+        with conn:
+            conn.execute("ALTER TABLE deals ADD COLUMN owner TEXT")
+    except Exception:
+        pass
+    try:
+        with conn:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_deals_owner ON deals(owner)")
+    except Exception:
+        pass
+
 def run_crm(conn: "sqlite3.Connection") -> None:
+    _ensure_deal_owner_schema(conn)
     st.header("CRM")
     tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
 
@@ -11405,7 +11422,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     with tabs[2]:
         # Add Deal (moved from Deals)
         with st.form("add_deal", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
             with c1:
                 title = st.text_input("Title")
             with c2:
@@ -11414,6 +11431,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 status = st.selectbox("Status", STAGES_ORDERED)
             with c4:
                 value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
+            with c5:
+                owner_sel_opts = ["Quincy", "Collin", "Charles"]
+                _ctx_owner = st.session_state.get("deal_owner_ctx")
+                _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
+                owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
             submitted = st.form_submit_button("Add Deal")
         if submitted and title:
             try:
@@ -11440,7 +11462,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
         st.subheader("Kanban")
         try:
-            df_k = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+            df_k = None
+            if deal_owner_ctx != "All":
+                df_k = pd.read_sql_query("SELECT id, title, agency, status, value, owner FROM deals WHERE owner = ? ORDER BY id DESC;", conn, params=(deal_owner_ctx,))
+            else:
+                df_k = pd.read_sql_query("SELECT id, title, agency, status, value, owner FROM deals ORDER BY id DESC;", conn, params=())
         except Exception:
             df_k = None
         if df_k is None or df_k.empty:
@@ -11476,7 +11502,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 if st.button("Save", key=f"k_save_{did}"):
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
-                                        cur.execute("UPDATE deals SET value=?, status=?, stage=?, updated_at=datetime('now') WHERE id=?", (float(v or 0.0), ns, ns, did))
+                                        cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
                                         if ns != stage:
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
                                         conn.commit()
@@ -11523,8 +11549,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     df_edit,
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "status": st.column_config.SelectboxColumn(options=STAGES_ORDERED),
+                    column_config={"status": st.column_config.SelectboxColumn(options=STAGES_ORDERED), "owner": st.column_config.SelectboxColumn(options=["Quincy","Collin","Charles"]),
                         "prob_%": st.column_config.NumberColumn(disabled=True),
                         "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
                     },
