@@ -3910,7 +3910,7 @@ def apply_theme_phase1():
     ''', unsafe_allow_html=True)
     st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
 
-st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
 apply_theme_phase1()
 
 # === Y0: GPT-5 Thinking CO assistant (streaming) ===
@@ -12598,11 +12598,21 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 def main() -> None:
     # Phase 1 re-init inside main
+    # Bootstrap UI and sidebar
     try:
         _init_phase1_ui()
-        _sidebar_brand()
     except Exception:
         pass
+
+    # Sidebar is critical. Try separately so it never gets skipped.
+    try:
+        _sidebar_brand()
+    except Exception:
+        with st.sidebar:
+            st.markdown("### 🧭 ELA GovCon Suite")
+            st.write("ELA Management LLC")
+            st.write("999 Fortino Blvd Lot 246, Pueblo, CO 81008, US")
+            st.write("CAGE 14ZP6 • UEI U32LBVK3DDF7 • DUNS 14-483-4790")
 
     conn = get_db()
     
