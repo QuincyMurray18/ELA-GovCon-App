@@ -491,7 +491,7 @@ except NameError:
                 mime = {"png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","gif":"image/gif"}.get(ext, "application/octet-stream")
                 try:
                     sconn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
-                                     VALUES(?,?,?,?,?)""", (email, sig_html, data, mime, name))
+                                     VALUES (?, ?, ?, ?, ?,?)""", (email, sig_html, data, mime, name))
                 except Exception:
                     sconn.execute("""UPDATE outreach_signatures
                                      SET signature_html=?,
@@ -629,7 +629,7 @@ def _s1d_get_details_cached(conn, pid: str, key: str):
         if row: return {"formatted_phone_number": row[0] or "", "website": row[1] or "", "url": row[2] or ""}
         det = _s1d_place_details(pid, key)
         phone = _s1d_norm_phone(det.get("formatted_phone_number","")); website = det.get("website") or ""; gurl = det.get("url") or ""
-        with conn: conn.execute("INSERT OR REPLACE INTO subfinder_cache(place_id, normalized_name, phone, website, google_url) VALUES(?,?,?,?,?)",
+        with conn: conn.execute("INSERT OR REPLACE INTO subfinder_cache(place_id, normalized_name, phone, website, google_url) VALUES (?, ?, ?, ?, ?,?)",
                                 (pid, "", phone, website, gurl))
         return {"formatted_phone_number": phone, "website": website, "url": gurl}
     except Exception as e:
@@ -863,7 +863,7 @@ def _phase3_analyzer_inline(conn):
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     with open(path, "wb") as fh: fh.write(data)
                     try:
-                        conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES(?,?,?,?,?);", (rfp_id, f.name, path, f.type, len(data)))
+                        conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES (?, ?, ?, ?, ?,?);", (rfp_id, f.name, path, f.type, len(data)))
                     except Exception:
                         pass
             st.success(f"Saved {len(files)} file(s).")
@@ -881,7 +881,7 @@ def _phase3_analyzer_inline(conn):
                             fn = os.path.basename(p)
                             cur = conn.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND filename=?;", (rfp_id, fn))
                             if not cur.fetchone():
-                                conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES(?,?,?,?,?);", (rfp_id, fn, p, "downloaded", os.path.getsize(p)))
+                                conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES (?, ?, ?, ?, ?,?);", (rfp_id, fn, p, "downloaded", os.path.getsize(p)))
                 if pulled: st.success(f"Pulled {len(pulled)} attachment(s).")
                 else: st.info("No attachments found from API/HTML.")
                 if errs:
@@ -1540,7 +1540,7 @@ def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | Non
                 """
                 INSERT OR IGNORE INTO rfp_files 
                     (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
-                VALUES (?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
+                VALUES (?, ?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
                 """,
                 (int(rfp_id), str(filename or ""), str(mime or "application/octet-stream"),
                  sha, sqlite3.Binary(blob or b""), status, src_url or "")
@@ -2178,7 +2178,7 @@ def x6_extract_requirements(conn: "sqlite3.Connection", rfp_id: int, limit_per_f
                             pass
                         else:
                             cur.execute(
-                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES(?,?,?,?,?,?)",
+                                "INSERT INTO compliance_requirements(rfp_id,file,page,text,must_flag,hash) VALUES (?, ?, ?, ?, ?,?,?)",
                                 (int(rfp_id), fname or "", int(pi), s[:2000], 1 if musty else 0, h)
                             )
                             added += 1
@@ -2834,7 +2834,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
                 continue
             cur.execute("""
                 INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                VALUES(?,?,?,?,?,?,?, ?, ?);
+                VALUES (?, ?, ?, ?, ?,?,?,?, ?, ?);
             """, (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now))
             inserted += 1
     # 2) From SOW chunks, simple heuristic
@@ -2863,7 +2863,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
                         continue
                     cur.execute("""
                         INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                        VALUES(?,?,?,?,?,?,?, ?, ?);
+                        VALUES (?, ?, ?, ?, ?,?,?,?, ?, ?);
                     """, (int(rfp_id), key, "SOW", row.get('file_name'), int(row.get('page') or 0), s.strip(), "Open", now, now))
                     inserted += 1
         if inserted >= max_rows:
@@ -3002,7 +3002,7 @@ def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
         tg = (row.get('add_link_target') or "").strip()
         if lt and tg:
             with closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO rtm_links(rtm_id, link_type, target, note, created_at, updated_at) VALUES(?,?,?,?,?,?);",
+                cur.execute("INSERT INTO rtm_links(rtm_id, link_type, target, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?,?,?);",
                             (rid, lt, tg, "", now, now))
     conn.commit()
 
@@ -3041,7 +3041,7 @@ def sam_snapshot(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: i
     out["facts"] = facts
     now = _now_iso()
     with closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO sam_versions(rfp_id, url, sha256, extracted_json, created_at) VALUES(?,?,?,?,?);",
+        cur.execute("INSERT INTO sam_versions(rfp_id, url, sha256, extracted_json, created_at) VALUES (?, ?, ?, ?, ?,?);",
                     (int(rfp_id), url, sha, json.dumps(facts), now))
         vid = cur.lastrowid
         for k, v in facts.items():
@@ -4351,7 +4351,7 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb)
-                        VALUES(?,?,?,?,?,?,?);
+                        VALUES (?, ?, ?, ?, ?,?,?,?);
                     """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
                     conn.commit()
                 added += 1
@@ -5662,7 +5662,7 @@ def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
             key = (r.get("clin",""), r.get("description",""))
             if key in existing:
                 continue
-            cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES(?,?,?,?,?,?,?);",
+            cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);",
                         (int(rfp_id), r.get("clin"), r.get("description"), r.get("qty"), r.get("unit"), r.get("unit_price"), r.get("extended_price")))
             added += 1
         conn.commit()
@@ -6795,7 +6795,7 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
         pages_text, ocr_count = ocr_pages_if_empty(file_bytes, mime, pages_text)
         pages = len(pages_text) if pages_text else None
         cur.execute(
-            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES(?,?,?,?,?,?, datetime('now'));",
+            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES (?, ?, ?, ?, ?,?,?, datetime('now'));",
             (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
         )
         rid = cur.lastrowid
@@ -7355,7 +7355,7 @@ def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
         if row:
             return int(row[0])
         cur.execute(
-            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
             (notice_row.get('Title') or "", notice_row.get('Solicitation') or "", nid, notice_row.get('SAM Link') or "", "")
         )
         rid = int(cur.lastrowid)
@@ -7755,29 +7755,30 @@ def run_sam_watch(conn) -> None:
                                     _db = _sqlite3.connect(DB_PATH, check_same_thread=False)
                                 with _closing(_db.cursor()) as cur:
                                     cur.execute(
-                                        """
-                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                        """,
+                                        "INSERT INTO deals(title, agency, status, stage, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
                                         (
-                                            row.get('Title') or "",
-                                            row.get('Agency Path') or "",
-                                            "Quote",
-                                            None,
-                                            row.get('Notice ID') or "",
-                                            row.get('Solicitation') or "",
-                                            row.get('Posted') or "",
-                                            row.get('Response Due') or "",
-                                            row.get('NAICS') or "",
-                                            row.get('PSC') or "",
-                                            row.get('SAM Link') or "",
+                                            str(row.get('Title') or ""),
+                                            str(row.get('Agency Path') or ""),
+                                            STAGES_ORDERED[0],
+                                            STAGES_ORDERED[0],
+                                            float(row.get('Est. Value') or 0) if 'Est. Value' in row else None,
+                                            str(row.get('Notice ID') or ""),
+                                            str(row.get('Solicitation') or ""),
+                                            str(row.get('Posted') or ""),
+                                            str(row.get('Response Due') or ""),
+                                            str(row.get('NAICS') or ""),
+                                            str(row.get('PSC') or ""),
+                                            str(row.get('SAM Link') or ""),
                                         ),
                                     )
                                     deal_id = cur.lastrowid
+                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
                                     _db.commit()
+                            except Exception:
+                                pass
                                 try:
                                     with _closing(_db.cursor()) as cur:
-                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
+                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
                                         rfp_id = cur.lastrowid
                                         _db.commit()
                                     att_saved = 0
@@ -7893,7 +7894,7 @@ def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime:
     with _closing(conn.cursor()) as cur:
         cur.execute(
             "INSERT OR IGNORE INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
-            "VALUES(?,?,?,?,NULL,?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, ?,NULL,?, datetime('now'))",
             (int(rfp_id), filename, mime or "application/octet-stream", sha, blob)
         )
         conn.commit()
@@ -8006,7 +8007,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
                         "INSERT OR IGNORE INTO contacts(name, email, phone, title, organization, created_at) "
-                        "VALUES(?,?,?,?,?, datetime('now'))",
+                        "VALUES (?, ?, ?, ?, ?,?, datetime('now'))",
                         (str(name), str(email), str(phone), str(job), str(agency))
                     )
                     conn.commit()
@@ -8553,7 +8554,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                                 ((_title_in or _guess_title(full_text, "Untitled")), (_solnum_in or _guess_solnum(full_text)), (_parse_sam_notice_id(_sam_in) or ""), (_sam_in or ""), "",)
                             )
                             rfp_id = cur.lastrowid
@@ -8561,13 +8562,13 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
                                             (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
                             for r in clins:
-                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);",
                                             (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
                             for d in dates:
                                 cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
                                             (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
                             for pc in pocs:
-                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
 
                             # X3: store POP / ordering period in meta and key_dates
@@ -8639,7 +8640,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                                 ((_title_in or _guess_title(text, f.name)), (_solnum_in or _guess_solnum(text)), (_parse_sam_notice_id(_sam_in) or ""), _sam_in, "", )
                             )
                             rfp_id = cur.lastrowid
@@ -8647,13 +8648,13 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
                                             (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
                             for r in clins:
-                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);",
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);",
                                             (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
                             for d in dates:
                                 cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
                                             (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
                             for pc in pocs:
-                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);",
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
                             conn.commit()
                         last_rfp_id = rfp_id
@@ -9099,7 +9100,7 @@ def _run_rfp_analyzer_phase3(conn):
                         for _, r in ed_c.fillna('').iterrows():
                             if not any(str(r.get(col,'')).strip() for col in ['clin','description','qty','unit','unit_price','extended_price']):
                                 continue
-                            cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?,?,?,?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
+                            cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
                         conn.commit()
                     st.success('CLINs saved.')
             with tab_dates:
@@ -9131,7 +9132,7 @@ def _run_rfp_analyzer_phase3(conn):
                         for _, r in ed_p.fillna('').iterrows():
                             if not any(str(r.get(col,'')).strip() for col in ['name','role','email','phone']):
                                 continue
-                            cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?,?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
+                            cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
                         conn.commit()
                     st.success('POCs saved.')
             with tab_meta:
@@ -9440,7 +9441,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT INTO lm_meta(lm_id, owner, ref_page, ref_para, evidence, risk, notes)
-                        VALUES(?,?,?,?,?,?,?)
+                        VALUES (?, ?, ?, ?, ?,?,?,?)
                         ON CONFLICT(lm_id) DO UPDATE SET
                             owner=excluded.owner, ref_page=excluded.ref_page, ref_para=excluded.ref_para,
                             evidence=excluded.evidence, risk=excluded.risk, notes=excluded.notes;
@@ -9936,7 +9937,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                             cur.execute(
                                 """
                                 INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                                VALUES(?,?,?,?,?,?,?,?,?,?)
+                                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?)
                                 ;
                                 """,
                                 (
@@ -9982,7 +9983,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                         cur.execute(
                             """
                             INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                            VALUES(?,?,?,?,?,?,?,?,?,?)
+                            VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?)
                             ;
                             """,
                             (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
@@ -10147,7 +10148,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                                 upx = float(r.get("unit_price", 0) or 0)
                                 ext = _calc_extended(qty, upx) or 0.0
                                 cur.execute(
-                                    "INSERT INTO quote_lines(quote_id, clin, description, qty, unit_price, extended_price) VALUES(?,?,?,?,?,?);",
+                                    "INSERT INTO quote_lines(quote_id, clin, description, qty, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?);",
                                     (qid, str(r.get("clin",""))[:50], str(r.get("description",""))[:300], qty, upx, ext)
                                 )
                                 total_rows += 1
@@ -10190,7 +10191,7 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
             ext = _calc_extended(qty, price) or 0.0
             with closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO quote_lines(quote_id, clin, description, qty, unit_price, extended_price) VALUES(?,?,?,?,?,?);",
+                    "INSERT INTO quote_lines(quote_id, clin, description, qty, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?);",
                     (qid, clin.strip(), desc.strip(), float(qty), float(price), float(ext))
                 )
                 conn.commit()
@@ -10288,7 +10289,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
             with closing(conn.cursor()) as cur:
                 cur.execute("""
                     INSERT INTO pricing_scenarios(rfp_id, name, overhead_pct, gna_pct, fee_pct, contingency_pct, created_at)
-                    VALUES(?,?,?,?,?,?,?);
+                    VALUES (?, ?, ?, ?, ?,?,?,?);
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
             st.success("Scenario created.")
@@ -10315,7 +10316,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     if add_lab:
         with closing(conn.cursor()) as cur:
             cur.execute("""
-                INSERT INTO pricing_labor(scenario_id, labor_cat, hours, rate, fringe_pct) VALUES(?,?,?,?,?);
+                INSERT INTO pricing_labor(scenario_id, labor_cat, hours, rate, fringe_pct) VALUES (?, ?, ?, ?, ?,?);
             """, (int(scenario_id), cat.strip(), float(hrs), float(rate), float(fringe)))
             conn.commit()
         st.success("Added.")
@@ -10839,7 +10840,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                         for _, r in df.iterrows():
                             cur.execute("""
                                 INSERT INTO past_perf(project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes)
-                                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?,?);
                             """, (
                                 str(r.get("project_title",""))[:200],
                                 str(r.get("customer",""))[:200],
@@ -10895,7 +10896,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT INTO past_perf(project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                        VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?,?);
                     """, (project_title.strip(), customer.strip(), contract_no.strip(), naics.strip(), role.strip(), pop_start.strip(), pop_end.strip(), v, scope.strip(), results.strip(), cpars_rating.strip(), contact_name.strip(), contact_email.strip(), contact_phone.strip(), keywords.strip(), notes.strip()))
                     conn.commit()
                 st.success("Saved project.")
@@ -11113,7 +11114,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                 st.error("Title required")
             else:
                 with closing(conn.cursor()) as cur:
-                    cur.execute("INSERT INTO white_papers(title, subtitle, rfp_id, created_at, updated_at) VALUES(?,?,?,?,datetime('now'));",
+                    cur.execute("INSERT INTO white_papers(title, subtitle, rfp_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?,datetime('now'));",
                                 (d_title.strip(), d_sub.strip(), None, datetime.utcnow().isoformat()))
                     pid = cur.lastrowid
                     if t_sel2:
@@ -11145,7 +11146,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                 img_path = save_uploaded_file(ns_img, subdir="whitepapers")
             pos = int((df_sec["position"].max() if not df_sec.empty else 0) + 1)
             with closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body, image_path) VALUES(?,?,?,?,?);",
+                cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body, image_path) VALUES (?, ?, ?, ?, ?,?);",
                             (int(p_sel), pos, ns_title.strip(), ns_body.strip(), img_path))
                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                 conn.commit()
@@ -11419,8 +11420,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 from contextlib import closing as _closing
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO deals(title, agency, status, stage, value, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
-                        (title.strip(), agency.strip(), status, status, float(value))
+                        "INSERT INTO deals(title, agency, status, stage, value, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
+                        (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value))
                     )
                     cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (status,))
                     conn.commit()
@@ -11458,7 +11459,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             st.markdown(f"#{did} · **{r.get('title') or ''}**")
                             st.caption(str(r.get("agency") or ""))
                             v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
-                            ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
+                            ns = st.selectbox("Stage", STAGES_ORDERED, index=0, key=f"k_stage_{did}")
                             c1, c2, c3 = st.columns([1,1,1])
                             with c1:
                                 if st.button("◀", key=f"k_prev_{did}"):
@@ -11639,7 +11640,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                         with closing(conn.cursor()) as cur:
                             cur.execute("""
                                 INSERT INTO files(owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at)
-                                VALUES(?,?,?,?,?,?,?,?,datetime('now'));
+                                VALUES (?, ?, ?, ?, ?,?,?,?,?,datetime('now'));
                             """, (
                                 owner_type, int(owner_id) if owner_id else None, f.name, pth, f.size, _detect_mime(f.name),
                                 tags.strip(), notes.strip()
@@ -11898,7 +11899,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT INTO rfq_packs(rfp_id, deal_id, title, instructions, due_date, created_at, updated_at)
-                        VALUES(?,?,?,?,?,datetime('now'),datetime('now'));
+                        VALUES (?, ?, ?, ?, ?,?,datetime('now'),datetime('now'));
                     """, (rf_opt if rf_opt else None, None, title.strip(), instr.strip(), str(due)))
                     conn.commit()
                 st.success("Created"); st.rerun()
@@ -11936,7 +11937,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
         with closing(conn.cursor()) as cur:
             cur.execute("""
                 INSERT INTO rfq_lines(pack_id, clin_code, description, qty, unit, naics, psc)
-                VALUES(?,?,?,?,?,?,?);
+                VALUES (?, ?, ?, ?, ?,?,?,?);
             """, (int(pk_sel), l_code.strip(), l_desc.strip(), float(l_qty or 0), l_unit.strip(), l_naics.strip(), l_psc.strip()))
             conn.commit()
         st.success("Line added"); st.rerun()
@@ -12418,7 +12419,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
@@ -12479,7 +12480,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
@@ -13711,7 +13712,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                 except Exception as e:
                     status = "Error"; err = str(e)
         with _closing(conn.cursor()) as cur:
-            cur.executemany("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES(?,?,?,?,?,?);", logs)
+            cur.executemany("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES (?, ?, ?, ?, ?,?,?);", logs)
             conn.commit()
         logs.append({"email":to_email,"status":status,"error":err})
         if status=="Sent":
@@ -13791,7 +13792,7 @@ def _o4_accounts_ui(conn):
                 with conn:
                     conn.execute("""
                     INSERT INTO email_accounts(user_email, display_name, app_password, smtp_host, smtp_port, use_ssl)
-                    VALUES(?,?,?,?,?,?)
+                    VALUES (?, ?, ?, ?, ?,?,?)
                     ON CONFLICT(user_email) DO UPDATE SET
                         display_name=excluded.display_name,
                         app_password=excluded.app_password,
@@ -13952,7 +13953,7 @@ def _o5_upsert_sequence(conn, name: str):
 
 def _o5_add_step(conn, seq_id: int, step_no: int, delay_hours: int, subject: str, body_html: str):
     with conn:
-        conn.execute("INSERT INTO outreach_steps(seq_id, step_no, delay_hours, subject, body_html) VALUES(?,?,?,?,?)",
+        conn.execute("INSERT INTO outreach_steps(seq_id, step_no, delay_hours, subject, body_html) VALUES (?, ?, ?, ?, ?,?)",
                      (seq_id, step_no, int(delay_hours), subject or "", body_html or ""))
 
 def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str | None = None):
@@ -13971,7 +13972,7 @@ def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str 
             for _, row in steps.iterrows():
                 eta = base + __import__("datetime").timedelta(hours=int(row["delay_hours"] or 0))
                 conn.execute("""INSERT INTO outreach_schedules(seq_id, step_no, to_email, send_at, subject, body_html, status)
-                                VALUES(?,?,?,?,?,?, 'queued')""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), row["subject"] or "", row["body_html"] or ""))
+                                VALUES (?, ?, ?, ?, ?,?,?, 'queued')""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), row["subject"] or "", row["body_html"] or ""))
                 base = eta
                 count += 1
     return count
@@ -14313,7 +14314,7 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
         for r in rows or []:
             cur = conn.execute(f"""
                 INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                 ON CONFLICT(place_id) DO UPDATE SET
                     name=COALESCE(excluded.name, {tbl}.name),
                     email=COALESCE(excluded.email, {tbl}.email),
@@ -14964,7 +14965,7 @@ def __p_o4_ui(conn):
             tls    = _st.checkbox("Use STARTTLS", value=True, key="__p_o4_tls")
         if _st.form_submit_button("Save sender") and email:
             __p_db(conn, """INSERT INTO outreach_sender_accounts(label,email,app_password,smtp_host,smtp_port,use_tls,is_active)
-                            VALUES(?,?,?,?,?,?,1)
+                            VALUES (?, ?, ?, ?, ?,?,?,1)
                             ON CONFLICT(label) DO UPDATE SET email=excluded.email,app_password=excluded.app_password,
                             smtp_host=excluded.smtp_host,smtp_port=excluded.smtp_port,use_tls=excluded.use_tls""",
                    (label or email, email, app_pw, host, int(port), 1 if tls else 0))
@@ -15057,7 +15058,7 @@ def __p_o5_ui(conn):
             with s3: subj = _st.text_input("Subject", key="__p_o5_subj")
             body = _st.text_area("HTML body", height=120, key="__p_o5_body")
             if _st.button("Add step", key="__p_o5_add"):
-                __p_db(conn,"INSERT INTO outreach_steps(seq_id,step_no,delay_hours,subject,body_html) VALUES(?,?,?,?,?)",
+                __p_db(conn,"INSERT INTO outreach_steps(seq_id,step_no,delay_hours,subject,body_html) VALUES (?, ?, ?, ?, ?,?)",
                        (seq_id,int(step),int(delay),subj or "",body or "")); _st.rerun()
     _st.markdown("---")
     _st.markdown("**Queue follow-ups**")
@@ -15076,7 +15077,7 @@ def __p_o5_ui(conn):
                     t = base
                     for _,row in steps.iterrows():
                         t = t + __import__("datetime").timedelta(hours=int(row["delay_hours"] or 0))
-                        __p_db(conn,"INSERT INTO outreach_schedules(seq_id,step_no,to_email,send_at,status,subject,body_html) VALUES(?,?,?,?, 'queued',?,?)",
+                        __p_db(conn,"INSERT INTO outreach_schedules(seq_id,step_no,to_email,send_at,status,subject,body_html) VALUES (?, ?, ?, ?, ?, 'queued',?,?)",
                                (seq_id,int(row["step_no"]),em,t.strftime("%Y-%m-%dT%H:%M:%SZ"),row["subject"] or "",row["body_html"] or "")); n+=1
                 _st.success(f"Queued {n}")
     if _st.button("Send due now", key="__p_o5_sendnow"):
@@ -16082,7 +16083,7 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
         pid = cur.lastrowid
         for i, ln in enumerate(lines, start=1):
             cur.execute(
-                "INSERT INTO proposal_sections(proposal_id,ord,title,content,settings_json) VALUES(?,?,?,?,?)",
+                "INSERT INTO proposal_sections(proposal_id,ord,title,content,settings_json) VALUES (?, ?, ?, ?, ?,?)",
                 (int(pid), i, ln, "", json.dumps({"font":"Times New Roman","size":11}))
             )
     conn.commit()
@@ -16383,7 +16384,7 @@ def o1_sender_accounts_ui(conn):
             with conn:
                 conn.execute("""
                 INSERT INTO email_accounts(user_email, display_name, app_password, smtp_host, smtp_port, use_ssl)
-                VALUES(?,?,?,?,?,?)
+                VALUES (?, ?, ?, ?, ?,?,?)
                 ON CONFLICT(user_email) DO UPDATE SET
                     display_name=excluded.display_name,
                     app_password=excluded.app_password,
