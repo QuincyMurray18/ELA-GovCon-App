@@ -512,13 +512,13 @@ except NameError:
                                          logo_name=COALESCE(?,logo_name)
                                      WHERE lower(email)=lower(?)""", (sig_html, data, mime, name, email))
                 sconn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
                 st.success("Saved")
         with col2:
             if st.button("Remove logo", key=f"__p_sig_remove_{email}"):
                 sconn.execute("UPDATE outreach_signatures SET logo_blob=NULL, logo_mime=NULL, logo_name=NULL WHERE lower(email)=lower(?)", (email,))
                 sconn.commit()
-            _ensure_stage_defaults(conn)
+                _ensure_stage_defaults(conn)
                 st.success("Logo removed")
 
         st.caption("Preview")
@@ -7370,7 +7370,7 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
                 )
                 conn.commit()
                 _ensure_stage_defaults(conn)
-            st.success(f"Added contact {name}")
+                st.success(f"Added contact {name}")
         except Exception as e:
             st.error(f"Error saving contact {e}")
 
@@ -8868,7 +8868,7 @@ def _run_rfp_analyzer_phase3(conn):
                                     (int(_ensure_selected_rfp_id(conn)), datetime.utcnow().isoformat(), q.strip(), a))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Stored Q&A.")
+                        st.success("Stored Q&A.")
                 except Exception as e:
                     st.error(f"Q&A failed: {e}")
             try:
@@ -8887,7 +8887,7 @@ def _run_rfp_analyzer_phase3(conn):
                                     cur.execute("DELETE FROM rfp_chat WHERE rfp_id=?;", (int(_ensure_selected_rfp_id(conn)),))
                                     conn.commit()
                                     _ensure_stage_defaults(conn)
-                                st.success("Cleared.")
+                                    st.success("Cleared.")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Clear failed: {e}")
@@ -8926,7 +8926,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.executemany("UPDATE lm_items SET status=? WHERE id=? AND rfp_id=?;", [(new_status, iid, int(_rid)) for iid in ids])
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                    st.success(f"Updated {len(ids)} item(s).")
+                            st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
             # Export
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
@@ -9050,7 +9050,7 @@ def _run_rfp_analyzer_phase3(conn):
                             _cur.execute(f"UPDATE rfp_files SET rfp_id=NULL WHERE id IN ({ph});", tuple(int(i) for i in to_unlink))
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                        st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
+                            st.success(f"Unlinked {len(to_unlink)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Unlink failed: {e}")
             st.caption("Attach from library")
@@ -9082,7 +9082,7 @@ def _run_rfp_analyzer_phase3(conn):
                             _cur2.execute(f"UPDATE rfp_files SET rfp_id=? WHERE id IN ({ph});", (int(_ensure_selected_rfp_id(conn)), *[int(i) for i in to_link]))
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                        st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
+                            st.success(f"Linked {len(to_link)} file(s)."); st.rerun()
                     except Exception as e:
                         st.error(f"Link failed: {e}")
         st.markdown("### Attachments status")
@@ -9185,7 +9185,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.execute('INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), txt, int(r.get('is_must') or 0), str(r.get('status') or 'Open')))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success('L/M saved.')
+                        st.success('L/M saved.')
             with tab_clin:
                 try:
                     df_c_e = _pd.__p_read_sql_query('SELECT clin, description, qty, unit, unit_price, extended_price FROM clin_lines WHERE rfp_id=?;', conn, params=(int(_ensure_selected_rfp_id(conn)),))
@@ -9202,7 +9202,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success('CLINs saved.')
+                        st.success('CLINs saved.')
             with tab_dates:
                 try:
                     df_d_e = _pd.__p_read_sql_query('SELECT label, date_text, date_iso FROM key_dates WHERE rfp_id=?;', conn, params=(int(_ensure_selected_rfp_id(conn)),))
@@ -9219,7 +9219,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.execute('INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('label','')), str(r.get('date_text','')), str(r.get('date_iso',''))))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success('Dates saved.')
+                        st.success('Dates saved.')
             with tab_pocs:
                 try:
                     df_p_e = _pd.__p_read_sql_query('SELECT name, role, email, phone FROM pocs WHERE rfp_id=?;', conn, params=(int(_ensure_selected_rfp_id(conn)),))
@@ -9236,7 +9236,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success('POCs saved.')
+                        st.success('POCs saved.')
             with tab_meta:
                 try:
                     df_m_e = _pd.__p_read_sql_query('SELECT key, value FROM rfp_meta WHERE rfp_id=?;', conn, params=(int(_ensure_selected_rfp_id(conn)),))
@@ -9253,7 +9253,7 @@ def _run_rfp_analyzer_phase3(conn):
                             cur.execute('INSERT INTO rfp_meta(rfp_id, key, value) VALUES (?,?,?);', (int(_ensure_selected_rfp_id(conn)), k, v))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success('Meta saved.')
+                        st.success('Meta saved.')
         # === End Phase S ===
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -9469,7 +9469,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                     cur.execute("UPDATE lm_items SET status='Complete' WHERE rfp_id=?;", (rfp_id,))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("All items marked Complete")
+                    st.success("All items marked Complete")
             except Exception as e:
                 st.error(f"Update failed: {e}")
     with c2:
@@ -9479,7 +9479,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                     cur.execute("UPDATE lm_items SET status='Open' WHERE rfp_id=?;", (rfp_id,))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("All items reset")
+                    st.success("All items reset")
             except Exception as e:
                 st.error(f"Update failed: {e}")
     with c3:
@@ -9489,7 +9489,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                     cur.execute("UPDATE lm_items SET status='Open' WHERE rfp_id=? AND is_must=1;", (rfp_id,))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("All MUST items set to Open")
+                    st.success("All MUST items set to Open")
             except Exception as e:
                 st.error(f"Update failed: {e}")
 
@@ -9556,7 +9556,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
                     """, (int(pick), owner.strip(), page.strip(), para.strip(), evidence.strip(), risk, notes.strip()))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Saved"); st.rerun()
+                    st.success("Saved"); st.rerun()
             except Exception as e2:
                 st.error(f"Save failed: {e2}")
     with cexp:
@@ -10100,7 +10100,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                         )
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Vendor saved")
+                        st.success("Vendor saved")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
@@ -10407,7 +10407,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
                 _ensure_stage_defaults(conn)
-            st.success("Scenario created.")
+                st.success("Scenario created.")
             st.rerun()
         return
     else:
@@ -10435,7 +10435,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
             """, (int(scenario_id), cat.strip(), float(hrs), float(rate), float(fringe)))
             conn.commit()
             _ensure_stage_defaults(conn)
-        st.success("Added.")
+            st.success("Added.")
 
     df_lab = pd.read_sql_query("""
         SELECT id, labor_cat, hours, rate, fringe_pct, (hours*rate) AS direct, (hours*rate*fringe_pct/100.0) AS fringe
@@ -10456,7 +10456,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
             cur.execute("INSERT INTO pricing_other(scenario_id, label, cost) VALUES(?, ?, ?);", (int(scenario_id), label.strip(), float(cost)))
             conn.commit()
             _ensure_stage_defaults(conn)
-        st.success("Added ODC.")
+            st.success("Added ODC.")
 
     df_odc = pd.read_sql_query("SELECT id, label, cost FROM pricing_other WHERE scenario_id=?;", conn, params=(scenario_id,))
     _styled_dataframe(df_odc, use_container_width=True, hide_index=True)
@@ -10850,7 +10850,7 @@ def _orig_run_capability_statement(conn: "sqlite3.Connection") -> None:
                 """, (company_name, tagline, address, phone, email, website, uei, cage, naics, core_competencies, differentiators, certifications, past_performance, primary_poc))
                 conn.commit()
                 _ensure_stage_defaults(conn)
-            st.success("Profile saved.")
+                st.success("Profile saved.")
         except Exception as e:
             st.error(f"Save failed: {e}")
 
@@ -11019,7 +11019,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                     """, (project_title.strip(), customer.strip(), contract_no.strip(), naics.strip(), role.strip(), pop_start.strip(), pop_end.strip(), v, scope.strip(), results.strip(), cpars_rating.strip(), contact_name.strip(), contact_email.strip(), contact_phone.strip(), keywords.strip(), notes.strip()))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Saved project.")
+                    st.success("Saved project.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
 
@@ -11173,7 +11173,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                         cur.execute("INSERT INTO white_templates(name, description, created_at) VALUES(?,?,datetime('now'));", (t_name.strip(), t_desc.strip()))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Template saved"); st.rerun()
+                        st.success("Template saved"); st.rerun()
         with t_col2:
             if df_t.empty:
                 st.info("No templates yet.")
@@ -11192,7 +11192,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                     (int(t_sel), pos, ts_title.strip(), ts_body.strip()))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Section added"); st.rerun()
+                        st.success("Section added"); st.rerun()
                 # Reorder / delete (simple)
                 if not df_ts.empty:
                     st.markdown("**Reorder / Delete**")
@@ -11206,14 +11206,14 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                     cur.execute("UPDATE white_template_sections SET position=? WHERE id=?;", (int(new_pos), int(r["id"])))
                                     conn.commit()
                                     _ensure_stage_defaults(conn)
-                                st.success("Updated position"); st.rerun()
+                                    st.success("Updated position"); st.rerun()
                         with c3:
                             if st.button("Delete", key=f"wp_ts_del_{int(r['id'])}"):
                                 with closing(conn.cursor()) as cur:
                                     cur.execute("DELETE FROM white_template_sections WHERE id=?;", (int(r["id"]),))
                                     conn.commit()
                                     _ensure_stage_defaults(conn)
-                                st.success("Deleted"); st.rerun()
+                                    st.success("Deleted"); st.rerun()
 
     st.divider()
 
@@ -11248,7 +11248,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                         (int(pid), int(r["position"]), r.get("title"), r.get("body")))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Draft created"); st.rerun()
+                    st.success("Draft created"); st.rerun()
     with c2:
         if df_p.empty:
             st.info("No drafts yet.")
@@ -11276,7 +11276,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                 conn.commit()
                 _ensure_stage_defaults(conn)
-            st.success("Section added"); st.rerun()
+                st.success("Section added"); st.rerun()
 
         # Section list
         if df_sec.empty:
@@ -11297,7 +11297,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                             cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                        st.success("Updated"); st.rerun()
+                            st.success("Updated"); st.rerun()
                 with e3:
                     up_img = st.file_uploader("Replace image", type=["png","jpg","jpeg"], key=f"wp_sec_img_{int(r['id'])}")
                     if st.button("Save image", key=f"wp_sec_img_save_{int(r['id'])}"):
@@ -11310,7 +11310,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                                 conn.commit()
                                 _ensure_stage_defaults(conn)
-                            st.success("Image saved"); st.rerun()
+                                st.success("Image saved"); st.rerun()
                 with e4:
                     if st.button("Delete", key=f"wp_sec_del_{int(r['id'])}"):
                         with closing(conn.cursor()) as cur:
@@ -11318,7 +11318,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                             cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                        st.success("Deleted"); st.rerun()
+                            st.success("Deleted"); st.rerun()
                 st.divider()
 
             # Export & Push
@@ -11455,7 +11455,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     """, (a_type, a_subject.strip(), a_notes.strip(), a_deal if a_deal else None, a_contact if a_contact else None))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Saved")
+                    st.success("Saved")
 
         st.subheader("Activity Log")
         f1, f2, f3 = st.columns([2,2,2])
@@ -11544,7 +11544,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             )
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                        st.success("Updated")
+                            st.success("Updated")
     # --- Pipeline
     with tabs[2]:
         # Add Deal (moved from Deals)
@@ -11749,7 +11749,7 @@ v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), 
                                     cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
                             conn.commit()
                             _ensure_stage_defaults(conn)
-                        st.success("Pipeline updated")
+                            st.success("Pipeline updated")
                     except Exception as e:
                         st.error(f"Save failed: {e}")
         except Exception as e:
@@ -11900,7 +11900,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                                 cur.execute("UPDATE files SET tags=?, notes=? WHERE id=?;", (new_tags.strip(), new_notes.strip(), int(r["id"])))
                                 conn.commit()
                                 _ensure_stage_defaults(conn)
-                            st.success("Updated")
+                                st.success("Updated")
                     with b2:
                         if st.button("Delete", key=f"fm_row_del_{int(r['id'])}"):
                             with closing(conn.cursor()) as cur:
@@ -12105,7 +12105,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     """, (rf_opt if rf_opt else None, None, title.strip(), instr.strip(), str(due)))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Created"); st.rerun()
+                    st.success("Created"); st.rerun()
     with right:
         st.subheader("Open")
         df_pk = pd.read_sql_query("SELECT id, title, due_date, created_at FROM rfq_packs_t ORDER BY id DESC;", conn, params=())
@@ -12144,7 +12144,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
             """, (int(pk_sel), l_code.strip(), l_desc.strip(), float(l_qty or 0), l_unit.strip(), l_naics.strip(), l_psc.strip()))
             conn.commit()
             _ensure_stage_defaults(conn)
-        st.success("Line added"); st.rerun()
+            st.success("Line added"); st.rerun()
 
     if not df_lines.empty:
         st.markdown("**Edit existing lines**")
@@ -12163,7 +12163,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                                     (nd.strip(), float(nq or 0), nu.strip(), int(r["id"])))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Updated"); st.rerun()
+                        st.success("Updated"); st.rerun()
 
     st.divider()
 
@@ -12197,7 +12197,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                                 (int(pk_sel), int(add_file), df_one.iloc[0]["filename"], df_one.iloc[0]["path"]))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Added"); st.rerun()
+                    st.success("Added"); st.rerun()
 
     if not df_att.empty:
         for _, r in df_att.iterrows():
@@ -12210,7 +12210,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                         cur.execute("DELETE FROM rfq_attach_t WHERE id=?;", (int(r["id"]),))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Removed"); st.rerun()
+                        st.success("Removed"); st.rerun()
 
     st.divider()
 
@@ -12236,7 +12236,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     pass
             conn.commit()
             _ensure_stage_defaults(conn)
-        st.success("Vendors added"); st.rerun()
+            st.success("Vendors added"); st.rerun()
 
     if not df_rv.empty:
         for _, r in df_rv.iterrows():
@@ -12249,7 +12249,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                         cur.execute("DELETE FROM rfq_vendors_t WHERE id=?;", (int(r["id"]),))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Removed"); st.rerun()
+                        st.success("Removed"); st.rerun()
 
     st.divider()
 
@@ -12872,7 +12872,7 @@ def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
                     cur.execute("INSERT OR IGNORE INTO tenants(name, created_at) VALUES(?, datetime('now'));", (new_name.strip(),))
                     conn.commit()
                     _ensure_stage_defaults(conn)
-                st.success("Workspace created"); st.rerun()
+                    st.success("Workspace created"); st.rerun()
             else:
                 st.warning("Enter a name")
 
@@ -13317,7 +13317,7 @@ RFP Context (optional, may be empty):
                                     (st.session_state.get("x161_tagline",""), st.session_state.get("x161_core",""), st.session_state.get("x161_diff","")))
                         conn.commit()
                         _ensure_stage_defaults(conn)
-                    st.success("Saved to org_profile")
+                        st.success("Saved to org_profile")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
     except Exception as e:
