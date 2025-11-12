@@ -11527,7 +11527,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             if deal_owner_ctx != "All":
                 df_k = pd.read_sql_query(
                     "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner, rfp_deadline "
+                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
                     "FROM deals WHERE (owner = ? OR owner IS NULL OR owner = '') "
                     "ORDER BY id DESC;",
                     conn, params=(deal_owner_ctx,)
@@ -11535,7 +11535,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             else:
                 df_k = pd.read_sql_query(
                     "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner, rfp_deadline "
+                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
                     "FROM deals ORDER BY id DESC;",
                     conn, params=()
                 )
@@ -17200,12 +17200,3 @@ def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return f"[AI unavailable] {e}"
-
-def __coerce_deadline_date(df):
-    try:
-        import pandas as _pd
-        if 'rfp_deadline' in df.columns:
-            df['rfp_deadline'] = _pd.to_datetime(df['rfp_deadline'], errors='coerce').dt.date
-    except Exception:
-        pass
-    return df
