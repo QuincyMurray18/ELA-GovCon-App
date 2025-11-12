@@ -7739,16 +7739,11 @@ def run_sam_watch(conn) -> None:
             with p1:
                 if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
                     _sam_go(-1)
-st.session_state["sam_page"] = cur_page - 1
-                    st.rerun()
             with p2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with p3:
                 if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
                     _sam_go(1)
-st.session_state["sam_page"] = cur_page + 1
-                    st.rerun()
-
             start_i = (cur_page - 1) * page_size
             end_i = min(start_i + page_size, total)
 
@@ -7890,16 +7885,11 @@ st.session_state["sam_page"] = cur_page + 1
             with bp1:
                 if st.button("◀ Prev", key="sam_prev_btn_bottom", disabled=(cur_page <= 1)):
                     _sam_go(-1)
-st.session_state["sam_page"] = cur_page - 1
-                    st.rerun()
             with bp2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with bp3:
                 if st.button("Next ▶", key="sam_next_btn_bottom", disabled=(cur_page >= total_pages)):
                     _sam_go(1)
-st.session_state["sam_page"] = cur_page + 1
-                    st.rerun()
-
             st.divider()
             sel_idx = st.session_state.get("sam_selected_idx")
             if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
