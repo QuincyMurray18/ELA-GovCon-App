@@ -12395,7 +12395,7 @@ def nav() -> str:
             "Win Probability",
             "Chat Assistant",
             "Capability Statement",
-            "CRM",
+            
             "Contacts",
             "Deals",
         ],
