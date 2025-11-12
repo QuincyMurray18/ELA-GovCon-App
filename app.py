@@ -11527,7 +11527,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             if deal_owner_ctx != "All":
                 df_k = pd.read_sql_query(
                     "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner, rfp_deadline "
                     "FROM deals WHERE (owner = ? OR owner IS NULL OR owner = '') "
                     "ORDER BY id DESC;",
                     conn, params=(deal_owner_ctx,)
@@ -11535,7 +11535,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             else:
                 df_k = pd.read_sql_query(
                     "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner, rfp_deadline "
                     "FROM deals ORDER BY id DESC;",
                     conn, params=()
                 )
