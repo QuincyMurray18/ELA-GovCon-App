@@ -7339,9 +7339,148 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             _styled_dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
+def _render_deals_board(conn: "sqlite3.Connection") -> None:
+    import streamlit as st
+    st.subheader("Board")
+    stages = _deal_stages()
+    try:
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+    except Exception:
+        st.info("No deals yet")
+        return
+    cols = st.columns(len(stages), gap="small")
+    for i, stage in enumerate(stages):
+        with cols[i]:
+            st.markdown(f"**{stage}**")
+            try:
+                stage_df = df[df["status"] == stage]
+            except Exception:
+                stage_df = pd.DataFrame(columns=["id","title","agency","status","value"])
+            st.caption(f"{len(stage_df)}")
+            for _, r in stage_df.iterrows():
+                did = int(r["id"])
+                with st.container(border=True):
+                    st.markdown(f"**#{did} {r['title']}**")
+                    st.caption(r.get("agency") or "")
+                    try:
+                        val = float(r.get("value") or 0.0)
+                    except Exception:
+                        val = 0.0
+                    st.write(f"${val:,.0f}")
+                    key_sel = f"deal_stage_sel_{did}"
+                    # initialize previous value in session to avoid repeated updates
+                    st.session_state.setdefault(f"{key_sel}_prev", stage)
+                    new_stage = st.selectbox("Stage", stages, index=stages.index(stage), key=key_sel)
+                    if new_stage != st.session_state.get(f"{key_sel}_prev"):
+                        from contextlib import closing as _closing
+                        with _closing(conn.cursor()) as cur:
+                            cur.execute("UPDATE deals SET status=?, stage=? WHERE id=?;", (new_stage, new_stage, did))
+                            try:
+                                cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?,?, datetime('now'));", (did, new_stage))
+                            except Exception:
+                                pass
+                            conn.commit()
+                        st.session_state[f"{key_sel}_prev"] = new_stage
+                        st.rerun()
 
-# [replaced by CRM BOARD PATCH]
 
+
+def run_deals(conn: "sqlite3.Connection") -> None:
+    st.header("Deals")
+    try:
+        _migrate_deals_columns(conn)
+    except Exception:
+        pass
+
+    # Ensure any current RFP in session is wired to CRM/Deals
+    try:
+        rid = int(st.session_state.get("current_rfp_id") or 0)
+        if rid:
+            _p3_auto_wire_crm_from_rfp(conn, rid)
+    except Exception:
+        pass
+
+    with st.form("add_deal", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+        with c1:
+            title = st.text_input("Title")
+        with c2:
+            agency = st.text_input("Agency")
+        with c3:
+            status = st.selectbox(
+                "Status",
+                ["New", "Qualifying", "Bidding", "Submitted", "Awarded", "Lost"],
+            )
+        with c4:
+            value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
+        submitted = st.form_submit_button("Add Deal")
+
+    if submitted and title:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO deals(title, agency, status, stage, value, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                    (title.strip(), agency.strip(), status, status, float(value)),
+                )
+                # log stage
+                cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (status,))
+                conn.commit()
+            st.success(f"Added deal {title}")
+        except Exception as e:
+            st.error(f"Error saving deal {e}")
+
+    # Editable pipeline table
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+            conn,
+            params=(),
+        )
+        st.subheader("Pipeline")
+        st.caption("Edit inline below. Use Board for HubSpot-style cards.")
+        st.divider()
+        _render_deals_board(conn)
+        st.divider()
+        if df.empty:
+            st.write("No deals yet")
+            return
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "status": st.column_config.SelectboxColumn(options=_deal_stages())
+            },
+            key="deals_editor",
+        )
+        if st.button("Save Edits", key="deals_save"):
+            try:
+                # Detect status changes to log stage
+                df_orig = df.set_index("id")
+                with closing(conn.cursor()) as cur:
+                    for _, r in edited.iterrows():
+                        rid = int(r["id"])
+                        old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
+                        new_status = str(r["status"] or "New")
+                        cur.execute(
+                            "UPDATE deals SET title=?, agency=?, status=?, stage=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
+                            (str(r["title"] or "").strip(),
+                             str(r["agency"] or "").strip(),
+                             new_status,
+                             new_status,
+                             float(r["value"] or 0.0),
+                             str(r["sam_url"] or "").strip(),
+                             rid)
+                        )
+                        if new_status != old_status:
+                            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
+                conn.commit()
+                st.success("Saved edits")
+            except Exception as e:
+                st.error(f"Error saving edits {e}")
+        _styled_dataframe(edited, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Failed to load deals {e}")
 def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
     from contextlib import closing as _closing
     nid = str(notice_row.get('Notice ID') or "")
@@ -11227,7 +11366,171 @@ def _stage_probability(stage: str) -> int:
     }
     return mapping.get(stage or "", 10)
 
-# [replaced by CRM BOARD PATCH]
+def run_crm(conn: "sqlite3.Connection") -> None:
+    st.header("CRM")
+    tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
+
+    # --- Activities
+    with tabs[0]:
+        st.subheader("Log Activity")
+        df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
+        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
+        a_col1, a_col2, a_col3 = st.columns([2,2,2])
+        with a_col1:
+            a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
+            a_subject = st.text_input("Subject", value=st.session_state.get("outreach_subject",""))
+        with a_col2:
+            a_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
+                                  format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
+                                  key="act_deal")
+            a_contact = st.selectbox("Related Contact (optional)", options=[None] + df_contacts["id"].tolist(),
+                                     format_func=lambda x: "None" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
+                                     key="act_contact")
+        with a_col3:
+            a_notes = st.text_area("Notes", height=100, key="act_notes")
+            if st.button("Save Activity", key="act_save"):
+                with closing(conn.cursor()) as cur:
+                    cur.execute("""
+                        INSERT INTO activities(ts, type, subject, notes, deal_id, contact_id) VALUES(datetime('now'),?,?,?,?,?);
+                    """, (a_type, a_subject.strip(), a_notes.strip(), a_deal if a_deal else None, a_contact if a_contact else None))
+                    conn.commit()
+                st.success("Saved")
+
+        st.subheader("Activity Log")
+        f1, f2, f3 = st.columns([2,2,2])
+        with f1:
+            f_type = st.multiselect("Type filter", ["Call","Email","Meeting","Note"])
+        with f2:
+            f_deal = st.selectbox("Deal filter", options=[None] + df_deals["id"].tolist(),
+                                  format_func=lambda x: "All" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
+                                  key="act_f_deal")
+        with f3:
+            f_contact = st.selectbox("Contact filter", options=[None] + df_contacts["id"].tolist(),
+                                     format_func=lambda x: "All" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
+                                     key="act_f_contact")
+        q = "SELECT ts, type, subject, notes, deal_id, contact_id FROM activities_t WHERE 1=1"
+        params = []
+        if f_type:
+            q += " AND type IN (%s)" % ",".join(["?"]*len(f_type))
+            params.extend(f_type)
+        if f_deal:
+            q += " AND deal_id=?"; params.append(f_deal)
+        if f_contact:
+            q += " AND contact_id=?"; params.append(f_contact)
+        q += " ORDER BY ts DESC"
+        df_a = pd.read_sql_query(q, conn, params=params)
+        if df_a.empty:
+            st.write("No activities")
+        else:
+            _styled_dataframe(df_a, use_container_width=True, hide_index=True)
+            if st.button("Export CSV", key="act_export"):
+                path = str(Path(DATA_DIR) / "activities.csv")
+                df_a.to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
+
+    # --- Tasks
+    with tabs[1]:
+        st.subheader("New Task")
+        df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
+        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
+        t1, t2, t3 = st.columns([2,2,2])
+        with t1:
+            t_title = st.text_input("Task title", key="task_title")
+            t_due = st.date_input("Due date", key="task_due")
+        with t2:
+            t_priority = st.selectbox("Priority", ["Low","Normal","High"], index=1, key="task_priority")
+            t_status = st.selectbox("Status", ["Open","In Progress","Done"], index=0, key="task_status")
+        with t3:
+            t_deal = st.selectbox("Related Deal (optional)", options=[None] + df_deals["id"].tolist(),
+                                  format_func=lambda x: "None" if x is None else f"#{x} — {df_deals.loc[df_deals['id']==x,'title'].values[0]}",
+                                  key="task_deal")
+            t_contact = st.selectbox("Related Contact (optional)", options=[None] + df_contacts["id"].tolist(),
+                                     format_func=lambda x: "None" if x is None else df_contacts.loc[df_contacts["id"]==x, "name"].values[0],
+                                     key="task_contact")
+        if st.button("Add Task", key="task_add"):
+            with closing(conn.cursor()) as cur:
+                cur.execute("""
+                    INSERT INTO tasks(title, due_date, status, priority, deal_id, contact_id, created_at)
+                    VALUES(?,?,?,?,?,?,datetime('now'));
+                """, (t_title.strip(), t_due.isoformat() if t_due else None, t_status, t_priority, t_deal if t_deal else None, t_contact if t_contact else None))
+                conn.commit()
+            st.success("Task added")
+
+        st.subheader("My Tasks")
+        f1, f2 = st.columns([2,2])
+        with f1:
+            tf_status = st.multiselect("Status", ["Open","In Progress","Done"], default=["Open","In Progress"])
+        with f2:
+            tf_priority = st.multiselect("Priority", ["Low","Normal","High"], default=[])
+        q = "SELECT id, title, due_date, status, priority, deal_id, contact_id FROM tasks_t WHERE 1=1"
+        params = []
+        if tf_status:
+            q += " AND status IN (%s)" % ",".join(["?"]*len(tf_status)); params.extend(tf_status)
+        if tf_priority:
+            q += " AND priority IN (%s)" % ",".join(["?"]*len(tf_priority)); params.extend(tf_priority)
+        q += " ORDER BY COALESCE(due_date,'9999-12-31') ASC"
+        df_t = pd.read_sql_query(q, conn, params=params)
+        if df_t.empty:
+            st.write("No tasks")
+        else:
+            for _, r in df_t.iterrows():
+                c1, c2, c3, c4 = st.columns([3,2,2,2])
+                with c1:
+                    st.write(f"**{r['title']}**  — due {r['due_date'] or '—'}")
+                with c2:
+                    new_status = st.selectbox("Status", ["Open","In Progress","Done"],
+                                              index=["Open","In Progress","Done"].index(r["status"] if r["status"] in ["Open","In Progress","Done"] else "Open"),
+                                              key=f"task_status_{int(r['id'])}")
+                with c3:
+                    new_pri = st.selectbox("Priority", ["Low","Normal","High"],
+                                            index=["Low","Normal","High"].index(r["priority"] if r["priority"] in ["Low","Normal","High"] else "Normal"),
+                                            key=f"task_pri_{int(r['id'])}")
+                with c4:
+                    if st.button("Apply", key=f"task_apply_{int(r['id'])}"):
+                        with closing(conn.cursor()) as cur:
+                            cur.execute("UPDATE tasks SET status=?, priority=?, completed_at=CASE WHEN ?='Done' THEN datetime('now') ELSE completed_at END WHERE id=?;",
+                                        (new_status, new_pri, new_status, int(r["id"])))
+                            conn.commit()
+                        st.success("Updated")
+
+            if st.button("Export CSV", key="task_export"):
+                path = str(Path(DATA_DIR) / "tasks.csv")
+                df_t.to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
+
+    # --- Pipeline
+    with tabs[2]:
+        st.subheader("Weighted Pipeline")
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+        if df.empty:
+            st.info("No deals")
+        else:
+            df["prob_%"] = df["status"].apply(_stage_probability)
+            df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
+            # Stage age: days since last stage change
+            df_log = pd.read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;", conn, params=())
+            def stage_age(row):
+                try:
+                    last = df_log[(df_log["deal_id"]==row["id"]) & (df_log["stage"]==row["status"])]["last_change"]
+                    if last.empty: return None
+                    dt = pd.to_datetime(last.values[0])
+                    return (pd.Timestamp.utcnow() - dt).days
+                except Exception:
+                    return None
+            df["stage_age_days"] = df.apply(stage_age, axis=1)
+            _styled_dataframe(df[["title","agency","status","value","prob_%","expected_value","stage_age_days"]], use_container_width=True, hide_index=True)
+
+            st.subheader("Summary by Stage")
+            summary = df.groupby("status").agg(
+                deals=("id","count"),
+                value=("value","sum"),
+                expected=("expected_value","sum")
+            ).reset_index().sort_values("expected", ascending=False)
+            _styled_dataframe(summary, use_container_width=True, hide_index=True)
+            if st.button("Export Pipeline CSV", key="pipe_export"):
+                path = str(Path(DATA_DIR) / "pipeline.csv")
+                df.to_csv(path, index=False)
+                st.markdown(f"[Download CSV]({path})")
 
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
     try:
@@ -15595,314 +15898,6 @@ try:
 except NameError:
     pass
 # ===================== END PATCH =====================
-
-# ==== BEGIN: CRM BOARD PATCH (HubSpot-like) ====
-# Injected by ChatGPT on request: stages, board cards, auto stage logging, weighted pipeline
-
-# Canonical CRM stages (exact user list)
-CRM_STAGES = [
-    "No contact made",
-    "CO contacted",
-    "Quote",
-    "Multiple quotes",
-    "Proposal started",
-    "Proposal finished",
-    "Submitted",
-    "Awarded",
-    "Proposal lost",
-]
-
-def _stage_probability(stage: str) -> int:
-    mapping = {
-        "No contact made": 5,
-        "CO contacted": 15,
-        "Quote": 25,
-        "Multiple quotes": 35,
-        "Proposal started": 50,
-        "Proposal finished": 60,
-        "Submitted": 70,
-        "Awarded": 100,
-        "Proposal lost": 0,
-    }
-    return mapping.get(stage or "", 10)
-
-def _ensure_helpers_exist():
-    # Provide tolerant shims if optional helpers are missing
-    globals().setdefault("_styled_dataframe", lambda *args, **kwargs: st.dataframe(args[0] if args else None))
-    globals().setdefault("_migrate_deals_columns", lambda conn: None)
-    globals().setdefault("_p3_auto_wire_crm_from_rfp", lambda conn, rid: None)
-
-def _load_deals_df(conn):
-    import pandas as pd
-    try:
-        return pd.read_sql_query(
-            "SELECT id, title, agency, status, stage, value, sam_url FROM deals_t ORDER BY id DESC;",
-            conn,
-            params=(),
-        )
-    except Exception:
-        # fallback to base table
-        try:
-            return pd.read_sql_query(
-                "SELECT id, title, agency, status, stage, value, sam_url FROM deals ORDER BY id DESC;",
-                conn,
-                params=(),
-            )
-        except Exception as e:
-            st.error(f"Failed to load deals: {e}")
-            return pd.DataFrame(columns=["id","title","agency","status","stage","value","sam_url"])
-
-def _load_stage_log_df(conn):
-    import pandas as pd
-    try:
-        return pd.read_sql_query(
-            "SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;",
-            conn, params=(),
-        )
-    except Exception:
-        try:
-            return pd.read_sql_query(
-                "SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log GROUP BY deal_id, stage;",
-                conn, params=(),
-            )
-        except Exception:
-            return pd.DataFrame(columns=["deal_id","stage","last_change"])
-
-def run_deals(conn):
-    _ensure_helpers_exist()
-    st.header("Deals")
-
-    # optional migrations
-    try:
-        _migrate_deals_columns(conn)
-    except Exception:
-        pass
-
-    # optional auto-wire from current RFP
-    try:
-        rid = int(st.session_state.get("current_rfp_id") or 0)
-        if rid:
-            _p3_auto_wire_crm_from_rfp(conn, rid)
-    except Exception:
-        pass
-
-    # Create new deal
-    with st.form("add_deal", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-        with c1:
-            title = st.text_input("Title")
-        with c2:
-            agency = st.text_input("Agency")
-        with c3:
-            status = st.selectbox("Stage", CRM_STAGES, index=0)
-        with c4:
-            value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
-        submitted = st.form_submit_button("Add Deal")
-
-    if submitted and title:
-        from contextlib import closing
-        try:
-            with closing(conn.cursor()) as cur:
-                cur.execute(
-                    "INSERT INTO deals(title, agency, status, stage, value, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, datetime('now'));",
-                    (title.strip(), agency.strip(), status, status, float(value)),
-                )
-                cur.execute(
-                    "INSERT INTO deal_stage_log(deal_id, stage, changed_at) "
-                    "VALUES(last_insert_rowid(), ?, datetime('now'));",
-                    (status,),
-                )
-                conn.commit()
-            st.success(f"Added deal {title}")
-        except Exception as e:
-            st.error(f"Error saving deal {e}")
-
-    # Load
-    df = _load_deals_df(conn)
-
-    # Board
-    st.subheader("Board")
-    def _on_stage_change(_deal_id: int, _key: str, _old_status: str):
-        new_status = st.session_state.get(_key)
-        if not new_status or new_status == _old_status:
-            return
-        from contextlib import closing
-        try:
-            with closing(conn.cursor()) as cur:
-                cur.execute(
-                    "UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?;",
-                    (new_status, new_status, int(_deal_id)),
-                )
-                cur.execute(
-                    "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
-                    (int(_deal_id), new_status),
-                )
-                conn.commit()
-            st.toast(f"#{_deal_id} → {new_status}")
-        except Exception as _e:
-            st.error(f"Save failed: {_e}")
-
-    cols = st.columns(len(CRM_STAGES))
-    for idx, stage in enumerate(CRM_STAGES):
-        with cols[idx]:
-            st.markdown(f"**{stage}**")
-            stage_df = df[df["status"] == stage].copy() if not df.empty else None
-            if stage_df is None or stage_df.empty:
-                st.caption("None")
-                continue
-            for _, r in stage_df.iterrows():
-                with st.container(border=True):
-                    st.markdown(f"**#{int(r['id'])} — {r['title'] or 'Untitled'}**")
-                    st.caption(r.get("agency") or "")
-                    cA, cB = st.columns([1, 1])
-                    with cA:
-                        new_val = st.number_input(
-                            "Value",
-                            value=float(r.get("value") or 0.0),
-                            step=1000.0,
-                            key=f"deal_val_{int(r['id'])}",
-                        )
-                    with cB:
-                        sb_key = f"deal_stage_{int(r['id'])}"
-                        st.selectbox(
-                            "Stage",
-                            CRM_STAGES,
-                            index=CRM_STAGES.index(stage) if stage in CRM_STAGES else 0,
-                            key=sb_key,
-                            on_change=_on_stage_change,
-                            args=(int(r["id"]), sb_key, stage),
-                        )
-                    t1, t2 = st.columns([2, 1])
-                    with t1:
-                        new_title = st.text_input(
-                            "Title",
-                            value=r.get("title") or "",
-                            key=f"deal_title_{int(r['id'])}",
-                        )
-                    with t2:
-                        url = str(r.get("sam_url") or "").strip()
-                        new_url = st.text_input("SAM URL", value=url, key=f"deal_url_{int(r['id'])}")
-                    if st.button("Save", key=f"deal_save_{int(r['id'])}"):
-                        from contextlib import closing
-                        try:
-                            with closing(conn.cursor()) as cur:
-                                cur.execute(
-                                    "UPDATE deals SET title=?, agency=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
-                                    (
-                                        new_title.strip(),
-                                        str(r.get("agency") or "").strip(),
-                                        float(new_val or 0.0),
-                                        new_url.strip(),
-                                        int(r["id"]),
-                                    ),
-                                )
-                                conn.commit()
-                            st.success("Saved")
-                        except Exception as e:
-                            st.error(f"Save failed: {e}")
-
-    st.divider()
-
-    # Table editor
-    st.subheader("Pipeline")
-    if df is None or df.empty:
-        st.write("No deals yet")
-        return
-
-    edited = st.data_editor(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "status": st.column_config.SelectboxColumn(options=CRM_STAGES)
-        },
-        key="deals_editor",
-    )
-    if st.button("Save Edits", key="deals_save"):
-        from contextlib import closing
-        try:
-            df_orig = df.set_index("id")
-            with closing(conn.cursor()) as cur:
-                for _, r in edited.iterrows():
-                    rid = int(r["id"])
-                    old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
-                    new_status = str(r["status"] or CRM_STAGES[0])
-                    cur.execute(
-                        "UPDATE deals SET title=?, agency=?, status=?, stage=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
-                        (
-                            str(r["title"] or "").strip(),
-                            str(r["agency"] or "").strip(),
-                            new_status,
-                            new_status,
-                            float(r["value"] or 0.0),
-                            str(r["sam_url"] or "").strip(),
-                            rid,
-                        ),
-                    )
-                    if new_status != old_status:
-                        cur.execute(
-                            "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
-                            (rid, new_status),
-                        )
-            conn.commit()
-            st.success("Saved edits")
-        except Exception as e:
-            st.error(f"Error saving edits {e}")
-
-    _styled_dataframe(edited, use_container_width=True, hide_index=True)
-
-def run_crm(conn):
-    _ensure_helpers_exist()
-    st.header("CRM")
-    tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
-
-    # Activities/Tasks assumed elsewhere in app. Keep placeholders.
-    with tabs[0]:
-        st.caption("Activities view")
-    with tabs[1]:
-        st.caption("Tasks view")
-
-    with tabs[2]:
-        st.subheader("Weighted Pipeline")
-        df = _load_deals_df(conn)
-        if df is None or df.empty:
-            st.info("No deals")
-            return
-
-        df["status"] = df["status"].where(df["status"].isin(CRM_STAGES), "No contact made")
-        df["prob_%"] = df["status"].apply(_stage_probability)
-        df["value"] = df["value"].fillna(0).astype(float)
-        df["expected_value"] = (df["value"] * df["prob_%"] / 100.0).round(2)
-
-        df_log = _load_stage_log_df(conn)
-
-        def stage_age(row):
-            try:
-                last = df_log[(df_log["deal_id"] == row["id"]) & (df_log["stage"] == row["status"])]["last_change"]
-                if last.empty:
-                    return None
-                dt = pd.to_datetime(last.values[0])
-                return (pd.Timestamp.utcnow() - dt).days
-            except Exception:
-                return None
-
-        df["stage_age_days"] = df.apply(stage_age, axis=1)
-        _styled_dataframe(
-            df[["title","agency","status","value","prob_%","expected_value","stage_age_days"]],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.subheader("Summary by Stage")
-        summary = (
-            df.groupby("status", as_index=False)
-              .agg(deals=("id","count"), value=("value","sum"), expected=("expected_value","sum"))
-              .sort_values("expected", ascending=False)
-        )
-        _styled_dataframe(summary, use_container_width=True, hide_index=True)
-
-# ==== END: CRM BOARD PATCH ====
 
 if __name__ == '__main__':
     try:
