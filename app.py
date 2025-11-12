@@ -12379,8 +12379,15 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
     b1, b2 = st.columns([2,2])
     with b1:
         if st.button("Create Backup (.db)"):
-            p = _backup_db(conn)
-            if p: st.success("Backup created"); st.markdown(f"[Download backup]({p})")
+    p = _backup_db(conn)
+    if p:
+        st.success(f"Backup created: /mnt/data/appmajorupdates.scrolltop.v4.py")
+        try:
+            data = Path(p).read_bytes()
+            st.download_button("Download backup", data=data, file_name=Path(p).name, mime="application/octet-stream", key=f"dl_backup_{Path(p).name}")
+        except Exception as e:
+            st.error(f"Could not open backup for download: {e}")
+
     with b2:
         up = st.file_uploader("Restore from .db file", type=["db","sqlite","sqlite3"])
         if up and st.button("Restore Now"):
