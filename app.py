@@ -11499,7 +11499,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     
         # Weighted Pipeline view
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+        df = pd.read_sql_query("SELECT id, title, agency, status, value, rfp_deadline FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
             st.info("No deals")
         else:
@@ -11543,7 +11543,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             # Fallback to view without owner column
             try:
                 df_k = pd.read_sql_query(
-                    "SELECT id, title, agency, status, value, '' AS owner FROM deals_t ORDER BY id DESC;",
+                    "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
                     conn, params=()
                 )
             except Exception:
@@ -11621,7 +11621,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         st.subheader("Edit Pipeline")
         try:
             df_edit = pd.read_sql_query(
-                "SELECT id, title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+                "SELECT id, title, agency, status, value, rfp_deadline, sam_url FROM deals_t ORDER BY id DESC;",
                 conn,
                 params=(),
             )
