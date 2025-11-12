@@ -1921,6 +1921,8 @@ def _ensure_indices(conn):
 
 def _db_connect(db_path: str, **kwargs):
     import sqlite3
+    _sq = sqlite3  # alias for compatibility
+
     import streamlit as st
 
     # Build connect kwargs with safe defaults
