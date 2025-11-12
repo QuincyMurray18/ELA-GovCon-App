@@ -232,6 +232,8 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
 from html import escape as _esc
 
 
+import sqlite3 as _sq  # global alias
+
 # === One-paragraph-per-idea enforcement ===
 def _one_idea_per_paragraph(text: str) -> str:
     import re as _re
@@ -12263,6 +12265,7 @@ def _backup_db(conn: "sqlite3.Connection") -> Optional[str]:
             return None
 
 def _restore_db_from_upload(conn: "sqlite3.Connection", upload) -> bool:
+    import sqlite3
     # Use backup API to copy uploaded DB into main DB file
     db_path = _db_path_from_conn(conn)
     tmp = Path(DATA_DIR) / ("restore_" + _safe_name(upload.name))
@@ -12272,8 +12275,8 @@ def _restore_db_from_upload(conn: "sqlite3.Connection", upload) -> bool:
         st.error(f"Could not write uploaded file: {e}")
         return False
     try:
-        src = _sq.connect(str(tmp))
-        dst = _sq.connect(db_path)
+        src = sqlite3.connect(str(tmp))
+        dst = sqlite3.connect(db_path)
         with dst:
             src.backup(dst)  # replaces content
         src.close(); dst.close()
